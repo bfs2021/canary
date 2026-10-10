@@ -242,9 +242,10 @@ type legFetcher func(
 // stable across session phases, so missing SPX OI is a data-quality
 // finding rather than expected off-hours sparsity.
 //
-// Per-leg budget is 1.5 s for the model-tick poll. Active strikes
-// produce a model tick within ~500 ms; dead deep-OTM strikes time out
-// and fall through to Stage 2 which back-solves σ from cached prices.
+// Per-leg collection shares the existing 2.25 s model/OI budget. A valid
+// model tick may arrive after 1.5 s even when OI arrived first; keep listening
+// until both inputs land or their bounded collection window ends. Missing
+// model ticks then fall through to Stage 2, which back-solves σ from prices.
 func productionLegFetcher(
 	ctx context.Context,
 	c *ibkrlib.Connector,
@@ -267,35 +268,16 @@ func productionLegFetcher(
 	}
 	defer func() { _ = c.UnsubscribeMarketData(key) }()
 
-	// Stage 1: model-tick poll. handleOptionComputation commits
-	// optIV[key] / optGreeks[key] once IBKR sends a non-sentinel model
-	deadline := time.Now().Add(1500 * time.Millisecond)
-	var iv, gamma float64
-	err = pollUntilWithReject(ctx, deadline, c.SubscriptionRejectCh(key), key, func() bool {
-		if v, optionDataType, found := c.OptionIVWithDataType(key); found && v > 0 && gammaOptionModelDataTypeCompatible(snapshotDataType, optionDataType) {
-			iv = v
-			if g, found := c.OptionGreeks(key); found {
-				gamma = g.Gamma
-			}
-		}
-		return iv > 0
+	inputs, err := collectGammaOptionInputs(ctx, snapshotDataType, key, c.SubscriptionRejectCh(key), gammaOptionInputReader{
+		model:  func() (float64, int, bool) { return c.OptionIVWithDataType(key) },
+		greeks: func() (ibkrlib.Greeks, bool) { return c.OptionGreeks(key) },
+		oi:     func() (int64, bool) { return optionOpenInterest(c, key) },
 	})
-	if IsSubscriptionRejected(err) {
-		// Gateway pushed a terminal error for this reqID (200 "no
-		// security definition", 354 "not subscribed", 10197 "competing
-		// session", …). The subscription will never produce ticks.
-		// the fan-out is overloading the wire.
+	if err != nil {
 		return legResult{Failure: classifyGammaLegFailure(err)}
 	}
-
-	if iv > 0 {
-		// Opportunistic OI read. May be 0 for strikes the gateway never
-		// Do not read only once: IV/model ticks often arrive before the
-		// one-shot OI tick. A short grace materially improves OI capture
-		oi, oiObserved := waitForOptionOpenInterest(ctx, time.Now().Add(optionOpenInterestGrace), func() (int64, bool) {
-			return optionOpenInterest(c, key)
-		})
-		return legResult{OI: oi, OIObserved: oiObserved, IV: iv, Gamma: gamma, IVSource: gammaIVSourceModelTick, OK: true}
+	if inputs.OK {
+		return inputs
 	}
 	if snapshotDataType == rpc.MarketDataDelayed {
 		// A quote/previous-close inversion has no typed source clock. Using it
@@ -314,10 +296,7 @@ func productionLegFetcher(
 		price = px
 		ivSource = gammaIVSourcePrevClose
 	}
-	oi, oiObserved := waitForOptionOpenInterest(ctx, time.Now().Add(optionOpenInterestGrace), func() (int64, bool) {
-		return optionOpenInterest(c, key)
-	})
-	fallback := bsIVFallback(snapshotSpot, snapshotAt, expiryYMD, tradingClass, strike, right, oi, oiObserved, price, ivSource)
+	fallback := bsIVFallback(snapshotSpot, snapshotAt, expiryYMD, tradingClass, strike, right, inputs.OI, inputs.OIObserved, price, ivSource)
 	if !fallback.OK {
 		fallback.Failure = gammaLegFailureTimeout
 	}

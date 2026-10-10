@@ -2,7 +2,7 @@
 
 **Status:** Implemented and live since v1.0.0; migrated to the `daemon.db` authority on 2026-07-20.
 **Created:** 2026-05-22 07:30 CEST
-**Last update:** 2026-09-05
+**Last update:** 2026-10-10
 **Owner:** osauer
 **Related:** [internal/daemon/gamma_zero_cache.go](../../../internal/daemon/gamma_zero_cache.go), [internal/daemon/gamma_zero_store.go](../../../internal/daemon/gamma_zero_store.go), [Concepts](../understand/concepts.md#gamma)
 
@@ -39,6 +39,22 @@ local while using the daemon's sole live SQLite authority:
 - Snapshot-time `quality.rankability` separates "served for context" from
   "rankable market evidence" so stale/degraded cache cannot confirm regime or
   stress state.
+
+### Option-input collection
+
+Each option subscription collects broker model volatility and open interest
+within one 2.25-second window, sharing the former 1.5-second model wait and
+750-millisecond open-interest grace. Early open interest does not end the model
+wait: a valid model tick arriving after 1.5 seconds must still be accepted.
+When the model arrives promptly, missing open interest waits at most the
+original 750-millisecond grace; a late model cannot extend the total budget.
+Cancellation and terminal broker rejection stop collection immediately.
+
+Missing model inputs still use the disclosed quote/close fallback where
+permitted. Delayed spot still requires delayed model inputs. Collection does
+not relax rankability thresholds or rewrite retained snapshots. A weekend
+snapshot can be fresh for its completed session and still have a model-quality
+block; the next regular-session compute must provide new evidence to clear it.
 
 The live location is `$XDG_STATE_HOME/ibkr/daemon.db`, falling back to
 `$HOME/.local/state/ibkr/daemon.db`. Former
