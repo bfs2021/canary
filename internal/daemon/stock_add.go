@@ -20,6 +20,7 @@ import (
 )
 
 type stockAddEvidence struct {
+	queueAdmission      *ownerQueueAdmission
 	input               risk.StockAddInput
 	contract            rpc.ContractParams
 	review              rpc.AddReview
@@ -57,6 +58,10 @@ func (s *Server) handleAddPlan(ctx context.Context, req *rpc.Request) (*rpc.AddP
 }
 
 func (s *Server) handleAddPreview(ctx context.Context, req *rpc.Request) (*rpc.OrderPreviewResult, error) {
+	var requested rpc.AddParams
+	if err := json.Unmarshal(req.Params, &requested); err != nil {
+		return nil, errBadRequest("invalid Add parameters")
+	}
 	plan, err := s.handleAddPlan(ctx, req)
 	if err != nil {
 		return nil, err
@@ -64,7 +69,7 @@ func (s *Server) handleAddPreview(ctx context.Context, req *rpc.Request) (*rpc.O
 	if len(plan.Blockers) > 0 || plan.Quantity <= 0 {
 		return nil, errBadRequest("Add held: " + addBlockerText(plan.StockAddPlan))
 	}
-	return s.previewOrder(ctx, rpc.OrderPreviewParams{Action: rpc.OrderActionBuy, Contract: plan.Contract, Quantity: plan.Quantity, OrderType: "LMT", LimitPrice: new(plan.LimitPrice), Strategy: "explicit-limit", TIF: "DAY", Add: true})
+	return s.previewOrder(ctx, rpc.OrderPreviewParams{AdaptivePriority: requested.AdaptivePriority, Action: rpc.OrderActionBuy, Contract: plan.Contract, Quantity: plan.Quantity, OrderType: "LMT", LimitPrice: new(plan.LimitPrice), Strategy: "explicit-limit", TIF: "DAY", Add: true})
 }
 
 func addBlockerText(p risk.StockAddPlan) string {
@@ -279,10 +284,16 @@ func stockAddCashFunding(bucket *protectionCashSweepPolicy, ledger map[string]ca
 }
 
 func (s *Server) stockAddEvidence(ctx context.Context, p rpc.AddParams) (stockAddEvidence, error) {
-	if s.stockAddEvidenceForTest != nil {
-		return s.stockAddEvidenceForTest(ctx, p)
+	admission, _ := ctx.Value(ownerQueueAdmissionKey{}).(*ownerQueueAdmission)
+	if admission != nil && (admission.ConID != p.Contract.ConID || admission.Quantity != p.Quantity || p.LimitPrice > admission.Cap) {
+		return stockAddEvidence{}, fmt.Errorf("queued buy differs from its signed admission")
 	}
-	ev := stockAddEvidence{}
+	if s.stockAddEvidenceForTest != nil {
+		ev, err := s.stockAddEvidenceForTest(ctx, p)
+		ev.queueAdmission = admission
+		return ev, err
+	}
+	ev := stockAddEvidence{queueAdmission: admission}
 	mgr := s.riskPolicies.snapshot()
 	if mgr.policy == nil {
 		return ev, &stockAddProblem{kind: "policy", message: "the existing risk policy is unavailable"}
@@ -367,10 +378,7 @@ func (s *Server) stockAddEvidence(ctx context.Context, p rpc.AddParams) (stockAd
 	if err != nil {
 		return ev, err
 	}
-	var queued []queuedAuthRecord
-	if s.tradeProposals != nil {
-		queued = s.tradeProposals.queued.list()
-	}
+	queued := s.stockAddQueueRecords(scope, admission)
 	for _, q := range queued {
 		if q.liveIntent() && sameBrokerScope(q.scope(), scope) {
 			return ev, fmt.Errorf("an armed queued instruction must resolve before an equity Add can be sized")
@@ -528,7 +536,7 @@ func (s *Server) stockAddEvidenceCurrent(ev stockAddEvidence) bool {
 	if s.stockAddEvidenceForTest != nil {
 		return true
 	}
-	if s.stockAddQueuedInstruction(s.currentBrokerStateScope()) {
+	if s.stockAddQueuedInstruction(s.currentBrokerStateScope(), ev.queueAdmission) {
 		return false
 	}
 	if !s.orderPreviewBrokerAuthorityCurrent(ev.broker) || ev.broker.connector.PortfolioProjectionGeneration() != ev.portfolioGeneration || stockAddAccountFingerprint(ev.broker) != ev.accountFingerprint {
@@ -617,11 +625,15 @@ func stockAddAccountFingerprint(broker *orderPreviewBrokerAuthority) string {
 	return fmt.Sprintf("%x", sha256.Sum256(b))
 }
 
-func (s *Server) stockAddQueuedInstruction(scope brokerStateScope) bool {
+func (s *Server) stockAddQueuedInstruction(scope brokerStateScope, admissions ...*ownerQueueAdmission) bool {
 	if s.tradeProposals == nil {
 		return false
 	}
-	for _, q := range s.tradeProposals.queued.list() {
+	var admission *ownerQueueAdmission
+	if len(admissions) > 0 {
+		admission = admissions[0]
+	}
+	for _, q := range s.stockAddQueueRecords(scope, admission) {
 		if q.liveIntent() && sameBrokerScope(q.scope(), scope) {
 			return true
 		}

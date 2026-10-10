@@ -15,6 +15,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -432,6 +433,9 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	if !previewSupportedOrderType(orderType) {
 		return nil, errBadRequest("order preview supports LMT, TRAIL, and TRAIL LIMIT orders only")
 	}
+	if p.AdaptivePriority != "" && (orderType != rpc.OrderTypeLMT || !slices.Contains([]string{"STK", "OPT"}, contract.SecType) || !slices.Contains([]string{"Normal", "Patient", "Urgent"}, p.AdaptivePriority)) {
+		return nil, errBadRequest("Adaptive requires a stock or option limit and Normal, Patient, or Urgent priority")
+	}
 	tif := strings.ToUpper(strings.TrimSpace(p.TIF))
 	if tif == "" && scope == rpc.OrderTokenScopeModify {
 		// Modify previews freeze TIF to the open order; defaulting to DAY here
@@ -528,13 +532,13 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 		FX:               fxTerms,
 	}
 	if scope == rpc.OrderTokenScopeModify {
-		if err := validateModifyDraft(replaceView, draft); err != nil {
+		if err := s.validateModifyDraft(replaceView, draft); err != nil {
 			return nil, err
 		}
 		// Position-mismatch gate: position.Before is this preview's fresh
 		// positions read (the preview already failed closed above if
 		// positions were unavailable).
-		if err := validateProtectiveModifyQuantity(replaceView, draft, position.Before); err != nil {
+		if err := s.validateProtectiveModifyQuantity(replaceView, draft, position.Before); err != nil {
 			return nil, err
 		}
 	}

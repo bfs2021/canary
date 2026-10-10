@@ -15,6 +15,7 @@ func runAdd(ctx context.Context, env *Env, args []string) int {
 	currency := fs.String("currency", "", "stock trading currency (required)")
 	conID := fs.Int("con-id", 0, "exact broker stock identity when known")
 	exchange := fs.String("exchange", "SMART", "broker venue")
+	adaptive := fs.String("adaptive-priority", "", "IBKR Adaptive priority for the limit: Normal, Patient, or Urgent")
 	jsonOut := fs.Bool("json", false, "emit typed Add evidence")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
@@ -22,7 +23,7 @@ func runAdd(ctx context.Context, env *Env, args []string) int {
 	if fs.NArg() != 2 || (fs.Arg(0) != "plan" && fs.Arg(0) != "preview") {
 		return fail(env, "usage: canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity N | --max) [--con-id ID] [--json]")
 	}
-	p, err := rpc.NormalizeAddParams(rpc.AddParams{Contract: rpc.ContractParams{Symbol: fs.Arg(1), SecType: "STK", Currency: *currency, ConID: *conID, Exchange: *exchange}, LimitPrice: *price, Quantity: *quantity, Max: *maximum})
+	p, err := rpc.NormalizeAddParams(rpc.AddParams{AdaptivePriority: *adaptive, Contract: rpc.ContractParams{Symbol: fs.Arg(1), SecType: "STK", Currency: *currency, ConID: *conID, Exchange: *exchange}, LimitPrice: *price, Quantity: *quantity, Max: *maximum})
 	if err != nil {
 		return fail(env, "add: %v", err)
 	}

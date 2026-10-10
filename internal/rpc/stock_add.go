@@ -20,7 +20,7 @@ const (
 // AddParams requires an explicit maximum or exact additional quantity.
 // Current size is daemon-owned.
 type AddParams struct {
-	AdaptivePriority string         `json:"-"`
+	AdaptivePriority string         `json:"adaptive_priority,omitempty"`
 	Max              bool           `json:"max,omitempty"`
 	Contract         ContractParams `json:"contract"`
 	LimitPrice       float64        `json:"limit_price"`
@@ -29,6 +29,9 @@ type AddParams struct {
 
 // NormalizeAddParams rejects unsupported entry types and invented position sizes.
 func NormalizeAddParams(p AddParams) (AddParams, error) {
+	if p.AdaptivePriority != "" && !slices.Contains([]string{"Normal", "Patient", "Urgent"}, p.AdaptivePriority) {
+		return p, fmt.Errorf("unsupported Adaptive priority")
+	}
 	p.Contract.Symbol = strings.ToUpper(strings.TrimSpace(p.Contract.Symbol))
 	p.Contract.Currency = strings.ToUpper(strings.TrimSpace(p.Contract.Currency))
 	if p.Contract.SecType == "" {

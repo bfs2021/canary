@@ -36,6 +36,11 @@ func TestQueueCLIRefusesAmbiguousInputsBeforeRPC(t *testing.T) {
 		stdin string
 	}{
 		{[]string{"queue", "prepare", "key", "revision"}, ""},
+		{[]string{"queue", "prepare", "--stdin", "--json"}, `{"owner_order":false}`},
+		{[]string{"queue", "prepare", "--stdin", "--json"}, `{"owner_order":true,"unknown":1}`},
+		{[]string{"queue", "prepare", "--stdin", "--json"}, `{"owner_order":true} {}`},
+		{[]string{"queue", "prepare", "--stdin", "--json", "--quantity", "3"}, `{"owner_order":true}`},
+		{[]string{"queue", "prepare", "--stdin", "--json"}, strings.Repeat(" ", queueArmInputMaxBytes+1)},
 		{[]string{"queue", "arm", "--json"}, `{"queued_ref":"r","terms_digest":"d"}`},
 		{[]string{"queue", "arm", "--stdin", "canaryqa1.in.argv"}, `{"queued_ref":"r","terms_digest":"d"}`},
 		{[]string{"queue", "arm", "--stdin"}, `{"queued_ref":"r"}`},
@@ -52,6 +57,20 @@ func TestQueueCLIRefusesAmbiguousInputsBeforeRPC(t *testing.T) {
 		if Run(t.Context(), env, "proposals", tc.args) == 0 || c.calls != 0 {
 			t.Fatalf("%v reached RPC", tc.args)
 		}
+	}
+}
+
+func TestOwnerQueueCLIExactPrepareFromStdin(t *testing.T) {
+	var out bytes.Buffer
+	c := &preparedProposalCLIConn{}
+	input := `{"owner_order":true,"account_id":"DU1234567","account_mode":"paper","worst_price":25,"order":{"contract":{"con_id":101,"symbol":"SYN","sec_type":"STK","currency":"USD"},"action":"BUY","quantity":2,"order_type":"LMT","tif":"DAY"}}`
+	env := &Env{Conn: c, Stdin: strings.NewReader(input), Stdout: &out, Stderr: &out}
+	if exit := Run(t.Context(), env, "proposals", []string{"queue", "prepare", "--stdin", "--json"}); exit != 0 || c.calls != 1 || c.method != rpc.MethodTradeProposalsQueuePrepare {
+		t.Fatalf("prepare exit=%d calls=%d: %s", exit, c.calls, &out)
+	}
+	p, ok := c.params.(rpc.TradeProposalQueuePrepareParams)
+	if !ok || !p.OwnerOrder || p.Order == nil || p.Order.Contract.ConID != 101 || p.Order.Quantity != 2 || p.WorstPrice != 25 || p.AccountMode != "paper" {
+		t.Fatalf("lost exact owner terms: %+v", c.params)
 	}
 }
 

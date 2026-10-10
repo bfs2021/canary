@@ -2687,8 +2687,9 @@ type OrderStatusParams struct {
 // then mint a short-lived preview token. The preview path never places the
 // order; place/modify/cancel remain separate gated RPCs.
 type OrderPreviewParams struct {
-	// Adaptive is available only to the separately authorised Desk controller.
-	AdaptivePriority string          `json:"-"`
+	// An explicit Adaptive limit remains bound to the ordinary preview token
+	// and owner-confirmed execution gates; it grants no controller authority.
+	AdaptivePriority string          `json:"adaptive_priority,omitempty"`
 	Add              bool            `json:"add,omitempty"`
 	Action           string          `json:"action"` // BUY | SELL, case-insensitive
 	Contract         ContractParams  `json:"contract"`

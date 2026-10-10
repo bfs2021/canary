@@ -17,7 +17,56 @@ down, nothing sends.
 
 None of these methods has an MCP surface; agent tools stay read-only.
 
-## Terms
+## Owner orders (version 2)
+
+Owner decision 2026-10-10 21:37 CEST: queue Add, Buy, Reduce and Close as exact
+stock/single-leg option orders; price them at the send-time midpoint within an
+approved maximum buy price or minimum sell price. Stock trailing stops cover
+the whole position, growing and shrinking without resetting or loosening the
+broker trail. This is an explicit, versioned owner mandate, not additional
+authority for a rule, schedule or agent. Existing v1 records keep their terms.
+
+Prepare uses `proposals queue prepare --stdin --json` with `owner_order: true`,
+account/mode and either an exact positive-ID `order` or proposal key/revision.
+`worst_price` is the approved cap/floor; `full_position` requests the stock-stop
+mandate. The v2 `owner_order` object binds type, trail, trigger, trading hours,
+Adaptive priority and full-position/Add flags. Desk and the companion understand
+these fields before signing the exact bytes. Unknown fields remain a refusal.
+
+Ordinary v2 orders have exact quantity, midpoint_bounded pricing, Adaptive Normal,
+DAY duration, regular hours and the existing exchange opening offset/spread/send
+window. They wait while outside the cap/floor and expire unsent at the window's
+end. Admission runs under the broker write lock and rechecks current cash,
+positions, policy, order inventory and account evidence. Future queues do not
+reserve cash or mutually block each other. A request-scoped admission exempts
+only unattempted future queues; attempted, uncertain and actual orders remain
+commitments. Manual Add has no such exemption. The first-byte check revalidates
+the same queue, exact quantity/cap, cancellation and evidence generations.
+
+Full-position stock stops have no queue expiry and no artificial opening delay.
+They remain queued until broker acceptance, owner cancellation or a confirmed
+flat position. Their reviewed DAY/GTC duration applies at the broker and is
+independent of queue lifetime. Fresh position size is used before sending.
+After acceptance, the existing protective-stop guard may resize only this signed
+mandate's exact broker order. It preserves trigger, hours, TIF, trail distance,
+limit offset and the broker's current ratchet. Total quantity includes prior
+fills plus the remaining position. Missing identity/ratchet evidence holds work.
+Confirmed flat ends the mandate permanently, even if the instrument reopens.
+
+Lost/ambiguous sends retain their order identity and wait for reconciliation;
+they are never retried merely because the broker is silent or reports an error.
+Only explicit definitely-unsent evidence permits another attempt. Later broker
+acknowledgement takes precedence over an earlier error. Queue state is not proof
+of active protection or a fill. Existing arm signatures and gated write path
+remain unchanged, and no MCP write surface is added.
+
+The corresponding immediate Desk order uses the explicit preview limit with
+`--adaptive-priority Normal` on `order preview` or `add preview`. The optional
+`adaptive_priority` RPC field is part of the signed draft, supports only stock
+or option limits and known priorities, and retains all normal owner execution
+gates. Omitting it preserves existing plain-limit CLI behavior.
+
+## Version 1 terms
 
 Only governor, theta and issuer-trim rows are queueable: single-contract DAY
 limit reductions with an exact contract id. Readiness must offer the queue,

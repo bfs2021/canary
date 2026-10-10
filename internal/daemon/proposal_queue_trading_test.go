@@ -395,6 +395,7 @@ func TestQueuedOriginNeedsTheExecutorsGrant(t *testing.T) {
 	refused("a grant for no record")
 	rec := rig.queued(id)
 	rig.server.queuedGrant.Store(&queuedWriteGrant{QueueID: id, Key: rec.Terms.Key, Bucket: rec.Terms.Bucket})
+	rig.now = rec.Terms.NotBefore
 	if blockers := rig.server.brokerWriteOriginBlockers(status, rpc.OrderOriginDaemonOwnerQueued); len(blockers) != 0 {
 		t.Fatalf("grant for an armed record: %+v", blockers)
 	}

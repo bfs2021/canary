@@ -122,10 +122,12 @@ const (
 // queuedAuthRecord is one durable queued authorisation, keyed by queue ID.
 // Its terms are immutable once prepared. Timestamps are UTC.
 type queuedAuthRecord struct {
-	Version       int                 `json:"version"`
-	ReferenceHash [sha256.Size]byte   `json:"reference_hash"`
-	Terms         rpc.QueuedAuthTerms `json:"terms"`
-	TermsDigest   string              `json:"terms_digest"`
+	BrokerAcceptedAt time.Time           `json:"broker_accepted_at,omitzero"`
+	MandateEndedAt   time.Time           `json:"mandate_ended_at,omitzero"`
+	Version          int                 `json:"version"`
+	ReferenceHash    [sha256.Size]byte   `json:"reference_hash"`
+	Terms            rpc.QueuedAuthTerms `json:"terms"`
+	TermsDigest      string              `json:"terms_digest"`
 	// ContractSide is sameContractSide of the queued row, the key of the
 	// one-intent guard.
 	ContractSide string    `json:"contract_side"`
@@ -188,12 +190,17 @@ func queuedRecordProblem(rec queuedAuthRecord) string {
 	switch {
 	case rec.problem != "":
 		return rec.problem
-	case rec.Version != queuedDocumentVersion || rec.Terms.Version != queuedTermsVersion:
+	case rec.Version != queuedDocumentVersion || (rec.Terms.Version != queuedTermsVersion && rec.Terms.Version != 2):
 		return "the stored record has a version this build of Canary does not know"
 	case !slices.Contains(queuedKnownStates, rec.State):
 		return "the stored record is in a state this build of Canary does not know"
-	case rec.Terms.Style != rpc.QueuedAuthStyleBoundedLimit || rec.Terms.TIF != rpc.OrderTIFDay:
+	case rec.Terms.Version == 1 && (rec.Terms.OwnerOrder != nil || rec.Terms.Style != rpc.QueuedAuthStyleBoundedLimit || rec.Terms.TIF != rpc.OrderTIFDay):
 		return "the stored record has an order style this build of Canary does not execute"
+	}
+	if rec.Terms.Version == 2 {
+		if problem := ownerQueueProblem(rec.Terms); problem != "" {
+			return problem
+		}
 	}
 	if digest, err := queuedTermsDigest(rec.Terms); err != nil || digest != rec.TermsDigest {
 		return "the stored terms no longer match their digest"
@@ -772,6 +779,12 @@ func queuedOrderWorkingBlocker(key string) []rpc.TradingBlocker {
 // QueuePrepare fixes the terms of a queued authorisation for one row and
 // returns them with a private reference. It sends nothing and reads no quote.
 func (e *proposalEngine) QueuePrepare(ctx context.Context, p rpc.TradeProposalQueuePrepareParams) (out rpc.TradeProposalQueuePrepareResult, err error) {
+	if p.OwnerOrder {
+		return e.prepareOwnerQueue(ctx, p)
+	}
+	if p.Order != nil || p.FullPosition || p.WorstPrice != 0 {
+		return out, errBadRequest("owner-order terms require the v2 intent kind")
+	}
 	started := time.Now()
 	now := e.clock()
 	out.AsOf = now
@@ -955,7 +968,7 @@ func (e *proposalEngine) QueueArm(ctx context.Context, p rpc.TradeProposalQueueA
 		}
 		return block("queued_arm_deadline_passed", "The owner's signature arrived after the ten-minute arm deadline; prepare the queue again.")
 	}
-	if !e.server.cfg.AutoTrade.WithDefaults().FastPathEnabledResolved() {
+	if rec.Terms.Version == 1 && !e.server.cfg.AutoTrade.WithDefaults().FastPathEnabledResolved() {
 		return block("fast_path_disabled", "Proposal submit is disabled by [auto_trade].fast_path_enabled, so nothing can be armed.")
 	}
 	scope := e.currentScope()
@@ -1074,6 +1087,20 @@ func (e *proposalEngine) QueueCancel(ctx context.Context, p rpc.TradeProposalQue
 			if p.PreparedOnly && r.State != rpc.QueuedAuthPrepared {
 				continue
 			}
+			if r.Terms.Version == 2 && r.State == rpc.QueuedAuthHeld && (r.OrderRef != "" || r.PreviewTokenID != "") {
+				if !r.CancelRequested {
+					r.CancelRequested, r.CancelOrigin, r.MandateEndedAt = true, origin, now
+					ev := r.note(queuedEventCancelRequested, r.State, now)
+					ev.Origin, ev.Reason = origin, reason
+					events = append(events, ev)
+				}
+				inFlight = append(inFlight, *r)
+				if !p.All {
+					copied := *r
+					single = &copied
+				}
+				continue
+			}
 			switch r.State {
 			case rpc.QueuedAuthSending:
 				// The order is being placed now. The request is kept: an
@@ -1091,6 +1118,16 @@ func (e *proposalEngine) QueueCancel(ctx context.Context, p rpc.TradeProposalQue
 				}
 				continue
 			case rpc.QueuedAuthSent:
+				if ownerQueueProtection(r.Terms) && !r.CancelRequested {
+					r.CancelRequested, r.CancelOrigin, r.MandateEndedAt = true, origin, now
+					ev := r.note(queuedEventCancelRequested, r.State, now)
+					ev.Origin, ev.Reason = origin, reason
+					events = append(events, ev)
+					if !p.All {
+						copy := *r
+						single = &copy
+					}
+				}
 				inFlight = append(inFlight, *r)
 				continue
 			}

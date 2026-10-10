@@ -167,6 +167,18 @@ func TestRunOrderPreviewForwardsTriggerAndRouteFields(t *testing.T) {
 	}
 }
 
+func TestRunOrderPreviewPreservesAdaptiveThroughRPC(t *testing.T) {
+	conn, calls := startOrderPreviewFakeConn(t, rpc.OrderPreviewResult{})
+	defer conn.Close()
+	var output bytes.Buffer
+	if code := Run(t.Context(), &Env{Conn: conn, Stdout: &output, Stderr: &output}, "order", []string{"preview", "buy", "SYN", "2", "--limit", "25", "--adaptive-priority", "Normal", "--json"}); code != 0 {
+		t.Fatalf("preview: %s", &output)
+	}
+	if p := (<-calls).params; p.AdaptivePriority != "Normal" || p.Quantity != 2 || p.LimitPrice == nil || *p.LimitPrice != 25 {
+		t.Fatalf("RPC lost reviewed algorithm or limit: %+v", p)
+	}
+}
+
 func TestRunOrderPreviewRejectsInvalidTriggerMethodBeforeDial(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr bytes.Buffer

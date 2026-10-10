@@ -48,12 +48,15 @@ const QueuedAuthStyleBoundedLimit = "bounded_limit"
 // stored terms. TermsDigest is the lowercase hex SHA-256 of their JSON
 // encoding as Canary serves it.
 type QueuedAuthTerms struct {
-	Version     int    `json:"version"`
-	QueueID     string `json:"queue_id"`
-	AccountID   string `json:"account_id"`
-	AccountMode string `json:"account_mode"`
-	Key         string `json:"key"`
-	Bucket      string `json:"bucket"`
+	Version int `json:"version"`
+	// OwnerOrder is present only in v2. V1 remains a rule-dependent reduction;
+	// v2 is an exact owner order, or an explicitly position-following stop.
+	OwnerOrder  *QueuedOwnerOrder `json:"owner_order,omitempty"`
+	QueueID     string            `json:"queue_id"`
+	AccountID   string            `json:"account_id"`
+	AccountMode string            `json:"account_mode"`
+	Key         string            `json:"key"`
+	Bucket      string            `json:"bucket"`
 	// RevisionAtQueue is the proposal revision the owner reviewed. It is
 	// audit only: the send revalidates by key and row terms, so snapshot
 	// revision churn at the open never cancels the record.
@@ -91,6 +94,18 @@ type QueuedAuthTerms struct {
 	RowTermsDigest      string      `json:"row_terms_digest"`
 	PolicyFingerprint   Fingerprint `json:"policy_fingerprint"`
 	RulebookFingerprint Fingerprint `json:"rulebook_fingerprint,omitzero"`
+}
+
+// QueuedOwnerOrder carries the exact v2 execution terms signed by the owner,
+// including the optional mandate to follow a stock position's full size.
+type QueuedOwnerOrder struct {
+	OrderType        string          `json:"order_type"`
+	Trail            *OrderTrailSpec `json:"trail,omitempty"`
+	TriggerMethod    int             `json:"trigger_method,omitempty"`
+	OutsideRTH       bool            `json:"outside_rth"`
+	AdaptivePriority string          `json:"adaptive_priority,omitempty"`
+	FullPosition     bool            `json:"full_position"`
+	Add              bool            `json:"add,omitempty"`
 }
 
 // QueuedAuthQuote is the quote an order was priced from when it was sent.
@@ -157,9 +172,17 @@ type TradeProposalQueued struct {
 // quantity is refused. Prepare reads
 // no quote: the price is set only when the order is sent.
 type TradeProposalQueuePrepareParams struct {
-	Key      string `json:"key"`
-	Revision string `json:"revision"`
-	Quantity int    `json:"quantity,omitempty"`
+	// OwnerOrder selects v2 explicitly. With Key/Revision, Canary copies the
+	// current row. Otherwise Order is the exact owner-authored limit request.
+	OwnerOrder   bool                `json:"owner_order,omitempty"`
+	Order        *OrderPreviewParams `json:"order,omitempty"`
+	WorstPrice   float64             `json:"worst_price,omitempty"`
+	AccountID    string              `json:"account_id,omitempty"`
+	AccountMode  string              `json:"account_mode,omitempty"`
+	FullPosition bool                `json:"full_position,omitempty"`
+	Key          string              `json:"key"`
+	Revision     string              `json:"revision"`
+	Quantity     int                 `json:"quantity,omitempty"`
 }
 
 // TradeProposalQueuePrepareResult keeps the authorizing reference

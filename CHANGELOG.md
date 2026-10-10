@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.21.0 — 2026-10-10 21:37 CEST
+
+### Added
+
+- Owner-confirmed queues for exact stock and single-leg option purchases and sales, priced at the send-time midpoint within an approved maximum buy price or minimum sell price.
+- Explicit Adaptive priority on stock/option limit previews and stock Add previews, bound to the same exact-order confirmation.
+- Whole-position stock trailing-stop mandates that wait for broker acceptance and follow position increases and reductions without resetting or loosening the broker trail. Confirmed closure ends the mandate.
+
+### Fixed
+
+- Queued purchases check fresh shared capacity at execution; attempted and uncertain orders remain commitments, and ambiguous sends are reconciled before another attempt.
+
 ## v3.20.1 — 2026-10-10 17:46 CEST
 
 ### What's new

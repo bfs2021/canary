@@ -833,6 +833,7 @@ func (s *Server) bindPreviewOrderRiskAuthority(ctx context.Context, binding *bro
 			return fmt.Errorf("%w: portfolio changed during Add admission", ErrTradingDisabled)
 		}
 		binding.stockAddReview = &addEvidence.review
+		binding.stockAddQueueAdmission = addEvidence.queueAdmission
 		binding.stockAddOrdersGeneration = addEvidence.ordersGeneration
 		binding.stockAddAccountFingerprint = addEvidence.accountFingerprint
 	}

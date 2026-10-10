@@ -40,6 +40,7 @@ const (
 	protectiveStopGuardWriteTimeout = 5 * time.Second
 
 	protectiveStopGuardShrink = "shrink"
+	protectiveStopGuardResize = "resize"
 	protectiveStopGuardCancel = "cancel"
 	protectiveStopGuardReport = "report"
 
@@ -77,6 +78,8 @@ type protectiveStopGuardWriteGrant struct {
 	OrderRef        string
 	ReservedOrderID int
 	Quantity        int
+	Trail           *rpc.OrderTrailSpec
+	Filled          float64
 }
 
 // protectiveStopGuardState is the guard's in-memory pass state.
@@ -112,7 +115,7 @@ func protectiveStopGuardCanaryPlaced(view *rpc.OrderView, scope brokerStateScope
 // planProtectiveStopGuard plans the corrections for one complete inventory
 // against one current position projection. It is pure: the caller has
 // already proven both inputs current and in scope.
-func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.RawPosition, scope brokerStateScope) []protectiveStopGuardStep {
+func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.RawPosition, scope brokerStateScope, mandates ...map[string]bool) []protectiveStopGuardStep {
 	var steps []protectiveStopGuardStep
 	for _, row := range working {
 		order := row.Order
@@ -139,7 +142,8 @@ func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.
 			continue
 		}
 		step.Position = position
-		if position+1e-9 >= remaining {
+		follows := len(mandates) > 0 && mandates[0][step.View.OrderRef]
+		if position+1e-9 >= remaining && (!follows || math.Abs(position-remaining) < 1e-9) {
 			continue
 		}
 		switch {
@@ -149,6 +153,23 @@ func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.
 		case math.Floor(position+1e-9) < 1:
 			step.Kind = protectiveStopGuardCancel
 			step.Reason = fmt.Sprintf("the position is %.4g shares, so the stop for %.4g would open a short; cancelling it", position, remaining)
+		case follows:
+			// A current broker ratchet is mandatory, even for a shrink. Never
+			// reseed from a new quote or silently weaken a reached stop.
+			if !isTrailOrderType(step.View.OrderType) || step.View.Trail == nil || !positiveFinite(order.TrailStopPrice) || order.TrailStopPrice < step.View.Trail.InitialStopPrice ||
+				math.Trunc(position) != position || math.Trunc(step.View.Filled) != step.View.Filled {
+				continue
+			}
+			if order.TIF != step.View.TIF || order.TriggerMethod != step.View.TriggerMethod || order.OutsideRth != step.View.OutsideRTH ||
+				(step.View.Trail.TrailingPercent != nil && order.TrailingPercent != *step.View.Trail.TrailingPercent) ||
+				(step.View.Trail.TrailingAmount != nil && order.AuxPrice != *step.View.Trail.TrailingAmount) ||
+				(step.View.Trail.LimitOffset != nil && order.LmtPriceOffset != *step.View.Trail.LimitOffset) {
+				continue
+			}
+			step.View.Trail = cloneTrailSpec(step.View.Trail)
+			step.View.Trail.InitialStopPrice = order.TrailStopPrice
+			step.Kind, step.Target = protectiveStopGuardResize, int(position)
+			step.Reason = fmt.Sprintf("full-position protection follows %.4g shares without changing its trail", position)
 		default:
 			step.Kind = protectiveStopGuardShrink
 			step.Target = int(math.Floor(position + 1e-9))
@@ -269,7 +290,7 @@ func (s *Server) planProtectiveStopGuardPass(ctx context.Context, scope brokerSt
 	if err != nil {
 		return nil, "the order journal is unavailable"
 	}
-	return planProtectiveStopGuard(brokerWorkingOrders(snapshot, views, scope), positions, scope), ""
+	return planProtectiveStopGuard(brokerWorkingOrders(snapshot, views, scope), positions, scope, s.fullPositionStopMandates(scope, views)), ""
 }
 
 // applyProtectiveStopGuardStep reports, or acts on, one settled step.
@@ -368,6 +389,12 @@ func (s *Server) protectiveStopGuardGrantCovers(origin, kind string, view rpc.Or
 		return nil
 	}
 	grant := s.protectiveStopGuardGrant.Load()
+	if kind == protectiveStopGuardShrink && grant != nil && grant.Kind == protectiveStopGuardResize {
+		if s.fullPositionResizeGranted(view, quantity) {
+			return nil
+		}
+		return fmt.Errorf("%w: full-position resize mandate is no longer current", ErrTradingDisabled)
+	}
 	if grant == nil || grant.Kind != kind || grant.OrderRef != view.OrderRef || grant.ReservedOrderID != view.ReservedOrderID ||
 		(kind == protectiveStopGuardShrink && (grant.Quantity != quantity || float64(quantity) >= orderViewRemainingQuantity(view))) {
 		return fmt.Errorf("%w: the protective stop guard holds no grant for this order change", ErrTradingDisabled)

@@ -148,7 +148,7 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	if err != nil {
 		return nil, err
 	}
-	if err := validateModifyDraft(view, payload.Draft); err != nil {
+	if err := s.validateModifyDraft(view, payload.Draft); err != nil {
 		return nil, err
 	}
 	if err := s.protectiveStopGuardGrantCovers(p.Origin, protectiveStopGuardShrink, view, payload.Draft.Quantity); err != nil {
@@ -173,7 +173,15 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	// A close-protective modify must remain exactly backed by the same current
 	// position authority that is carried to the first-byte guard.
 	if orderViewIsCloseProtective(view) {
-		if err := validateProtectiveModifyQuantity(view, modifiedDraft, binding.riskPosition.Before); err != nil {
+		if err := s.validateProtectiveModifyQuantity(view, modifiedDraft, binding.riskPosition.Before); err != nil {
+			return nil, err
+		}
+	}
+	contract := previewIBKRStrategyContract(modifiedDraft)
+	order := previewIBKROrder(modifiedDraft)
+	if p.Origin == rpc.OrderOriginDaemonProtectiveGuard {
+		order.TotalQty, err = protectionModifyTotal(modifiedDraft.Quantity, view.Filled)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -200,8 +208,6 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	binding.orderID = view.ReservedOrderID
 	binding.orderEventSeq = stagedOrderEventSeq
 
-	contract := previewIBKRStrategyContract(modifiedDraft)
-	order := previewIBKROrder(modifiedDraft)
 	order.OrderID = view.ReservedOrderID
 	order.ClientID = status.ClientID
 	order.Account = status.Account

@@ -111,11 +111,12 @@ func (e *proposalEngine) runQueuedCycle(ctx context.Context) {
 	}
 	e.endUnreadableQueued(ctx)
 	e.recoverQueuedAfterRestart(ctx)
+	e.endFlatProtectionQueues(ctx)
 	e.expireQueued(ctx)
 	e.followQueuedSent(ctx)
 	now := e.clock()
 	for _, rec := range e.queued.list() {
-		if !rec.waiting() || now.Before(rec.Terms.NotBefore) || !now.Before(rec.Terms.NotAfter) {
+		if !rec.waiting() || now.Before(rec.Terms.NotBefore) || (!ownerQueueProtection(rec.Terms) && !now.Before(rec.Terms.NotAfter)) {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -164,7 +165,7 @@ func (e *proposalEngine) expireQueued(ctx context.Context) {
 			switch {
 			case r.State == rpc.QueuedAuthPrepared && !now.Before(r.Terms.ArmDeadline):
 				events = append(events, r.resolve(queuedEventExpired, rpc.QueuedAuthExpired, queuedReasonNotArmed, "the owner's signature did not arrive within ten minutes", now))
-			case r.waiting() && !now.Before(r.Terms.NotAfter):
+			case r.waiting() && !ownerQueueProtection(r.Terms) && !now.Before(r.Terms.NotAfter):
 				reason := "the send window ended before every gate passed"
 				if r.HoldReason != "" {
 					reason += "; it was held: " + r.HoldReason
@@ -193,7 +194,7 @@ func (e *proposalEngine) expireQueued(ctx context.Context) {
 func (e *proposalEngine) followQueuedSent(ctx context.Context) {
 	var sent []queuedAuthRecord
 	for _, rec := range e.queued.list() {
-		if rec.State == rpc.QueuedAuthSent && rec.OrderRef != "" {
+		if (rec.State == rpc.QueuedAuthSent || ownerQueueProtection(rec.Terms) && rec.State == rpc.QueuedAuthHeld) && rec.OrderRef != "" {
 			sent = append(sent, rec)
 		}
 	}
@@ -216,12 +217,34 @@ func (e *proposalEngine) followQueuedSent(ctx context.Context) {
 		var events []queuedAuthEvent
 		for _, s := range sent {
 			r := records[s.Terms.QueueID]
-			if r == nil || r.State != rpc.QueuedAuthSent {
+			if r == nil || (r.State != rpc.QueuedAuthSent && !(ownerQueueProtection(r.Terms) && r.State == rpc.QueuedAuthHeld)) {
 				continue
 			}
 			v, ok := byRef[r.OrderRef]
-			if !ok || !orderViewMatchesBrokerScope(v, r.scope()) {
+			if !ok || !orderViewMatchesBrokerScope(v, r.scope()) || r.Terms.Version == 2 && (v.ConID != r.Terms.Contract.ConID || v.PreviewTokenID != r.PreviewTokenID) {
 				continue
+			}
+			if ownerQueueProtection(r.Terms) && r.BrokerAcceptedAt.IsZero() {
+				switch v.LifecycleStatus {
+				case rpc.OrderLifecycleSubmitted, rpc.OrderLifecyclePreSubmitted, rpc.OrderLifecycleFilled:
+					r.BrokerAcceptedAt = now
+					if r.State == rpc.QueuedAuthHeld {
+						events = append(events, r.transition(queuedEventSent, rpc.QueuedAuthSent, now))
+					}
+					events = append(events, r.note("broker_accepted", r.State, now))
+				case rpc.OrderLifecycleRejected:
+					if r.BrokerAcceptedAt.IsZero() {
+						// Rejected includes duplicate-ID and ambiguous callbacks.
+						// Retain the attempt identity; absence of fills is not proof
+						// that a new order is safe. Only definitely-unsent attempts
+						// in the shared send path may retry automatically.
+						r.HeldAt, r.HoldCode, r.HoldReason = now, "broker_rejection_unconfirmed", "The broker rejected the stop. It remains queued; its attempt must be reconciled before retrying."
+						if r.State != rpc.QueuedAuthHeld {
+							events = append(events, r.transition(queuedEventHeld, rpc.QueuedAuthHeld, now))
+						}
+						continue
+					}
+				}
 			}
 			progressed := v.Filled != r.FilledQuantity || v.PermID != r.PermID && v.PermID != 0
 			r.FilledQuantity, r.AvgFillPrice = v.Filled, v.AvgFillPrice
@@ -229,7 +252,7 @@ func (e *proposalEngine) followQueuedSent(ctx context.Context) {
 				r.PermID = v.PermID
 			}
 			var ev queuedAuthEvent
-			if eventType, state, code, reason, done := queuedOrderResolution(v, r.QuantitySent); done {
+			if eventType, state, code, reason, done := queuedRecordOrderResolution(v, *r); done {
 				ev = r.resolve(eventType, state, code, reason, now)
 			} else if progressed && r.FilledQuantity > 0 {
 				ev = r.note(queuedEventPartiallyFilled, r.State, now)
@@ -252,6 +275,22 @@ func (e *proposalEngine) followQueuedSent(ctx context.Context) {
 		e.server.infof("queued authorisation %s for %s %s (%g of %d)", r.Terms.QueueID, r.Terms.Key, r.State, r.FilledQuantity, r.QuantitySent)
 		e.recordQueuedOutcome(r, r.State, r.ReasonCode, r.Reason)
 	}
+}
+
+// A full-position mandate can resize the broker order after placement. Its
+// original QuantitySent is audit evidence, not the current completion target.
+func queuedRecordOrderResolution(v rpc.OrderView, r queuedAuthRecord) (eventType, state, code, reason string, done bool) {
+	qty := r.QuantitySent
+	if ownerQueueProtection(r.Terms) {
+		if !positiveFinite(v.Quantity) || math.Trunc(v.Quantity) != v.Quantity || v.Quantity > 1000000 {
+			if orderLifecycleStatusIsTerminal(v.LifecycleStatus) {
+				return queuedEventFailed, rpc.QueuedAuthFailed, "fill_unconfirmed", "the final stop quantity could not be verified; check the position", true
+			}
+			return "", "", "", "", false
+		}
+		qty = int(v.Quantity)
+	}
+	return queuedOrderResolution(v, qty)
 }
 
 // queuedOrderResolution classifies a sent order's broker view once it has
@@ -353,7 +392,7 @@ func (e *proposalEngine) recoverQueuedAfterRestart(ctx context.Context) {
 			if r == nil || r.State != rpc.QueuedAuthSending {
 				continue
 			}
-			outcome, orderRef := orderJournalSendOutcome(journal, r.PreviewTokenID)
+			outcome, orderRef := queuedJournalSendOutcome(journal, *r)
 			if orderRef != "" {
 				r.OrderRef = orderRef
 			}
@@ -368,6 +407,11 @@ func (e *proposalEngine) recoverQueuedAfterRestart(ctx context.Context) {
 				ev = r.transition(queuedEventRecovered, rpc.QueuedAuthSent, now)
 				ev.Reason = "the order reached the broker; confirmed from the order journal " + across
 			case outcome == orderSendUnclear:
+				if ownerQueueProtection(r.Terms) {
+					r.HoldCode, r.HoldReason = queuedReasonSendUnclear, "Broker acceptance is unconfirmed; checking the existing attempt, never resending it."
+					ev = r.transition(queuedEventHeld, rpc.QueuedAuthHeld, now)
+					break
+				}
 				ev = r.resolve(queuedEventRecovered, rpc.QueuedAuthFailed, queuedReasonSendUnclear, "the broker send outcome is unknown "+across+"; confirm against the order journal and broker statements; not resent", now)
 			case r.CancelRequested:
 				ev = r.resolve(queuedEventCancelled, rpc.QueuedAuthCancelled, queuedReasonOwnerCancelled, "cancelled by the owner while the order was being placed; the order journal shows the attempt never reached the broker, so nothing was sent", now)
@@ -398,6 +442,9 @@ func (e *proposalEngine) executeQueued(ctx context.Context, rec queuedAuthRecord
 	if s == nil {
 		return
 	}
+	if rec.Terms.Version == 2 && rec.OrderRef != "" {
+		return
+	}
 	now := e.clock()
 	if problem := queuedRecordProblem(rec); problem != "" {
 		e.cancelQueued(ctx, rec, queuedReasonRecordUnreadable, problem)
@@ -409,6 +456,10 @@ func (e *proposalEngine) executeQueued(ctx context.Context, rec queuedAuthRecord
 		e.holdQueued(ctx, rec, rpc.ReadinessBrokerUnavailable, queuedHoldUnscopedReason)
 		return
 	case !sameBrokerScope(scope, rec.scope()):
+		if ownerQueueProtection(rec.Terms) {
+			e.holdQueued(ctx, rec, queuedReasonAccountChanged, "Protection waits for its original account and mode.")
+			return
+		}
 		e.cancelQueued(ctx, rec, queuedReasonAccountChanged, "the connected account or paper/live mode changed after the owner signed")
 		return
 	case s.tradingFrozen():
@@ -423,11 +474,11 @@ func (e *proposalEngine) executeQueued(ctx context.Context, rec queuedAuthRecord
 		e.holdQueued(ctx, rec, rpc.ReadinessBrokerUnavailable, queuedHoldBrokerLinkReason)
 		return
 	}
-	if session, ok := s.previewSession(marketcal.Market(rec.Terms.Market), now); ok && session.State != marketcal.StateUnknown && !session.IsOpen {
+	if session, ok := s.previewSession(marketcal.Market(rec.Terms.Market), now); !ownerQueueProtection(rec.Terms) && ok && session.State != marketcal.StateUnknown && !session.IsOpen {
 		e.holdQueued(ctx, rec, rpc.ReadinessMarketClosed, nonEmptyString(sessionClosedPhrase(session), queuedHoldSessionReason))
 		return
 	}
-	if !s.cfg.AutoTrade.WithDefaults().FastPathEnabledResolved() {
+	if rec.Terms.Version == 1 && !s.cfg.AutoTrade.WithDefaults().FastPathEnabledResolved() {
 		e.cancelQueued(ctx, rec, "fast_path_disabled", "proposal submit was disabled by [auto_trade].fast_path_enabled after the owner signed")
 		return
 	}
@@ -458,6 +509,9 @@ func (e *proposalEngine) executeQueued(ctx context.Context, rec queuedAuthRecord
 // churn never cancels. It returns the current row and the blockers it
 // carries, or the reason code and reason to cancel with.
 func (e *proposalEngine) queuedResolve(ctx context.Context, rec queuedAuthRecord) (rpc.TradeProposal, []rpc.TradingBlocker, string, string) {
+	if rec.Terms.Version == 2 {
+		return e.resolveOwnerQueue(ctx, rec)
+	}
 	var snap rpc.TradeProposalSnapshot
 	var err error
 	if e.queuedRefreshForTest != nil {
@@ -505,6 +559,9 @@ func (e *proposalEngine) queuedResolve(ctx context.Context, rec queuedAuthRecord
 // nothing.
 func (e *proposalEngine) settleQueuedRefusal(ctx context.Context, rec queuedAuthRecord, blockers []rpc.TradingBlocker) {
 	hold, code, reason := queuedDisposition(blockers)
+	if rec.Terms.Version == 2 && code != "" {
+		hold = true
+	}
 	switch {
 	case hold:
 		e.holdQueued(ctx, rec, code, reason)
@@ -584,6 +641,18 @@ func (e *proposalEngine) sendQueued(ctx context.Context, rec queuedAuthRecord, p
 	s.queuedGrant.Store(&queuedWriteGrant{QueueID: id, Key: current.Terms.Key, Bucket: current.Terms.Bucket})
 	defer s.queuedGrant.Store(nil)
 	terms := current.Terms
+	if terms.Version == 2 {
+		fresh, blockers, code, reason := e.resolveOwnerQueue(ctx, current)
+		if code != "" {
+			e.cancelQueued(ctx, current, code, reason)
+			return
+		}
+		if len(blockers) > 0 {
+			e.settleQueuedRefusal(ctx, current, blockers)
+			return
+		}
+		prop = fresh
+	}
 	params := rpc.TradeProposalSubmitParams{Key: prop.Key, Revision: prop.Revision, Quantity: min(terms.MaxQuantity, prop.Quantity), FastPath: true,
 		Origin: rpc.OrderOriginDaemonOwnerQueued, TimeoutMs: int(queuedSubmitTimeout.Milliseconds())}
 	staged, stagedToken := false, ""
@@ -592,7 +661,13 @@ func (e *proposalEngine) sendQueued(ctx context.Context, rec queuedAuthRecord, p
 	// window ended before staging; expiry ends the record.
 	mismatch, problem, outside := "", "", false
 	var placeErr error
-	res, err := e.submit(ctx, params, proposalSubmitOptions{
+	submit := func(opts proposalSubmitOptions) (rpc.TradeProposalSubmitResult, error) {
+		if terms.Version == 2 {
+			return e.submitOwnerQueue(ctx, current, prop, opts)
+		}
+		return e.submit(ctx, params, opts)
+	}
+	res, err := submit(proposalSubmitOptions{
 		queued:       &current,
 		resolved:     &prop,
 		bounded:      &rpc.OrderBoundedLimit{Concession: terms.Concession, WorstPrice: terms.WorstPrice, MaxSpreadPctOfMid: terms.MaxSpreadPctOfMid},
@@ -604,9 +679,13 @@ func (e *proposalEngine) sendQueued(ctx context.Context, rec queuedAuthRecord, p
 			switch {
 			case preview.Draft.Contract.ConID != terms.Contract.ConID || !strings.EqualFold(preview.Draft.Action, terms.Action):
 				mismatch = "the preview does not describe the signed contract and side"
-			case preview.Draft.Quantity <= 0 || preview.Draft.Quantity > terms.MaxQuantity:
+			case preview.Draft.Quantity <= 0 || !ownerQueueProtection(terms) && preview.Draft.Quantity > terms.MaxQuantity:
 				mismatch = "the preview quantity is outside the signed maximum"
-			case !queuedLimitInside(terms.Action, preview.Draft.LimitPrice, terms.WorstPrice):
+			case ownerQueueProtection(terms) && (float64(preview.Draft.Quantity) != preview.Position.Before || !trailSpecsEquivalent(preview.Draft.Trail, terms.OwnerOrder.Trail)):
+				mismatch = "the preview changed full-position coverage or the approved trail"
+			case terms.Version == 2 && !ownerQueueProtection(terms) && preview.Draft.Quantity != terms.MaxQuantity:
+				mismatch = "the preview changed the approved quantity"
+			case !ownerQueueProtection(terms) && !queuedLimitInside(terms.Action, preview.Draft.LimitPrice, terms.WorstPrice):
 				mismatch = "the preview limit is beyond the signed worst price"
 			}
 			if mismatch != "" {
@@ -623,7 +702,7 @@ func (e *proposalEngine) sendQueued(ctx context.Context, rec queuedAuthRecord, p
 				if problem = queuedRecordProblem(*r); problem != "" {
 					return nil
 				}
-				if at.Before(r.Terms.NotBefore) || !at.Before(r.Terms.NotAfter) {
+				if at.Before(r.Terms.NotBefore) || !ownerQueueProtection(r.Terms) && !at.Before(r.Terms.NotAfter) {
 					outside = true
 					return nil
 				}
@@ -692,7 +771,7 @@ func (e *proposalEngine) sendQueued(ctx context.Context, rec queuedAuthRecord, p
 			outcome = orderSendNone
 		} else if s.orderJournal != nil {
 			if journal, loadErr := s.orderJournal.LoadEvents(0); loadErr == nil {
-				outcome, journalRef = orderJournalSendOutcome(journal, stagedToken)
+				outcome, journalRef = queuedJournalSendOutcome(journal, queuedAuthRecord{Terms: terms, PreviewTokenID: stagedToken})
 			}
 		}
 	}
@@ -727,6 +806,11 @@ func (e *proposalEngine) sendQueued(ctx context.Context, rec queuedAuthRecord, p
 			ev = r.transition(queuedEventHeld, rpc.QueuedAuthHeld, finish)
 			ev.ReasonCode, ev.Reason = code, r.HoldReason
 		default:
+			if ownerQueueProtection(r.Terms) {
+				r.HoldCode, r.HoldReason = queuedReasonSendUnclear, "Broker acceptance is unconfirmed; checking the existing attempt, never resending it."
+				ev = r.transition(queuedEventHeld, rpc.QueuedAuthHeld, finish)
+				break
+			}
 			ev = r.resolve(queuedEventFailed, rpc.QueuedAuthFailed, queuedReasonSendUnclear,
 				"the send did not return a confirmed result: "+automaticOutcomeReason(res, err)+"; confirm against the order journal and broker statements; not resent", finish)
 		}
@@ -799,8 +883,12 @@ func (s *Server) daemonOwnerQueuedOriginBlockers() []rpc.TradingBlocker {
 		return unauthorised
 	}
 	rec, ok := s.tradeProposals.queued.get(grant.QueueID)
-	if !ok || !rec.liveIntent() || rec.Terms.Key != grant.Key {
+	if !ok || !rec.liveIntent() || rec.Terms.Key != grant.Key || rec.Terms.Bucket != grant.Bucket || rec.CancelRequested || !rec.MandateEndedAt.IsZero() {
 		return unauthorised
+	}
+	now := s.tradeProposals.clock()
+	if now.Before(rec.Terms.NotBefore) || !ownerQueueProtection(rec.Terms) && !now.Before(rec.Terms.NotAfter) {
+		return []rpc.TradingBlocker{{Code: "queued_window_closed", Message: "The signed queue send window is not open."}}
 	}
 	return nil
 }

@@ -27,6 +27,7 @@ func (s *Server) protectiveStopGuardWrite(ctx context.Context, step protectiveSt
 	still := false
 	for _, current := range steps {
 		if current.key() == step.key() {
+			step = current
 			still = true
 			break
 		}
@@ -35,13 +36,13 @@ func (s *Server) protectiveStopGuardWrite(ctx context.Context, step protectiveSt
 		return errors.New("the step no longer applies to current evidence")
 	}
 	view := step.View
-	s.protectiveStopGuardGrant.Store(&protectiveStopGuardWriteGrant{Kind: step.Kind, OrderRef: view.OrderRef, ReservedOrderID: view.ReservedOrderID, Quantity: step.Target})
+	s.protectiveStopGuardGrant.Store(&protectiveStopGuardWriteGrant{Kind: step.Kind, OrderRef: view.OrderRef, ReservedOrderID: view.ReservedOrderID, Quantity: step.Target, Trail: cloneTrailSpec(view.Trail), Filled: view.Filled})
 	defer s.protectiveStopGuardGrant.Store(nil)
 	switch step.Kind {
 	case protectiveStopGuardCancel:
 		_, err := s.cancelOrderForAction(ctx, rpc.OrderCancelParams{ID: view.OrderRef, Origin: rpc.OrderOriginDaemonProtectiveGuard}, corestore.ActionCancel)
 		return err
-	case protectiveStopGuardShrink:
+	case protectiveStopGuardShrink, protectiveStopGuardResize:
 		preview, err := s.previewOrder(ctx, protectiveStopGuardShrinkParams(view, step.Target))
 		if err != nil {
 			return err

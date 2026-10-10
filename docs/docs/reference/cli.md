@@ -818,6 +818,7 @@ canary order cancel ID [--json]
 |------|---------------|----------------|
 | `--limit` | yes | - |
 | `--strategy` | yes | `patient-limit`, `explicit-limit` |
+| `--adaptive-priority` | yes | `Normal`, `Patient`, `Urgent` |
 | `--order-type` | yes | `LMT`, `TRAIL`, `TRAIL-LIMIT` |
 | `--trail-percent` | yes | - |
 | `--trail-amount` | yes | - |

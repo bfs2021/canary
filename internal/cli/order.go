@@ -60,6 +60,7 @@ func runOrderPreview(ctx context.Context, env *Env, args []string) int {
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
 	limit := fs.Float64("limit", 0, "explicit LMT limit price")
 	strategy := fs.String("strategy", "", "pricing strategy: patient-limit (default) or explicit-limit")
+	adaptive := fs.String("adaptive-priority", "", "IBKR Adaptive priority for a limit: Normal, Patient, or Urgent")
 	orderTypeFlag := fs.String("order-type", "", "order type: LMT, TRAIL, or TRAIL-LIMIT")
 	trailPercent := fs.Float64("trail-percent", 0, "broker trail offset percent; 2 means 2%, not 0.02")
 	trailAmount := fs.Float64("trail-amount", 0, "broker trail offset amount")
@@ -178,18 +179,19 @@ func runOrderPreview(ctx context.Context, env *Env, args []string) int {
 		}
 	}
 	params := rpc.OrderPreviewParams{
-		Action:        strings.ToUpper(strings.TrimSpace(rest[0])),
-		Contract:      contract,
-		Quantity:      qty,
-		OrderType:     orderType,
-		LimitPrice:    limitPtr,
-		Trail:         trail,
-		TriggerMethod: *triggerMethod,
-		Strategy:      strings.TrimSpace(*strategy),
-		TIF:           strings.ToUpper(strings.TrimSpace(*tif)),
-		OutsideRTH:    *outsideRTH,
-		ReplaceID:     strings.TrimSpace(*replaceID),
-		TimeoutMs:     int(timeout.Milliseconds()),
+		AdaptivePriority: *adaptive,
+		Action:           strings.ToUpper(strings.TrimSpace(rest[0])),
+		Contract:         contract,
+		Quantity:         qty,
+		OrderType:        orderType,
+		LimitPrice:       limitPtr,
+		Trail:            trail,
+		TriggerMethod:    *triggerMethod,
+		Strategy:         strings.TrimSpace(*strategy),
+		TIF:              strings.ToUpper(strings.TrimSpace(*tif)),
+		OutsideRTH:       *outsideRTH,
+		ReplaceID:        strings.TrimSpace(*replaceID),
+		TimeoutMs:        int(timeout.Milliseconds()),
 	}
 	if params.Contract.Currency == "" && params.Contract.Market == "" && params.Contract.Exchange == "" && params.Contract.PrimaryExch == "" {
 		params.Contract.Currency = "USD"

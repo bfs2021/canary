@@ -31,12 +31,12 @@ func TestStockAddCLIOnlyPlansOrPreviews(t *testing.T) {
 	for _, action := range []string{"plan", "preview"} {
 		conn := &stockAddConn{}
 		var stdout, stderr bytes.Buffer
-		code := Run(t.Context(), &Env{Conn: conn, Stdout: &stdout, Stderr: &stderr}, "add", []string{action, "syna", "--currency", "usd", "--limit", "100", "--quantity", "3", "--json"})
+		code := Run(t.Context(), &Env{Conn: conn, Stdout: &stdout, Stderr: &stderr}, "add", []string{action, "syna", "--currency", "usd", "--limit", "100", "--quantity", "3", "--adaptive-priority", "Normal", "--json"})
 		want := rpc.MethodAddPlan
 		if action == "preview" {
 			want = rpc.MethodAddPreview
 		}
-		if code != 0 || conn.method != want || conn.params.Quantity != 3 || conn.params.Contract.Symbol != "SYNA" {
+		if code != 0 || conn.method != want || conn.params.Quantity != 3 || conn.params.Contract.Symbol != "SYNA" || conn.params.AdaptivePriority != "Normal" {
 			t.Fatalf("%d %+v %s", code, conn, stderr.String())
 		}
 	}

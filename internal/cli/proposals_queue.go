@@ -53,14 +53,33 @@ func runProposalsQueuePrepare(ctx context.Context, env *Env, args []string) int 
 	fs := flagSet(env, "proposals queue prepare")
 	jsonOut := fs.Bool("json", false, "emit private backend handoff JSON")
 	qty := fs.Int("quantity", 0, "lower the signed maximum below the proposal quantity")
+	fromStdin := fs.Bool("stdin", false, "read exact owner-order terms from standard input")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
 	}
-	if fs.NArg() != 2 || !*jsonOut {
-		return fail(env, "proposals queue prepare requires KEY REVISION --json; retain its private reference only in the backend")
+	if !*jsonOut || !*fromStdin && fs.NArg() != 2 || *fromStdin && (fs.NArg() != 0 || *qty != 0) {
+		return fail(env, "proposals queue prepare requires KEY REVISION --json or --stdin --json; retain its private reference only in the backend")
 	}
 	var res rpc.TradeProposalQueuePrepareResult
 	p := rpc.TradeProposalQueuePrepareParams{Key: fs.Arg(0), Revision: fs.Arg(1), Quantity: *qty}
+	if *fromStdin {
+		if env.Stdin == nil {
+			return fail(env, "queue prepare requires standard input")
+		}
+		raw, err := io.ReadAll(io.LimitReader(env.Stdin, queueArmInputMaxBytes+1))
+		if err != nil || len(raw) > queueArmInputMaxBytes {
+			return fail(env, "cannot read bounded owner-order terms")
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			return fail(env, "invalid owner-order terms: %v", err)
+		}
+		var extra any
+		if dec.Decode(&extra) != io.EOF || !p.OwnerOrder {
+			return fail(env, "queue prepare requires one v2 owner-order object")
+		}
+	}
 	if err := env.Conn.Call(ctx, rpc.MethodTradeProposalsQueuePrepare, p, &res); err != nil {
 		return fail(env, "proposals queue prepare: %v", err)
 	}

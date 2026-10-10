@@ -20,6 +20,7 @@ import (
 type brokerWriteTransactionBinding struct {
 	deskAuthority              *deskAuthorityFence
 	stockAddReview             *rpc.AddReview
+	stockAddQueueAdmission     *ownerQueueAdmission
 	stockAddOrdersGeneration   uint64
 	stockAddAccountFingerprint string
 	connector                  *ibkrlib.Connector
@@ -370,8 +371,11 @@ func (s *Server) brokerWireGuard(binding brokerWriteTransactionBinding, status r
 		// Policy managers and account evidence are read before the control lease,
 		// following the same lock order as ordinary order-limit validation.
 		if binding.stockAddReview != nil {
+			if a := binding.stockAddQueueAdmission; a != nil && (!s.ownerQueueAdmissionCurrent(binding.scope, a) || binding.riskDraft.Contract.ConID != a.ConID || binding.riskDraft.Quantity != a.Quantity || binding.riskDraft.LimitPrice > a.Cap) {
+				return fmt.Errorf("%w: queued buy admission changed before transmission", ErrTradingDisabled)
+			}
 			broker := &orderPreviewBrokerAuthority{connector: binding.connector}
-			if s.stockAddQueuedInstruction(binding.scope) || !s.stockAddPolicyCurrent(*binding.stockAddReview) || s.currentProtectionOrderSnapshotBinding().generation != binding.stockAddOrdersGeneration || stockAddAccountFingerprint(broker) != binding.stockAddAccountFingerprint {
+			if s.stockAddQueuedInstruction(binding.scope, binding.stockAddQueueAdmission) || !s.stockAddPolicyCurrent(*binding.stockAddReview) || s.currentProtectionOrderSnapshotBinding().generation != binding.stockAddOrdersGeneration || stockAddAccountFingerprint(broker) != binding.stockAddAccountFingerprint {
 				return fmt.Errorf("%w: Add policy, cash or working orders changed after admission; preview again", ErrTradingDisabled)
 			}
 		}
