@@ -1,5 +1,5 @@
 # canary order --help · COLUMNS=80 · colour off
-canary order — Preview, place, modify, cancel, or inspect gated orders
+canary order — Preview, place, change, cancel or check orders
 
 Usage: canary order <action> [flags]
 
@@ -13,7 +13,7 @@ Actions
 Run canary order <action> --help for syntax and flags.
 
 # canary order --help · COLUMNS=80 · colour on, ESC written as \x1b
-\x1b[1mcanary order — Preview, place, modify, cancel, or inspect gated orders\x1b[0m
+\x1b[1mcanary order — Preview, place, change, cancel or check orders\x1b[0m
 
 Usage: \x1b[36mcanary order <action> [flags]\x1b[0m
 

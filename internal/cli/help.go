@@ -89,10 +89,10 @@ func helpDescription(name string) (summary, usage string) {
 func renderUsage(env *Env) {
 	w := env.Stdout
 	helpLine(env, "", productidentity.ProductName+" — portfolio, risk and order tools for Interactive Brokers", env.bold)
-	helpLine(env, "", "Runs locally. Broker writes require approval and trading checks.", nil)
+	helpLine(env, "", "Runs locally. Sending or changing orders requires approval and safety checks.", nil)
 	fmt.Fprintln(w)
 	helpLine(env, "Usage: ", productidentity.Executable+" <subcommand> [flags] [args]", env.cyan)
-	helpLine(env, "Start: ", productidentity.Executable+" status — check the daemon and gateway connection", nil)
+	helpLine(env, "Start: ", productidentity.Executable+" status — check the broker connection", nil)
 	specs := Catalog()
 	for _, group := range HelpGroups() {
 		fmt.Fprintln(w)
@@ -108,7 +108,7 @@ func renderUsage(env *Env) {
 	fmt.Fprintln(w)
 	helpLine(env, "", "Run canary <command> --help for usage and available actions.", nil)
 	helpLine(env, "", "Run canary <command> <action> --help for that action's flags.", nil)
-	helpLine(env, "", "Add --json to data/query commands for machine-readable output.", nil)
+	helpLine(env, "", "Add --json to data commands for output that scripts can read.", nil)
 	fmt.Fprintln(w)
 	helpLine(env, "", "Colour: NO_COLOR=1 disables it; CANARY_COLOR=always|never overrides.", env.dim)
 }

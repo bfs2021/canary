@@ -16,47 +16,47 @@ The group column is the heading a command appears under in `canary --help`: Desk
 
 | Command | Group | Summary | Guard | MCP tool |
 |---------|-------|---------|-------|----------|
-| [`canary status`](#canary-status) | Desk | Daemon + gateway health (run this first if anything fails) | `read-only` | yes |
-| [`canary data`](#canary-data) | Markets | Canary-owned source health and bounded required-feed checks | `read-only` | yes |
+| [`canary status`](#canary-status) | Desk | Check Canary and the broker connection | `read-only` | yes |
+| [`canary data`](#canary-data) | Markets | Check data availability and freshness | `read-only` | yes |
 | [`canary account`](#canary-account) | Desk | Account summary snapshot (NLV, BP, cash, margin, daily P&L) | `read-only` | yes |
 | [`canary positions`](#canary-positions) | Desk | List open stock, option, bill and bond positions | `read-only` | yes |
 | [`canary strategies`](#canary-strategies) | Desk | Group option legs and close or reduce them as one guaranteed combo | `confirm` | yes |
 | [`canary portfolio`](#canary-portfolio) | Desk | Signed allocation by asset class and GICS sector, with coverage; plan reads the next portfolio action | `read-only` | yes |
 | [`canary market`](#canary-market) | Markets | Observed quotes, price history and a daily price/breadth/volume tape | `read-only` | yes |
 | [`canary technical`](#canary-technical) | Markets | Trend, relative strength, ATR, and liquidity from daily bars | `read-only` | yes |
-| [`canary watchlist`](#canary-watchlist) | Markets | Read and edit the durable owner watchlist; no broker or policy changes | `local` | CLI only |
+| [`canary watchlist`](#canary-watchlist) | Markets | View and edit your saved watchlist; no orders or risk-limit changes | `local` | CLI only |
 | [`canary add`](#canary-add) |  | Plan a stock addition or opening and review it through existing order confirmation | `read-only` | yes |
-| [`canary setups`](#canary-setups) | Markets | Observe volume turns, discover exact standard calls and read entry markouts; no trade or policy authority | `read-only` | CLI only |
+| [`canary setups`](#canary-setups) | Markets | Review volume signals, find standard call options and check prices after entry; no orders or risk-limit changes | `read-only` | CLI only |
 | [`canary calendar`](#canary-calendar) | Markets | Official exchange sessions, holidays, early closes, and coverage bounds | `read-only` | yes |
 | [`canary macro`](#canary-macro) | Markets | Public economic calendar, official publications and source coverage | `read-only` | yes |
 | [`canary regime`](#canary-regime) | Markets | Detailed broad-market regime across volatility, credit, funding, FX, gamma, and breadth | `read-only` | yes |
 | [`canary stress`](#canary-stress) | Desk | Portfolio stress with margin, exposure, concentration, options, protection, and source evidence | `read-only` | yes |
 | [`canary brief`](#canary-brief) | Desk | Combined post- and pre-trade operator brief with disclosed source degradation | `read-only` | yes |
-| [`canary edge`](#canary-edge) | Desk | Automatic decision review with coverage, matched horizons, repeatability, and option position cycles | `read-only` | yes |
+| [`canary edge`](#canary-edge) | Desk | Review past trading decisions using broker records | `read-only` | yes |
 | [`canary short-interest`](#canary-short-interest) | Desk | Screen FINRA short positions across US equities | `read-only` | yes |
 | [`canary lending`](#canary-lending) | Desk | Read lending income, borrowing fees and stock market context | `read-only` | yes |
 | [`canary rules`](#canary-rules) | Desk | Advisory daily trading rule checklist, hardest breach first, against limits you can set | `read-only` | yes |
 | [`canary policy`](#canary-policy) | Desk | Every policy and setting in force, capital/drawdown state, plausibility check, overrides (human-only writes) | `confirm` | CLI only |
 | [`canary recon`](#canary-recon) | Desk | Post-trade reconciliation: broker statement flows vs the declared capital ledger | `confirm` | CLI only |
 | [`canary reporting`](#canary-reporting) | Desk | IBKR statement reporting status and performance series for Recon and Edge | `read-only` | yes |
-| [`canary proposals`](#canary-proposals) | Desk | Daemon-owned close/reduce-only protection proposals | `confirm` | yes |
-| [`canary opportunities`](#canary-opportunities) | Desk | Daemon-owned option exercise opportunities | `confirm` | yes |
-| [`canary trading`](#canary-trading) | Desk | Local trading gate status and configuration | `read-only` | yes |
-| [`canary settings`](#canary-settings) | System | Runtime platform preferences and observed read-only state | `confirm` | yes |
+| [`canary proposals`](#canary-proposals) | Desk | Review proposals to close or reduce positions | `confirm` | yes |
+| [`canary opportunities`](#canary-opportunities) | Desk | Review option exercise opportunities | `confirm` | yes |
+| [`canary trading`](#canary-trading) | Desk | Check trading permissions and what blocks orders | `read-only` | yes |
+| [`canary settings`](#canary-settings) | System | View settings and change supported preferences | `confirm` | yes |
 | [`canary orders`](#canary-orders) | Desk | Read current-context local order lifecycle state without transmitting orders | `read-only` | yes |
-| [`canary order`](#canary-order) | Desk | Preview, place, modify, cancel, or inspect gated orders | `confirm` | yes |
-| [`canary app`](#canary-app) | System | Run the paired mobile PWA application layer | `confirm` | CLI only |
-| [`canary mcp`](#canary-mcp) | System | Run the stdio MCP server for local AI clients | `local` | CLI only |
-| [`canary daemon`](#canary-daemon) | System | Run the stateful gateway daemon (normally autospawned) | `local` | CLI only |
-| [`canary setup`](#canary-setup) | System | Configure a local client, app host, or shared broker reporting | `local` | CLI only |
-| [`canary update`](#canary-update) | System | Self-update the Canary binary from the latest GitHub release | `confirm` | CLI only |
-| [`canary restart`](#canary-restart) | System | Gracefully restart the daemon and any running app process | `confirm` | CLI only |
-| [`canary stop`](#canary-stop) | System | Stop the local daemon and app processes | `confirm` | CLI only |
+| [`canary order`](#canary-order) | Desk | Preview, place, change, cancel or check orders | `confirm` | yes |
+| [`canary app`](#canary-app) | System | Run the paired mobile app | `confirm` | CLI only |
+| [`canary mcp`](#canary-mcp) | System | Run Canary’s connection for AI assistants (MCP) | `local` | CLI only |
+| [`canary daemon`](#canary-daemon) | System | Run the background broker connection (usually starts automatically) | `local` | CLI only |
+| [`canary setup`](#canary-setup) | System | Set up an AI assistant, the mobile app or broker statements | `local` | CLI only |
+| [`canary update`](#canary-update) | System | Install the latest Canary release | `confirm` | CLI only |
+| [`canary restart`](#canary-restart) | System | Restart Canary and any running mobile app server | `confirm` | CLI only |
+| [`canary stop`](#canary-stop) | System | Stop Canary and the mobile app server | `confirm` | CLI only |
 | [`canary version`](#canary-version) | System | Print version, commit, build date | `local` | CLI only |
 
 ## `canary status`
 
-Daemon + gateway health (run this first if anything fails).
+Check Canary and the broker connection.
 
 Guard `read-only`. Also available as an MCP tool.
 
@@ -72,7 +72,7 @@ canary status [--json] [--gateway-diagnostics]
 
 ## `canary data`
 
-Canary-owned source health and bounded required-feed checks.
+Check data availability and freshness.
 
 Guard `read-only`. Also available as an MCP tool.
 
@@ -239,7 +239,7 @@ canary technical SYM[,SYM...] [--benchmark SPY] [--market us|de] [--json]
 
 ## `canary watchlist`
 
-Read and edit the durable owner watchlist; no broker or policy changes.
+View and edit your saved watchlist; no orders or risk-limit changes.
 
 Guard `local`. CLI only, with no MCP tool: owner-managed local preferences; typed read-only client and owner CLI, no model mutation tool.
 
@@ -283,7 +283,7 @@ canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity N
 
 ## `canary setups`
 
-Observe volume turns, discover exact standard calls and read entry markouts; no trade or policy authority.
+Review volume signals, find standard call options and check prices after entry; no orders or risk-limit changes.
 
 `options` reads in three steps: listed expiries; with `--expiry`, up to 21 listed call strikes around the underlying price, which carry no prices (`status: not_requested`); with `--strike`, the exact call. Only that exact call carries a `quote`, read once within 5 seconds on a market-data line opened for this request: `status: quoted` with `bid`, `ask`, `as_of` and `data_type` when both sides are finite and positive, the bid is at most the ask, `as_of` is no more than 60 seconds old, and the broker labelled the data `live`, `delayed`, `frozen` or `delayed-frozen`. Anything else is `status: missing` with no prices. A missing quote never fails the selection, and the order preview still prices any order.
 
@@ -413,7 +413,7 @@ canary brief [--details] [--json]
 
 ## `canary edge`
 
-Automatic decision review with coverage, matched horizons, repeatability, and option position cycles.
+Review past trading decisions using broker records.
 
 Guard `read-only`. Also available as an MCP tool.
 
@@ -631,7 +631,7 @@ Subcommands: `status`, `performance`, `fx`.
 
 ## `canary proposals`
 
-Daemon-owned close/reduce-only protection proposals.
+Review proposals to close or reduce positions.
 
 Proposals are advisory. Only `submit`, `submit-bundle` and `reduce` reach the broker; each needs an explicit human instruction for that exact order.
 
@@ -685,7 +685,7 @@ canary proposals status|refresh|list|preview|prepare|prepared-status|prepare-bun
 
 ## `canary opportunities`
 
-Daemon-owned option exercise opportunities.
+Review option exercise opportunities.
 
 Opportunity detection is advisory. Only `exercise` reaches the broker, and it needs an explicit human instruction for that exact action.
 
@@ -718,7 +718,7 @@ canary opportunities status|refresh|list|preview|exercise|ignore [--json]
 
 ## `canary trading`
 
-Local trading gate status and configuration.
+Check trading permissions and what blocks orders.
 
 `status` reads the local trading gate and its blockers.
 
@@ -738,7 +738,7 @@ Subcommands: `status`.
 
 ## `canary settings`
 
-Runtime platform preferences and observed read-only state.
+View settings and change supported preferences.
 
 `show` reads. `set` writes a runtime preference, and the write path has its own gate: `trading.freeze` is accepted only from an interactive human terminal (the order limits live in `risk-policy.toml` `[order_limits]`, not in settings), and agent and paired-device origins are rejected. The keys are listed in the [configuration reference](config.md).
 
@@ -787,7 +787,7 @@ Subcommands: `open`, `history`.
 
 ## `canary order`
 
-Preview, place, modify, cancel, or inspect gated orders.
+Preview, place, change, cancel or check orders.
 
 `status` reads one journaled order and `preview` mints a tokenized draft: it runs the broker WhatIf and never transmits, and a minted token is not submit eligibility. `place`, `modify`, and `cancel` are broker writes: each requires an explicit human instruction for that exact order, and place/modify additionally consume a submit-eligible preview token through the daemon's ordinary admission gates (mode and account pins, caps, freeze, origin, journal). The constrained proposal and opportunity surfaces remain the daemon-authored candidate paths; this family is the operator's direct gated path.
 
@@ -840,7 +840,7 @@ canary order cancel ID [--json]
 
 ## `canary app`
 
-Run the paired mobile PWA application layer.
+Run the paired mobile app.
 
 Guard `local`, with `confirm` subcommands. CLI only, with no MCP tool: local mobile/PWA service mode with browser pairing and Web Push state; not a broker-data MCP tool.
 
@@ -873,7 +873,7 @@ canary app pair
 
 ## `canary mcp`
 
-Run the stdio MCP server for local AI clients.
+Run Canary’s connection for AI assistants (MCP).
 
 Guard `local`. CLI only, with no MCP tool: transport server mode; the MCP host starts this process, no LLM should call it as a tool.
 
@@ -889,7 +889,7 @@ canary mcp
 
 ## `canary daemon`
 
-Run the stateful gateway daemon (normally autospawned).
+Run the background broker connection (usually starts automatically).
 
 Guard `local`. CLI only, with no MCP tool: local background service mode; autospawned by CLI/MCP clients and not an agent operation.
 
@@ -909,7 +909,7 @@ canary daemon [--foreground] [--config PATH] [--socket PATH] [--log PATH|stderr]
 
 ## `canary setup`
 
-Configure a local client, app host, or shared broker reporting.
+Set up an AI assistant, the mobile app or broker statements.
 
 Guard `local`. CLI only, with no MCP tool: interactive local integration and credential configuration; not an LLM operation.
 
@@ -928,7 +928,7 @@ Subcommands: `claude-desktop`, `app`, `reporting`.
 
 ## `canary update`
 
-Self-update the Canary binary from the latest GitHub release.
+Install the latest Canary release.
 
 Guard `confirm`. CLI only, with no MCP tool: binary-management verb (replaces the canary binary from GitHub releases); not a daemon RPC, must stay user-triggered for trust-boundary reasons.
 
@@ -947,7 +947,7 @@ canary update [--check] [--force] [--restart|--no-restart]
 
 ## `canary restart`
 
-Gracefully restart the daemon and any running app process.
+Restart Canary and any running mobile app server.
 
 Guard `confirm`. CLI only, with no MCP tool: local process-management verb (signals daemon processes); useful for humans and scripts, but not a broker-data MCP tool.
 
@@ -971,7 +971,7 @@ canary restart [--app] [--force] [--timeout 15s] [--json]
 
 ## `canary stop`
 
-Stop the local daemon and app processes.
+Stop Canary and the mobile app server.
 
 Stopping is local process management: it signals the daemon and the app on this machine and reaches no broker. Orders already working stay at the broker, but nothing local watches them until the daemon runs again — no fills or cancels in the journal, no protection proposals, no phone alerts. So `stop` asks before it stops a daemon that still has work in flight, the same work its own idle shutdown defers on, and `--yes` is how a script answers. `--force` only escalates a stuck process from SIGTERM to SIGKILL after `--timeout`; it never widens what is stopped. Stopping the daemon records a persistent stop intent for its socket. Ordinary CLI, MCP and app requests cannot start it again until `canary restart` clears that intent. MCP servers belong to the AI client that started them and are reported, never signalled.
 

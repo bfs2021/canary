@@ -11,7 +11,7 @@ reconnects, with clearer log-monitor coverage.
 
 ### Changed
 
-- CLI help groups commands with clearer spacing and colour, lists order and proposal actions, includes option-order syntax and shows flag value placeholders.
+- CLI help uses plain language, clearer spacing and colour, lists order and proposal actions, includes option-order syntax and shows flag value placeholders.
 - Order previews lead with submission eligibility and retain token details and approval requirements. Stress output always shows when the assessment was generated.
 - Long CLI rows wrap beneath their values. Narrow bond tables keep comparable figures together, with identifiers and notes beneath each row; wider overflow uses labelled records. Trading permissions use plain language. JSON output and trading safeguards are unchanged.
 

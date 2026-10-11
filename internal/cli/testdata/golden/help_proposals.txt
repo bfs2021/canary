@@ -1,5 +1,5 @@
 # canary proposals --help · COLUMNS=80 · colour off
-canary proposals — Daemon-owned close/reduce-only protection proposals
+canary proposals — Review proposals to close or reduce positions
 
 Usage: canary proposals <action> [flags]
 
@@ -23,7 +23,7 @@ Actions
 Run canary proposals <action> --help for syntax and flags.
 
 # canary proposals --help · COLUMNS=80 · colour on, ESC written as \x1b
-\x1b[1mcanary proposals — Daemon-owned close/reduce-only protection proposals\x1b[0m
+\x1b[1mcanary proposals — Review proposals to close or reduce positions\x1b[0m
 
 Usage: \x1b[36mcanary proposals <action> [flags]\x1b[0m
 
