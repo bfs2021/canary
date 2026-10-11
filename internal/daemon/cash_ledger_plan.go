@@ -8,7 +8,8 @@ import (
 )
 
 func cashSweepCashObservation(row rpc.CurrencyExposure, account *rpc.AccountResult, now time.Time) cashSweepLedgerRow {
-	out := cashSweepLedgerRow{Observed: row.CashObserved, TradeDate: row.CashCcy, ExchangeRate: row.ExchangeRate, Settled: cloneFloat64Ptr(row.SettledCashCcy)}
+	out := cashSweepLedgerRow{Observed: row.CashObserved, TradeDate: row.CashCcy, ExchangeRate: row.ExchangeRate, Settled: cloneFloat64Ptr(row.SettledCashCcy),
+		Interest: rpc.CloneCashInterestRates(row.Interest)}
 	if out.Settled != nil {
 		out.SettledSourceKind = "native_tws_ledger"
 	}

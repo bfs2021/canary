@@ -450,6 +450,7 @@ func (s *Server) runFlexFetch(ctx context.Context, operationCancel context.Cance
 		}
 	}
 	if err == nil {
+		s.cashInterest.invalidate()
 		s.evaluateRiskPolicyV3Reconciliation()
 		s.kickEdgeRebuild()
 	}

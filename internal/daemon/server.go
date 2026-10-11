@@ -432,6 +432,9 @@ type Server struct {
 	flexFetch flexFetchState
 	// retainedFlex reuses parsed, content-verified evidence for recurring reads.
 	retainedFlex retainedFlexCache
+	// cashInterest keeps the broker's cash interest tiers read from the
+	// retained statements (cash_interest_rates.go).
+	cashInterest cashInterestTiersCache
 	// flexBrokerMu serializes the daily report and Edge's paced historical
 	// ranges. IBKR applies the Flex Web Service limit above Canary's query
 	// identities, so separate workers must still share one request lane.

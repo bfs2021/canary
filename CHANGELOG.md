@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.22.0 — Unreleased
+
+### What's new
+
+Cash interest rates are the broker's own. Canary reads the Flex statement's
+"Interest Details (Tiers)" section and shows, per currency, the credit rate on
+the current cash balance and the debit rate on the amount borrowed, with every
+tier; the cash sweep's benefit estimate and the policy check use that rate and
+make no claim without it. The owner-entered `cash_interest_rate_upper` is
+retired.
+
+### Added
+
+- The account read (`canary account`, `canary_account`, the display stream) carries `interest` per currency: the broker's credit and debit rate from the Flex statement's Interest Details (Tiers) section, with the tier, the value date, the statement's generation time and every tier of the day, or `unavailable` with the reason and the last value date seen.
+- The policy check names a sweep currency that still writes the retired `cash_interest_rate_upper` or `cash_interest_valid_through` (`retired_cash_interest_key`).
+
+### Changed
+
+- A cash sweep invest row carries `cash_interest`, the broker's credit rate its benefit estimate forgoes, and names it in its details; without a live rate the estimate reads "rate unavailable" with the reason instead of assuming a number. The `sweep_minimum_uneconomic` check reads the same rate and is skipped as `rate unavailable` without it.
+
+### Removed
+
+- `cash_interest_rate_upper` and `cash_interest_valid_through` are retired and no longer read; the file still loads with them. `dated_assumption_expired` no longer reads `cash_interest_valid_through`.
+
 ## v3.21.1 — 2026-10-11 12:16 CEST
 
 ### What's new

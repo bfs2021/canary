@@ -2099,6 +2099,10 @@ type CurrencyExposure struct {
 	SettledCashSchedule *SettledCashSchedule `json:"settled_cash_schedule,omitempty"`
 	// WebCash is supplemental exact-currency evidence, never a BASE aggregate.
 	WebCash *WebCashObservation `json:"web_cash,omitempty"`
+	// Interest is the broker's credit and debit rate on this currency's cash
+	// from the Flex statement's Interest Details (Tiers) section; nil while
+	// the daemon has not read the statements for this account yet.
+	Interest *CashInterestRates `json:"interest,omitempty"`
 }
 
 // ChainStrike is one strike row in a chain.

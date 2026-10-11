@@ -3,6 +3,7 @@ package daemon
 import (
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,8 +67,7 @@ func TestCashSweepPurchaseGainIncludesCashInterestAndSpread(t *testing.T) {
 	prop.CashSweep.MinTranche = 0
 	prop.CashSweep.MinNetGainBase = 25
 	prop.CashSweep.Bill.Maturity = cashSweepDay(preview.AsOf).AddDate(0, 0, 90).Format(time.DateOnly)
-	prop.CashSweep.CashInterestRateUpper = new(0.04)
-	prop.CashSweep.CashInterestValidThrough = "2027-12-31"
+	prop.CashSweep.CashInterest = cashInterestTestSide(0.04)
 	preview.Quote.Ask = new(99.0)
 	preview.Quote.DataType = rpc.MarketDataLive
 	// Ten units, 10000 face. Gross discount 100, fee 1, forgone interest ~98.
@@ -78,7 +78,7 @@ func TestCashSweepPurchaseGainIncludesCashInterestAndSpread(t *testing.T) {
 	if got := cashSweepEconomicsAdvisory(prop, preview); got.State != "below_benchmark" || got.IncrementalGainBase == nil || *got.IncrementalGainBase >= 25 {
 		t.Fatalf("ignored cash opportunity cost: %+v", got)
 	}
-	prop.CashSweep.CashInterestRateUpper = new(0.0)
+	prop.CashSweep.CashInterest = cashInterestTestSide(0.0)
 	if got := cashSweepEconomicsBlockers(prop, preview); len(got) != 0 {
 		t.Fatalf("explicit zero interest with worthwhile bill: %v", got)
 	}
@@ -90,16 +90,19 @@ func TestCashSweepPurchaseGainIncludesCashInterestAndSpread(t *testing.T) {
 	if got := cashSweepEconomicsAdvisory(prop, preview); got.State != "below_benchmark" || got.IncrementalGainBase == nil || math.Abs(*got.IncrementalGainBase-9) > 1e-9 {
 		t.Fatalf("spread was ignored: %+v", got)
 	}
-	for _, change := range []func(){func() { prop.CashSweep.CashInterestRateUpper = nil }, func() { prop.CashSweep.CashInterestRateUpper = new(math.NaN()) }, func() {
-		prop.CashSweep.CashInterestRateUpper = new(0.04)
-		prop.CashSweep.CashInterestValidThrough = "2026-01-01"
-	}} {
+	// No rate, a non-finite rate, a stale broker row and a negative broker
+	// rate each leave the estimate unavailable, saying "rate unavailable"
+	// and why; none blocks the order and none becomes a zero.
+	for _, change := range []func(){func() { prop.CashSweep.CashInterest = nil }, func() { prop.CashSweep.CashInterest = cashInterestTestSide(math.NaN()) }, func() {
+		prop.CashSweep.CashInterest = &rpc.CashInterestSide{State: rpc.CashInterestStateUnavailable, LastValueDate: "2026-09-24",
+			Reason: "the latest USD credit row is dated 2026-09-24, 4 business days ago, so the live rate is unknown"}
+	}, func() { prop.CashSweep.CashInterest = cashInterestTestSide(-0.002) }} {
 		change()
 		if got := cashSweepEconomicsBlockers(prop, preview); len(got) != 0 {
 			t.Fatalf("unknown/stale cash interest blocked the order: %v", got)
 		}
-		if got := cashSweepEconomicsAdvisory(prop, preview); got.State != "unavailable" || got.IncrementalGainBase != nil {
-			t.Fatalf("unknown/stale cash interest became zero: %+v", got)
+		if got := cashSweepEconomicsAdvisory(prop, preview); got.State != "unavailable" || got.IncrementalGainBase != nil || !strings.Contains(got.Message, "rate unavailable (") {
+			t.Fatalf("unknown/stale cash interest became zero or a claim: %+v", got)
 		}
 	}
 }
@@ -217,8 +220,7 @@ func TestCashSweepUnacknowledgedBuyCannotDisappearFromCommitments(t *testing.T) 
 func TestCashSweepRetainedPreviewExpirySeparatesAdvisoryFromSettlement(t *testing.T) {
 	prop, preview := sweepFeePreview(30000, 1000, 1)
 	prop.CashSweep.MinNetGainBase = 25
-	prop.CashSweep.CashInterestRateUpper = new(0.0)
-	prop.CashSweep.CashInterestValidThrough = preview.AsOf.Format(time.DateOnly)
+	prop.CashSweep.CashInterest = cashInterestTestSide(0.0)
 	if got := cashSweepCurrentEvidenceBlockers(prop, preview.AsOf); len(got) > 0 {
 		t.Fatalf("valid assumption refused: %v", got)
 	}

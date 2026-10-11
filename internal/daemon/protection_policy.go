@@ -1158,9 +1158,9 @@ type protectionCashSweepCurrency struct {
 	KeepCash *float64 `toml:"keep_cash" json:"keep_cash,omitempty"`
 	// MinTranche is retired in favour of min_order_notional and kept readable: when written it still raises this currency's smallest buy, in its own unit; absent, it adds nothing.
 	MinTranche *float64 `toml:"min_tranche" json:"min_tranche,omitempty"`
-	// CashInterestRateUpper is a conservative annual decimal opportunity-cost bound. Nil is unknown, including when the broker pays no interest.
+	// CashInterestRateUpper is retired and no longer read (owner decision 2026-10-11 14:07 CEST): the sweep's cash rate is the broker's own, from the Flex statement's Interest Details (Tiers) section. Kept readable so an older file still loads; `canary policy check` names it.
 	CashInterestRateUpper *float64 `toml:"cash_interest_rate_upper" json:"cash_interest_rate_upper,omitempty"`
-	// CashInterestValidThrough dates the owner-reviewed cash-interest assumption; expiry makes the benefit comparison unavailable without blocking an order.
+	// CashInterestValidThrough is retired with cash_interest_rate_upper and no longer read; kept readable so an older file still loads.
 	CashInterestValidThrough policyDate `toml:"cash_interest_valid_through" json:"cash_interest_valid_through,omitempty"`
 	// SettlementDays overrides the bill route's settlement lag in payment business days, between 1 and 5 (default: Canary's maintained route, USD bills T+1 and EUR bills T+2, T+1 for trades from 2027-10-11; other currencies have none and hold).
 	SettlementDays *int `toml:"settlement_days" json:"settlement_days,omitempty"`
@@ -1543,12 +1543,6 @@ func validateCashSweepCurrency(prefix, ccy string, c protectionCashSweepCurrency
 	}
 	if c.SettlementValidThrough != "" && !c.SettlementValidThrough.valid() {
 		return fmt.Errorf("%s.settlement_valid_through must be a date", prefix)
-	}
-	if c.CashInterestRateUpper != nil && (!finiteProtectionOptionPolicyValue(*c.CashInterestRateUpper) || *c.CashInterestRateUpper < 0) {
-		return fmt.Errorf("%s.cash_interest_rate_upper must be a finite nonnegative annual decimal rate", prefix)
-	}
-	if c.CashInterestValidThrough != "" && !c.CashInterestValidThrough.valid() {
-		return fmt.Errorf("%s.cash_interest_valid_through must be a date", prefix)
 	}
 	if c.MinTranche != nil && (!finiteProtectionOptionPolicyValue(*c.MinTranche) || *c.MinTranche <= 0) {
 		return fmt.Errorf("%s.min_tranche must be positive", prefix)

@@ -122,6 +122,10 @@ type Statement struct {
 	// Financing is optional SYEP evidence. Invalid lending rows never prevent
 	// the existing reconciliation and Edge sections from being retained.
 	Financing *FinancingStatement
+	// InterestTiers is the optional "Interest Details (Tiers)" section: the
+	// broker's own interest rates per currency, side and tier. Its rows never
+	// change what the other sections retain.
+	InterestTiers *InterestTiersStatement
 }
 
 type xmlFlexQueryResponse struct {
@@ -302,6 +306,7 @@ func parseContext(ctx context.Context, data []byte) ([]Statement, error) {
 	parseCashBalances(ctx, data, out)
 	parseFXSnapshots(ctx, data, out)
 	parseFinancing(ctx, data, out)
+	parseInterestTiers(ctx, data, out)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

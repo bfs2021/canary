@@ -35,20 +35,22 @@ func TestCashSweepBenefitIsAdvisoryThroughActualProposalPreview(t *testing.T) {
 		change      func(*rpc.TradeProposalCashSweep)
 	}{
 		{"below configured benchmark", "below_benchmark", func(s *rpc.TradeProposalCashSweep) { s.MinNetGainBase = 1e9 }},
-		{"unknown cash interest", "unavailable", func(s *rpc.TradeProposalCashSweep) { s.CashInterestRateUpper = nil }},
-		{"nonfinite cash interest", "unavailable", func(s *rpc.TradeProposalCashSweep) { s.CashInterestRateUpper = new(math.NaN()) }},
-		{"expired cash interest", "unavailable", func(s *rpc.TradeProposalCashSweep) { s.CashInterestValidThrough = "2026-01-01" }},
+		{"unknown cash interest", "unavailable", func(s *rpc.TradeProposalCashSweep) { s.CashInterest = nil }},
+		{"nonfinite cash interest", "unavailable", func(s *rpc.TradeProposalCashSweep) { s.CashInterest = cashInterestTestSide(math.NaN()) }},
+		{"stale cash interest", "unavailable", func(s *rpc.TradeProposalCashSweep) {
+			s.CashInterest = &rpc.CashInterestSide{State: rpc.CashInterestStateUnavailable, LastValueDate: "2026-09-24",
+				Reason: "the latest USD credit row is dated 2026-09-24, 4 business days ago, so the live rate is unknown"}
+		}},
 		{"valid zero benchmark", "estimated", func(s *rpc.TradeProposalCashSweep) { s.MinNetGainBase = 0 }},
 		{"zero benchmark with negative benefit", "estimated", func(s *rpc.TradeProposalCashSweep) {
-			s.MinNetGainBase, s.CashInterestRateUpper = 0, new(1.0)
+			s.MinNetGainBase, s.CashInterest = 0, cashInterestTestSide(1.0)
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newSweepPreviewRig(t, time.Date(2026, 9, 30, 14, 0, 0, 0, time.UTC))
 			s := rig.row.CashSweep
 			s.MinNetGainBase = 25
-			s.CashInterestRateUpper = new(0.0)
-			s.CashInterestValidThrough = "2027-12-31"
+			s.CashInterest = cashInterestTestSide(0.0)
 			tc.change(s)
 			out := rig.preview(t)
 			if !out.Accepted || !out.SubmitEligible || len(out.Blockers) != 0 || out.Preview == nil {
@@ -91,8 +93,7 @@ func TestCashSweepWholeSaleReportsPartialRestorationWithoutResizing(t *testing.T
 
 func TestCashSweepAdvisoryNeverMutatesOrRenewsPreview(t *testing.T) {
 	prop, preview := sweepFeePreview(30000, 990, 1)
-	prop.CashSweep.CashInterestRateUpper = new(0.0)
-	prop.CashSweep.CashInterestValidThrough = "2027-12-31"
+	prop.CashSweep.CashInterest = cashInterestTestSide(0.0)
 	prop.CashSweep.Bill.Maturity = "2026-12-31"
 	preview.Quote.Ask = new(99.0)
 	first := sanitizeProposalPreviewForProposal(preview, prop)

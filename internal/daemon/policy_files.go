@@ -1136,8 +1136,6 @@ func writeCashSweepTemplate(b *strings.Builder) {
 # etf_symbol = "XEON"   # example: a euro money-market ETF on Xetra
 # etf_exchange = "IBIS"   # Xetra
 # keep_cash = %s   # overrides the bucket's keep_cash for EUR
-# cash_interest_rate_upper = 0.0   # EXAMPLE ONLY: review an annual decimal upper bound; missing is unknown
-# cash_interest_valid_through = 2026-01-01   # EXAMPLE ONLY: expires; does not attest today's rate
 # settlement_exchange = "SMART"   # optional override; Canary's route needs no line here
 # settlement_days = 2   # optional override of the route's lag in payment business days
 # settlement_valid_through = 2027-06-30   # optional end date for this currency's route; omit it to follow Canary

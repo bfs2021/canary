@@ -115,14 +115,16 @@ var policyCheckCatalogue = []policyCheckRule{
 		summary: "no_buy_while_borrowed is false while a currency's cash is negative, so the sweep may buy bills while the account pays margin interest.", run: checkSweepBuysWhileBorrowed},
 	{id: "leveling_debit_inside_band", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryBook, needsBook: true,
 		summary: "A currency is borrowed within currency leveling's trigger_base, so leveling leaves the margin loan in place while no_buy_while_borrowed may hold the sweep's bill buys.", run: checkLevelingDebitInsideBand},
-	{id: "sweep_minimum_uneconomic", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryEconomics,
-		summary: "The sweep's minimum bill order earns less interest to the shortest rung than the commission it pays.", run: checkSweepEconomics},
+	{id: "sweep_minimum_uneconomic", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryEconomics, needsBook: true,
+		summary: "The sweep's minimum bill order earns less over the broker's cash rate to the shortest rung than the commission it pays.", run: checkSweepEconomics},
+	{id: "retired_cash_interest_key", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryProvenance,
+		summary: "A sweep currency still writes the retired cash_interest_rate_upper or cash_interest_valid_through, which nothing reads: the broker's own rate from the Flex statement decides.", run: checkRetiredCashInterestKeys},
 	{id: "retired_trading_gate", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryProvenance,
 		summary: "config.toml [trading] still carries a retired order gate whose value differs from [order_limits], which decides.", run: checkRetiredTradingGates},
 	{id: "version_not_bumped", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryProvenance,
 		summary: "A policy file was edited without a higher policy_version, so the daemon keeps the old policy in force.", run: checkVersionNotBumped},
 	{id: "dated_assumption_expired", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryProvenance,
-		summary: "A dated assumption has expired: cash_interest_valid_through, or a directional intent's expires_at.", run: checkDatedExpired},
+		summary: "A dated assumption has expired: a directional intent's expires_at.", run: checkDatedExpired},
 	{id: "dated_assumption_expiring", severity: rpc.PolicyCheckInfo, category: rpc.PolicyCheckCategoryProvenance,
 		summary: "A dated assumption ends within 14 days.", run: checkDatedExpiring},
 	{id: "file_unreviewed", severity: rpc.PolicyCheckInfo, category: rpc.PolicyCheckCategoryProvenance,
@@ -854,13 +856,16 @@ func checkSweepEconomics(c *policyCheckContext) []policyCheckHit {
 		}
 		fx, minNative := m.fx, m.native
 		keys := append(slices.Clone(m.keys), c.sweepCurrencyKey(ccy, "min_maturity_days", fmt.Sprint(cfg.MinMaturityDays)))
-		cashRate := 0.0
-		if cfg.CashInterestRateUpper != nil {
-			cashRate = *cfg.CashInterestRateUpper
-			keys = append(keys, c.sweepCurrencyKey(ccy, "cash_interest_rate_upper", policyCheckNumber(cashRate)))
-		} else {
-			c.assume(ccy + " cash: assumed to earn no interest (cash_interest_rate_upper is not written)")
+		// The cash rate is the broker's own, read with the account; without
+		// it the check makes no claim and assumes nothing.
+		side := c.book.CashInterest[ccy]
+		rate, rateReason := cashInterestRate(side, ccy)
+		if rate == nil {
+			c.skip(fmt.Sprintf("the %s sweep economics: rate unavailable (%s)", ccy, rateReason))
+			continue
 		}
+		cashRate := *rate
+		keys = append(keys, rpc.PolicyCheckKey{File: "broker statements (Flex Interest Details (Tiers))", Key: ccy + " cash rate, value date " + side.ValueDate, Value: policyCheckPct(cashRate) + " a year"})
 		net := a.yield - cashRate
 		days := float64(cfg.MinMaturityDays)
 		threshold := a.minCommission
@@ -890,8 +895,8 @@ func checkSweepEconomics(c *policyCheckContext) []policyCheckHit {
 			suggestion += "."
 		}
 		out = append(out, policyCheckHit{keys: keys,
-			message: fmt.Sprintf("The smallest %s sweep buy, %s (%s, from %s) in a %d-day bill, earns about %s over cash at an assumed %s a year, less than the assumed %s commission: the smallest bill buy the sweep places loses money.",
-				ccy, policyCheckMoney(minNative, ccy), policyCheckMoney(m.base, c.base()), m.binding, cfg.MinMaturityDays, policyCheckMoney(interest, ccy), policyCheckPct(net), policyCheckMoney(commission, ccy)),
+			message: fmt.Sprintf("The smallest %s sweep buy, %s (%s, from %s) in a %d-day bill, earns about %s over cash: an assumed bill yield of %s a year less the broker's %s cash rate of %s (value date %s), less than the assumed %s commission: the smallest bill buy the sweep places loses money.",
+				ccy, policyCheckMoney(minNative, ccy), policyCheckMoney(m.base, c.base()), m.binding, cfg.MinMaturityDays, policyCheckMoney(interest, ccy), policyCheckPct(a.yield), ccy, policyCheckPct(cashRate), side.ValueDate, policyCheckMoney(commission, ccy)),
 			suggestion: suggestion})
 	}
 	return out
@@ -919,17 +924,6 @@ type policyCheckDated struct {
 
 func (c *policyCheckContext) datedAssumptions() []policyCheckDated {
 	var out []policyCheckDated
-	if s := c.protection.Cash.Sweep; s != nil {
-		for _, ccy := range slices.Sorted(maps.Keys(s.Currency)) {
-			d := string(s.Currency[ccy].CashInterestValidThrough)
-			t, err := time.ParseInLocation(time.DateOnly, d, c.now.Location())
-			if d == "" || err != nil {
-				continue
-			}
-			out = append(out, policyCheckDated{key: c.sweepCurrencyKey(ccy, "cash_interest_valid_through", d), at: t.AddDate(0, 0, 1),
-				what: "the " + ccy + " cash-interest assumption, so the sweep's benefit comparison reads unavailable"})
-		}
-	}
 	for i, intent := range c.protection.Buckets.TrailingStop.Options.DirectionalIntents {
 		if intent.ExpiresAt.IsZero() {
 			continue
@@ -1187,6 +1181,47 @@ func checkRetiredTradingGates(c *policyCheckContext) []policyCheckHit {
 			suggestion: fmt.Sprintf("Delete %s from [trading] in %s; the order limits live in the risk constitution only.", g.config, c.config)})
 	}
 	return out
+}
+
+// checkRetiredCashInterestKeys warns while a sweep currency table still
+// writes cash_interest_rate_upper or cash_interest_valid_through. Both are
+// retired (owner decision 2026-10-11 14:07 CEST: the cash rate is the
+// broker's own, from the Flex statement's Interest Details (Tiers) section)
+// and nothing reads them, so a reader of the file sees a rate that is not
+// in force.
+func checkRetiredCashInterestKeys(c *policyCheckContext) []policyCheckHit {
+	s := c.protection.Cash.Sweep
+	if s == nil {
+		return nil
+	}
+	var out []policyCheckHit
+	for _, ccy := range slices.Sorted(maps.Keys(s.Currency)) {
+		cfg := s.Currency[ccy]
+		var keys []rpc.PolicyCheckKey
+		if cashSweepCurrencyDefined(c.protectionMD, ccy, "cash_interest_rate_upper") {
+			keys = append(keys, c.sweepCurrencyKey(ccy, "cash_interest_rate_upper", policyCheckNumber(policyCheckDeref(cfg.CashInterestRateUpper))))
+		}
+		if cashSweepCurrencyDefined(c.protectionMD, ccy, "cash_interest_valid_through") {
+			keys = append(keys, c.sweepCurrencyKey(ccy, "cash_interest_valid_through", string(cfg.CashInterestValidThrough)))
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		out = append(out, policyCheckHit{keys: keys,
+			message: fmt.Sprintf("[cash.sweep.currency.%s] still writes %s, retired and no longer read: the %s cash rate the sweep's economics and this check use is the broker's own, from the Flex statement's Interest Details (Tiers) section. A reader of the file sees a rate that is not in force.",
+				ccy, policyCheckKeyNames(keys), ccy),
+			suggestion: fmt.Sprintf("Delete %s from [cash.sweep.currency.%s].", policyCheckKeyNames(keys), ccy)})
+	}
+	return out
+}
+
+// policyCheckKeyNames lists the bare key names of hits in one table.
+func policyCheckKeyNames(keys []rpc.PolicyCheckKey) string {
+	names := make([]string, 0, len(keys))
+	for _, k := range keys {
+		names = append(names, k.Key[strings.LastIndex(k.Key, ".")+1:])
+	}
+	return strings.Join(names, " and ")
 }
 
 // checkLevelingDebitInsideBand reports a margin loan leveling leaves alone

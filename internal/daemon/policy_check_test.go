@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -126,6 +127,8 @@ func pcBook() *PolicyCheckBook {
 	return &PolicyCheckBook{BaseCurrency: "EUR", NetLiquidation: 200000, AsOf: pcNow,
 		Cash:     map[string]float64{"EUR": 20000, "USD": 5000},
 		FXToBase: map[string]float64{"EUR": 1, "USD": 0.9},
+		// The broker's USD credit rate on the Friday before pcNow.
+		CashInterest: map[string]*rpc.CashInterestSide{"USD": {State: rpc.CashInterestStateAvailable, Rate: new(0.01), Tier: "1", ValueDate: "2026-10-02"}},
 		Positions: []PolicyCheckPosition{
 			{Kind: policyCheckKindStock, Currency: "USD", Quantity: 100, MarketValueBase: 30000},
 			{Kind: policyCheckKindOption, Currency: "USD", Quantity: 10, MarketValueBase: 20000},
@@ -176,6 +179,49 @@ func pcFinding(r rpc.PolicyCheckReport, rule string) (rpc.PolicyCheckFinding, bo
 		}
 	}
 	return rpc.PolicyCheckFinding{}, false
+}
+
+// The sweep economics read the broker's cash rate from the book; without
+// one the rule says "rate unavailable" and assumes nothing.
+func TestPolicyCheckSweepEconomicsNeedTheBrokersRate(t *testing.T) {
+	uneconomic := func(f *pcFiles) {
+		f.protection = strings.Replace(f.protection, "min_order_notional = 3000.0", "min_order_notional = 900.0", 1)
+		f.protection = strings.Replace(f.protection, "[cash.sweep.currency.USD]\nmin_maturity_days = 91", "[cash.sweep.currency.USD]\nmin_maturity_days = 28", 1)
+	}
+	for name, side := range map[string]*rpc.CashInterestSide{
+		"no rates read":    nil,
+		"rate unavailable": {State: rpc.CashInterestStateUnavailable, Reason: "the latest USD credit row is dated 2026-09-25, 6 business days ago, so the live rate is unknown", LastValueDate: "2026-09-25"},
+		"rate not finite":  {State: rpc.CashInterestStateAvailable, Rate: new(math.NaN())},
+		"negative rate":    {State: rpc.CashInterestStateAvailable, Rate: new(-0.002), ValueDate: "2026-10-02"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := pcClean()
+			uneconomic(&files)
+			in := pcInput(t, files)
+			in.Book.CashInterest = map[string]*rpc.CashInterestSide{}
+			if side != nil {
+				in.Book.CashInterest["USD"] = side
+			}
+			r := CheckPolicy(in)
+			if _, ok := pcFinding(r, "sweep_minimum_uneconomic"); ok {
+				t.Fatalf("economics judged without the broker's rate: %+v", r.Findings)
+			}
+			if !slices.ContainsFunc(r.Skipped, func(s string) bool { return strings.HasPrefix(s, "the USD sweep economics: rate unavailable (") }) {
+				t.Fatalf("no skip named the missing rate: %v", r.Skipped)
+			}
+			for _, a := range r.Assumptions {
+				if strings.Contains(a, "cash") && strings.Contains(a, "interest") {
+					t.Fatalf("a cash rate was assumed: %q", a)
+				}
+			}
+		})
+	}
+	files := pcClean()
+	uneconomic(&files)
+	r := CheckPolicy(pcInput(t, files))
+	if f, ok := pcFinding(r, "sweep_minimum_uneconomic"); !ok || !strings.Contains(f.Message, "the broker's USD cash rate of 1% (value date 2026-10-02)") || len(f.Keys) == 0 || !strings.Contains(f.Keys[len(f.Keys)-1].File, "Flex Interest Details (Tiers)") {
+		t.Fatalf("economics with the broker's rate: %+v", f)
+	}
 }
 
 func TestPolicyCheckCleanPolicyHasNoFindings(t *testing.T) {
@@ -348,13 +394,13 @@ func TestPolicyCheckCatalogue(t *testing.T) {
 			edit: func(f *pcFiles, _ *PolicyCheckInput) {
 				f.protection = replace(f.protection, "min_order_notional = 3000.0", "min_order_notional = 900.0")
 				f.protection = replace(f.protection, "[cash.sweep.currency.USD]\nmin_maturity_days = 91", "[cash.sweep.currency.USD]\nmin_maturity_days = 28")
-			}, contains: "1,000 USD (900 EUR, from min_order_notional) in a 28-day bill"},
+			}, contains: "1,000 USD (900 EUR, from min_order_notional) in a 28-day bill, earns about 1.92 USD over cash: an assumed bill yield of 3.5% a year less the broker's USD cash rate of 1% (value date 2026-10-02)"},
 		{name: "edited without a version bump", rule: "version_not_bumped", severity: rpc.PolicyCheckWarn,
 			edit: func(_ *pcFiles, in *PolicyCheckInput) { in.FileStatus[PolicyFileRulebook] = "drift" }, contains: "did not rise"},
-		{name: "cash interest assumption expired", rule: "dated_assumption_expired", severity: rpc.PolicyCheckWarn,
+		{name: "retired cash interest keys still written", rule: "retired_cash_interest_key", severity: rpc.PolicyCheckWarn,
 			edit: func(f *pcFiles, _ *PolicyCheckInput) {
 				f.protection = replace(f.protection, "[cash.sweep.currency.USD]\n", "[cash.sweep.currency.USD]\ncash_interest_rate_upper = 0.01\ncash_interest_valid_through = 2026-09-30\n")
-			}, contains: "USD cash-interest assumption"},
+			}, absent: []string{"dated_assumption_expired", "file_refused"}, contains: "cash_interest_rate_upper and cash_interest_valid_through, retired and no longer read"},
 		{name: "directional intent expired", rule: "dated_assumption_expired", severity: rpc.PolicyCheckWarn,
 			edit: func(f *pcFiles, _ *PolicyCheckInput) {
 				f.protection += "\n[buckets.trailing_stop.options]\ndirectional_intents = [{ con_id = 1, reason = \"test\", approved_at = 2026-09-01T00:00:00Z, expires_at = 2026-10-01T00:00:00Z }]\n"
