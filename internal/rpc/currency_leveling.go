@@ -104,9 +104,11 @@ type TradeProposalCurrencyLevelingStatus struct {
 	// OrderCapBase is the order cap in force ([order_limits]) one loan's
 	// conversions together are held to; nil while it cannot be read.
 	OrderCapBase *float64 `json:"order_cap_base,omitempty"`
-	// RatesSource names where interest rates come from (broker_statements);
-	// RatesThrough is the latest statement day read and RatesReason says why
-	// no rates are available.
+	// RatesSource names where leveling's rates come from (broker_statements:
+	// figures leveling measures from the daily accruals for its own ranking,
+	// labelled as measured; the broker's own rates per currency are on the
+	// account read); RatesThrough is the latest statement day read and
+	// RatesReason says why no rates are available.
 	RatesSource  string `json:"rates_source"`
 	RatesThrough string `json:"rates_through,omitempty"`
 	RatesReason  string `json:"rates_reason,omitempty"`

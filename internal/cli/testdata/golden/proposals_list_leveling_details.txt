@@ -8,7 +8,7 @@ Theta/day 0.00
   Currency leveling 1 row · each repayment needs your approval · band €
   10,000.00 · cushion € 250.00 · limit within 2 bp of the mid · a conversion
   pays back within 30 days · one repayment at most € 50,000.00 (order cap in
-  force) · interest rates from the broker's statements to 2026-10-05
+  force) · interest rates measured from the broker's statements to 2026-10-05
     EUR pays EUR pays about 17,219 EUR of the USD loan, earning 1.40% a year
     USD convert USD is borrowed: −20,000 USD (−17,094 EUR), beyond the 10,000
     EUR band, costing 5.10% a year; a conversion follows
@@ -45,7 +45,7 @@ Theta/day 0.00
   Currency leveling 1 row · each repayment needs your approval · band €
   10,000.00 · cushion € 250.00 · limit within 2 bp of the mid · a conversion
   pays back within 30 days · one repayment at most € 50,000.00 (order cap in
-  force) · interest rates from the broker's statements to 2026-10-05
+  force) · interest rates measured from the broker's statements to 2026-10-05
     EUR pays EUR pays about 17,219 EUR of the USD loan, earning 1.40% a year
     USD convert USD is borrowed: −20,000 USD (−17,094 EUR), beyond the 10,000
     EUR band, costing 5.10% a year; a conversion follows

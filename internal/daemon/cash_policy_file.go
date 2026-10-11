@@ -34,7 +34,7 @@ func OpenCashPolicyFile(ctx context.Context, policyPath, statePath string) (*Cas
 	s := &Server{protectionPolicies: m, coreStore: core}
 	s.cashPolicyBookForTest = func() cashPolicyBook {
 		const why = "no broker is connected"
-		return cashPolicyBook{at: time.Now().UTC(), ledgerReason: why, orderCapReason: why, ratesReason: why}
+		return cashPolicyBook{at: time.Now().UTC(), ledgerReason: why, orderCapReason: why, ratesReason: why, tiersReason: why}
 	}
 	return &CashPolicyFile{s: s, core: core}, nil
 }

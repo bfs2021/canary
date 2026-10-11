@@ -136,7 +136,9 @@ type CashPolicySnapshot struct {
 	Sections     CashPolicySections   `json:"sections"`
 	Settings     []CashPolicySetting  `json:"settings"`
 	Currencies   []CashPolicyCurrency `json:"currencies"`
-	// RatesThrough is the latest statement day the interest rates read.
+	// RatesSource names where the currency rows' rates come from
+	// (flex_interest_tiers); RatesThrough is the latest value date among them.
+	RatesSource  string              `json:"rates_source,omitempty"`
 	RatesThrough string              `json:"rates_through,omitempty"`
 	Findings     []CashPolicyFinding `json:"findings"`
 	// ConfirmationWindowSeconds is [cash] confirmation_window in force, in
@@ -290,20 +292,27 @@ type CashPolicySetting struct {
 
 // CashPolicyCurrency is one currency row: the ledger's trade-date cash in its
 // own unit (nil while unknown), whether currency leveling trades a pair for
-// it, its interest rates from the broker's statements (annual decimals, each
-// with the last day read; StandIn marks a rate taken from the currency's other
-// side) and what the sweep buys in it.
+// it, the broker's own interest rates on it and what the sweep buys in it.
+// The rates are read from the Flex statement's Interest Details (Tiers)
+// section (CashInterestRates): LoanRate is the debit rate on the amount
+// borrowed and CashRate the credit rate on the cash, annual decimals, each
+// with its value date in *Through. A side with no live rate leaves the rate
+// nil and says why in *Reason, with the last value date seen when it is
+// stale; it is never a measured blend, a stand-in from the other side or an
+// assumed number.
 type CashPolicyCurrency struct {
-	Currency        string   `json:"currency"`
-	Cash            *float64 `json:"cash,omitempty"`
-	Pair            bool     `json:"pair"`
-	LoanRate        *float64 `json:"loan_rate,omitempty"`
-	LoanRateThrough string   `json:"loan_rate_through,omitempty"`
-	LoanRateStandIn bool     `json:"loan_rate_stand_in,omitempty"`
-	CashRate        *float64 `json:"cash_rate,omitempty"`
-	CashRateThrough string   `json:"cash_rate_through,omitempty"`
-	CashRateStandIn bool     `json:"cash_rate_stand_in,omitempty"`
-	Buys            string   `json:"buys"`
+	Currency              string   `json:"currency"`
+	Cash                  *float64 `json:"cash,omitempty"`
+	Pair                  bool     `json:"pair"`
+	LoanRate              *float64 `json:"loan_rate,omitempty"`
+	LoanRateThrough       string   `json:"loan_rate_through,omitempty"`
+	LoanRateReason        string   `json:"loan_rate_reason,omitempty"`
+	LoanRateLastValueDate string   `json:"loan_rate_last_value_date,omitempty"`
+	CashRate              *float64 `json:"cash_rate,omitempty"`
+	CashRateThrough       string   `json:"cash_rate_through,omitempty"`
+	CashRateReason        string   `json:"cash_rate_reason,omitempty"`
+	CashRateLastValueDate string   `json:"cash_rate_last_value_date,omitempty"`
+	Buys                  string   `json:"buys"`
 }
 
 // CashPolicyFinding is one `canary policy check` finding that names a cash

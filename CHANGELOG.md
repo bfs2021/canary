@@ -21,6 +21,7 @@ retired.
 ### Changed
 
 - A cash sweep invest row carries `cash_interest`, the broker's credit rate its benefit estimate forgoes, and names it in its details; without a live rate the estimate reads "rate unavailable" with the reason instead of assuming a number. The `sweep_minimum_uneconomic` check reads the same rate and is skipped as `rate unavailable` without it.
+- The Cash settings currency rows (`policy.cash.get`) show the broker's own credit and debit rate with its value date, or no rate with the reason and the last value date seen, instead of currency leveling's measured blend or a stand-in from the other side; `rates_source` and `rates_through` name the source and the latest value date. Leveling's own figures are labelled as measured wherever they appear.
 
 ### Removed
 

@@ -127,6 +127,12 @@ rule for three or more currencies:
 
 ### Rates come from the broker's statements
 
+Leveling's figures below are measured blends it uses for its own ranking and
+payback test, and every surface labels them as measured. The rate shown per
+currency (the account read's `interest`, the Cash settings currency rows) is
+the broker's own, from the Flex statement's Interest Details (Tiers) section
+(owner decision 2026-10-11 14:07 CEST; see cash-sweep-controls.md).
+
 No rate settings. Canary already keeps IBKR's daily statements for currency
 reporting (`fxStatements`). Each carries, per currency, the interest
 accrued that day (`InterestAccruals`) and the settled cash it accrued on
