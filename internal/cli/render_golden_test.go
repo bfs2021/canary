@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -129,13 +130,28 @@ func renderGolden(t *testing.T, tc renderGoldenCase, color bool) string {
 	return stdout.String()
 }
 
-// goldenText makes a render machine-independent and reviewable: the local zone
-// abbreviation becomes "TZ" and each ESC byte is written as the text \x1b.
+// goldenText makes a render machine-independent and reviewable: timestamp zone
+// abbreviations become "TZ" and each ESC byte is written as the text \x1b.
+// Literal zone names in help text remain part of the output contract.
 func goldenText(out string) string {
 	if zone := goldenAt.Format("MST"); zone != "" {
-		out = strings.ReplaceAll(out, " "+zone, " TZ")
+		stamp := regexp.MustCompile(`(\b[0-9]{2}:[0-9]{2}(?::[0-9]{2})?) ` + regexp.QuoteMeta(zone) + `\b`)
+		out = stamp.ReplaceAllString(out, "${1} TZ")
 	}
 	return strings.ReplaceAll(out, "\x1b", `\x1b`)
+}
+
+func TestGoldenTextPreservesLiteralTimezone(t *testing.T) {
+	zone := goldenAt.Format("MST")
+	input := "YYYY-MM-DD UTC day; local zone " + zone + "\n" +
+		"Observed 5 Sep 14:00 " + zone + "\n" +
+		"\x1b[1mUpdated 14:00:05 " + zone + "\x1b[0m\n"
+	want := "YYYY-MM-DD UTC day; local zone " + zone + "\n" +
+		"Observed 5 Sep 14:00 TZ\n" +
+		`\x1b[1mUpdated 14:00:05 TZ\x1b[0m` + "\n"
+	if got := goldenText(input); got != want {
+		t.Fatalf("normalized output = %q, want %q", got, want)
+	}
 }
 
 func compareGolden(t *testing.T, path, got string) {
