@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "amendments": {
+    "v3.21.0": {
+      "tag_object": "e018aa13dec96288799cd89e2df30a2a338d4e90",
+      "commit": "8c4a5c76239ea2ee34e56dbf90ce5025f798f54f",
+      "original_body_sha256": "1f4eb2641307763ccf9ec3da2a84c80fc1d24346b42b6fee82ffa16f561db72f",
+      "approved_body_sha256": "fd7eb5b0f2240a7c49de73badc58952234195c678a0d69746b8297697d21a72c",
+      "approved_on": "2026-10-11",
+      "approval": "Owner approved the revised product description and v3.21.0 notes: Go ahead and update the published v3.21.0 release notes and the template with this wording. Source wording committed in f3cf193fa07d0a6015f61fefa5afb41f87e4dca6; assets and tags unchanged."
+    }
+  }
+}

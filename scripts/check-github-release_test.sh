@@ -342,6 +342,141 @@ PY
 	fi
 done
 
+# Published wording corrections require exact approval in committed controller
+# policy; the working tree and draft-stage metadata cannot supply authority.
+python3 - "$repo" "$version" "$test_root/release.canonical.json" "$test_root/release.json" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+repo, version, canonical, output = sys.argv[1:]
+def git(*args):
+    return subprocess.check_output(["git", "-C", repo, *args], text=True).strip()
+release = json.loads(Path(canonical).read_text())
+original = release["body"]
+release["body"] += "\nApproved product description correction.\n"
+Path(output).write_text(json.dumps(release))
+policy = {"schema_version": 1, "amendments": {version: {
+    "tag_object": git("rev-parse", "refs/tags/" + version),
+    "commit": git("rev-parse", "refs/tags/" + version + "^{commit}"),
+    "original_body_sha256": hashlib.sha256(original.encode()).hexdigest(),
+    "approved_body_sha256": hashlib.sha256(release["body"].encode()).hexdigest(),
+    "approved_on": "2026-10-11", "approval": "Fixture owner approval",
+}}}
+Path(repo, ".github/release-note-amendments.json").write_text(json.dumps(policy))
+PY
+expect_notes_rejection() {
+	if run_checker >"$test_root/notes-rejection.log" 2>&1; then
+		echo "check-github-release test: $1 passed" >&2
+		exit 1
+	fi
+	grep -Fq 'no matching committed amendment' "$test_root/notes-rejection.log"
+}
+commit_policy() {
+	git -C "$repo" add .github/release-note-amendments.json
+	git -C "$repo" commit -qm "$1"
+}
+expect_notes_rejection 'uncommitted notes approval'
+commit_policy 'Approve exact fixture notes correction'
+run_checker >/dev/null
+cp "$repo/.github/release-note-amendments.json" "$test_root/policy.canonical.json"
+cp "$test_root/release.json" "$test_root/release.approved.json"
+
+# A local edit cannot extend the committed approval to different remote text.
+python3 - "$repo/.github/release-note-amendments.json" "$test_root/release.json" "$version" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+policy_path, release_path = map(Path, sys.argv[1:3])
+policy = json.loads(policy_path.read_text())
+release = json.loads(release_path.read_text())
+release["body"] += "Unapproved instruction.\n"
+policy["amendments"][sys.argv[3]]["approved_body_sha256"] = hashlib.sha256(release["body"].encode()).hexdigest()
+policy_path.write_text(json.dumps(policy))
+release_path.write_text(json.dumps(release))
+PY
+expect_notes_rejection 'working-tree extension of approval'
+cp "$test_root/release.approved.json" "$test_root/release.json"
+# Even a dirty policy cannot invalidate the already committed exact approval.
+run_checker >/dev/null
+
+for mutation in tag_object commit original_body_sha256 approved_body_sha256 version duplicate malformed; do
+	python3 - "$test_root/policy.canonical.json" "$repo/.github/release-note-amendments.json" "$version" "$mutation" <<'PY'
+import json
+import sys
+from pathlib import Path
+source, output, version, mutation = sys.argv[1:]
+policy = json.loads(Path(source).read_text())
+if mutation == "version":
+    policy["amendments"]["v9.9.9"] = policy["amendments"].pop(version)
+elif mutation not in {"duplicate", "malformed"}:
+    policy["amendments"][version][mutation] = "0" * len(policy["amendments"][version][mutation])
+text = json.dumps(policy)
+if mutation == "duplicate":
+    text = text.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1')
+elif mutation == "malformed":
+    text = "{"
+Path(output).write_text(text)
+PY
+	commit_policy "Invalid $mutation fixture"
+	expect_notes_rejection "$mutation amendment"
+done
+cp "$test_root/policy.canonical.json" "$repo/.github/release-note-amendments.json"
+commit_policy 'Restore exact approved correction'
+run_checker >/dev/null
+
+python3 - "$test_root/release.approved.json" "$test_root/release-list.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+release = json.loads(Path(sys.argv[1]).read_text())
+release["draft"] = True
+release["published_at"] = None
+for asset in release["assets"]:
+    ids = {"SHA256SUMS": 9101, "SHA256SUMS.asc": 9102, "SHA256SUMS.ed25519": 9103}
+    if asset["name"] in ids:
+        asset["id"] = ids[asset["name"]]
+Path(sys.argv[2]).write_text(json.dumps([release]))
+PY
+CHECK_GITHUB_RELEASE_STAGE=draft TEST_RELEASE_LIST="$test_root/release-list.json" \
+	expect_notes_rejection 'amended draft notes'
+
+# The original tag-derived text remains valid. Then run all asset/signature
+# rejection cases below with approved amended notes, to prove approval cannot
+# short-circuit asset verification.
+cp "$test_root/release.canonical.json" "$test_root/release.json"
+run_checker >/dev/null
+cp "$test_root/release.approved.json" "$test_root/release.canonical.json"
+for mutation in missing_asset wrong_digest altered_payload; do
+	cp "$test_root/release.canonical.json" "$test_root/release.json"
+	python3 - "$test_root/release.json" "$mutation" <<'PY'
+import json
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+release = json.loads(path.read_text())
+if sys.argv[2] == "missing_asset":
+    release["assets"].pop()
+elif sys.argv[2] == "wrong_digest":
+    release["assets"][0]["digest"] = "sha256:" + "0" * 64
+path.write_text(json.dumps(release))
+PY
+	payload="$dist/canary-$version-linux-arm64.tar.gz"
+	cp "$payload" "$test_root/payload.canonical"
+	if [ "$mutation" = altered_payload ]; then
+		printf 'tampered' >>"$payload"
+	fi
+	if run_checker >"$test_root/asset-rejection.log" 2>&1; then
+		echo "check-github-release test: amended notes with $mutation passed" >&2
+		exit 1
+	fi
+	grep -Fq 'approved notes amendment matched' "$test_root/asset-rejection.log"
+	cp "$test_root/payload.canonical" "$payload"
+done
+
 cp "$test_root/release.canonical.json" "$test_root/release.json"
 printf '%s\n' divergent-stable-alias >"$dist/canary.mcpb"
 write_sums

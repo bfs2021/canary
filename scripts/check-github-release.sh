@@ -177,14 +177,15 @@ python3 "$script_dir/materialize-release-tag-file.py" \
 	"$notes_source/CHANGELOG.md" "$notes_source/release-notes-template.md" \
 	"$expected_notes"
 
-python3 - "$version" "$dist_dir" "$download_dir" "$release_json" "$expected_notes" "$stage" <<'PY'
+python3 - "$version" "$dist_dir" "$download_dir" "$release_json" "$expected_notes" "$stage" "$repo_root" <<'PY'
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
-version, dist_arg, download_arg, json_arg, expected_notes_arg, stage = sys.argv[1:]
+version, dist_arg, download_arg, json_arg, expected_notes_arg, stage, repo_root = sys.argv[1:]
 dist = Path(dist_arg)
 download = Path(download_arg)
 release_path = Path(json_arg)
@@ -219,8 +220,69 @@ try:
     expected_body = expected_notes_path.read_text(encoding="utf-8")
 except (OSError, UnicodeDecodeError) as error:
     raise SystemExit(f"check-github-release: cannot read expected release notes: {error}")
+def verify_notes_amendment(body):
+    # Only committed controller policy can approve an exact published correction.
+    # Never use a working-tree file or derive approval from the remote release.
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", repo_root, *args], stderr=subprocess.DEVNULL
+        ).decode("utf-8").strip()
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate amendment key")
+            result[key] = value
+        return result
+
+    try:
+        if stage != "published" or type(body) is not str:
+            raise ValueError("only published text can have an amendment")
+        controller = git("rev-parse", "HEAD^{commit}")
+        path = ".github/release-note-amendments.json"
+        entry = git("ls-tree", "-z", controller, "--", path)
+        metadata, name = entry.rstrip("\0").split("\t")
+        mode, kind, oid = metadata.split()
+        if mode != "100644" or kind != "blob" or name != path:
+            raise ValueError("amendment policy must be a committed regular file")
+        policy = json.loads(git("cat-file", "blob", oid), object_pairs_hook=unique_object)
+        if (type(policy) is not dict or set(policy) != {"schema_version", "amendments"}
+                or type(policy["schema_version"]) is not int or policy["schema_version"] != 1
+                or type(policy["amendments"]) is not dict):
+            raise ValueError("invalid amendment policy")
+        amendment = policy["amendments"][version]
+        fields = {"tag_object", "commit", "original_body_sha256", "approved_body_sha256",
+                  "approved_on", "approval"}
+        if type(amendment) is not dict or set(amendment) != fields:
+            raise ValueError("invalid amendment record")
+        if any(type(value) is not str or not value.strip() for value in amendment.values()):
+            raise ValueError("amendment fields must be nonempty strings")
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", amendment["approved_on"]) is None:
+            raise ValueError("approval date must be YYYY-MM-DD")
+        for field in ("tag_object", "commit"):
+            if re.fullmatch(r"[0-9a-f]{40}", amendment[field]) is None:
+                raise ValueError("invalid Git identity")
+        for field in ("original_body_sha256", "approved_body_sha256"):
+            if re.fullmatch(r"[0-9a-f]{64}", amendment[field]) is None:
+                raise ValueError("invalid notes digest")
+        tag = "refs/tags/" + version
+        if (git("cat-file", "-t", tag) != "tag"
+                or git("rev-parse", tag) != amendment["tag_object"]
+                or git("rev-parse", tag + "^{commit}") != amendment["commit"]):
+            raise ValueError("amendment tag identity mismatch")
+        if hashlib.sha256(expected_body.encode("utf-8")).hexdigest() != amendment["original_body_sha256"]:
+            raise ValueError("amendment original notes mismatch")
+        if hashlib.sha256(body.encode("utf-8")).hexdigest() != amendment["approved_body_sha256"]:
+            raise ValueError("amendment approved notes mismatch")
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
+        raise SystemExit(f"check-github-release: release body differs from the immutable tag; "
+                         f"no matching committed amendment: {error}")
+    print(f"check-github-release: approved notes amendment matched for {version}")
+
+
 if release.get("body") != expected_body:
-    raise SystemExit("check-github-release: release body differs from the immutable tag")
+    verify_notes_amendment(release.get("body"))
 if stage == "published" and (
     not isinstance(release.get("published_at"), str) or not release["published_at"]
 ):

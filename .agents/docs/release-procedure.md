@@ -300,7 +300,8 @@ questions go to the user. Never weaken a gate to reach GO.
   object and peels to that SHA before continuing plugin, GitHub, or registry
   publication. Existing GitHub releases are hydrated into a private staging
   directory and must have the exact 13-asset inventory, GitHub digests, signed
-  checksum file, and tag-derived release body. Only an absent release is built
+  checksum file, and tag-derived release body (or an exact approved amendment,
+  described below). Only an absent release is built
   and signed locally. Release creation requires the existing tag with
   `--verify-tag` and renders notes from tag blobs. Registry metadata likewise
   comes from the tag's `server.json` and the verified versioned MCPB. Direct
@@ -309,6 +310,22 @@ questions go to the user. Never weaken a gate to reach GO.
 - On failure the release worktree is kept and its path printed. Inspect it,
   then `git worktree remove --force <path>` — a fresh `make release` refuses
   to start while a leftover worktree for that version exists.
+
+### Approved release-note amendments
+
+An owner-approved wording correction after publication may be recorded in
+`.github/release-note-amendments.json`. Record the approval and date, exact
+version, annotated product tag object, peeled commit, original tag-rendered
+body SHA-256 and approved replacement body SHA-256. Hash the UTF-8 bodies
+without trimming or normalizing whitespace. Commit the record in the release
+controller checkout before verifying or resuming the release.
+
+The verifier reads this policy from committed `HEAD`, ignoring working-tree
+changes. It accepts only the exact recorded replacement for the bound tag;
+drafts still require the original tag-derived body. No environment variable or
+command-line option bypasses notes verification. All existing tag, asset
+inventory, digest, checksum, signature and registry checks still apply. Never
+move tags, rebuild assets or republish a release to correct its prose.
 
 ## Stage 7 — Post-release verification (autonomous)
 
