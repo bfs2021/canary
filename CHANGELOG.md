@@ -2,25 +2,31 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## v3.21.1 — Unreleased
+## v3.21.1 — 2026-10-11 12:16 CEST
 
 ### What's new
 
-More reliable chart refreshes and option reads during concurrent use and broker
-reconnects, with clearer log-monitor coverage.
+Clearer CLI help, colour and spacing, plus more reliable chart and option reads
+when several clients use Canary or the broker reconnects. Trading safeguards
+and CLI JSON output are unchanged.
 
 ### Changed
 
 - CLI help uses plain language, clearer spacing and colour, lists order and proposal actions, includes option-order syntax and shows flag value placeholders.
 - Order previews lead with submission eligibility and retain token details and approval requirements. Stress output always shows when the assessment was generated.
-- Long CLI rows wrap beneath their values. Narrow bond tables keep comparable figures together, with identifiers and notes beneath each row; wider overflow uses labelled records. Trading permissions use plain language. JSON output and trading safeguards are unchanged.
+- Long CLI rows wrap beneath their values. Narrow bond tables keep comparable figures together, with identifiers and notes beneath each row; very wide rows switch to labelled records. Trading permissions use plain language.
 
 ### Fixed
 
 - Completed history-cache entries no longer block new chart and research reads while fetch capacity is idle. Active request and broker pacing limits remain unchanged. Fixes #57.
-- Quote requests waiting across a broker reconnect no longer leak market-data capacity. Overlapping option readers share one subscription until the last reader leaves, and old cleanup cannot cancel a replacement line. Fixes #58.
-- Alert observations waiting behind another producer honor their existing deadline and identify queue contention separately from persistence failures.
+- Quote requests waiting across a broker reconnect no longer leak market-data capacity. Overlapping option readers share one subscription until the last reader leaves, and finishing an older request cannot cancel a newer subscription. Fixes #58.
+- Alert recording respects its deadline while waiting for another writer and distinguishes that wait from a storage failure.
 - Scheduled log checks count the known macOS allocator startup diagnostic separately from crash output and disclose first-read coverage and unknown event times.
+
+### Maintenance
+
+- Release verification accepts exact, approved notes corrections while retaining tag, signature and asset checks.
+- Updated the website and release notes to describe order management and the scope of TWS / IB Gateway 10.50 compatibility fixes.
 
 ## v3.21.0 — 2026-10-11 09:10 CEST
 
