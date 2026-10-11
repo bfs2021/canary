@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canary 3.21.0 — order queues and TWS compatibility</title>
+  <meta name="description" content="Approved order queues, Adaptive priority, whole-position trailing stops and TWS / IB Gateway 10.50 compatibility fixes.">
+  <link rel="canonical" href="https://osauer.dev/canary/releases/3.21.0/">
+  <link rel="icon" type="image/png" href="/canary/social/canary-icon.png">
+  <link rel="preload" href="/assets/fonts/instrument-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/assets/fonts/instrument-serif-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <meta name="color-scheme" content="light dark">
+  <script src="/assets/theme.js?v=20261008"></script>
+  <link rel="stylesheet" href="/assets/site.css?v=20261008-footer">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://osauer.dev/canary/releases/3.21.0/">
+  <meta property="og:title" content="Canary 3.21.0 — order queues and TWS compatibility">
+  <meta property="og:description" content="Approved order queues, Adaptive priority, whole-position trailing stops and TWS / IB Gateway 10.50 compatibility fixes.">
+  <meta property="og:image" content="https://osauer.dev/canary/social/social-preview.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Canary 3.21.0 — order queues and TWS compatibility">
+  <meta name="twitter:description" content="Approved order queues, Adaptive priority, whole-position trailing stops and TWS / IB Gateway 10.50 compatibility fixes.">
+  <meta name="twitter:image" content="https://osauer.dev/canary/social/social-preview.png">
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Canary 3.21.0 — order queues and TWS compatibility",
+  "description": "Approved order queues, Adaptive priority, whole-position trailing stops and TWS / IB Gateway 10.50 compatibility fixes.",
+  "url": "https://osauer.dev/canary/releases/3.21.0/",
+  "mainEntityOfPage": "https://osauer.dev/canary/releases/3.21.0/",
+  "datePublished": "2026-10-11",
+  "dateModified": "2026-10-11",
+  "author": {
+    "@type": "Person",
+    "name": "Oliver Sauer",
+    "url": "https://osauer.dev/"
+  },
+  "about": {
+    "@type": "SoftwareApplication",
+    "name": "Canary",
+    "url": "https://osauer.dev/canary/"
+  }
+}
+  </script>
+  <style>
+    .release-note h1 { font-size: clamp(48px, 7vw, 88px); }
+    .release-note h2 { font: 32px/1.15 var(--serif); margin: 32px 0 16px; }
+    .release-note .note-body { max-width: 700px; }
+    .release-note li { margin-bottom: 12px; }
+    .release-note ul { padding-left: 22px; }
+    .release-note code { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="wrap site-header">
+    <a class="brand" href="/">osauer.dev</a>
+    <nav class="site-nav" aria-label="Main">
+      <a class="nav-work" href="/#work">Work</a>
+      <a href="/desk/">Canary Desk</a>
+      <a href="/canary/">Canary CLI</a>
+      <a href="/#about">About</a>
+      <a class="li-link nav-social external" href="https://www.linkedin.com/in/osauer/"><svg class="li" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.47-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z"/></svg>LinkedIn</a>
+    </nav>
+  </header>
+  <main id="main" class="note-page release-note" tabindex="-1">
+    <article class="wrap hero">
+      <p class="kicker"><a href="/canary/">Canary</a> · Release notes</p>
+      <h1>Canary 3.21.0</h1>
+      <p class="note">Oliver Sauer · <time datetime="2026-10-11">11 October 2026</time></p>
+      <div class="note-body">
+        <p>This release adds order queues and whole-position trailing stops, and fixes volume readings and reconnect handling.</p>
+        <h2>What changed</h2>
+        <ul>
+          <li><strong>Order queues:</strong> queue an approved stock or single-leg option purchase or sale, with a maximum buy price or minimum sell price.</li>
+          <li><strong>IBKR Adaptive orders:</strong> choose the execution priority when previewing a stock or option limit order.</li>
+          <li><strong>Trailing stops:</strong> adjust a stock trailing stop to cover the whole position as its size changes, without loosening the trail.</li>
+          <li><strong>Broker data:</strong> corrected large volume readings, improved order recovery after reconnects and added read-only API settings diagnostics.</li>
+        </ul>
+        <h2 id="compatibility">TWS and IB Gateway compatibility</h2>
+        <p>These changes address TWS / IB Gateway 10.50 compatibility. Live checks passed on TWS; Gateway 10.50 still needs end-to-end validation.</p>
+        <p>Order submission requires the optional trading build and its approval checks. Standard downloads and all MCP tools remain read-only.</p>
+        <h2>Install or update</h2>
+        <p>Follow the <a href="/canary/docs/start/install.html">installation guide</a> or <a href="/canary/docs/start/updating.html">update guide</a>. For order submission, use the <a href="/canary/docs/operate/orders.html">trading guide</a>.</p>
+        <p><a href="https://github.com/osauer/canary/releases/tag/v3.21.0">Downloads and full release notes →</a></p>
+      </div>
+    </article>
+  </main>
+  <footer class="wrap site-footer">
+    <div class="footer-top">
+      <nav class="footer-links" aria-label="Canary links and profiles">
+        <a href="https://github.com/osauer/canary/blob/main/CHANGELOG.md">Changelog</a>
+        <a href="/canary/feedback/">Feedback</a>
+        <a href="https://github.com/osauer/canary/blob/main/PRIVACY.md">Privacy</a>
+        <a href="https://github.com/osauer/canary/blob/main/SECURITY.md">Security</a>
+        <a class="external gh-link" href="https://github.com/osauer/canary"><svg class="gh" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>GitHub</a>
+        <a class="li-link external" href="https://www.linkedin.com/in/osauer/"><svg class="li" viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M20.45 20.45h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.36V9h3.41v1.56h.05c.47-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.06 2.06 0 1 1 0-4.12 2.06 2.06 0 0 1 0 4.12zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z"/></svg>LinkedIn</a>
+      </nav>
+    </div>
+    <fieldset class="theme-control" data-theme-control hidden><legend>Colour theme</legend><label><input type="radio" name="theme" value="system" checked><span>System</span></label><label><input type="radio" name="theme" value="dark"><span>Dark</span></label><label><input type="radio" name="theme" value="light"><span>Light</span></label></fieldset>
+    <div class="footer-bottom"><p>Personal projects, unaffiliated with any employer or with Interactive Brokers. IBKR, TWS and IB Gateway are Interactive Brokers trademarks. No investment advice.</p><span>osauer.dev</span></div>
+  </footer>
+</body>
+</html>
