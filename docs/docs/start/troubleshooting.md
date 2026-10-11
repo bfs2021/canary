@@ -1,8 +1,36 @@
 # Troubleshooting
 
-Updated: 2026-08-27
+Updated: 2026-10-11
 
 Symptom, cause, fix. Start with `canary status`: it prints one of four verdicts (`READY`, `STARTING`, `ATTENTION`, `OFFLINE`), waits up to 25 seconds for the API handshake to land, and exits 1 while the gateway is not connected.
+
+## Check API settings after changing TWS or Gateway
+
+Run `canary status --gateway-diagnostics` (add `--json` for all fields).
+The normal connection keeps its tested protocol ceiling of 203. The diagnostic
+opens one separate connection to the same endpoint, negotiates up to 219,
+reads API settings, and closes within five seconds. It does not restart TWS,
+change ports, update settings, bind orders, or submit broker instructions.
+
+`observed` means the broker returned settings. `unsupported` means that session
+could not negotiate the required config-read protocol; check settings in TWS
+or Gateway manually. `unavailable` or `rejected` carries a reason. An omitted
+setting means **not reported**, not off. The negotiated protocol is not the
+installed application's version number.
+
+The output includes read-only API mode, automatic open-order download,
+reconnect order retention, US-stock volume-in-lots mode, and rate-limit
+rejection. These are observations, not changes or permission to trade.
+Volume values preserve the broker's decimal quantity; Canary does not guess
+shares versus lots from the value's size. Retained broker orders are reconciled
+by identity; an uncertain send is never automatically replayed.
+
+When switching applications, compare the Session endpoint with the socket port
+in the selected application. An explicit `[gateway].port` pin remains binding:
+TWS commonly uses 7496/7497 and Gateway 4001/4002. Keep the working endpoint
+until the intended application's login, API socket and settings are ready.
+The config diagnostic does not establish a restart timezone or alter the
+operator-declared restart schedule.
 
 ## Gateway is ready, but Recon or Edge has no statement evidence
 

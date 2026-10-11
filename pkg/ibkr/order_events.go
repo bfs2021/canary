@@ -27,6 +27,7 @@ const (
 // Raw is a copied slice of untrusted wire fields and may be nil for synthesized
 // error events.
 type OrderLifecycleEvent struct {
+	Deactivated      *bool // Deactivated is explicit broker evidence; nil means not reported.
 	AlgoStrategy     string
 	AdaptivePriority string
 	AlgoKnown        bool
@@ -229,8 +230,20 @@ func parseExecDetailsEvent(fields []string) (OrderLifecycleEvent, bool) {
 }
 
 func parseOpenOrderProtoEvent(fields []string) (OrderLifecycleEvent, bool) {
+	if summaryFieldValue(fields, "decode_error=") != "" {
+		return OrderLifecycleEvent{}, false
+	}
+	var deactivated *bool
+	if raw := summaryFieldValue(fields, "deactivated="); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			return OrderLifecycleEvent{}, false
+		}
+		deactivated = &v
+	}
 	clientID, clientIDPresent := orderEventSummaryInt(fields, "clientId=")
 	ev := OrderLifecycleEvent{
+		Deactivated:      deactivated,
 		AlgoKnown:        true,
 		AlgoStrategy:     summaryFieldValue(fields, "algoStrategy="),
 		AdaptivePriority: summaryFieldValue(fields, "adaptivePriority="),

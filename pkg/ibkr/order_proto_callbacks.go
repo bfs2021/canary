@@ -15,6 +15,7 @@ const (
 )
 
 type inboundOrderProtoSummary struct {
+	deactivated          *bool
 	algoStrategy         string
 	adaptivePriority     string
 	orderID              int
@@ -198,6 +199,9 @@ func appendContractSummaryFields(fields []string, summary inboundOrderProtoSumma
 }
 
 func appendOrderSummaryFields(fields []string, summary inboundOrderProtoSummary) []string {
+	if summary.deactivated != nil {
+		fields = append(fields, "deactivated="+strconv.FormatBool(*summary.deactivated))
+	}
 	return append(fields,
 		"algoStrategy="+summary.algoStrategy,
 		"adaptivePriority="+summary.adaptivePriority,
@@ -478,6 +482,14 @@ func parseInboundOrderProto(body []byte, summary *inboundOrderProtoSummary) erro
 				return err
 			}
 			summary.transmit = v != 0
+		case 138: // IBKR Order.deactivate; absence is not false on older callbacks.
+			v, err := protoVarintValue(fieldNumber, wireType, value)
+			if err != nil || v > 1 {
+				return fmt.Errorf("invalid order deactivate field")
+			}
+			active := v == 1
+			summary.deactivated = &active
+
 		case 99:
 			v, err := protoFixed64Value(fieldNumber, wireType, value)
 			if err != nil {

@@ -61,7 +61,7 @@ Daemon + gateway health (run this first if anything fails).
 Guard `read-only`. Also available as an MCP tool.
 
 ```text
-canary status [--json]
+canary status [--json] [--gateway-diagnostics]
 ```
 
 **Flags**

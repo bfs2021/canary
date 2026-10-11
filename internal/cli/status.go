@@ -22,6 +22,7 @@ const handshakePollInterval = 500 * time.Millisecond
 func runStatus(ctx context.Context, env *Env, args []string) int {
 	fs := flagSet(env, "status")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
+	gatewayDiagnostics := fs.Bool("gateway-diagnostics", false, "read broker API settings on an isolated diagnostic connection")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
 	}
@@ -36,6 +37,11 @@ func runStatus(ctx context.Context, env *Env, args []string) int {
 		return r, err
 	}
 	res = waitForStatusVerdict(ctx, env.Stderr, *jsonOut, res, fetch)
+	if *gatewayDiagnostics {
+		if err := env.Conn.Call(ctx, rpc.MethodStatusHealth, rpc.HealthParams{GatewayDiagnostics: true}, &res); err != nil {
+			return fail(env, "status diagnostics: %v", err)
+		}
+	}
 
 	if *jsonOut {
 		return printJSON(env, res)
@@ -80,6 +86,26 @@ func renderStatusText(env *Env, res *rpc.HealthResult, alerts *rpc.AlertCandidat
 		statusHealthRow(env, out, "TWS", env.red(formatPortRejectionValue(*res)))
 	default:
 		statusHealthRow(env, out, "TWS", env.red("not connected"))
+	}
+	if api := res.GatewayAPI; api != nil {
+		statusHealthRow(env, out, "API protocol", fmt.Sprintf("%d negotiated · %d client ceiling", res.ServerVersion, api.TradingProtocolMax))
+		if api.ConfigState != "not_requested" {
+			value := api.ConfigState
+			if api.Reason != "" {
+				value += " · " + api.Reason
+			}
+			if api.DiagnosticProtocol > 0 {
+				value += fmt.Sprintf(" · probe protocol %d", api.DiagnosticProtocol)
+			}
+			statusHealthRow(env, out, "API settings", value)
+			if settings := api.Settings; settings != nil {
+				statusHealthRow(env, out, "API read-only", formatDiagnosticBool(settings.ReadOnly))
+				statusHealthRow(env, out, "Recover orders", formatDiagnosticBool(settings.RetainOrdersOnReconnect))
+				statusHealthRow(env, out, "Volume in lots", formatDiagnosticBool(settings.VolumeInLots))
+				statusHealthRow(env, out, "Order download", formatDiagnosticBool(settings.DownloadOpenOrders))
+				statusHealthRow(env, out, "Rate rejection", formatDiagnosticBool(settings.RejectAboveRate))
+			}
+		}
 	}
 	if link := res.BackendLink; link != nil && link.Losses > 0 {
 		value := formatBackendLinkValue(*link)
@@ -839,4 +865,14 @@ func apiStatusConcern(state, text string) statusConcern {
 	default:
 		return statusConcern{Text: "UNVERIFIED · daemon health verdict unavailable", Level: statusConcernWarn}
 	}
+}
+
+func formatDiagnosticBool(value *bool) string {
+	if value == nil {
+		return "not reported"
+	}
+	if *value {
+		return "on"
+	}
+	return "off"
 }

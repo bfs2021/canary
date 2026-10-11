@@ -117,6 +117,8 @@ func brokerWorkingOrders(snapshot ibkrlib.OpenOrderSnapshot, views []rpc.OrderVi
 // brokerOrderWorking reports whether an open-order snapshot entry is still
 // working at the broker. Unknown broker state counts as working: the
 // callers use it to prove an absence, so doubt never reads as settled.
+// Retained deactivated orders also block competing orders: they may be resumed
+// externally. They do not count as executing protection.
 func brokerOrderWorking(order ibkrlib.OrderLifecycleEvent) bool {
 	if order.Type != ibkrlib.OrderLifecycleEventOpenOrder || order.WhatIf {
 		return false
@@ -124,7 +126,7 @@ func brokerOrderWorking(order ibkrlib.OrderLifecycleEvent) bool {
 	if order.Remaining <= 0 && order.TotalQuantity > 0 && order.TotalQuantity-order.Filled <= 1e-9 {
 		return false
 	}
-	return !orderLifecycleStatusIsTerminal(mapBrokerOrderLifecycleStatus(order.Status, order.Filled, order.Remaining))
+	return !orderLifecycleStatusIsTerminal(mapBrokerOrderLifecycleWithDeactivation(order.Status, order.Filled, order.Remaining, order.Deactivated))
 }
 
 // untrackedBrokerOrders lists the orders working at the broker in scope that
@@ -165,6 +167,7 @@ func (s *Server) untrackedBrokerOrders(ctx context.Context, views []rpc.OrderVie
 // modify- or cancel-eligible, because the daemon never tracked it.
 func untrackedOrderView(order ibkrlib.OrderLifecycleEvent, scope brokerStateScope, asOf time.Time) rpc.OrderView {
 	view := rpc.OrderView{
+		Deactivated:     cloneBoolPtr(order.Deactivated),
 		ReservedOrderID: order.OrderID, PermID: order.PermID,
 		Account: scope.Account, Mode: scope.Mode,
 		Symbol: order.Symbol, SecType: order.SecType, ConID: order.ConID,
@@ -175,7 +178,7 @@ func untrackedOrderView(order ibkrlib.OrderLifecycleEvent, scope brokerStateScop
 		TriggerMethod: order.TriggerMethod, OutsideRTH: order.OutsideRth,
 		Quantity: order.TotalQuantity, LimitPrice: order.LimitPrice, Trail: trailSpecFromLifecycle(order),
 		Status: order.Status, Filled: order.Filled, Remaining: order.Remaining,
-		LifecycleStatus: mapBrokerOrderLifecycleStatus(order.Status, order.Filled, order.Remaining),
+		LifecycleStatus: mapBrokerOrderLifecycleWithDeactivation(order.Status, order.Filled, order.Remaining, order.Deactivated),
 		UpdatedAt:       asOf, Open: true,
 	}
 	if order.ClientIDPresent {

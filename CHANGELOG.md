@@ -6,11 +6,16 @@ All notable changes to this project are documented here. The project adheres to 
 
 ### Added
 
+- Read-only broker API settings diagnostics with `canary status --gateway-diagnostics`, including protocol capabilities, volume units and reconnect order retention. The main TWS connection keeps its tested protocol.
+
 - Owner-confirmed queues for exact stock and single-leg option purchases and sales, priced at the send-time midpoint within an approved maximum buy price or minimum sell price.
 - Explicit Adaptive priority on stock/option limit previews and stock Add previews, bound to the same exact-order confirmation.
 - Whole-position stock trailing-stop mandates that wait for broker acceptance and follow position increases and reductions without resetting or loosening the broker trail. Confirmed closure ends the mandate.
 
 ### Fixed
+
+- Large market-data volumes retain their broker-reported decimal value instead of being divided by one million. Invalid and overflowing sizes are rejected. Fixes #56.
+- Explicitly deactivated orders remain visible and resumable, do not count as active protection, and block competing orders. Recovery regressions cover retained orders and lost acknowledgements without duplicate submissions.
 
 - Queued purchases check fresh shared capacity at execution; attempted and uncertain orders remain commitments, and ambiguous sends are reconciled before another attempt.
 

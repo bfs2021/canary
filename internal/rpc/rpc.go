@@ -2451,6 +2451,7 @@ type HealthResult struct {
 	// flapping is one counted observation instead of scattered warnings.
 	BackendLink *BackendLinkHealth `json:"backend_link,omitempty"`
 	// GatewayRestart is diagnostic context, independent of connectivity and data health.
+	GatewayAPI     *GatewayAPIHealth     `json:"gateway_api,omitempty"`
 	GatewayRestart *GatewayRestartHealth `json:"gateway_restart,omitempty"`
 	DataType       string                `json:"data_type,omitempty"`
 	ServerVersion  int                   `json:"server_version,omitempty"`
@@ -2644,6 +2645,8 @@ const (
 	OrderLifecycleRejected = "rejected"
 	// OrderLifecycleInactive is a durable order-lifecycle classification.
 	OrderLifecycleInactive = "inactive"
+	// OrderLifecycleDeactivated is retained at IBKR but cannot execute until activated.
+	OrderLifecycleDeactivated = "deactivated"
 	// OrderLifecycleUnknownReconcileRequired is a durable order-lifecycle classification.
 	OrderLifecycleUnknownReconcileRequired = "unknown_reconcile_required"
 	// OrderLifecycleExpiredInferred marks a DAY order whose effective session
@@ -2993,6 +2996,7 @@ type OrderCancelResult struct {
 // OrderEvent is the read-only lifecycle/audit row exposed from the private
 // journal. It redacts full preview tokens and never implies a broker write
 type OrderEvent struct {
+	Deactivated      *bool           `json:"deactivated,omitempty"`
 	AlgoStrategy     string          `json:"algo_strategy,omitempty"`
 	AlgoKnown        bool            `json:"algo_known,omitempty"`
 	AdaptivePriority string          `json:"adaptive_priority,omitempty"`
@@ -3053,6 +3057,7 @@ type OrderEvent struct {
 // OrderView is the daemon's read-only product state for one locally observed
 // order intent. It is reduced from the append-only journal; broker callbacks
 type OrderView struct {
+	Deactivated      *bool           `json:"deactivated,omitempty"`
 	AlgoStrategy     string          `json:"algo_strategy,omitempty"`
 	AlgoKnown        bool            `json:"algo_known,omitempty"`
 	AdaptivePriority string          `json:"adaptive_priority,omitempty"`

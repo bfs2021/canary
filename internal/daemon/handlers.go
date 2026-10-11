@@ -3459,6 +3459,7 @@ func (s *Server) statusHealthSnapshot() *rpc.HealthResult {
 	s.mu.Unlock()
 
 	res := &rpc.HealthResult{
+		GatewayAPI:    gatewayAPIHealth(),
 		DaemonVersion: s.version,
 		DaemonStarted: s.startedAt,
 		UptimeSeconds: int64(time.Since(s.startedAt).Seconds()),

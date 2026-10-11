@@ -265,7 +265,7 @@ func protectionCoverageOrderIsStopLike(order rpc.OrderView) bool {
 }
 
 func protectionCoverageOrderCounts(order rpc.OrderView, row rpc.PositionView) bool {
-	if protectionCoverageOrderIsProblem(order) {
+	if protectionCoverageOrderIsProblem(order) || (order.Deactivated != nil && *order.Deactivated) {
 		return false
 	}
 	switch order.LifecycleStatus {

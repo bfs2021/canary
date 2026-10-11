@@ -679,9 +679,14 @@ func protectionOrderViewFromSnapshot(view rpc.OrderView, order ibkrlib.OrderLife
 	if order.TotalQuantity > 0 {
 		out.Quantity = order.TotalQuantity
 	}
+	if order.Deactivated != nil {
+		out.Deactivated = cloneBoolPtr(order.Deactivated)
+	}
 	if order.Status != "" {
 		out.Status = order.Status
-		out.LifecycleStatus = mapBrokerOrderLifecycleStatus(order.Status, order.Filled, order.Remaining)
+	}
+	if order.Status != "" || order.Deactivated != nil {
+		out.LifecycleStatus = mapBrokerOrderLifecycleWithDeactivation(out.Status, order.Filled, order.Remaining, out.Deactivated)
 	}
 	out.Filled = order.Filled
 	if order.Remaining > 0 {

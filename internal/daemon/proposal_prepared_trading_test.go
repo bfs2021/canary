@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -289,5 +290,71 @@ func TestPreparedProposalStatusIsPassiveAndNeverEchoesCapability(t *testing.T) {
 	}
 	if bytes.Contains(raw, []byte(p.PreparedRef)) || bytes.Contains(raw, []byte("ibkrp4.")) {
 		t.Fatal("status exposed a private capability")
+	}
+}
+
+// TWS/Gateway may retain an order after an uncertain socket write. Neither
+// retention nor an empty recovery snapshot authorizes replaying a consumed
+// preparation. The same broker identity can be reported repeatedly after login.
+func TestPreparedGatewayRecoveryNeverReplaysAnUncertainOrder(t *testing.T) {
+	for _, retained := range []bool{false, true} {
+		t.Run(fmt.Sprint(retained), func(t *testing.T) {
+			rig, p, _, previews := preparedTestRig(t)
+			var sends atomic.Int32
+			rig.server.orderPlaceBroker = func(context.Context, *ibkrlib.Contract, *ibkrlib.RawOrder) error {
+				sends.Add(1)
+				return ibkrlib.WithSendDisposition(errors.New("synthetic lost acknowledgement"), ibkrlib.SendDispositionMayHaveWritten)
+			}
+			first := preparedSubmit(t, rig, p)
+			if first.Order == nil || !first.Order.Found {
+				t.Fatal("uncertain attempt lost durable identity")
+			}
+			identity := first.Order.Order
+			waitRulesRegimeKick(t, rig.server)
+			reopenPreparedRig(t, rig)
+			rig.advance(15 * time.Minute)
+			var observed []ibkrlib.OrderLifecycleEvent
+			if retained {
+				ev := ibkrlib.OrderLifecycleEvent{Type: ibkrlib.OrderLifecycleEventOpenOrder,
+					OrderID: identity.ReservedOrderID, PermID: 7001, ClientID: identity.ClientID, ClientIDPresent: true,
+					OrderRef: identity.OrderRef, Account: identity.Account, Symbol: identity.Symbol, SecType: identity.SecType,
+					Action: identity.Action, OrderType: identity.OrderType, TIF: identity.TIF, TotalQuantity: identity.Quantity,
+					Remaining: identity.Quantity, Status: "Submitted"}
+				observed = []ibkrlib.OrderLifecycleEvent{ev}
+				for range 2 {
+					if !rig.server.appendOrderLifecycleEvent(ev) {
+						t.Fatal("recovered callback was not journaled")
+					}
+				}
+			}
+			rig.server.orderSnapshotFn = func(context.Context) (ibkrlib.OpenOrderSnapshot, error) {
+				return ibkrlib.OpenOrderSnapshot{Complete: true, AsOf: rig.now, Orders: observed}, nil
+			}
+			rig.server.reconcileOrderJournalWithBroker(t.Context())
+			for range 2 {
+				retry := preparedSubmit(t, rig, p)
+				if retry.Accepted || retry.Preparation == nil || retry.Preparation.State != "consumed" {
+					t.Fatal("recovery revived consumed authority")
+				}
+			}
+			if sends.Load() != 1 || previews.Load() != 1 {
+				t.Fatalf("replayed: sends=%d previews=%d", sends.Load(), previews.Load())
+			}
+			views, _, err := rig.server.loadOrderViews()
+			if err != nil || len(views) != 1 {
+				t.Fatalf("recovery duplicated journal identity: %d %v", len(views), err)
+			}
+			view := views[0]
+			if view.OrderRef != identity.OrderRef || view.ReservedOrderID != identity.ReservedOrderID {
+				t.Fatal("recovery changed order identity")
+			}
+			if retained {
+				if view.PermID != 7001 || view.LifecycleStatus != rpc.OrderLifecycleSubmitted {
+					t.Fatalf("lost retained broker order: %+v", view)
+				}
+			} else if view.LifecycleStatus != rpc.OrderLifecycleUnknownReconcileRequired || !view.Open {
+				t.Fatalf("absence falsely resolved uncertain unacknowledged send: %+v", view)
+			}
+		})
 	}
 }

@@ -181,7 +181,12 @@ func renderGoldenCases() []renderGoldenCase {
 		Blockers:      []rpc.TradingBlocker{{Code: "live_override_missing", Message: "live trading needs the live override", Action: "set the live override in config.toml"}},
 		WriteBlockers: []rpc.TradingBlocker{{Code: "trading_frozen", Message: "trading.freeze is on; only cancels pass"}},
 	}
+	diagnosticHealth := goldenHealthReady(readyTrading)
+	diagnosticHealth.ServerVersion = 203
+	diagnosticHealth.GatewayAPI = &rpc.GatewayAPIHealth{TradingProtocolMax: 203, ConfigReadProtocol: 219, ConfigState: "observed", DiagnosticProtocol: 219,
+		Settings: &rpc.GatewayAPISettings{ReadOnly: new(false), VolumeInLots: new(false), RetainOrdersOnReconnect: new(true), DownloadOpenOrders: new(true)}}
 	return []renderGoldenCase{
+		{name: "status_gateway_diagnostics", argv: []string{"status", "--gateway-diagnostics"}, conn: goldenConn{rpc.MethodStatusHealth: diagnosticHealth}},
 		{name: "portfolio_plan", argv: []string{"portfolio", "plan"}, conn: goldenConn{rpc.MethodPortfolioPlan: goldenPortfolioPlan()}},
 		{name: "portfolio_plan_held", argv: []string{"portfolio", "plan"}, conn: goldenConn{rpc.MethodPortfolioPlan: rpc.PortfolioPlanResult{State: "held", Reason: "Current portfolio evidence is incomplete.", Blockers: []rpc.TradingBlocker{{Code: "portfolio_book_unavailable", Message: "A complete same-session account and portfolio are required."}}}}},
 		{name: "add_plan", argv: []string{"add", "plan", "SYNA", "--currency", "USD", "--limit", "100", "--max"}, conn: goldenConn{rpc.MethodAddPlan: goldenStockAdd()}},
@@ -345,6 +350,7 @@ func goldenHealthReady(trading rpc.TradingStatus) rpc.HealthResult {
 		Connected:        true,
 		GatewayPhase:     rpc.GatewayPhaseReady,
 		DataType:         rpc.MarketDataLive,
+		GatewayAPI:       &rpc.GatewayAPIHealth{TradingProtocolMax: 203, ConfigReadProtocol: 219, ConfigState: "not_requested"},
 		ServerVersion:    176,
 		BackgroundTasks:  []rpc.BackgroundTaskStatus{},
 		Subsystems:       []rpc.SubsystemHealth{{Name: "regime", Status: "ready"}, {Name: "breadth", Status: "ready"}, {Name: "rulebook", Status: "ready"}},

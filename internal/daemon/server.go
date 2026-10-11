@@ -58,6 +58,7 @@ var perCandidateConnectBudget = 25 * time.Second
 
 // Server is the daemon process state.
 type Server struct {
+	gatewayDiagnosticsMu sync.Mutex
 	// deskAuthorityMu fences controller changes against the final broker byte.
 	deskAuthorityMu sync.RWMutex
 	// deskExecutionMu serializes the execution journal's check-then-append.
@@ -2851,7 +2852,7 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 	case rpc.MethodDataCheck:
 		s.unary(req, enc, func() (any, error) { return s.requestDataHealthCheck() })
 	case rpc.MethodStatusHealth:
-		s.unary(req, enc, func() (any, error) { return s.handleStatusHealth(), nil })
+		s.unary(req, enc, func() (any, error) { return s.handleStatusHealthRequest(ctx, req) })
 	case rpc.MethodTradingStatus:
 		s.unary(req, enc, func() (any, error) { return s.handleTradingStatus(), nil })
 	case rpc.MethodAutoTradeStatus:

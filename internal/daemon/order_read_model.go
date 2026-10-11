@@ -801,15 +801,30 @@ type orderAttemptFold struct {
 }
 
 type orderViewFold struct {
-	view     rpc.OrderView
-	last     orderJournalEvent
-	attempts map[string]*orderAttemptFold
-	terminal bool
+	view               rpc.OrderView
+	last               orderJournalEvent
+	attempts           map[string]*orderAttemptFold
+	terminal           bool
+	definitiveTerminal bool
 }
 
 func (f *orderViewFold) merge(ev orderJournalEvent) {
 	if f == nil {
 		return
+	}
+	// A callback that omits the flag cannot clear explicit deactivation evidence.
+	if (ev.Type == orderJournalEventStatusUpdated || ev.Type == orderJournalEventBrokerAcknowledged) && ev.Deactivated == nil {
+		ev.Deactivated = cloneBoolPtr(f.view.Deactivated)
+		if ev.Deactivated != nil && *ev.Deactivated && !orderLifecycleStatusIsTerminal(mapOrderJournalLifecycleStatus(ev)) {
+			ev.SendState = orderSendStateBrokerAcknowledged
+		}
+	}
+	// Older status-only Inactive evidence cannot distinguish a retained order.
+	// Only an explicit later openOrder can correct it; actual terminal fills,
+	// cancellations and broker errors remain sticky.
+	if f.terminal && !f.definitiveTerminal && ev.Type == orderJournalEventBrokerAcknowledged && ev.Deactivated != nil && *ev.Deactivated &&
+		strings.EqualFold(f.view.Status, "Inactive") {
+		f.terminal = false
 	}
 	if f.terminal && !orderJournalEventIsTerminal(ev) {
 		// Terminal broker evidence is sticky. A delayed local send return or a
@@ -878,6 +893,11 @@ func (f *orderViewFold) merge(ev orderJournalEvent) {
 	mergeOrderJournalEventIntoView(&f.view, ev)
 	f.last = ev
 	if orderJournalEventIsTerminal(ev) {
+		// Once definitive finality was seen, a later Inactive callback cannot
+		// turn it into the ambiguous terminal state that retention may correct.
+		if ev.Type == orderJournalEventBrokerError || mapOrderJournalLifecycleStatus(ev) != rpc.OrderLifecycleInactive {
+			f.definitiveTerminal = true
+		}
 		f.terminal = true
 		for _, attempt := range f.attempts {
 			attempt.resolved = true
@@ -1044,6 +1064,7 @@ func orderJournalEventFromView(view rpc.OrderView, eventType string, at time.Tim
 		AdaptivePriority: view.AdaptivePriority,
 		AlgoStrategy:     view.AlgoStrategy,
 		AlgoKnown:        view.AlgoKnown,
+		Deactivated:      cloneBoolPtr(view.Deactivated),
 		TriggerMethod:    view.TriggerMethod,
 		OutsideRTH:       view.OutsideRTH,
 		Quantity:         view.Quantity,
@@ -1177,6 +1198,9 @@ func mergeOrderJournalEventIntoView(view *rpc.OrderView, ev orderJournalEvent) {
 	if ev.OpenClose != "" {
 		view.OpenClose = ev.OpenClose
 	}
+	if ev.Deactivated != nil {
+		view.Deactivated = cloneBoolPtr(ev.Deactivated)
+	}
 	if ev.Status != "" && !preserveWorkingOrderOnBrokerError &&
 		(ev.Type != orderJournalEventBrokerError || orderLifecycleStatusIsTerminal(brokerErrorLifecycleStatus)) {
 		view.Status = ev.Status
@@ -1289,6 +1313,7 @@ func orderEventFromJournal(ev orderJournalEvent) rpc.OrderEvent {
 		AdaptivePriority: ev.AdaptivePriority,
 		AlgoStrategy:     ev.AlgoStrategy,
 		AlgoKnown:        ev.AlgoKnown,
+		Deactivated:      cloneBoolPtr(ev.Deactivated),
 		TriggerMethod:    ev.TriggerMethod,
 		OutsideRTH:       ev.OutsideRTH,
 		Quantity:         ev.Quantity,
@@ -1369,6 +1394,7 @@ func orderJournalEventFromLifecycle(ev ibkrlib.OrderLifecycleEvent, at time.Time
 		AdaptivePriority: ev.AdaptivePriority,
 		AlgoStrategy:     ev.AlgoStrategy,
 		AlgoKnown:        ev.AlgoKnown,
+		Deactivated:      cloneBoolPtr(ev.Deactivated),
 		TriggerMethod:    ev.TriggerMethod,
 		OutsideRTH:       ev.OutsideRth,
 		Quantity:         ev.TotalQuantity,
@@ -1395,7 +1421,7 @@ func orderJournalEventFromLifecycle(ev ibkrlib.OrderLifecycleEvent, at time.Time
 		}
 	case ibkrlib.OrderLifecycleEventStatus:
 		out.Type = orderJournalEventStatusUpdated
-		if orderLifecycleStatusIsTerminal(mapBrokerOrderLifecycleStatus(ev.Status, ev.Filled, ev.Remaining)) {
+		if orderLifecycleStatusIsTerminal(mapBrokerOrderLifecycleWithDeactivation(ev.Status, ev.Filled, ev.Remaining, ev.Deactivated)) {
 			out.SendState = orderSendStateTerminal
 		} else if brokerOrderStatusIsUncertainPending(ev.Status) {
 			out.SendState = orderSendStateUncertainSend
@@ -1464,7 +1490,7 @@ func mapOrderJournalLifecycleStatus(ev orderJournalEvent) string {
 		return mapBrokerErrorLifecycleStatus(ev.ErrorCode, ev.Status)
 	}
 	if ev.Status != "" {
-		return mapBrokerOrderLifecycleStatus(ev.Status, ev.Filled, ev.Remaining)
+		return mapBrokerOrderLifecycleWithDeactivation(ev.Status, ev.Filled, ev.Remaining, ev.Deactivated)
 	}
 	switch ev.Type {
 	case orderJournalEventPreviewed, orderJournalEventTokenConfirmed:
@@ -1520,7 +1546,7 @@ func mapOrderViewLifecycleStatus(view rpc.OrderView, last orderJournalEvent, att
 			return status
 		}
 		if view.Status != "" && view.SendState == orderSendStateBrokerAcknowledged {
-			return mapBrokerOrderLifecycleStatus(view.Status, view.Filled, view.Remaining)
+			return mapBrokerOrderLifecycleWithDeactivation(view.Status, view.Filled, view.Remaining, view.Deactivated)
 		}
 		return rpc.OrderLifecycleUnknownReconcileRequired
 	}
@@ -1537,7 +1563,7 @@ func mapOrderViewLifecycleStatus(view rpc.OrderView, last orderJournalEvent, att
 		return rpc.OrderLifecyclePendingCancel
 	}
 	if view.Status != "" {
-		return mapBrokerOrderLifecycleStatus(view.Status, view.Filled, view.Remaining)
+		return mapBrokerOrderLifecycleWithDeactivation(view.Status, view.Filled, view.Remaining, view.Deactivated)
 	}
 	switch view.LastEvent {
 	case orderJournalEventPreviewed, orderJournalEventTokenConfirmed:
@@ -1605,6 +1631,16 @@ func mapBrokerErrorLifecycleStatus(errorCode int, status string) string {
 	default:
 		return rpc.OrderLifecycleUnknownReconcileRequired
 	}
+}
+
+// Deactivation is resumable and must not be conflated with terminal Inactive.
+// Explicit fills/cancellations/rejections still settle an order.
+func mapBrokerOrderLifecycleWithDeactivation(status string, filled, remaining float64, deactivated *bool) string {
+	base := mapBrokerOrderLifecycleStatus(status, filled, remaining)
+	if deactivated != nil && *deactivated && (base == rpc.OrderLifecycleInactive || !orderLifecycleStatusIsTerminal(base)) && base != rpc.OrderLifecyclePendingCancel {
+		return rpc.OrderLifecycleDeactivated
+	}
+	return base
 }
 
 func mapBrokerOrderLifecycleStatus(status string, filled, remaining float64) string {
@@ -1918,4 +1954,11 @@ func (s *Server) reservedBrokerOrderIDFloor() (int, error) {
 	}
 	floor, err := store.GlobalOrderIDFloor(context.Background())
 	return int(floor), err
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	return new(*value)
 }

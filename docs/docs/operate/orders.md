@@ -25,6 +25,17 @@ admission gates as every other write. A proposal or opportunity preview is
 candidate-specific evidence and never submit authority. The MCP server has no
 preview or execution tools.
 
+## Deactivated broker orders
+
+An explicit broker `deactivate` flag appears as `deactivated` in the order
+read model. Such an order is retained at IBKR and can be activated externally.
+It remains visible, blocks competing orders, and does not count as active
+protection. Canary does not activate it or offer modification through this
+state. A later explicit active open-order callback resumes the same identity.
+Ordinary `Inactive` callbacks remain distinct, and final fills, cancellations
+and rejections remain terminal. Older callbacks without the flag cannot prove
+deactivation.
+
 ## Required authority
 
 Trading configuration must pin `[gateway].account`,

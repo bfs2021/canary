@@ -9,6 +9,7 @@ Data farms     hmds:ushmds broken (IBKR 2105)
 Market access  CHECK · SYNB not subscribed (IBKR 354, seen 14:00, retry 14:30)
 Daemon         v0.0.0-golden, up 2h0m0s
 TWS            API server 176
+API protocol   176 negotiated · 203 client ceiling
 Backend link   restored; 2 losses this session (1 in maintenance windows), last
                outage 30s, longest 1m30s
 Answers        history connection answers no history since 13:50 · redial at
@@ -34,6 +35,7 @@ IBKR Gateway  \x1b[33m\x1b[1mATTENTION\x1b[0m\x1b[0m
 \x1b[2mMarket access \x1b[0m \x1b[33mCHECK · SYNB not subscribed (IBKR 354, seen 14:00, retry 14:30)\x1b[0m
 \x1b[2mDaemon        \x1b[0m v0.0.0-golden, up 2h0m0s
 \x1b[2mTWS           \x1b[0m API server 176
+\x1b[2mAPI protocol  \x1b[0m 176 negotiated · 203 client ceiling
 \x1b[2mBackend link  \x1b[0m \x1b[33mrestored; 2 losses this session (1 in maintenance windows), last
                outage 30s, longest 1m30s\x1b[0m
 \x1b[2mAnswers       \x1b[0m \x1b[33mhistory connection answers no history since 13:50 · redial at

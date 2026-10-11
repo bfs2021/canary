@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
@@ -8515,27 +8516,26 @@ func parseRTVolumeTick(value string, serverVersion int) (last float64, volume in
 	return last, volume, ts, last > 0 || volume > 0 || !ts.IsZero()
 }
 
-// parseTickSize normalises IBKR tickSize payloads.
-// Recent TWS/Gateway builds expose size values as IBKR Decimal payloads.
-// For stock volume (tick type 8) the wire field can arrive as a fixed-scale
-func parseTickSize(serverVersion, tickType int, raw string) (int64, bool) {
+// parseTickSize reads the broker's decimal quantity without guessing a scale
+// from its magnitude. Protocol 203 can report shares or lots according to the
+// TWS setting; neither the server version nor a large value proves the unit.
+// The existing integer read model truncates fractional quantities toward zero.
+func parseTickSize(_, _ int, raw string) (int64, bool) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	if raw == "" || len(raw) > 128 {
 		return 0, false
 	}
-	size, err := strconv.ParseInt(raw, 10, 64)
-	if err == nil {
-		if serverVersion >= minServerVerSizeRules && (tickType == 8 || tickType == 74) && size >= 1_000_000 {
-			return size / 1_000_000, true
-		}
-		return size, true
+	if size, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return size, size >= 0
 	}
-	decimal, decimalErr := strconv.ParseFloat(raw, 64)
-	if decimalErr != nil || math.IsNaN(decimal) || math.IsInf(decimal, 0) || decimal < 0 {
-		marketDataLogger.Warnf("Invalid tick size for tickType %d: %q (error: %v)", tickType, raw, err)
+	// Enough precision for every accepted mantissa, including values near
+	// MaxInt64. Float64 conversion can round a valid decimal across that bound.
+	decimal, _, err := big.ParseFloat(raw, 10, 512, big.ToZero)
+	if err != nil || decimal.IsInf() || decimal.Sign() < 0 || decimal.Cmp(big.NewFloat(0x1p63)) >= 0 {
 		return 0, false
 	}
-	return int64(decimal), true
+	size, _ := decimal.Int64()
+	return size, true
 }
 
 // handlePosition processes position updates
