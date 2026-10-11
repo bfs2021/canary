@@ -259,14 +259,14 @@ func productionLegFetcher(
 	if c == nil {
 		return legResult{Throttle: true}
 	}
-	key, _, err := c.SubscribeOption(ctx, underlying, tradingClass, expiryYMD, strike, right)
+	key, releaseOption, err := c.HoldOption(ctx, underlying, tradingClass, expiryYMD, strike, right)
 	if err != nil {
 		// SubscribeOption's error path has two distinct shapes:
 		failure := classifyGammaLegFailure(err)
 		throttle := failure != gammaLegFailureContractMissing && failure != gammaLegFailureEntitlement
 		return legResult{Throttle: throttle, Failure: failure}
 	}
-	defer func() { _ = c.UnsubscribeMarketData(key) }()
+	defer func() { _ = releaseOption() }()
 
 	inputs, err := collectGammaOptionInputs(ctx, snapshotDataType, key, c.SubscriptionRejectCh(key), gammaOptionInputReader{
 		model:  func() (float64, int, bool) { return c.OptionIVWithDataType(key) },

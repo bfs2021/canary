@@ -23,8 +23,15 @@ The daemon writes its process-level fatal output (the runtime's SIGQUIT
 goroutine dump, an unrecovered panic) to `<daemon-log-name>.crash.log` beside
 its log. The monitor scans that file with its own cursor (`-daemon-crash-log`,
 `-daemon-crash-offset`; both derive from the daemon paths by default) and
-reports new content as one ERROR signal naming the first line and the line
-count, never the trace itself. A missing crash log is normal.
+reports unexplained content as one ERROR signal naming the first line and the
+line count, never the trace itself. The known macOS diagnostic saying malloc
+stack logging could not be turned off because it was not enabled is counted
+separately in `crash_scan.allocator_diagnostic_lines`; it is not crash evidence.
+A panic or other output in the same scan remains an ERROR. `crash_scan` exposes
+first-read/reset status, newly scanned lines and the file modification time.
+These undated lines have no known event times: an initial read includes retained
+history, and line counts never represent numbers of crashes. A missing crash
+log is normal.
 
 Missing logs require attention. `-stale-after=24h` also flags inactive logs as
 **health unverified**, not as proof of a service outage; set a different interval

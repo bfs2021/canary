@@ -50,3 +50,24 @@ func TestCrashOutputIsOneSignal(t *testing.T) {
 		t.Fatalf("consumed crash output reported again: %+v %v", got.Daemon.Signals, err)
 	}
 }
+
+func TestAllocatorStartupDiagnosticsAreNotCrashes(t *testing.T) {
+	opts := testMonitorOptions(t)
+	writeTestFile(t, opts.daemonLog, "level=INFO msg=ready\n")
+	path, _ := opts.crashPaths()
+	line := "canary(1234) MallocStackLogging: can't turn off malloc stack logging because it was not enabled.\n"
+	writeTestFile(t, path, strings.Repeat(line, 382))
+	got, err := run(opts, time.Now())
+	if err != nil || got.NeedsAttention || got.CrashScan == nil || !got.CrashScan.FirstRead || got.CrashScan.EventTimesKnown || got.CrashScan.NewLines != 382 || got.CrashScan.AllocatorDiagnosticLines != 382 {
+		t.Fatalf("startup diagnostics misreported: %+v %v", got, err)
+	}
+	got, err = run(opts, time.Now())
+	if err != nil || got.CrashScan.FirstRead || got.CrashScan.NewLines != 0 || got.NeedsAttention {
+		t.Fatalf("consumed startup diagnostics replayed: %+v %v", got, err)
+	}
+	writeTestFile(t, path, strings.Repeat(line, 382)+line+"panic: synthetic failure\ntrace line\n")
+	got, err = run(opts, time.Now())
+	if err != nil || !got.NeedsAttention || len(got.Daemon.Signals) != 1 || got.Daemon.Signals[0].Count != 2 || !strings.Contains(got.Daemon.Signals[0].Message, "panic:") || got.CrashScan.AllocatorDiagnosticLines != 1 {
+		t.Fatalf("allocator diagnostic hid a real failure: %+v %v", got, err)
+	}
+}

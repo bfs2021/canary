@@ -126,7 +126,7 @@ func scanIncremental(logPath, offsetPath string) (scannedLog, error) {
 	}
 	identity := fileIdentity(info)
 	next := logCursor{Version: 2, Path: path, Identity: identity, Lines: len(all), Prefix: lineHash(all[:min(len(all), 32)]), Boundary: lineHash(all[max(0, len(all)-1):]), Days: previous.Days, Starts: previous.Starts}
-	scanned := scannedLog{state: "unchanged", path: path, modified: info.ModTime(), total: len(all), cursor: next}
+	scanned := scannedLog{state: "unchanged", path: path, modified: info.ModTime(), total: len(all), cursor: next, firstRead: previous.Version == 0}
 	offset := 0
 	if previous.Version == 2 && previous.Path == path && sameFileIdentity(previous.Identity, identity) && cursorMatches(previous, all) {
 		offset = previous.Lines

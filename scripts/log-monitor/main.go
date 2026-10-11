@@ -56,9 +56,20 @@ type report struct {
 	Holdings string    `json:"holdings"`
 	Daemon   logReport `json:"daemon"`
 	App      logReport `json:"app"`
-	// CrashLog names the daemon's crash output file when it exists; new
-	// content there is one ERROR signal on the daemon report.
-	CrashLog string `json:"crash_log,omitempty"`
+	// CrashLog names process stderr, which may contain allocator diagnostics
+	// as well as fatal output. Counts describe lines, never crash events.
+	CrashLog  string           `json:"crash_log,omitempty"`
+	CrashScan *crashScanReport `json:"crash_scan,omitempty"`
+}
+
+type crashScanReport struct {
+	State                    string    `json:"state"`
+	ModifiedAt               time.Time `json:"modified_at"`
+	FirstRead                bool      `json:"first_read"`
+	OffsetReset              bool      `json:"offset_reset,omitempty"`
+	NewLines                 int       `json:"new_lines"`
+	AllocatorDiagnosticLines int       `json:"allocator_diagnostic_lines"`
+	EventTimesKnown          bool      `json:"event_times_known"`
 }
 
 type logReport struct {
@@ -116,6 +127,7 @@ type scannedLog struct {
 	total       int
 	state       string
 	offsetReset bool
+	firstRead   bool
 	path        string
 	modified    time.Time
 	coverage    string
@@ -123,12 +135,15 @@ type scannedLog struct {
 }
 
 var (
-	accountPattern = regexp.MustCompile(`\b(?:DU|U)\d{5,}\b`)
-	sensitiveField = regexp.MustCompile(`(?i)\b(account(?:_id)?|order(?:_id|_?ref)?|preview_token|token|balance|holding|position|symbol|conid|reqid)=("[^"]*"|\S+)`)
-	symbolPhrase   = regexp.MustCompile(`(?i)\bfor [A-Z][A-Z0-9.]{0,9} via\b`)
-	spacePattern   = regexp.MustCompile(`\s+`)
-	statusPattern  = regexp.MustCompile(`(?:^|\s)status=(\d{3})(?:\s|$)`)
-	timePattern    = regexp.MustCompile(`(?:^|\s)time=([^\s]+)`)
+	// Match only this known startup diagnostic, never arbitrary allocator or
+	// crash text. A panic elsewhere in the same scan remains an ERROR.
+	mallocDisabledDiagnostic = regexp.MustCompile(`^(?:[A-Za-z0-9_.-]+\([0-9]+\) )?MallocStackLogging: can't turn off malloc stack logging because it was not enabled\.$`)
+	accountPattern           = regexp.MustCompile(`\b(?:DU|U)\d{5,}\b`)
+	sensitiveField           = regexp.MustCompile(`(?i)\b(account(?:_id)?|order(?:_id|_?ref)?|preview_token|token|balance|holding|position|symbol|conid|reqid)=("[^"]*"|\S+)`)
+	symbolPhrase             = regexp.MustCompile(`(?i)\bfor [A-Z][A-Z0-9.]{0,9} via\b`)
+	spacePattern             = regexp.MustCompile(`\s+`)
+	statusPattern            = regexp.MustCompile(`(?:^|\s)status=(\d{3})(?:\s|$)`)
+	timePattern              = regexp.MustCompile(`(?:^|\s)time=([^\s]+)`)
 	// Ephemeral values embedded in messages (socket addresses, event
 	// timestamps) would make every occurrence a distinct signal, letting one
 	// reconnect storm fill the whole bounded list with unmergeable
@@ -219,15 +234,18 @@ func run(opts options, now time.Time) (report, error) {
 	}
 	if crash.state != "missing" {
 		result.CrashLog = crash.path
+		result.CrashScan = &crashScanReport{State: crash.state, ModifiedAt: crash.modified, FirstRead: crash.firstRead, OffsetReset: crash.offsetReset, NewLines: len(crash.lines)}
 	}
-	// The crash log is the runtime's own output — a goroutine dump, a panic —
-	// so its content is one finding, not a line-by-line classification; the
-	// first line names the cause ("SIGQUIT: quit", "panic: …", "fatal error:
-	// …") and the count says how much landed.
+	// No per-record timestamp is available in this stream. An initial scan
+	// can cover old process starts; neither line count nor mtime dates crashes.
 	if crash.state == "scanned" {
 		first, lines := "", 0
 		for _, line := range crash.lines {
 			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				if mallocDisabledDiagnostic.MatchString(trimmed) {
+					result.CrashScan.AllocatorDiagnosticLines++
+					continue
+				}
 				lines++
 				if first == "" {
 					first = redactMessage(trimmed)
@@ -235,7 +253,7 @@ func run(opts options, now time.Time) (report, error) {
 			}
 		}
 		if lines > 0 {
-			addSignal(&result.Daemon, "ERROR", "crash_output", "daemon crash output written: "+first, lines)
+			addSignal(&result.Daemon, "ERROR", "crash_output", "daemon process stderr (undated lines, not a crash count): "+first, lines)
 		}
 	}
 	applyCoverage(&result.Daemon, daemon, now, opts.staleAfter)

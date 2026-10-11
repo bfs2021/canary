@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.21.1 — Unreleased
+
+### What's new
+
+More reliable chart refreshes and option reads during concurrent use and broker
+reconnects, with clearer log-monitor coverage.
+
+### Fixed
+
+- Completed history-cache entries no longer block new chart and research reads while fetch capacity is idle. Active request and broker pacing limits remain unchanged. Fixes #57.
+- Quote requests waiting across a broker reconnect no longer leak market-data capacity. Overlapping option readers share one subscription until the last reader leaves, and old cleanup cannot cancel a replacement line. Fixes #58.
+- Alert observations waiting behind another producer honor their existing deadline and identify queue contention separately from persistence failures.
+- Scheduled log checks count the known macOS allocator startup diagnostic separately from crash output and disclose first-read coverage and unknown event times.
+
 ## v3.21.0 — 2026-10-11 09:10 CEST
 
 ### What's new

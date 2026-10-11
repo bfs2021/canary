@@ -27,6 +27,7 @@ type marketDataCache struct {
 type marketHistoryEntry struct {
 	done    chan struct{}
 	expires time.Time
+	usedAt  time.Time
 	result  *rpc.MarketHistoryResult
 	err     error
 }
@@ -56,6 +57,9 @@ func (s *Server) handleMarketHistory(ctx context.Context, req *rpc.Request) (*rp
 }
 
 func (s *Server) marketHistoryRequest(ctx context.Context, p rpc.MarketHistoryParams) (*rpc.MarketHistoryResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if _, _, err := marketHistoryWindow(p.Range, time.Now()); err != nil {
 		return nil, err
 	}
@@ -81,6 +85,7 @@ func (s *Server) marketHistoryRequest(ctx context.Context, p rpc.MarketHistoryPa
 		}
 	}
 	if e := cache.history[requestKey]; e != nil {
+		e.usedAt = time.Now()
 		cache.mu.Unlock()
 		select {
 		case <-ctx.Done():
@@ -90,10 +95,27 @@ func (s *Server) marketHistoryRequest(ctx context.Context, p rpc.MarketHistoryPa
 		}
 	}
 	if len(cache.history) >= 64 {
-		cache.mu.Unlock()
-		return nil, errors.New("history capacity reached; retry later")
+		// Completed results are a disposable cache, not occupied work slots.
+		// A rotating research universe can fill this cache within its TTL even
+		// when both fetch slots are idle. Evict only completed work; in-flight
+		// owners and their joined callers must retain the same entry.
+		var oldest string
+		for k, candidate := range cache.history {
+			select {
+			case <-candidate.done:
+				if oldest == "" || candidate.usedAt.Before(cache.history[oldest].usedAt) || candidate.usedAt.Equal(cache.history[oldest].usedAt) && k < oldest {
+					oldest = k
+				}
+			default:
+			}
+		}
+		if oldest == "" {
+			cache.mu.Unlock()
+			return nil, errors.New("history capacity reached; retry later")
+		}
+		delete(cache.history, oldest)
 	}
-	e := &marketHistoryEntry{done: make(chan struct{})}
+	e := &marketHistoryEntry{done: make(chan struct{}), usedAt: time.Now()}
 	cache.history[requestKey] = e
 	slots := cache.slots
 	cache.mu.Unlock()

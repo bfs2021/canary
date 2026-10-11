@@ -80,6 +80,7 @@ type Connector struct {
 	reqIDMap      map[int]string // Maps request IDs to symbols or routed subscription keys
 	subMu         sync.RWMutex
 	exactQuoteSeq atomic.Uint64
+	optionPending map[string]*optionSubscriptionFlight // protected by subMu
 
 	// Order management
 	openOrders       map[string]*trackedOrder
@@ -380,6 +381,9 @@ type Subscription struct {
 	// 10197) — "the subscription will never produce ticks" semantics.
 	// Buffered one; the receipt producer never blocks on a full channel.
 	RejectCh chan SubscriptionRejection
+	// Option readers share one line until the final matching reader leaves.
+	optionReaders int
+	optionSession ConnectorSessionBinding
 	// replaySpec records the wire form of this subscription so the 1101
 	// backend-recovery path can re-issue it: IBKR code 1101 means the
 	// TWS<->IBKR link was restored with server-side subscriptions LOST,
@@ -4762,15 +4766,15 @@ func (c *Connector) UnsubscribeMarketData(symbol string) error {
 // cancels on its originating session. It does not hold the cache mutex during
 // wire I/O. The caller owns the cancellation deadline.
 func (c *Connector) UnsubscribeMarketDataContext(ctx context.Context, symbol string) error {
-	return c.unsubscribeMarketData(ctx, symbol, nil)
+	return c.unsubscribeMarketData(ctx, symbol, nil, nil)
 }
 
 // UnsubscribeSharedMarketDataForSession releases a shared line only if binding still
 // names the cache generation. Retired callers cannot remove a successor line.
 func (c *Connector) UnsubscribeSharedMarketDataForSession(ctx context.Context, binding ConnectorSessionBinding, symbol string) error {
-	return c.unsubscribeMarketData(ctx, symbol, &binding)
+	return c.unsubscribeMarketData(ctx, symbol, &binding, nil)
 }
-func (c *Connector) unsubscribeMarketData(ctx context.Context, symbol string, binding *ConnectorSessionBinding) error {
+func (c *Connector) unsubscribeMarketData(ctx context.Context, symbol string, binding *ConnectorSessionBinding, expected *Subscription) error {
 	symbol = strings.ToUpper(symbol)
 	c.mu.RLock()
 	conn := c.conn
@@ -4789,9 +4793,17 @@ func (c *Connector) unsubscribeMarketData(ctx context.Context, symbol string, bi
 		epoch = binding.epoch
 	}
 	sub, exists := c.subscriptions[symbol]
-	if !exists {
+	if !exists || expected != nil && sub != expected {
 		c.subMu.Unlock()
 		return nil
+	}
+	if sub.optionReaders > 1 {
+		sub.optionReaders--
+		c.subMu.Unlock()
+		return nil
+	}
+	if sub.optionSession.connection != nil {
+		conn, epoch = sub.optionSession.connection, sub.optionSession.epoch
 	}
 	if sub.liveRetryTimer != nil {
 		sub.liveRetryTimer.Stop()
@@ -4801,7 +4813,18 @@ func (c *Connector) unsubscribeMarketData(ctx context.Context, symbol string, bi
 		delete(c.reqIDMap, sub.ReqID)
 	}
 	reqID, wire := sub.ReqID, wireCancelNeeded(sub)
+	// Keep admission closed until the retired option route is removed. A
+	// replacement socket may reuse this request ID for the same option key.
+	c.optMu.Lock()
+	if c.optReqIDs[reqID] == symbol {
+		delete(c.optReqIDs, reqID)
+	}
+	c.optMu.Unlock()
 	c.subMu.Unlock()
+	if sub.optionSession.connection != nil && !c.SessionCurrent(sub.optionSession) {
+		conn.releaseMarketDataSlotAtEpoch(reqID, epoch)
+		return nil
+	}
 	if conn != nil && conn.IsConnected() && reqID != 0 {
 		if wire {
 			return conn.cancelMarketDataForEpoch(ctx, reqID, epoch)
@@ -5571,9 +5594,7 @@ func (c *Connector) ServerVersion() int {
 	return c.conn.ServerVersion()
 }
 
-// SubscribeOption ensures a streaming subscription exists for a fully
-// multiple classes for one underlying must supply the class explicitly. The
-func (c *Connector) SubscribeOption(ctx context.Context, underlying, tradingClass, expiryYMD string, strike float64, right string) (string, int, error) {
+func (c *Connector) subscribeOption(ctx context.Context, underlying, tradingClass, expiryYMD string, strike float64, right string) (string, int, error) {
 	if !c.isConnected() {
 		return "", 0, ErrIBKRUnavailable
 	}
@@ -5583,13 +5604,6 @@ func (c *Connector) SubscribeOption(ctx context.Context, underlying, tradingClas
 		upperClass = upperUnderlying
 	}
 	key := optionMarketDataKeyForClass(upperUnderlying, upperClass, expiryYMD, right, strike)
-
-	c.subMu.RLock()
-	if existing, ok := c.subscriptions[key]; ok {
-		c.subMu.RUnlock()
-		return key, existing.ReqID, nil
-	}
-	c.subMu.RUnlock()
 
 	contract := Contract{
 		Symbol:       upperUnderlying,
@@ -5604,12 +5618,11 @@ func (c *Connector) SubscribeOption(ctx context.Context, underlying, tradingClas
 		TradingClass: upperClass,
 	}
 
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
-	if conn == nil {
+	binding, ready := c.CaptureSession()
+	if !ready {
 		return "", 0, ErrIBKRUnavailable
 	}
+	conn := binding.connection
 
 	if conn.applyCachedOptionContract(&contract) {
 		normalizeResolvedOptionMarketDataContract(&contract)
@@ -5627,7 +5640,7 @@ func (c *Connector) SubscribeOption(ctx context.Context, underlying, tradingClas
 	// Generic ticks mirror RequestOptionsMarketData: 100=opt volume,
 	// delivered for option contracts, so callers must not depend on
 	// Register the reqID before the wire send so ticks 27/28 cannot race
-	reqID, err := conn.requestMarketDataWithContract(ctx, contract, OptionSubscriptionGenericTicks, false, false, func(reqID int) func() {
+	reqID, err := conn.requestMarketDataWithContractForEpoch(ctx, contract, OptionSubscriptionGenericTicks, false, false, binding.epoch, func(reqID int) func() {
 		subscriptionRight := strings.ToUpper(strings.TrimSpace(contract.Right))
 		if subscriptionRight != "" {
 			subscriptionRight = subscriptionRight[:1]
@@ -5635,11 +5648,12 @@ func (c *Connector) SubscribeOption(ctx context.Context, underlying, tradingClas
 		c.subMu.Lock()
 		c.reqIDMap[reqID] = key
 		c.subscriptions[key] = &Subscription{
-			Symbol:   key,
-			Right:    subscriptionRight,
-			ReqID:    reqID,
-			LastTime: time.Now(),
-			RejectCh: make(chan SubscriptionRejection, 1),
+			Symbol:        key,
+			Right:         subscriptionRight,
+			ReqID:         reqID,
+			LastTime:      time.Now(),
+			RejectCh:      make(chan SubscriptionRejection, 1),
+			optionReaders: 1, optionSession: binding, SessionEpoch: binding.epoch,
 		}
 		c.subMu.Unlock()
 		// Route option-computation ticks (msg 21, live types 10/11/13 and

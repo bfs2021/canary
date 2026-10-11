@@ -1459,11 +1459,11 @@ func captureOptionGreeks(ctx context.Context, c *ibkrlib.Connector, under, expir
 	}
 	// Single-class default — captureOptionGreeks is called from the
 	// chain-prewarm path which doesn't disambiguate SPX vs SPXW today.
-	key, _, err := c.SubscribeOption(ctx, under, under, expiryYMD, strike, right)
+	key, releaseOption, err := c.HoldOption(ctx, under, under, expiryYMD, strike, right)
 	if err != nil {
 		return out
 	}
-	defer func() { _ = c.UnsubscribeMarketData(key) }()
+	defer func() { _ = releaseOption() }()
 
 	_ = pollUntilWithReject(ctx, time.Now().Add(budget), c.SubscriptionRejectCh(key), key, func() bool {
 		g, ok := c.OptionGreeks(key)
@@ -2195,11 +2195,11 @@ func (s *Server) handleOptionQuoteSnapshot(ctx context.Context, c *ibkrlib.Conne
 	if tradingClass == "" {
 		tradingClass = sym
 	}
-	key, _, err := c.SubscribeOption(ctx, sym, tradingClass, contract.Expiry, contract.Strike, contract.Right)
+	key, releaseOption, err := c.HoldOption(ctx, sym, tradingClass, contract.Expiry, contract.Strike, contract.Right)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = c.UnsubscribeMarketData(key) }()
+	defer func() { _ = releaseOption() }()
 
 	q := &rpc.Quote{
 		Symbol:   key,

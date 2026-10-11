@@ -2583,6 +2583,14 @@ func (c *Connection) logMarketDataSlotCensus() {
 
 // acquireMarketDataSlot acquires a market data slot and records the holding
 func (c *Connection) acquireMarketDataSlot(ctx context.Context, reqID int, owner ...string) error {
+	label := "unknown"
+	if len(owner) != 0 {
+		label = owner[0]
+	}
+	return c.acquireMarketDataSlotForEpoch(ctx, reqID, c.BrokerSessionEpoch(), label)
+}
+
+func (c *Connection) acquireMarketDataSlotForEpoch(ctx context.Context, reqID int, epoch uint64, owner string) error {
 	if c.rateLimiter == nil {
 		return nil
 	}
@@ -2593,11 +2601,21 @@ func (c *Connection) acquireMarketDataSlot(ctx context.Context, reqID int, owner
 		return err
 	}
 	c.marketDataSlotsMu.Lock()
-	label := "unknown"
-	if len(owner) != 0 {
-		label = owner[0]
+	err := ctx.Err()
+	if err == nil && c.BrokerSessionEpoch() != epoch {
+		err = fmt.Errorf("broker socket generation changed during market-data slot admission")
 	}
-	c.marketDataSlots[reqID] = marketDataSlot{epoch: c.BrokerSessionEpoch(), acquired: time.Now(), owner: label}
+	if err == nil {
+		if _, exists := c.marketDataSlots[reqID]; exists {
+			err = fmt.Errorf("market-data request already owns a slot")
+		}
+	}
+	if err != nil {
+		c.marketDataSlotsMu.Unlock()
+		c.rateLimiter.ReleaseMarketDataSlot()
+		return err
+	}
+	c.marketDataSlots[reqID] = marketDataSlot{epoch: epoch, acquired: time.Now(), owner: owner}
 	c.marketDataSlotsMu.Unlock()
 	return nil
 }
@@ -5599,7 +5617,11 @@ func (c *Connection) requestMarketDataWithContractForEpochMode(ctx context.Conte
 	contractCopy := contract
 	c.registerReqAlias(ctx, reqID, contractCopy)
 	msg := c.encodeMsg(c.buildReqMktDataFields(contractCopy, reqID, genericTicks, snapshot, regulatorySnap)...)
-	if err := c.acquireMarketDataSlot(ctx, reqID, "epoch_quote"); err != nil {
+	owner := "epoch_quote"
+	if contract.SecType == "OPT" {
+		owner = "option_quote"
+	}
+	if err := c.acquireMarketDataSlotForEpoch(ctx, reqID, expectedEpoch, owner); err != nil {
 		return 0, fmt.Errorf("market data subscription limit reached: %w", err)
 	}
 	var cleanup func()

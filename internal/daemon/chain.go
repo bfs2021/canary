@@ -1041,12 +1041,12 @@ func mergeStrikeSide(dst, src *rpc.ChainStrike, right string) {
 }
 
 func fillOptionLeg(ctx context.Context, c *ibkrlib.Connector, row *rpc.ChainStrike, symbol, tradingClass, expiryYMD string, strike float64, right string) {
-	key, _, err := c.SubscribeOption(ctx, symbol, tradingClass, expiryYMD, strike, right)
+	key, releaseOption, err := c.HoldOption(ctx, symbol, tradingClass, expiryYMD, strike, right)
 	if err != nil {
 		setOptionLegUnavailable(row, right, "subscribe_error")
 		return
 	}
-	defer func() { _ = c.UnsubscribeMarketData(key) }()
+	defer func() { _ = releaseOption() }()
 
 	asOf := time.Now()
 	deadline := time.Now().Add(2500 * time.Millisecond)
