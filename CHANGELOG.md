@@ -6,18 +6,11 @@ All notable changes to this project are documented here. The project adheres to 
 
 ### What's new
 
-Queue an exact stock or single-leg option order with an owner-approved price
-limit, or approve a stock trailing stop that follows the whole position without
-loosening its trail. TWS / IB Gateway 10.50 compatibility hardening preserves
-large volume readings, tracks deactivated orders and adds read-only API settings
-diagnostics while retaining the main connection's tested protocol.
+Approved order queues, Adaptive priority, trailing stops that follow the whole
+position, corrected volume readings and API settings diagnostics.
 
-Live validation used TWS. A running IB Gateway 10.50 session has not yet been
-validated end to end.
-
-Existing policies and broker settings are unchanged. New queues and protection
-mandates require owner confirmation; installation grants no new trading authority.
-Standard binaries and MCP remain read-only.
+These changes address TWS / IB Gateway 10.50 compatibility. Live checks passed
+on TWS; Gateway 10.50 still needs end-to-end validation.
 
 ### Added
 
@@ -29,7 +22,7 @@ Standard binaries and MCP remain read-only.
 ### Fixed
 
 - Large market-data volumes retain their broker-reported decimal value instead of being divided by one million. Invalid and overflowing sizes are rejected. Fixes #56.
-- Explicitly deactivated orders remain visible and resumable, do not count as active protection, and block competing orders. Recovery regressions cover retained orders and lost acknowledgements without duplicate submissions.
+- Deactivated orders remain visible, block competing orders and do not count as active protection; reactivation happens outside Canary. Reconnect recovery keeps retained orders and lost acknowledgements from causing duplicate submissions.
 - Queued purchases check fresh shared capacity at execution; attempted and uncertain orders remain commitments, and ambiguous sends are reconciled before another attempt.
 - Gamma calculations retain valid model ticks arriving late within the existing collection window, even when open interest arrived first.
 
