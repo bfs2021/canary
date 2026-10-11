@@ -46,6 +46,8 @@ func (s *Server) measureBondPositions(ctx context.Context, bonds []rpc.PositionB
 		lines = append(lines, risk.BondBookLine{Symbol: b.Symbol, Currency: b.Currency, Issuer: nonEmptyString(b.EvidenceIssuer, b.Issuer),
 			IssuerClass: b.IssuerClass, MarketValueBase: b.MarketValueBase, RateShockLossBase: b.RateShockLossBase, Unmeasured: b.RiskUnmeasured})
 	}
+	// The console's per-line facts (bond_facts.go) read the measured rows.
+	s.fillBondFacts(ctx, bonds, stocks, now)
 	return risk.SummarizeBondBook(lines, nlvBase, baseCcy)
 }
 

@@ -33,6 +33,9 @@ type cashSweepBonds struct {
 	// evidence holds the issuer sources a user bond buy is admitted by
 	// (bond_evidence.go).
 	evidence *bondEvidenceSources
+	// yields keeps the daily yield records the console's spread since
+	// purchase is read from (bond_facts.go).
+	yields *bondYieldRecords
 }
 
 const (
@@ -66,9 +69,12 @@ type bondDirectory struct {
 	lines    map[string]bondLinesEntry
 	quotes   map[int]bondQuoteEntry
 	inflight map[string]chan struct{}
-	fetch    func(context.Context, ibkrlib.BondContractRequest) ([]ibkrlib.BondContractDetails, *ibkrlib.BondLookupTrace, error)
-	quote    func(context.Context, ibkrlib.BondContractDetails) (rpc.BondQuote, error)
-	now      func() time.Time
+	// quoteInflight marks the lines a detached quote read is running for
+	// (bond_facts.go), one at a time per line.
+	quoteInflight map[int]bool
+	fetch         func(context.Context, ibkrlib.BondContractRequest) ([]ibkrlib.BondContractDetails, *ibkrlib.BondLookupTrace, error)
+	quote         func(context.Context, ibkrlib.BondContractDetails) (rpc.BondQuote, error)
+	now           func() time.Time
 }
 
 type bondLinesEntry struct {

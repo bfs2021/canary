@@ -1,0 +1,80 @@
+# canary positions · COLUMNS=80 · colour off
+Bill & bond facts · price per 100 of face, yield on the stated basis
+  SYMBOL         SYNTH
+  PRICE          99.40 bid
+  YIELD          4.08% act/365
+  VS CLOSE       +1 bp
+  +25 BP         -18 USD
+  PER BP         -0.73 USD
+  PAYS AT MATURITY
+                 50,000 USD on 2026-12-04 · 54d
+     bought 2026-10-02 at 99.18 (4.79%) · canary order journal · gain +110 USD =
+     carry +58 · rates +52 · spread: US Treasury bills are the USD benchmark;
+     spread does not apply
+
+  SYMBOL         SYNTHB
+  PRICE          99.40 bid
+  YIELD          2.31% act/360
+  VS CLOSE       +2 bp
+  +25 BP         -26 EUR
+  PER BP         -1.03 EUR
+  PAYS AT MATURITY
+                 40,000 EUR on 2027-01-13 · 94d
+     bought 2026-09-22 at 99.32 (2.17%) · canary order journal · gain +32 EUR =
+     carry +58 · rates -19 · spread -8 since 2026-10-01 · +29 bp over
+     DE000SYN0002
+
+  SYMBOL         SYNTHG
+  PRICE          98.90 mark
+  YIELD          4.46% act/365
+  VS CLOSE       —
+  +25 BP         -6 GBP
+  PER BP         -0.24 GBP
+  PAYS AT MATURITY
+                 10,000 GBP on 2027-01-11 · 91d
+     bought at 98.75 · broker average cost · gain +15 GBP · the purchase date is
+     unknown: the line was not bought through Canary, so the gain cannot be
+     split · vs close: the broker sent no prior close · quote requested; the
+     next read carries it
+
+
+# canary positions · COLUMNS=80 · colour on, ESC written as \x1b
+Bill & bond facts · price per 100 of face, yield on the stated basis
+  \x1b[2mSYMBOL        \x1b[0m \x1b[1mSYNTH\x1b[0m
+  \x1b[2mPRICE         \x1b[0m 99.40 bid
+  \x1b[2mYIELD         \x1b[0m 4.08% act/365
+  \x1b[2mVS CLOSE      \x1b[0m +1 bp
+  \x1b[2m+25 BP        \x1b[0m -18 USD
+  \x1b[2mPER BP        \x1b[0m -0.73 USD
+  \x1b[2mPAYS AT MATURITY\x1b[0m
+  \x1b[2m              \x1b[0m 50,000 USD on 2026-12-04 · 54d
+    \x1b[2m\x1b[0m bought 2026-10-02 at 99.18 (4.79%) · canary order journal · gain +110 USD =
+     carry +58 · rates +52 · spread: US Treasury bills are the USD benchmark;
+     spread does not apply
+
+  \x1b[2mSYMBOL        \x1b[0m \x1b[1mSYNTHB\x1b[0m
+  \x1b[2mPRICE         \x1b[0m 99.40 bid
+  \x1b[2mYIELD         \x1b[0m 2.31% act/360
+  \x1b[2mVS CLOSE      \x1b[0m +2 bp
+  \x1b[2m+25 BP        \x1b[0m -26 EUR
+  \x1b[2mPER BP        \x1b[0m -1.03 EUR
+  \x1b[2mPAYS AT MATURITY\x1b[0m
+  \x1b[2m              \x1b[0m 40,000 EUR on 2027-01-13 · 94d
+    \x1b[2m\x1b[0m bought 2026-09-22 at 99.32 (2.17%) · canary order journal · gain +32 EUR =
+     carry +58 · rates -19 · spread -8 since 2026-10-01 · +29 bp over
+     DE000SYN0002
+
+  \x1b[2mSYMBOL        \x1b[0m \x1b[1mSYNTHG\x1b[0m
+  \x1b[2mPRICE         \x1b[0m 98.90 mark
+  \x1b[2mYIELD         \x1b[0m 4.46% act/365
+  \x1b[2mVS CLOSE      \x1b[0m —
+  \x1b[2m+25 BP        \x1b[0m -6 GBP
+  \x1b[2mPER BP        \x1b[0m -0.24 GBP
+  \x1b[2mPAYS AT MATURITY\x1b[0m
+  \x1b[2m              \x1b[0m 10,000 GBP on 2027-01-11 · 91d
+    \x1b[2m\x1b[0m bought at 98.75 · broker average cost · gain +15 GBP · the purchase date is
+     unknown: the line was not bought through Canary, so the gain cannot be
+     split · vs close: the broker sent no prior close · quote requested; the
+     next read carries it
+
+

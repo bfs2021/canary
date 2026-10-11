@@ -268,6 +268,45 @@ func renderGoldenCases() []renderGoldenCase {
 			renderBondsTable(env, env.Stdout, bonds)
 			renderBondRisk(env, env.Stdout, bonds, book)
 		}},
+		{name: "positions_bond_facts", argv: []string{"positions"}, render: func(env *Env) { renderBondFacts(env, env.Stdout, goldenBondFacts()) }},
+	}
+}
+
+// goldenBondFacts is a synthetic held bill book with the console's facts
+// (bond-risk.md, "Bill and bond facts"): a US bill bought through Canary
+// with its gain split and no spread, a French bill against a German
+// benchmark whose spread part runs from a later record, and a bill bought
+// elsewhere whose quote is still on its way.
+func goldenBondFacts() []rpc.PositionBond {
+	quoteAt := time.Date(2026, 10, 12, 9, 30, 0, 0, time.UTC)
+	usBill := &rpc.BondFacts{Currency: "USD", PriceConvention: rpc.BondPriceConventionPer100, Bid: new(99.40), Ask: new(99.42), Mark: new(99.40), Close: new(99.38),
+		QuoteAsOf: quoteAt, QuoteFresh: true, PriceSource: rpc.BondPriceSourceBid, Price: new(99.40), YieldPct: new(4.08), YieldBasis: risk.BillYieldBasisAct365,
+		YieldBasisNote: "simple annualised yield from price to par, actual/365", PriorCloseYieldPct: new(4.07), PriorCloseDate: "2026-10-09", YieldChangeBp: new(1.4),
+		ValueChangeUp25Bp: new(-18.3), ValueChangeDown25Bp: new(18.3), DV01: new(0.73), ScenarioModel: rpc.BondScenarioModel,
+		FaceValue: new(50000.0), FaceSource: rpc.BondFaceSourceQuantityUnit, PaysAtMaturity: &rpc.BondMaturityPayment{Amount: 50000, Currency: "USD", Date: "2026-12-04", Days: 54},
+		Purchase: &rpc.BondPurchase{Date: "2026-10-02", PricePer100: 99.18, Lots: 1, YieldPct: new(4.79), Source: rpc.BondPurchaseSourceJournal},
+		PnL: &rpc.BondPnLSplit{Currency: "USD", Scope: rpc.BondPnLScopeCleanPrice, Total: 110, Carry: new(58.2), Rates: new(51.8),
+			SpreadUnavailable: "US Treasury bills are the USD benchmark; spread does not apply", TotalSource: rpc.BondPnLTotalSourceLots}}
+	btf := &rpc.BondFacts{Currency: "EUR", PriceConvention: rpc.BondPriceConventionPer100, Bid: new(99.40), Ask: new(99.42), Mark: new(99.40), Close: new(99.41),
+		QuoteAsOf: quoteAt, QuoteFresh: true, PriceSource: rpc.BondPriceSourceBid, Price: new(99.40), YieldPct: new(2.31), YieldBasis: risk.BillYieldBasisAct360,
+		YieldBasisNote: "simple annualised yield from price to par, actual/360", PriorCloseYieldPct: new(2.29), PriorCloseDate: "2026-10-09", YieldChangeBp: new(2.3),
+		ValueChangeUp25Bp: new(-25.8), ValueChangeDown25Bp: new(25.9), DV01: new(1.03), ScenarioModel: rpc.BondScenarioModel,
+		FaceValue: new(40000.0), FaceSource: rpc.BondFaceSourceQuantityUnit, PaysAtMaturity: &rpc.BondMaturityPayment{Amount: 40000, Currency: "EUR", Date: "2027-01-13", Days: 94},
+		Purchase: &rpc.BondPurchase{Date: "2026-09-22", PricePer100: 99.32, Lots: 1, YieldPct: new(2.17), Source: rpc.BondPurchaseSourceJournal},
+		PnL: &rpc.BondPnLSplit{Currency: "EUR", Scope: rpc.BondPnLScopeCleanPrice, Total: 32, Carry: new(58.4), Rates: new(-18.6), Spread: new(-7.8), TotalSource: rpc.BondPnLTotalSourceLots,
+			Benchmark: &rpc.BondBenchmark{ConID: 900012, ISIN: "DE000SYN0002", Issuer: "Synthetic Republic", Maturity: "2027-01-19", YieldPct: new(2.02), YieldBasis: risk.BillYieldBasisAct360,
+				QuoteAsOf: quoteAt, SpreadBpNow: new(29.0), SpreadBpThen: new(21.0), SpreadSince: "2026-10-01", Source: "de_bubill"}}}
+	elsewhere := &rpc.BondFacts{Currency: "GBP", PriceConvention: rpc.BondPriceConventionPer100, Mark: new(98.90), PriceSource: rpc.BondPriceSourceMark, Price: new(98.90),
+		QuoteNote: "quote requested; the next read carries it", YieldPct: new(4.46), YieldBasis: risk.BillYieldBasisAct365, PriorCloseDate: "2026-10-09",
+		YieldChangeUnavailable: "the broker sent no prior close", ValueChangeUp25Bp: new(-6.1), ValueChangeDown25Bp: new(6.1), DV01: new(0.24), ScenarioModel: rpc.BondScenarioModel,
+		FaceValue: new(10000.0), FaceSource: rpc.BondFaceSourceQuantityUnit, PaysAtMaturity: &rpc.BondMaturityPayment{Amount: 10000, Currency: "GBP", Date: "2027-01-11", Days: 91},
+		Purchase:                 &rpc.BondPurchase{PricePer100: 98.75, Source: rpc.BondPurchaseSourceBrokerCost},
+		PnL:                      &rpc.BondPnLSplit{Currency: "GBP", Scope: rpc.BondPnLScopeCleanPrice, Total: 15, TotalSource: rpc.BondPnLTotalSourceBroker, SpreadUnavailable: "no benchmark instrument is defined for uk_tbill"},
+		SincePurchaseUnavailable: "the purchase date is unknown: the line was not bought through Canary, so the gain cannot be split"}
+	return []rpc.PositionBond{
+		{ConID: 900010, Symbol: "SYNTH", Currency: "USD", Class: rpc.BondClassBill, CUSIP: "SYN797ZZ1", Maturity: "2026-12-04", Quantity: 50, Mark: 99.40, MarketValue: 49700, Facts: usBill},
+		{ConID: 900011, Symbol: "SYNTHB", Currency: "EUR", Class: rpc.BondClassBill, ISIN: "FR000SYN0001", Maturity: "2027-01-13", Quantity: 40000, Mark: 99.40, MarketValue: 39760, Facts: btf},
+		{ConID: 900013, Symbol: "SYNTHG", Currency: "GBP", Class: rpc.BondClassBill, ISIN: "GB00SYN00001", Maturity: "2027-01-11", Quantity: 10000, Mark: 98.90, MarketValue: 9890, Facts: elsewhere},
 	}
 }
 

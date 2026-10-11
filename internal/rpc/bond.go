@@ -230,6 +230,10 @@ type PositionBond struct {
 	DV01Base          *float64 `json:"dv01_base,omitempty"`
 	RateShockLossBase *float64 `json:"rate_shock_loss_base,omitempty"`
 	RiskUnmeasured    string   `json:"risk_unmeasured,omitempty"`
+	// Facts are the console's price, yield, scenario, maturity and
+	// since-purchase facts for the line (bond_facts.go), in the line's
+	// currency; nil for an unclassified line.
+	Facts *BondFacts `json:"facts,omitempty"`
 }
 
 // CloneBondQuote deep-copies a bond quote; nil stays nil.

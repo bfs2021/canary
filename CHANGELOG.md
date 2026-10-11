@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.22.0 — Unreleased
+
+### Added
+
+- Positions carry each held bill's and bond's console facts (`bonds[].facts`): the price it trades at (bid, else the mark) with the quote's clock, its yield on a named basis (simple actual/360 for EUR bills, actual/365 for USD, GBP and CAD bills, yield to maturity for coupon bonds), the change since the prior close in basis points, the value change for ±25 bp and per basis point, what it pays at maturity, and its clean gain since purchase split into carry, rates and spread that sum to it. Purchases come from Canary's order journal, else the broker's average cost; the spread reads a BTF against the nearest Bubill and needs the benchmark yield Canary records daily from this release on, so it is reported unavailable with the reason until a record exists. The CLI prints them as "Bill & bond facts" records.
+
 ## v3.21.1 — 2026-10-11 12:16 CEST
 
 ### What's new

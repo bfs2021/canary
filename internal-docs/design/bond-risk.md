@@ -1,9 +1,10 @@
 # Bond risk (interest rate, issuer credit, concentration)
 
-Updated: 2026-10-07 20:51 CEST
-Status: phase 1 built (owner "Phase1 Go", 2026-10-07 20:43 CEST); phases 2
-and 3 proposed. Every threshold below is `unapproved` until the owner sets
-it.
+Updated: 2026-10-11 (bill and bond facts for the console, build 4)
+Status: phase 1 built (owner "Phase1 Go", 2026-10-07 20:43 CEST); the
+console's bill and bond facts built (owner decisions 2026-10-11 14:07 and
+15:39 CEST, below); phases 2 and 3 proposed. Every threshold below is
+`unapproved` until the owner sets it.
 
 This record follows `.agents/docs/risk-policy-contract.md`. It answers the
 owner's request of 2026-10-06 21:34 CEST: "Design a proper handling solution
@@ -148,6 +149,51 @@ changes submit eligibility until the owner makes one a hard gate.
   evidence only. The brief and Desk read these daemon fields in a later
   change.
 - Ratings: IBKR sends none (proven 2026-10-07), so no rating is shown.
+
+## Bill and bond facts for the console (build 4)
+
+Owner decisions, 2026-10-11: 14:07 CEST "bills and bonds must show the price
+they trade at and their gain or loss from interest-rate and risk (spread)
+changes"; 15:39 CEST build 4 approved. Canary Desk displays these facts and
+does no financial arithmetic of its own, so every figure below is Canary's.
+
+Where: `positions.bonds[].facts` (`rpc.BondFacts`, `internal/rpc/bond_facts.go`),
+filled by `internal/daemon/bond_facts.go` on every positions read for each
+classified bill or bond; the same JSON reaches the CLI (`canary positions
+--json`), MCP `canary_positions` and Desk's positions observation. The CLI's
+"Bill & bond facts" records print them (`internal/cli/positions_bonds.go`,
+golden `positions_bond_facts`). Money is in the line's currency, prices per
+100 of face. A fact that cannot be stated is nil with a reason field saying
+why; nothing is read as zero.
+
+| Fact | How | Source and label |
+|---|---|---|
+| Price | the quote's bid, else the broker's mark; bid, ask, last, mark and the broker's prior close are all carried with the quote's clock and freshness | `price_source`; a quote the directory lacks is requested detached and the next read carries it (`quote_note`) |
+| Yield | a bill: simple annualised yield from price to par, `(100/P − 1) × basis/days`; a coupon bond: `risk.MeasureBond`'s yield to maturity at the price | `yield_basis`: `simple_act360` for EUR bills (Bubills, BTFs), `simple_act365` for USD, GBP and CAD bills; `ytm_annual` (EUR) or `ytm_semiannual` (other) for bonds. IBKR's `bid_yield`/`ask_yield` ticks are not used: their basis is unstated |
+| Yield change | the yield at the broker's prior close on the same basis, with that session's days to maturity, versus the yield now, in basis points | `prior_close_date` is the prior weekday in the instrument's (else the currency's) calendar zone; exchange holidays are not checked and `prior_close_note` says so |
+| Rate scenario | the position's value change for +25 bp and −25 bp and the value lost per 1 bp (`dv01`): a bill by its price formula, a bond by full repricing | `scenario_model`: a model estimate from the price, not a quote |
+| Face, maturity | quantity × the instrument's face per unit (A5), else the broker's market value × 100 / mark; `pays_at_maturity` is the face, currency, date and days | `face_source` |
+| Purchase | every filled buy of the contract in Canary's order journal (this account and mode) is a lot with its fill price per 100 and first fill day (the broker's execution time, else the receipt); lots are used when their face matches the held face. Otherwise the broker's average cost, read back unit-free as `mark × (1 − unrealised gain / market value)`, gives the price and the journal's earliest buy, when there is one, the date | `purchase.source`: `canary_order_journal` or `broker_average_cost`; `purchase.note` says what the source could not say. Flex statements carry no trades in Canary, so they are not a source |
+| Gain since purchase | clean price against clean purchase price (`pnl.scope: clean_price`; coupon income not included), split lot by lot (`risk.SplitBillPnL`, `risk.SplitBondPnL`): **carry** is the price moving along the lot's purchase-yield path to today; **rates** the price effect of the benchmark's yield change since the lot's reference date (without a benchmark, the whole yield effect); **spread** the price effect of the line's yield moving against the benchmark since that date. The parts sum to the total; tests assert it | `pnl.total_source`: `purchase_lots`, or `broker_unrealized` when the purchase date is unknown (carry and rates are then nil and `since_purchase_unavailable` says why) |
+| Spread benchmark | only a vocabulary bill with a benchmark instrument: a BTF against the Bubill nearest in maturity among the held book and the sweep policy's EUR ISINs, read from the directory's cached lookups and quotes. US bills and Bubills are their currencies' benchmarks (spread does not apply); UK and Canadian bills have none defined; coupon bonds read none | `pnl.benchmark`: identity, yield now on the same basis, quote clock, `spread_bp_now`; `pnl.spread_unavailable` names the reason, never zero |
+
+Spread since purchase needs the benchmark's yield when the line was bought.
+Canary keeps that itself: every positions read records, per held bill and
+day, the line's yield and the benchmark's (daemon.db document
+`bond-facts:yield-records`, kind `bond_yield_records_v1`; one record a day,
+lines unseen for 400 days pruned). A lot takes the record on its purchase
+date, else the first record after it; the spread part then runs from that
+record's day (`pnl.benchmark.spread_since`), with the line's own yield that
+day as the reference so the earlier move stays in rates. A lot with no
+record leaves the spread unavailable ("no benchmark yield is on record"),
+so for a bill bought before this build the spread part appears only from
+the first record on. Records began with this build.
+
+Budget: the facts never wait on the gateway. Lines are read from the bond
+directory's day-long cache, quotes from its one-minute cache; a missing or
+old quote (the line's or the benchmark's) is read detached through the same
+subscription hold as any bond quote, one read per line at a time, and the
+next positions read carries it.
 
 ## Phases
 
