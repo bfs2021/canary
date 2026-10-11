@@ -42,6 +42,10 @@ type PolicyCheckBook struct {
 	// FXToBase is base-currency units per unit of each currency; the base
 	// currency itself is 1.
 	FXToBase map[string]float64
+	// CashInterest is the broker's credit rate on each currency's cash from
+	// the account read (rpc.CashInterestRates.Credit); a currency without an
+	// entry had no rates read with the account.
+	CashInterest map[string]*rpc.CashInterestSide
 	// Positions is nil when the positions read failed; PositionsKnown says
 	// whether an empty list means "no positions".
 	Positions      []PolicyCheckPosition
@@ -149,9 +153,14 @@ func PolicyCheckBookFrom(acct *rpc.AccountResult, pos *rpc.PositionsResult) *Pol
 	}
 	base := strings.ToUpper(strings.TrimSpace(acct.BaseCurrency))
 	b := &PolicyCheckBook{BaseCurrency: base, NetLiquidation: acct.NetLiquidation, AsOf: acct.AsOf,
-		Cash: map[string]float64{}, FXToBase: map[string]float64{base: 1}}
-	if l := acct.BaseCurrencyLedger; l != nil && l.CashObserved {
-		b.Cash[base] = l.CashCcy
+		Cash: map[string]float64{}, FXToBase: map[string]float64{base: 1}, CashInterest: map[string]*rpc.CashInterestSide{}}
+	if l := acct.BaseCurrencyLedger; l != nil {
+		if l.CashObserved {
+			b.Cash[base] = l.CashCcy
+		}
+		if l.Interest != nil {
+			b.CashInterest[base] = rpc.CloneCashInterestSide(&l.Interest.Credit)
+		}
 	}
 	for _, row := range acct.CurrencyExposure {
 		ccy := strings.ToUpper(strings.TrimSpace(row.Currency))
@@ -163,6 +172,9 @@ func PolicyCheckBookFrom(acct *rpc.AccountResult, pos *rpc.PositionsResult) *Pol
 		}
 		if row.CashObserved {
 			b.Cash[ccy] = row.CashCcy
+		}
+		if row.Interest != nil {
+			b.CashInterest[ccy] = rpc.CloneCashInterestSide(&row.Interest.Credit)
 		}
 	}
 	if pos == nil {

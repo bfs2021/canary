@@ -115,7 +115,7 @@ func formatCurrencyLevelingStatus(st *rpc.TradeProposalCurrencyLevelingStatus, r
 	case st.RatesReason != "":
 		parts = append(parts, st.RatesReason)
 	case st.RatesThrough != "":
-		parts = append(parts, "interest rates from the broker's statements to "+st.RatesThrough)
+		parts = append(parts, "interest rates measured from the broker's statements to "+st.RatesThrough)
 	}
 	if len(st.NeedsYourNumber) > 0 {
 		parts = append(parts, "needs your number: "+strings.Join(st.NeedsYourNumber, ", "))

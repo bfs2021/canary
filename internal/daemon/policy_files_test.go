@@ -148,9 +148,11 @@ func TestProtectionAndConstitutionTemplatesShowEveryKey(t *testing.T) {
 		data []byte
 		skip map[string]bool
 	}{
-		// min_tranche is retired in favour of min_order_notional: readable in
-		// an old file, never shown or written.
-		"protection":   {reflect.TypeFor[protectionPolicy](), ProtectionPolicyTemplate("v9.9.9"), map[string]bool{"min_tranche": true}},
+		// min_tranche is retired in favour of min_order_notional, and
+		// cash_interest_rate_upper with cash_interest_valid_through in favour
+		// of the broker's own rate from the Flex statement (2026-10-11):
+		// readable in an old file, never shown or written.
+		"protection":   {reflect.TypeFor[protectionPolicy](), ProtectionPolicyTemplate("v9.9.9"), map[string]bool{"min_tranche": true, "cash_interest_rate_upper": true, "cash_interest_valid_through": true}},
 		"constitution": {reflect.TypeFor[risk.Constitution](), ConstitutionPolicyTemplate("v9.9.9"), map[string]bool{"cadence": true}},
 	} {
 		text := string(tc.data)

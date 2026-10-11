@@ -545,16 +545,19 @@ type TradeProposalCashSweep struct {
 	EstimatedCost float64 `json:"estimated_cost,omitempty"`
 	// OrderAmount is the cash the order puts to work (invest) or the gap it
 	// covers (redeem), before rounding to whole units.
-	OrderAmount              float64  `json:"order_amount"`
-	Cash                     float64  `json:"cash"`
-	Committed                float64  `json:"committed"`
-	KeepCash                 float64  `json:"keep_cash"`
-	Free                     float64  `json:"free"`
-	MinTranche               float64  `json:"min_tranche"`
-	MinOrderNotionalBase     float64  `json:"min_order_notional_base,omitempty"`
-	MinNetGainBase           float64  `json:"min_net_gain_base,omitempty"`
-	CashInterestRateUpper    *float64 `json:"cash_interest_rate_upper,omitempty"`
-	CashInterestValidThrough string   `json:"cash_interest_valid_through,omitempty"`
+	OrderAmount          float64 `json:"order_amount"`
+	Cash                 float64 `json:"cash"`
+	Committed            float64 `json:"committed"`
+	KeepCash             float64 `json:"keep_cash"`
+	Free                 float64 `json:"free"`
+	MinTranche           float64 `json:"min_tranche"`
+	MinOrderNotionalBase float64 `json:"min_order_notional_base,omitempty"`
+	MinNetGainBase       float64 `json:"min_net_gain_base,omitempty"`
+	// CashInterest is the broker's credit rate on this currency's cash (the
+	// account read's CashInterestRates.Credit): what an invest row's benefit
+	// estimate forgoes. Unavailable carries the reason and the estimate reads
+	// unavailable; it is never an entered or assumed number.
+	CashInterest *CashInterestSide `json:"cash_interest,omitempty"`
 	// RedemptionTarget is the liquidity shortfall. A capped sale may restore part,
 	// while still meeting the gross whole-order minimum; fees reduce net proceeds.
 	RedemptionTarget float64 `json:"redemption_target,omitempty"`
@@ -650,7 +653,7 @@ func CloneProposalCashSweep(in *TradeProposalCashSweep) *TradeProposalCashSweep 
 	}
 	out := *in
 	out.Bill = CloneCashSweepBill(in.Bill)
-	out.CashInterestRateUpper = cloneCashSweepFloat(in.CashInterestRateUpper)
+	out.CashInterest = CloneCashInterestSide(in.CashInterest)
 	if in.SettlementDays != nil {
 		out.SettlementDays = new(*in.SettlementDays)
 	}

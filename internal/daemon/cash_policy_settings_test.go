@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -78,6 +79,14 @@ func cashPolicyTestBook() cashPolicyBook {
 			"USD": {Loan: new(0.051), LoanThrough: "2026-10-03", Cash: new(0.033), CashThrough: "2026-09-12"},
 		},
 		ratesThrough: "2026-10-03",
+		// The broker's own tiers on Monday 5 Oct: USD borrowed at 5.1%, EUR
+		// cash earning nothing on the first 10,000 and 1.4% above it.
+		tiers: []cashInterestTierRow{
+			{Currency: "USD", Type: "IBKR Debit Interest", Tier: "1", ValueDate: time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), Threshold: new(0.0), Principal: new(-20000.0), RatePct: new(5.1), Interest: new(-2.79), Side: cashInterestSideDebit, GeneratedAt: cashPolicyTestNow.Add(-6 * time.Hour)},
+			{Currency: "EUR", Type: "IBKR Credit Interest", Tier: "1", ValueDate: time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), Threshold: new(0.0), Principal: new(10000.0), RatePct: new(0.0), Interest: new(0.0), Side: cashInterestSideCredit, GeneratedAt: cashPolicyTestNow.Add(-6 * time.Hour)},
+			{Currency: "EUR", Type: "IBKR Credit Interest", Tier: "2", ValueDate: time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC), Threshold: new(10000.0), Principal: new(50000.0), RatePct: new(1.4), Interest: new(1.92), Side: cashInterestSideCredit, GeneratedAt: cashPolicyTestNow.Add(-6 * time.Hour)},
+		},
+		tiersSeen: true, tiersReadAt: cashPolicyTestNow.Add(-time.Hour),
 		check: &PolicyCheckBook{BaseCurrency: "EUR", NetLiquidation: 200000, AsOf: cashPolicyTestNow,
 			Cash: map[string]float64{"EUR": 60000, "USD": -20000}, FXToBase: map[string]float64{"EUR": 1, "USD": 0.855}}}
 }
@@ -261,14 +270,26 @@ func TestCashPolicyGetReportsEveryKeyWithSourceDefaultBoundsAndHelp(t *testing.T
 			t.Errorf("%s fact %q, want %q", key, row.Fact, want)
 		}
 	}
-	if snap.Sections.Leveling.Fact != "Interest rates from the broker's statements, to 3 Oct 2026." ||
+	if snap.Sections.Leveling.Fact != "Leveling measures its own rates from the broker's statements, to 3 Oct 2026; the rates shown are the broker's." ||
 		snap.Sections.Leveling.Cap != "One repayment at most 25,000 EUR: the order cap in force." ||
 		snap.Sections.Sweep.Authority != "You approve each sweep order." || snap.Sections.Sweep.PreAuthorised {
 		t.Fatalf("section facts %+v", snap.Sections)
 	}
+	// The currency rows show the broker's own rates from the tiers, never
+	// leveling's measured blend (0.033 for USD cash above) or a stand-in.
 	usd := snap.Currencies[slices.IndexFunc(snap.Currencies, func(c rpc.CashPolicyCurrency) bool { return c.Currency == "USD" })]
-	if !usd.Pair || usd.Cash == nil || *usd.Cash != -20000 || usd.LoanRate == nil || *usd.LoanRate != 0.051 || usd.Buys != "US Treasury bills" {
+	if !usd.Pair || usd.Cash == nil || *usd.Cash != -20000 || usd.LoanRate == nil || *usd.LoanRate != 0.051 || usd.LoanRateThrough != "2026-10-05" || usd.LoanRateReason != "" || usd.Buys != "US Treasury bills" {
 		t.Fatalf("USD row %+v", usd)
+	}
+	if usd.CashRate != nil || !strings.Contains(usd.CashRateReason, "held no USD cash") || usd.CashRateLastValueDate != "" {
+		t.Fatalf("USD cash side was filled from a measured or stand-in figure: %+v", usd)
+	}
+	eur := snap.Currencies[0]
+	if eur.CashRate == nil || math.Abs(*eur.CashRate-0.014) > 1e-12 || eur.CashRateThrough != "2026-10-05" || eur.LoanRate != nil || !strings.Contains(eur.LoanRateReason, "has not borrowed EUR") {
+		t.Fatalf("EUR row %+v", eur)
+	}
+	if snap.RatesSource != rpc.CashInterestSourceFlexTiers || snap.RatesThrough != "2026-10-05" {
+		t.Fatalf("rates source %q through %q", snap.RatesSource, snap.RatesThrough)
 	}
 	if gbp := snap.Currencies[slices.IndexFunc(snap.Currencies, func(c rpc.CashPolicyCurrency) bool { return c.Currency == "GBP" })]; gbp.Buys != "UK Treasury bills · No bills listed: add ISINs in the file" {
 		t.Fatalf("GBP buys %q", gbp.Buys)

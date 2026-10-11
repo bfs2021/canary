@@ -4,9 +4,31 @@ All notable changes to this project are documented here. The project adheres to 
 
 ## v3.22.0 — Unreleased
 
+### What's new
+
+Cash interest rates are the broker's own. Canary reads the Flex statement's
+"Interest Details (Tiers)" section and shows, per currency, the credit rate on
+the current cash balance and the debit rate on the amount borrowed, with every
+tier; the cash sweep's benefit estimate and the policy check use that rate and
+make no claim without it. The owner-entered `cash_interest_rate_upper` is
+retired. Held bills and bonds now show the price they trade at, their yield on
+a named basis, what a 25 bp move would cost, what they pay at maturity, and
+their gain since purchase split into carry, rates and spread.
+
 ### Added
 
 - Positions carry each held bill's and bond's console facts (`bonds[].facts`): the price it trades at (bid, else the mark) with the quote's clock, its yield on a named basis (simple actual/360 for EUR bills, actual/365 for USD, GBP and CAD bills, yield to maturity for coupon bonds), the change since the prior close in basis points, the value change for ±25 bp and per basis point, what it pays at maturity, and its clean gain since purchase split into carry, rates and spread that sum to it. Purchases come from Canary's order journal, else the broker's average cost; the spread reads a BTF against the nearest Bubill and needs the benchmark yield Canary records daily from this release on, so it is reported unavailable with the reason until a record exists. The CLI prints them as "Bill & bond facts" records.
+- The account read (`canary account`, `canary_account`, the display stream) carries `interest` per currency: the broker's credit and debit rate from the Flex statement's Interest Details (Tiers) section, with the tier, the value date, the statement's generation time and every tier of the day, or `unavailable` with the reason and the last value date seen.
+- The policy check names a sweep currency that still writes the retired `cash_interest_rate_upper` or `cash_interest_valid_through` (`retired_cash_interest_key`).
+
+### Changed
+
+- A cash sweep invest row carries `cash_interest`, the broker's credit rate its benefit estimate forgoes, and names it in its details; without a live rate the estimate reads "rate unavailable" with the reason instead of assuming a number. The `sweep_minimum_uneconomic` check reads the same rate and is skipped as `rate unavailable` without it.
+- The Cash settings currency rows (`policy.cash.get`) show the broker's own credit and debit rate with its value date, or no rate with the reason and the last value date seen, instead of currency leveling's measured blend or a stand-in from the other side; `rates_source` and `rates_through` name the source and the latest value date. Leveling's own figures are labelled as measured wherever they appear.
+
+### Removed
+
+- `cash_interest_rate_upper` and `cash_interest_valid_through` are retired and no longer read; the file still loads with them. `dated_assumption_expired` no longer reads `cash_interest_valid_through`.
 
 ## v3.21.1 — 2026-10-11 12:16 CEST
 

@@ -103,15 +103,28 @@ pure calculation uses continuous compounding of the stated annual nominal upper
 rate to conservatively cover cash-interest reinvestment. The result is advice,
 not a forecast or an eligibility gate.
 
-Each currency can supply an owner-reviewed `cash_interest_rate_upper` (annual
-decimal) and `cash_interest_valid_through`. With current inputs the benefit is
-known; absent or invalid calculation inputs make it unknown, and expired
-interest assumptions make it stale. These states never hold the order. Missing
-interest is not zero: zero must be explicit. This is a
-conservative opportunity-cost assumption, not a live IBKR interest-rate feed or
-a prediction of future rates. Review changes in published broker rates, account
-terms and the intended holding period; do not insert a guessed zero to make the
-advice look known. Below-benchmark or negative benefits remain visible warnings.
+The cash interest forgone is the broker's own credit rate on the currency
+(owner decision 2026-10-11 14:07 CEST: cash credit and debit rates are live
+broker rates; anything else is a bug). Canary reads it from the "Interest
+Details (Tiers)" section of the Flex statements it already fetches each Berlin
+morning (the owner added the section to the query on 2026-10-11 16:19 CEST):
+per currency, side and tier, the rate, the balance threshold, the value date
+and the statement's generation time, source `flex_interest_tiers`. IBKR resets
+its benchmark once per business day, so the latest value date is the live
+rate. The account read carries, per currency, the credit rate on the tier the
+current cash balance reaches and the debit rate for the amount borrowed, with
+every tier of the value date; the sweep row's `cash_interest` is that credit
+side and the policy check reads the same rows. A currency without a row for
+the side (never held, or never borrowed), a statement set without the section,
+or a latest value date older than two business days reads `unavailable` with
+the reason and the last value date seen. The benefit estimate then says "rate
+unavailable" and makes no claim; it never assumes a number, and never holds
+the order. A broker rate of exactly zero (the first slice of a balance) is a
+rate. The former owner-entered `cash_interest_rate_upper` and
+`cash_interest_valid_through` are retired: the sweep never reads them, the
+loader still accepts them so an older file loads, and `canary policy check`
+names them (`retired_cash_interest_key`) until they are deleted. Below-benchmark
+or negative benefits remain visible warnings.
 
 ## Verified hours and settlement calendars
 
@@ -159,7 +172,7 @@ builds neither ETF execution nor a new tax gate.
 
 Existing policy files and runtime settings are not edited by installing source.
 The commented template illustrates the new controls, with expired example dates
-that cannot commission a route or attest a cash-interest rate. Owner migration
+that cannot commission a route. Owner migration
 must use the normal policy version/fingerprint checks. The new order-event fee
 fields are additive; older daemons cannot reuse them to certify fee-inclusive
 commitments. Broker-write confirmations, freezes and account pins remain binding.
@@ -167,8 +180,10 @@ commitments. Broker-write confirmations, freezes and account pins remain binding
 ## Validation
 
 Synthetic regressions cover whole-order FX/rounding, fixed-quantity previewing,
-net sale fees, advisory gain versus cash interest/spread, known/unknown/stale
-advice and exact-zero versus unknown rates, payment
+net sale fees, advisory gain versus the broker's cash rate and spread,
+known/unknown/stale advice and exact-zero versus unknown rates, the tiers
+parser (currencies, credit and debit, a missing section, a stale value date),
+the account read's rates, payment
 holidays and coverage boundaries, SQLite restart with partial fills, modified
 and stale bounds, and unacknowledged local BUYs. Both daemon build modes retain
 the prepared-order, automatic-notice and maximum-notional safety tests. These

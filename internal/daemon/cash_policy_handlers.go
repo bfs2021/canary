@@ -290,6 +290,7 @@ func (s *Server) cashPolicyBook(ctx context.Context) cashPolicyBook {
 	} else {
 		b.ratesReason = "the broker's statements are not read in this process"
 	}
+	b.tiers, b.tiersSeen, b.tiersReason, b.tiersReadAt = s.cashInterestTiers(now)
 	c.at, c.book = now, b
 	return b
 }
@@ -335,10 +336,11 @@ func (s *Server) cashPolicySnapshot(ctx context.Context, r cashPolicyRead) rpc.C
 	facts, sections := cashPolicyFacts(view.p, b)
 	sections.Leveling.Present, sections.Sweep.Present = view.p.Cash.Leveling != nil, view.p.Cash.Sweep != nil
 	currencies := b.currencies(view.p)
+	rows, ratesThrough := cashPolicyCurrencyRows(view.p, b, currencies)
 	out := rpc.CashPolicySnapshot{Revision: r.revision, Path: r.path, FileState: r.state, Message: r.message, LegacyLayout: r.legacy,
 		PolicyVersion: r.file.PolicyVersion, InForceVersion: r.inForce.PolicyVersion, Writable: r.writable(), AsOf: b.at, BaseCurrency: b.base,
-		Sections: sections, Settings: cashPolicySettingsFor(view, r.definedKey, currencies, facts), Currencies: cashPolicyCurrencyRows(view.p, b, currencies),
-		RatesThrough: b.ratesThrough, Findings: []rpc.CashPolicyFinding{}}
+		Sections: sections, Settings: cashPolicySettingsFor(view, r.definedKey, currencies, facts), Currencies: rows,
+		RatesSource: rpc.CashInterestSourceFlexTiers, RatesThrough: ratesThrough, Findings: []rpc.CashPolicyFinding{}}
 	window := r.inForce.Cash.confirmationWindow()
 	out.ConfirmationWindowSeconds, out.Confirmation = int64(window/time.Second), cashPolicyConfirmationSentence(window)
 	if r.writable() {

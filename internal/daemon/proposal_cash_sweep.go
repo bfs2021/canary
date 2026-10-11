@@ -55,6 +55,8 @@ type cashSweepLedgerRow struct {
 	ExchangeRate  float64
 	Settled       *float64
 	SettledReason string
+	// Interest is the broker's rates on this currency from the account read.
+	Interest *rpc.CashInterestRates
 }
 
 // cashSweepSettlement carries a legacy estimate from journal fills. The live
@@ -176,6 +178,8 @@ type cashSweepCurrencyPlan struct {
 	// bill is the resolved bill (cash_sweep_bills.go); nil until resolution
 	// names one, and on a row built straight from the plan.
 	bill *rpc.TradeProposalCashSweepBill
+	// interest is the broker's rates on the currency, from the ledger row.
+	interest *rpc.CashInterestRates
 	// Redeem.
 	holding *cashSweepHolding
 	gap     float64
@@ -317,6 +321,7 @@ func cashSweepPlanCurrency(bucket *protectionCashSweepPolicy, in cashSweepInput,
 
 	// Figures first, so every state shows what was observed.
 	row, inLedger := in.Ledger[ccy]
+	cp.interest = rpc.CloneCashInterestRates(row.Interest)
 	cashKnown := in.LedgerReason == "" && inLedger && row.Observed && finiteProtectionOptionPolicyValue(row.TradeDate) &&
 		row.ExchangeRate > 0 && finiteProtectionOptionPolicyValue(row.ExchangeRate)
 	settlementReason := cashSweepUnknownReason(in.Settlement.Known, in.Settlement.Reason, in.Settlement.Unknown, ccy)
@@ -853,7 +858,7 @@ func cashSweepRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, so
 		Cash: cp.cash, Committed: cp.committed, KeepCash: cp.keep, Free: cp.free, MinTranche: cp.tranche,
 		MinOrderNotionalBase: sizing.MinOrderBase, MinNetGainBase: bucket.MinNetGain,
 		ReserveHeld: cp.bandKeep - cp.keep + cp.carry, Sizing: rpc.CloneCashSweepSizing(cp.sizing),
-		CashInterestRateUpper: cloneFloat64Ptr(cfg.CashInterestRateUpper), CashInterestValidThrough: string(cfg.CashInterestValidThrough),
+		CashInterest:   cashInterestCreditSide(cp.interest, ccy),
 		SettlementDays: route.days, SettlementExchange: route.exchange, SettlementValidThrough: route.validThrough, SettlementSource: route.source,
 		Session: rpc.CloneBondSession(cp.session),
 	}
@@ -867,6 +872,7 @@ func cashSweepRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, so
 	var blockers []rpc.TradingBlocker
 	switch cp.side {
 	case rpc.CashSweepSideInvest:
+		details = append(details, cashInterestWords(block.CashInterest, ccy))
 		block.Rung, block.TargetDays = cp.rung, cp.targetDays
 		block.MinMaturityDays, block.MaxMaturityDays = cfg.MinMaturityDays, cfg.MaxMaturityDays
 		block.MaxOrderNotionalBase, block.ExchangeRate, block.HeldToCap = sizing.MaxOrderBase, cp.rate, cp.heldToCap

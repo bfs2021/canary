@@ -101,9 +101,16 @@ func cashSweepEconomicsAdvisory(prop rpc.TradeProposal, preview *rpc.OrderPrevie
 	if s.Bill != nil {
 		maturity, err = time.Parse(time.DateOnly, s.Bill.Maturity)
 	}
-	validThrough, validErr := time.Parse(time.DateOnly, s.CashInterestValidThrough)
-	if at.IsZero() || err != nil || !maturity.After(cashSweepDay(at)) || validErr != nil || cashSweepDay(at).After(validThrough) || s.CashInterestRateUpper == nil || !finiteProtectionOptionPolicyValue(*s.CashInterestRateUpper) || *s.CashInterestRateUpper < 0 {
-		out.Message = "Incremental benefit is unavailable: a current dated cash-interest assumption and future maturity are needed for the comparison. This is advisory."
+	if at.IsZero() || err != nil || !maturity.After(cashSweepDay(at)) {
+		out.Message = "Incremental benefit is unavailable: the bill's maturity or the review time is unknown. This is advisory."
+		return out
+	}
+	// The cash interest forgone is the broker's own credit rate on this
+	// currency (cash_interest_rates.go); without it the estimate makes no
+	// claim and never assumes a number.
+	cashRate, rateReason := cashInterestRate(s.CashInterest, s.Currency)
+	if cashRate == nil {
+		out.Message = "Incremental benefit is unavailable: rate unavailable (" + rateReason + "). This is advisory."
 		return out
 	}
 	if preview.Quote.Ask == nil || !positiveFinite(*preview.Quote.Ask) || !positiveFinite(d.LimitPrice) || !finiteProtectionOptionPolicyValue(s.MinNetGainBase) || s.MinNetGainBase < 0 {
@@ -115,7 +122,7 @@ func cashSweepEconomicsAdvisory(prop rpc.TradeProposal, preview *rpc.OrderPrevie
 	price := max(d.LimitPrice, *preview.Quote.Ask)
 	face := float64(d.Quantity) * d.Bond.FacePerUnit
 	days := maturity.Sub(cashSweepDay(at)).Hours() / 24
-	gain, valid := risk.CashSweepIncrementalGain(face, face*price/100, fee, *s.CashInterestRateUpper, days, s.ExchangeRate)
+	gain, valid := risk.CashSweepIncrementalGain(face, face*price/100, fee, *cashRate, days, s.ExchangeRate)
 	if !valid {
 		out.Message = "Incremental benefit cannot be calculated from the available order terms. This is advisory."
 		return out

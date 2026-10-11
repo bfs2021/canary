@@ -483,10 +483,11 @@ rule is one entry.
 | `declared_risk_vs_nlv` | warn | yes | Declared risk capital is above NLV or under 2% of it. |
 | `sweep_buys_while_borrowed` | warn | yes | `no_buy_while_borrowed = false` while a currency's cash is negative by more than 1 unit, so the sweep may buy bills while the account pays margin interest on the debit. |
 | `leveling_debit_inside_band` | warn | yes | A currency is borrowed (by more than 1 unit) but within currency leveling's `trigger_base`, so leveling leaves that margin loan in place; with `no_buy_while_borrowed`, the sweep's bill buys wait meanwhile. |
-| `sweep_minimum_uneconomic` | warn | no | The smallest bill buy (as for `sweep_minimum_above_cap`) earns less interest over cash to the shortest rung (`min_maturity_days`) than the commission it pays. |
+| `sweep_minimum_uneconomic` | warn | yes | The smallest bill buy (as for `sweep_minimum_above_cap`) earns less over the broker's cash rate to the shortest rung (`min_maturity_days`) than the commission it pays. Without the broker's rate for the currency the check is skipped as `rate unavailable`; it never assumes one. |
 | `retired_trading_gate` | warn | no | `config.toml` `[trading]` still carries a retired order gate whose value differs from the `[order_limits]` key that decides. |
+| `retired_cash_interest_key` | warn | no | A sweep currency table still writes the retired `cash_interest_rate_upper` or `cash_interest_valid_through`. Nothing reads them: the cash rate is the broker's own, from the Flex statement's Interest Details (Tiers) section. |
 | `version_not_bumped` | warn | daemon | A file changed without a higher `policy_version`, so the daemon keeps the old policy. |
-| `dated_assumption_expired` | warn | no | `cash_interest_valid_through` or a directional intent's `expires_at` has passed. |
+| `dated_assumption_expired` | warn | no | A directional intent's `expires_at` has passed. |
 | `dated_assumption_expiring` | info | no | One of those dates ends within 14 days. |
 | `file_unreviewed` | info | no | A file still carries the "Canary defaults, not yet reviewed" header; for the Rulebook it names the limits that already differ from the defaults. |
 | `compiled_default_in_force` | info | no | A sweep sizing number is not written, so the sweep holds at `needs_your_number`. |
@@ -498,9 +499,11 @@ check's judgement, not limits; nothing enforces them. No policy or config key
 carries a bill yield or a commission, so the economics rule assumes them and
 the report lists each assumption: US Treasury bills 3.5% a year and 0.002% of
 face with a 5 USD minimum; EUR bills 1.75%, GBP 3.5%, CAD 2.25%, each with a
-minimum of 5 in the bill's currency and the percentage fee not modelled. A
-written `cash_interest_rate_upper` lowers the yield to the gain over cash, and
-`min_net_gain` raises the bar. The same report is the `plausibility` field of
+minimum of 5 in the bill's currency and the percentage fee not modelled. The
+cash rate the yield is measured over is never assumed: it is the broker's own,
+read with the account from the Flex statement's Interest Details (Tiers)
+section (the rate on the tier the currency's current balance reaches, at its
+value date), and `min_net_gain` raises the bar. The same report is the `plausibility` field of
 the `policy.snapshot` RPC and the MCP tool `canary_policy_check`.
 
 ## Change a policy safely

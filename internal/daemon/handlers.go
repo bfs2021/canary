@@ -174,6 +174,7 @@ func (s *Server) buildAccountSummaryWithAuthority(ctx context.Context, observe b
 		annotateLedgerCash(res, ledger, raw.Raw)
 		annotateSettledCashSchedules(res, c.CaptureSettledCashSchedulesForSession(healthBinding, scope.Account))
 	}
+	s.annotateCashInterest(res)
 	s.annotateWebCash(ctx, res, c, healthBinding, scope, authority)
 	// Read the latest reqPnL frame; absence starts the idempotent subscription.
 	// connect setup skips the subscribe in auto-detect mode (ep.Account is

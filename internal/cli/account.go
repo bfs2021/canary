@@ -170,6 +170,7 @@ func renderAccountTextTo(env *Env, out io.Writer, a *rpc.AccountResult) int {
 	}
 
 	renderCurrencyExposureTo(env, out, a)
+	renderCashInterestTo(env, out, a)
 	asOf := a.AsOf
 	if a.Authority != nil && !a.Authority.AsOf.IsZero() {
 		asOf = a.Authority.AsOf
@@ -357,6 +358,41 @@ func renderCurrencyExposureTo(env *Env, out io.Writer, a *rpc.AccountResult) {
 			fmtFX(ex.ExchangeRate),
 			formatMoneyCcy(ex.NetLiquidationBase, base))
 	}
+}
+
+// renderCashInterestTo prints the broker's cash interest rates per currency
+// (the base currency first) from the account read's Interest Details
+// (Tiers) evidence: each side's rate with its tier and value date, or why
+// it is unavailable. Absent while the daemon has read no statements for the
+// account.
+func renderCashInterestTo(env *Env, out io.Writer, a *rpc.AccountResult) {
+	var rows []rpc.CurrencyExposure
+	if l := a.BaseCurrencyLedger; l != nil && l.Interest != nil {
+		rows = append(rows, *l)
+	}
+	for _, ex := range a.CurrencyExposure {
+		if ex.Interest != nil {
+			rows = append(rows, ex)
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Cash interest  (broker rates from the Flex statement's Interest Details (Tiers))")
+	fmt.Fprintln(out, env.rule(60))
+	for _, row := range rows {
+		fmt.Fprintf(out, "  %-4s   credit %s · debit %s\n", row.Currency, formatCashInterestSide(row.Interest.Credit), formatCashInterestSide(row.Interest.Debit))
+	}
+}
+
+// formatCashInterestSide is one side's rate as a person reads it. A
+// broker rate of zero is a rate; unavailable carries its reason.
+func formatCashInterestSide(side rpc.CashInterestSide) string {
+	if side.State != rpc.CashInterestStateAvailable || side.Rate == nil {
+		return "unavailable (" + nonEmpty(side.Reason, "no reason given") + ")"
+	}
+	return fmt.Sprintf("%.2f%% a year (tier %s, value date %s)", *side.Rate*100, nonEmpty(side.Tier, "?"), nonEmpty(side.ValueDate, "unknown"))
 }
 
 // fmtFX renders an exchange rate to 4 decimals. Em-dash when zero — the

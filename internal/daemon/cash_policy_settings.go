@@ -453,11 +453,20 @@ type cashPolicyBook struct {
 	ledgerReason   string
 	orderCap       float64
 	orderCapReason string
-	rates          map[string]currencyLevelingRate
-	ratesThrough   string
-	ratesReason    string
-	leveling       *rpc.TradeProposalCurrencyLevelingStatus
-	check          *PolicyCheckBook
+	// rates are the figures currency leveling measures for its own decision
+	// (currency_leveling_rates.go); they are labelled as measured and never
+	// shown as the rate.
+	rates        map[string]currencyLevelingRate
+	ratesThrough string
+	ratesReason  string
+	// tiers are the broker's own rates (cash_interest_rates.go), as the
+	// account read carries them; the currency rows show these.
+	tiers       []cashInterestTierRow
+	tiersSeen   bool
+	tiersReason string
+	tiersReadAt time.Time
+	leveling    *rpc.TradeProposalCurrencyLevelingStatus
+	check       *PolicyCheckBook
 }
 
 // borrowed lists the currencies whose trade-date cash is negative by more
@@ -573,7 +582,7 @@ func cashPolicyFacts(p protectionPolicy, b cashPolicyBook) (map[string]string, r
 	lev := sections.Leveling
 	switch {
 	case b.ratesThrough != "":
-		lev.Fact = "Interest rates from the broker's statements, to " + cashPolicyDay(b.ratesThrough) + "."
+		lev.Fact = "Leveling measures its own rates from the broker's statements, to " + cashPolicyDay(b.ratesThrough) + "; the rates shown are the broker's."
 	case b.ratesReason != "":
 		lev.Fact = sentence(b.ratesReason) + ", so leveling would wait."
 	}
@@ -787,27 +796,33 @@ func cashPolicyOrderFact(s *protectionCashSweepPolicy, b cashPolicyBook) string 
 	return "Now " + policyCheckNumber(math.Round(*s.MinOrderNotional)) + " to " + cashPolicyMoney(top, b.base) + " per order."
 }
 
-// cashPolicyCurrencyRows lists each currency's cash, pair, rates and what
-// the sweep buys in it.
-func cashPolicyCurrencyRows(p protectionPolicy, b cashPolicyBook, currencies []string) []rpc.CashPolicyCurrency {
-	out := make([]rpc.CashPolicyCurrency, 0, len(currencies))
+// cashPolicyCurrencyRows lists each currency's cash, pair, the broker's own
+// rates on it and what the sweep buys in it. through is the latest value
+// date among the rates shown.
+func cashPolicyCurrencyRows(p protectionPolicy, b cashPolicyBook, currencies []string) (rows []rpc.CashPolicyCurrency, through string) {
+	rows = make([]rpc.CashPolicyCurrency, 0, len(currencies))
 	for _, ccy := range currencies {
 		row := rpc.CashPolicyCurrency{Currency: ccy, Buys: cashPolicyBuys(p.Cash.Sweep.currency(ccy))}
 		_, row.Pair = orderFXBasePriority[ccy]
 		if cash, ok := b.cash[ccy]; ok {
 			row.Cash = new(cash)
 		}
-		if r, ok := b.rates[ccy]; ok {
-			if v, through, bound, ok := r.loanRate(); ok {
-				row.LoanRate, row.LoanRateThrough, row.LoanRateStandIn = new(v), through, bound
-			}
-			if v, through, bound, ok := r.cashRate(); ok {
-				row.CashRate, row.CashRateThrough, row.CashRateStandIn = new(v), through, bound
-			}
-		}
-		out = append(out, row)
+		rates := cashInterestRatesFor(b.tiers, b.tiersSeen, b.tiersReason, ccy, row.Cash, b.tiersReadAt, b.at)
+		row.LoanRate, row.LoanRateThrough, row.LoanRateReason, row.LoanRateLastValueDate = cashPolicyRateSide(rates.Debit)
+		row.CashRate, row.CashRateThrough, row.CashRateReason, row.CashRateLastValueDate = cashPolicyRateSide(rates.Credit)
+		through = max(through, row.LoanRateThrough, row.CashRateThrough)
+		rows = append(rows, row)
 	}
-	return out
+	return rows, through
+}
+
+// cashPolicyRateSide is one side as the row shows it: the live rate with its
+// value date, or nothing with the reason and the last value date seen.
+func cashPolicyRateSide(side rpc.CashInterestSide) (rate *float64, through, reason, lastValueDate string) {
+	if side.State == rpc.CashInterestStateAvailable && side.Rate != nil {
+		return cloneFloat64Ptr(side.Rate), side.ValueDate, "", ""
+	}
+	return nil, "", side.Reason, side.LastValueDate
 }
 
 // cashPolicyBuys summarises what the sweep may buy in a currency.

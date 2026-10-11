@@ -1,0 +1,20 @@
+<FlexQueryResponse queryName="synthetic-interest-tiers" type="AF">
+<FlexStatements count="1">
+<FlexStatement accountId="DU1234567" fromDate="20261008" toDate="20261009" period="LastTwoDays" whenGenerated="20261010;051000">
+<EquitySummaryInBase>
+<EquitySummaryByReportDateInBase currency="EUR" reportDate="20261008" total="100000"/>
+<EquitySummaryByReportDateInBase currency="EUR" reportDate="20261009" total="100100"/>
+</EquitySummaryInBase>
+<TierInterestDetails>
+<TierInterestDetail accountId="DU1234567" acctAlias="" model="" currency="USD" fxRateToBase="0.85" interestType="IBKR Credit Interest" valueDate="20261009" tierBreak="1" balanceThreshold="0" securitiesPrincipal="10000" commoditiesPrincipal="0" totalPrincipal="10000" rate="0" securitiesInterest="0" commoditiesInterest="0" totalInterest="0" code="" fromAcct="" toAcct=""/>
+<TierInterestDetail accountId="DU1234567" acctAlias="" model="" currency="USD" fxRateToBase="0.85" interestType="IBKR Credit Interest" valueDate="20261009" tierBreak="2" balanceThreshold="10000" securitiesPrincipal="42000" commoditiesPrincipal="0" totalPrincipal="42000" rate="3.38" securitiesInterest="3.89" commoditiesInterest="0" totalInterest="3.89" code="" fromAcct="" toAcct=""/>
+<TierInterestDetail accountId="DU1234567" acctAlias="" model="" currency="USD" fxRateToBase="0.85" interestType="IBKR Credit Interest" valueDate="20261008" tierBreak="1" balanceThreshold="0" securitiesPrincipal="10000" commoditiesPrincipal="0" totalPrincipal="10000" rate="0" securitiesInterest="0" commoditiesInterest="0" totalInterest="0" code="" fromAcct="" toAcct=""/>
+<TierInterestDetail accountId="DU1234567" acctAlias="" model="" currency="USD" fxRateToBase="0.85" interestType="IBKR Credit Interest" valueDate="20261008" tierBreak="2" balanceThreshold="10000" securitiesPrincipal="41000" commoditiesPrincipal="0" totalPrincipal="41000" rate="3.40" securitiesInterest="3.82" commoditiesInterest="0" totalInterest="3.82" code="" fromAcct="" toAcct=""/>
+<TierInterestDetail accountId="DU1234567" acctAlias="" model="" currency="EUR" fxRateToBase="1" interestType="IBKR Debit Interest" valueDate="20261009" tierBreak="1" balanceThreshold="0" securitiesPrincipal="-30000" commoditiesPrincipal="0" totalPrincipal="-30000" rate="3.482" securitiesInterest="-2.86" commoditiesInterest="0" totalInterest="-2.86" code="" fromAcct="" toAcct=""/>
+<TierInterestDetail accountId="DU1234567" acctAlias="" model="" currency="CHF" fxRateToBase="1.06" interestType="IBKR Credit Interest" valueDate="20261009" tierBreak="2" balanceThreshold="10000" securitiesPrincipal="5000" commoditiesPrincipal="0" totalPrincipal="5000" rate="-0.206" securitiesInterest="-0.03" commoditiesInterest="0" totalInterest="-0.03" code="" fromAcct="" toAcct=""/>
+<TierInterestDetail accountId="DU7654321" acctAlias="" model="" currency="GBP" fxRateToBase="1.15" interestType="IBKR Credit Interest" valueDate="20261009" tierBreak="1" balanceThreshold="0" totalPrincipal="1000" rate="3.5" totalInterest="0.1"/>
+<TierInterestDetail accountId="DU1234567" currency="BASE_SUMMARY" valueDate="20261009" tierBreak="" rate="" totalInterest="1.1"/>
+</TierInterestDetails>
+</FlexStatement>
+</FlexStatements>
+</FlexQueryResponse>
