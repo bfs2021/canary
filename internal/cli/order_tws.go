@@ -16,7 +16,8 @@ import (
 // the daemon checks the order against come from --terms when a caller that
 // already reviewed them (Desk) passes them, otherwise from the current
 // `orders open` row, which the command prints before sending. A refusal or
-// an uncertain outcome is printed in full and exits 1; nothing is retried.
+// an uncertain outcome is printed in full; in text mode it exits 1, with
+// --json the result carries it. Nothing is retried.
 func runOrderTWSControl(ctx context.Context, env *Env, args []string, method string) int {
 	modify := method == rpc.MethodOrderTWSModify
 	name := "order tws-cancel"
@@ -72,10 +73,11 @@ func runOrderTWSControl(ctx context.Context, env *Env, args []string, method str
 		return fail(env, "%s: %v", name, err)
 	}
 	if *jsonOut {
-		printJSON(env, res)
-	} else {
-		renderOrderTWSControlText(env, &res)
+		// The JSON is the answer, whatever the outcome: a caller reads
+		// accepted, outcome and the blockers from it.
+		return printJSON(env, res)
 	}
+	renderOrderTWSControlText(env, &res)
 	if !res.Accepted {
 		return 1
 	}
