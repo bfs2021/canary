@@ -32,10 +32,11 @@ type platformSettingsStore struct {
 
 // Persisted shape versions of the platform-settings state document. Version 1
 const (
-	platformSettingsDocVersion        = 4
-	platformSettingsDocVersionDisplay = 3
-	platformSettingsDocVersionStress  = 2
-	platformSettingsDocVersionCanary  = 1
+	platformSettingsDocVersion          = 5
+	platformSettingsDocVersionCashSweep = 4
+	platformSettingsDocVersionDisplay   = 3
+	platformSettingsDocVersionStress    = 2
+	platformSettingsDocVersionCanary    = 1
 )
 
 type platformSettingsData struct {
@@ -60,39 +61,54 @@ type platformSettingsDocument struct {
 
 // platformSettingsDocumentV1 is the complete persisted version-1 shape.
 type platformSettingsDocumentV1 struct {
-	Version                  int                         `json:"version,omitempty"`
-	TradingControlGeneration uint64                      `json:"trading_control_generation"`
-	Features                 platformFeatureSettingsData `json:"features"`
-	Trading                  platformTradingSettingsData `json:"trading"`
-	Regime                   platformRegimeSettingsData  `json:"regime"`
-	Canary                   *platformStressSettingsData `json:"canary,omitempty"`
-	History                  platformHistorySettingsData `json:"history"`
+	Version                  int                           `json:"version,omitempty"`
+	TradingControlGeneration uint64                        `json:"trading_control_generation"`
+	Features                 platformFeatureSettingsData   `json:"features"`
+	Trading                  platformTradingSettingsDataV4 `json:"trading"`
+	Regime                   platformRegimeSettingsData    `json:"regime"`
+	Canary                   *platformStressSettingsData   `json:"canary,omitempty"`
+	History                  platformHistorySettingsData   `json:"history"`
 }
 
 // platformSettingsDocumentV2 is the complete persisted version-2 shape. The
 // v3 display block is added only after this strict decode succeeds, so a new
 // preference cannot be mistaken for an old document during rollback.
 type platformSettingsDocumentV2 struct {
-	Version                  int                         `json:"version"`
-	TradingControlGeneration uint64                      `json:"trading_control_generation"`
-	Features                 platformFeatureSettingsData `json:"features"`
-	Trading                  platformTradingSettingsData `json:"trading"`
-	Regime                   platformRegimeSettingsData  `json:"regime"`
-	Stress                   platformStressSettingsData  `json:"stress"`
-	History                  platformHistorySettingsData `json:"history"`
+	Version                  int                           `json:"version"`
+	TradingControlGeneration uint64                        `json:"trading_control_generation"`
+	Features                 platformFeatureSettingsData   `json:"features"`
+	Trading                  platformTradingSettingsDataV4 `json:"trading"`
+	Regime                   platformRegimeSettingsData    `json:"regime"`
+	Stress                   platformStressSettingsData    `json:"stress"`
+	History                  platformHistorySettingsData   `json:"history"`
 }
 
 // platformSettingsDocumentV3 keeps new preference fields out of the strict old decoder.
 type platformSettingsDocumentV3 struct {
-	Version                  int                         `json:"version"`
-	TradingControlGeneration uint64                      `json:"trading_control_generation"`
-	Display                  platformDisplaySettingsData `json:"display"`
-	Features                 platformFeatureSettingsData `json:"features"`
-	Trading                  platformTradingSettingsData `json:"trading"`
-	Regime                   platformRegimeSettingsData  `json:"regime"`
-	Stress                   platformStressSettingsData  `json:"stress"`
-	History                  platformHistorySettingsData `json:"history"`
+	Version                  int                           `json:"version"`
+	TradingControlGeneration uint64                        `json:"trading_control_generation"`
+	Display                  platformDisplaySettingsData   `json:"display"`
+	Features                 platformFeatureSettingsData   `json:"features"`
+	Trading                  platformTradingSettingsDataV4 `json:"trading"`
+	Regime                   platformRegimeSettingsData    `json:"regime"`
+	Stress                   platformStressSettingsData    `json:"stress"`
+	History                  platformHistorySettingsData   `json:"history"`
 }
+
+// platformSettingsDocumentV4 is the complete persisted version-4 shape: the
+// cash-sweep block, and a trading block without the v5 TWS order control.
+type platformSettingsDocumentV4 struct {
+	Version                  int                           `json:"version"`
+	TradingControlGeneration uint64                        `json:"trading_control_generation"`
+	Display                  platformDisplaySettingsData   `json:"display"`
+	CashSweep                platformCashSweepSettingsData `json:"cash_sweep"`
+	Features                 platformFeatureSettingsData   `json:"features"`
+	Trading                  platformTradingSettingsDataV4 `json:"trading"`
+	Regime                   platformRegimeSettingsData    `json:"regime"`
+	Stress                   platformStressSettingsData    `json:"stress"`
+	History                  platformHistorySettingsData   `json:"history"`
+}
+
 type platformCashSweepSettingsData struct {
 	CurrencyPriority *string `json:"currency_priority,omitempty"`
 }
@@ -122,7 +138,7 @@ func (d platformSettingsDocument) upgrade() (platformSettingsData, error) {
 		}
 		data.Version = platformSettingsDocVersionStress
 		fallthrough
-	case platformSettingsDocVersionStress, platformSettingsDocVersionDisplay:
+	case platformSettingsDocVersionStress, platformSettingsDocVersionDisplay, platformSettingsDocVersionCashSweep:
 		data.Version = platformSettingsDocVersion
 	case platformSettingsDocVersion:
 	default:
@@ -164,7 +180,7 @@ func decodePlatformSettingsDocument(raw []byte) (platformSettingsDocument, error
 			Version:                  legacy.Version,
 			TradingControlGeneration: legacy.TradingControlGeneration,
 			Features:                 legacy.Features,
-			Trading:                  legacy.Trading,
+			Trading:                  legacy.Trading.upgrade(),
 			Regime:                   legacy.Regime,
 			History:                  legacy.History,
 			LegacyCanary:             legacy.Canary,
@@ -181,7 +197,7 @@ func decodePlatformSettingsDocument(raw []byte) (platformSettingsDocument, error
 			Version:                  prior.Version,
 			TradingControlGeneration: prior.TradingControlGeneration,
 			Features:                 prior.Features,
-			Trading:                  prior.Trading,
+			Trading:                  prior.Trading.upgrade(),
 			Regime:                   prior.Regime,
 			Stress:                   prior.Stress,
 			History:                  prior.History}, nil
@@ -191,7 +207,18 @@ func decodePlatformSettingsDocument(raw []byte) (platformSettingsDocument, error
 			return platformSettingsDocument{}, err
 		}
 		return platformSettingsDocument{Version: prior.Version, TradingControlGeneration: prior.TradingControlGeneration,
-			Display: prior.Display, Features: prior.Features, Trading: prior.Trading, Regime: prior.Regime, Stress: prior.Stress, History: prior.History}, nil
+			Display: prior.Display, Features: prior.Features, Trading: prior.Trading.upgrade(), Regime: prior.Regime, Stress: prior.Stress, History: prior.History}, nil
+	case platformSettingsDocVersionCashSweep:
+		var prior platformSettingsDocumentV4
+		if err := decodeStrictPlatformSettingsJSON(raw, &prior); err != nil {
+			return platformSettingsDocument{}, err
+		}
+		if prior.Version != platformSettingsDocVersionCashSweep {
+			return platformSettingsDocument{}, fmt.Errorf("unsupported version %d", prior.Version)
+		}
+		return platformSettingsDocument{Version: prior.Version, TradingControlGeneration: prior.TradingControlGeneration,
+			Display: prior.Display, CashSweep: prior.CashSweep, Features: prior.Features, Trading: prior.Trading.upgrade(),
+			Regime: prior.Regime, Stress: prior.Stress, History: prior.History}, nil
 	case platformSettingsDocVersion:
 		var current platformSettingsData
 		if err := decodeStrictPlatformSettingsJSON(raw, &current); err != nil {
@@ -314,6 +341,34 @@ type platformTradingSettingsData struct {
 	// brokerWriteAuthorization while cancels stay allowed. Unlike the
 	// must engage even when order entry is otherwise misconfigured.
 	Freeze *bool `json:"freeze,omitempty"`
+	// TWSOrderControl is the v5 switch for reaching orders placed by hand in
+	// TWS over a separate client-0 connection, and the paper proof the daemon
+	// records (owner decision "TWS B", 2026-10-11 19:36 CEST).
+	TWSOrderControl platformTWSOrderControlSettingsData `json:"tws_order_control"`
+}
+
+// platformTradingSettingsDataV4 is the trading block as versions 1 to 4
+// persisted it, before the TWS order control.
+type platformTradingSettingsDataV4 struct {
+	MaxNotional           *float64 `json:"max_notional,omitempty"`
+	MaxOptionContracts    *int     `json:"max_option_contracts,omitempty"`
+	AllowStockShort       *bool    `json:"allow_stock_short,omitempty"`
+	AllowOptionSellToOpen *bool    `json:"allow_option_sell_to_open,omitempty"`
+	Freeze                *bool    `json:"freeze,omitempty"`
+}
+
+func (d platformTradingSettingsDataV4) upgrade() platformTradingSettingsData {
+	return platformTradingSettingsData{MaxNotional: d.MaxNotional, MaxOptionContracts: d.MaxOptionContracts,
+		AllowStockShort: d.AllowStockShort, AllowOptionSellToOpen: d.AllowOptionSellToOpen, Freeze: d.Freeze}
+}
+
+// platformTWSOrderControlSettingsData is the TWS order-control switch and
+// proof. Enabled nil or false is off. PaperProvenAt is written by the daemon
+// only, when a control action on the paper account ends confirmed or
+// pending; a patch cannot set it.
+type platformTWSOrderControlSettingsData struct {
+	Enabled       *bool      `json:"enabled,omitempty"`
+	PaperProvenAt *time.Time `json:"paper_proven_at,omitempty"`
 }
 
 func defaultPlatformSettingsPath() (string, error) {
@@ -540,6 +595,10 @@ func canonicalPlatformSettingValue(data platformSettingsData, key string) (json.
 		value = data.Features.Rulebook.EarningsOverrides
 	case "trading.freeze":
 		value = data.Trading.Freeze
+	case "trading.tws_order_control.enabled":
+		value = data.Trading.TWSOrderControl.Enabled
+	case "trading.tws_order_control.paper_proven_at":
+		value = data.Trading.TWSOrderControl.PaperProvenAt
 	case "regime.journal.enabled":
 		value = data.Regime.Journal.Enabled
 	case "stress.journal.enabled":
@@ -555,7 +614,16 @@ func canonicalPlatformSettingValue(data platformSettingsData, key string) (json.
 }
 
 func sameTradingControls(a, b platformTradingSettingsData) bool {
-	return sameOptionalBool(a.Freeze, b.Freeze)
+	return sameOptionalBool(a.Freeze, b.Freeze) &&
+		sameOptionalBool(a.TWSOrderControl.Enabled, b.TWSOrderControl.Enabled) &&
+		sameOptionalTime(a.TWSOrderControl.PaperProvenAt, b.TWSOrderControl.PaperProvenAt)
+}
+
+func sameOptionalTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }
 
 func sameOptionalBool(a, b *bool) bool {
@@ -771,6 +839,8 @@ func applySettingsKey(next *platformSettingsData, key string, raw json.RawMessag
 		return nil
 	case "trading.freeze":
 		return boolField(&next.Trading.Freeze)
+	case "trading.tws_order_control.enabled":
+		return boolField(&next.Trading.TWSOrderControl.Enabled)
 	case "regime.journal.enabled":
 		return boolField(&next.Regime.Journal.Enabled)
 	case "stress.journal.enabled":
@@ -897,6 +967,7 @@ func (s *Server) platformSettingsSnapshot(observed *platformSettingsObserved) rp
 			LiveOverride:         settingsString(status.LiveOverride, rpc.SettingsAccessRead, rpc.SettingsSourceConfig, `computed from [trading].mode and active blockers; "ready" only on an unblocked live route`),
 			BuildWritesAvailable: settingsBool(orderWritesAvailable, rpc.SettingsAccessRead, rpc.SettingsSourceBuild, "controlled by the Canary build"),
 			Limits:               tradingLimitSettingsFrom(limits),
+			TWSOrderControl:      s.twsOrderControlSettings(status.Mode),
 		},
 		AutoTrade: rpc.PlatformAutoTradeSettings{
 			ProposalsEnabled: settingsBool(autoTrade.ProposalsEnabledResolved(), rpc.SettingsAccessRead, rpc.SettingsSourceConfig, "set [auto_trade].proposals_enabled in config.toml"),

@@ -21,6 +21,8 @@ func commandActions(name string) []actionHelp {
 			{"place", "Submit an eligible preview through the trading gates", "canary order place --preview-token TOKEN [--json]"},
 			{"modify", "Replace an order using an eligible preview", "canary order modify ID --preview-token TOKEN [--json]"},
 			{"cancel", "Request an order cancellation through the trading gates", "canary order cancel ID [--json]"},
+			{"tws-cancel", "Cancel an order placed by hand in TWS over a client-0 connection (it becomes an API order)", "canary order tws-cancel PERM_ID [--terms JSON] [--request-id ID] [--json]"},
+			{"tws-modify", "Change the quantity or limit of a DAY limit order placed by hand in TWS over a client-0 connection", "canary order tws-modify PERM_ID --quantity N --limit PRICE [--terms JSON] [--request-id ID] [--json]"},
 		}
 	case "orders":
 		return []actionHelp{

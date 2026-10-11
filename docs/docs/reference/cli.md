@@ -801,6 +801,8 @@ canary order status ID [--json]
 canary order place --preview-token TOKEN [--json]
 canary order modify ID --preview-token TOKEN [--json]
 canary order cancel ID [--json]
+canary order tws-cancel PERM_ID [--terms JSON] [--request-id ID] [--json]
+canary order tws-modify PERM_ID --quantity N --limit PRICE [--terms JSON] [--request-id ID] [--json]
 ```
 
 **Subcommands**
@@ -812,6 +814,8 @@ canary order cancel ID [--json]
 | `place` | `confirm` |
 | `modify` | `confirm` |
 | `cancel` | `confirm` |
+| `tws-cancel` | `confirm` |
+| `tws-modify` | `confirm` |
 
 **Flags**
 
@@ -836,6 +840,9 @@ canary order cancel ID [--json]
 | `--currency` | yes | - |
 | `--type` | yes | `BOND`, `BILL` |
 | `--preview-token` | yes | - |
+| `--quantity` | yes | - |
+| `--terms` | yes | - |
+| `--request-id` | yes | - |
 | `--json` | no | - |
 
 ## `canary app`

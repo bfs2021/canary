@@ -278,6 +278,7 @@ func renderSettingsText(env *Env, st *rpc.PlatformSettings) {
 		displayRow(env, out, "Earnings overrides", fmt.Sprintf("%d symbol(s)", n))
 	}
 	displayRow(env, out, "Trading freeze", formatSettingsBool(env, st.Trading.Freeze))
+	displayRow(env, out, "TWS order control", formatTWSOrderControlSetting(env, st.Trading.TWSOrderControl))
 	displayRow(env, out, "Trading", nonEmpty(st.Trading.Mode.Value, "disabled"))
 	displayRow(env, out, "Endpoint", nonEmpty(st.Trading.Endpoint.Value, "unknown"))
 	displayRow(env, out, "Account", nonEmpty(st.Trading.Account.Value, "unknown"))
@@ -353,4 +354,17 @@ func orderCapSettingText(f rpc.SettingsFloat) string {
 		return strings.TrimPrefix(reason, "risk-policy.toml [order_limits]: ")
 	}
 	return fmt.Sprintf("%.2f (%s)", f.Value, accessSummary(f.Access, f.Source))
+}
+
+// formatTWSOrderControlSetting renders the TWS order-control switch with its
+// paper proof and the verdict for the current mode.
+func formatTWSOrderControlSetting(env *Env, ctl rpc.TWSOrderControlSettings) string {
+	text := formatSettingsBool(env, ctl.Enabled)
+	if ctl.PaperProvenAt.Value != "" {
+		text += " · paper proven " + ctl.PaperProvenAt.Value
+	}
+	if ctl.Status.Value != "" && ctl.Status.Value != rpc.TWSOrderControlStatusOff {
+		text += " · " + ctl.Status.Value
+	}
+	return text
 }

@@ -27,7 +27,7 @@ func runOrder(ctx context.Context, env *Env, args []string) int {
 		if len(args) == 1 && helpArg(args[0]) {
 			return printCommandUsage(env, "order")
 		}
-		return fail(env, "order: unknown subcommand (preview, status, place, modify, cancel)")
+		return fail(env, "order: unknown subcommand (preview, status, place, modify, cancel, tws-cancel, tws-modify)")
 	}
 	sub := args[subIdx]
 	args = append(append([]string{}, args[:subIdx]...), args[subIdx+1:]...)
@@ -40,6 +40,10 @@ func runOrder(ctx context.Context, env *Env, args []string) int {
 		return runOrderPlace(ctx, env, args)
 	case "modify":
 		return runOrderModify(ctx, env, args)
+	case "tws-cancel":
+		return runOrderTWSControl(ctx, env, args, rpc.MethodOrderTWSCancel)
+	case "tws-modify":
+		return runOrderTWSControl(ctx, env, args, rpc.MethodOrderTWSModify)
 	default:
 		return runOrderCancel(ctx, env, args)
 	}
@@ -48,7 +52,7 @@ func runOrder(ctx context.Context, env *Env, args []string) int {
 func orderSubcommandIndex(args []string) int {
 	for i, arg := range args {
 		switch arg {
-		case "preview", "status", "place", "modify", "cancel":
+		case "preview", "status", "place", "modify", "cancel", "tws-cancel", "tws-modify":
 			return i
 		}
 	}

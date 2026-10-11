@@ -164,6 +164,16 @@ human-only policy in disabled, paper, and live modes: missing, agent, or paired
 device origins are rejected, and accepted human-terminal origins are stamped
 in the atomic audit event.
 
+`trading.tws_order_control.enabled` (document version 5) is the switch for
+reaching orders placed by hand in TWS over a separate client-0 connection
+([tws-order-control.md](tws-order-control.md)). It is off by default and
+human-terminal-only like the freeze, and a change advances the trading-control
+generation. `trading.tws_order_control.paper_proven_at` sits next to it and is
+the daemon's to write: it records the first paper request that ended confirmed
+or pending, a patch cannot set it, and the live account stays off until it
+exists. A version-4 document that carries the block is refused by the strict
+decoder, so a rollback never reads the newer preference as an old one.
+
 `regime.journal.enabled` retains its public name but controls forward
 collection of typed regime-decision events in `daemon.db`. It does not enable
 a JSONL writer.

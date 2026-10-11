@@ -3147,13 +3147,19 @@ type OrdersOpenResult struct {
 	// Untracked lists orders working at the broker in this account and mode
 	// that the local journal does not track: placed by hand in TWS or by
 	// another API client. They come from the daemon's complete all-client
-	// open-order inventory, carry no origin, and are never modify- or
-	// cancel-eligible here. Only UntrackedStatus "current" makes an empty
-	// list conclusive; "unavailable" means the inventory could not be read.
+	// open-order inventory and carry no origin. They are modify- or
+	// cancel-eligible only while TWS order control is available
+	// (UntrackedControl "available"): then MethodOrderTWSCancel and
+	// MethodOrderTWSModify reach them over a client-0 connection. Only
+	// UntrackedStatus "current" makes an empty list conclusive;
+	// "unavailable" means the inventory could not be read.
 	Untracked       []OrderView `json:"untracked,omitempty"`
 	UntrackedStatus string      `json:"untracked_status,omitempty"`
 	// UntrackedAsOf is when the broker inventory behind Untracked completed.
 	UntrackedAsOf time.Time `json:"untracked_as_of,omitzero"`
+	// UntrackedControl is the TWS order-control status for this mode
+	// (TWSOrderControlStatus*, or the reason it cannot run).
+	UntrackedControl string `json:"untracked_control,omitempty"`
 }
 
 // UntrackedStatus values for OrdersOpenResult.

@@ -26,6 +26,7 @@ and this index needs the fix.
 | [design/protection-trailing-stop-tif.md](design/protection-trailing-stop-tif.md) | Protection proposal trailing-stop and TIF semantics |
 | [design/protective-stop-guard.md](design/protective-stop-guard.md) | Protective stock exit exemption from the notional and short gates, and the stop guard |
 | [design/regime-calibration.md](design/regime-calibration.md) | Regime indicator calibration and journal contract |
+| [design/tws-order-control.md](design/tws-order-control.md) | Cancelling and changing orders placed by hand in TWS over a one-request client-0 connection: the switch, the paper proof, the gates, the journal and the failure semantics |
 | [design/regime-input-currency.md](design/regime-input-currency.md) | Regime input currency model (`regime-currency-v1`) |
 | [design/documentation-ia.md](design/documentation-ia.md) | Public handbook information architecture |
 | [guides/trading-harness-development.md](guides/trading-harness-development.md) | Risk-harness development guide |

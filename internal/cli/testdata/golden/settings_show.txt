@@ -9,6 +9,8 @@ Rulebook       true (write/config)
 Earnings overrides
                1 symbol(s)
 Trading freeze false (write/runtime)
+TWS order control
+               false (write/runtime)
 Trading        paper
 Endpoint       127.0.0.1:4002
 Account        DU0000000
@@ -40,6 +42,8 @@ Canary Settings  \x1b[2m\x1b[1mDATA UNKNOWN\x1b[0m\x1b[0m
 \x1b[2mEarnings overrides\x1b[0m
 \x1b[2m              \x1b[0m 1 symbol(s)
 \x1b[2mTrading freeze\x1b[0m false (write/runtime)
+\x1b[2mTWS order control\x1b[0m
+\x1b[2m              \x1b[0m false (write/runtime)
 \x1b[2mTrading       \x1b[0m paper
 \x1b[2mEndpoint      \x1b[0m 127.0.0.1:4002
 \x1b[2mAccount       \x1b[0m DU0000000

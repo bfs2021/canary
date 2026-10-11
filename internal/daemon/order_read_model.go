@@ -79,6 +79,7 @@ func (s *Server) handleOrdersOpen(ctx context.Context, req *rpc.Request) (*rpc.O
 		Limitations:        orderHistoryLimitations(),
 	}
 	result.Untracked, result.UntrackedStatus, result.UntrackedAsOf = s.untrackedBrokerOrders(ctx, views, scope)
+	result.UntrackedControl = s.twsOrderControlAvailability(scope.Mode).Status
 	integrity.Orders = append([]rpc.OrderView(nil), out...)
 	s.observeOrderIntegrityAlertShadow(ctx, integrity)
 	return result, nil

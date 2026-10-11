@@ -163,7 +163,32 @@ type PlatformTradingSettings struct {
 	LiveOverride         SettingsString       `json:"live_override"`
 	BuildWritesAvailable SettingsBool         `json:"build_writes_available"`
 	Limits               TradingLimitSettings `json:"limits"`
+	// TWSOrderControl governs cancelling and changing orders placed by hand
+	// in TWS through a separate client-0 connection (owner decision "TWS B",
+	// 2026-10-11 19:36 CEST).
+	TWSOrderControl TWSOrderControlSettings `json:"tws_order_control"`
 }
+
+// TWSOrderControlSettings is the TWS order-control switch and its proof.
+// Enabled is the owner's runtime switch, off by default and terminal-only
+// like the freeze. PaperProvenAt is recorded by the daemon when a control
+// action on the paper account ends confirmed or pending; it is empty until
+// then and read-only. Status says whether the path is available in the
+// current mode: "available", "off", "paper proof required", or the reason it
+// cannot run. Live is available only when Enabled and PaperProvenAt are both
+// set.
+type TWSOrderControlSettings struct {
+	Enabled       SettingsBool   `json:"enabled"`
+	PaperProvenAt SettingsString `json:"paper_proven_at"`
+	Status        SettingsString `json:"status"`
+}
+
+// TWS order-control status values.
+const (
+	TWSOrderControlStatusAvailable     = "available"
+	TWSOrderControlStatusOff           = "off"
+	TWSOrderControlStatusProofRequired = "paper proof required"
+)
 
 // PlatformAutoTradeSettings exposes proposal-generation preferences and loaded
 // configuration; none of its fields are broker-write authority.
@@ -289,6 +314,10 @@ func SettingsKeys() []SettingsKeySpec {
 		{
 			Key: "trading.freeze", Kind: SettingsKindBool, Class: SettingsClassRuntime,
 			Doc: "Runtime trading brake: true blocks every new broker write while cancels stay allowed; human-only by policy, and the write origin is audited (default false).",
+		},
+		{
+			Key: "trading.tws_order_control.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Doc: "Lets an owner-confirmed cancel or change reach an order placed by hand in TWS through a separate client-0 connection; paper works once enabled, live also needs the daemon-recorded paper proof (trading.tws_order_control.paper_proven_at); human-only by policy (default false).",
 		},
 		{
 			Key: "regime.journal.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,

@@ -161,8 +161,23 @@ func renderUntrackedOrdersText(env *Env, res *rpc.OrdersOpenResult) {
 		fmt.Fprintf(out, "Working at the broker, not placed by Canary (inventory %s):\n", formatOrderTime(res.UntrackedAsOf))
 		for _, order := range res.Untracked {
 			fmt.Fprintf(out, "  %s\n", formatOrderViewTitle(order))
-			fmt.Fprintf(out, "    %s  %s  origin none\n", order.LifecycleStatus, nonEmpty(order.Status, "unknown"))
+			fmt.Fprintf(out, "    %s  %s  origin none  %s\n", order.LifecycleStatus, nonEmpty(order.Status, "unknown"), untrackedOrderControlText(order, res.UntrackedControl))
 		}
+	}
+}
+
+// untrackedOrderControlText says what the TWS order-control path may do
+// with an untracked row: cancel, cancel and change, or nothing and why.
+func untrackedOrderControlText(order rpc.OrderView, control string) string {
+	switch {
+	case order.ModifyEligible && order.CancelEligible:
+		return "tws-cancel or tws-modify by perm id"
+	case order.CancelEligible:
+		return "tws-cancel by perm id"
+	case control == "" || control == rpc.TWSOrderControlStatusOff:
+		return "control off (trading.tws_order_control.enabled)"
+	default:
+		return "control " + control
 	}
 }
 

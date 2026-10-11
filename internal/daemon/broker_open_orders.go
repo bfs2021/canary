@@ -157,6 +157,9 @@ func (s *Server) untrackedBrokerOrders(ctx context.Context, views []rpc.OrderVie
 		}
 		return cmp.Compare(a.ReservedOrderID, b.ReservedOrderID)
 	})
+	// TWS order control, when the owner enabled it, is the one path that
+	// reaches these rows; it lends them their eligibility.
+	s.markTWSOrderControlEligibility(untracked, scope.Mode)
 	return untracked, rpc.OrdersUntrackedCurrent, asOf
 }
 
@@ -164,7 +167,8 @@ func (s *Server) untrackedBrokerOrders(ctx context.Context, views []rpc.OrderVie
 // track onto the read row shape. It carries typed identity, contract and
 // working state only: broker free text (the order reference a human typed,
 // why-held, messages) stays out, the row has no origin, and nothing marks it
-// modify- or cancel-eligible, because the daemon never tracked it.
+// modify- or cancel-eligible here, because the daemon never tracked it;
+// markTWSOrderControlEligibility may lend that afterwards.
 func untrackedOrderView(order ibkrlib.OrderLifecycleEvent, scope brokerStateScope, asOf time.Time) rpc.OrderView {
 	view := rpc.OrderView{
 		Deactivated:     cloneBoolPtr(order.Deactivated),

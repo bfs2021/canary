@@ -9,6 +9,10 @@ Actions
   place             Submit an eligible preview through the trading gates
   modify            Replace an order using an eligible preview
   cancel            Request an order cancellation through the trading gates
+  tws-cancel        Cancel an order placed by hand in TWS over a client-0
+                    connection (it becomes an API order)
+  tws-modify        Change the quantity or limit of a DAY limit order placed by
+                    hand in TWS over a client-0 connection
 
 Run canary order <action> --help for syntax and flags.
 
@@ -23,6 +27,10 @@ Usage: \x1b[36mcanary order <action> [flags]\x1b[0m
   \x1b[36mplace             \x1b[0mSubmit an eligible preview through the trading gates
   \x1b[36mmodify            \x1b[0mReplace an order using an eligible preview
   \x1b[36mcancel            \x1b[0mRequest an order cancellation through the trading gates
+  \x1b[36mtws-cancel        \x1b[0mCancel an order placed by hand in TWS over a client-0
+                    connection (it becomes an API order)
+  \x1b[36mtws-modify        \x1b[0mChange the quantity or limit of a DAY limit order placed by
+                    hand in TWS over a client-0 connection
 
 Run canary order <action> --help for syntax and flags.
 

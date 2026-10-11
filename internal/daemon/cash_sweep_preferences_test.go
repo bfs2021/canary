@@ -50,7 +50,7 @@ func TestCashSweepPreferencesStrictV3UpgradeAndNoEagerWrite(t *testing.T) {
 	if doc.Revision != 1 || !bytes.Equal(doc.JSON, []byte(oldCashPreferenceSettings)) {
 		t.Fatal("binding eagerly rewrote old settings")
 	}
-	if got := s.platformSettings.snapshot(); got.Version != 4 || got.TradingControlGeneration != 9 || got.Trading.Freeze == nil || !*got.Trading.Freeze || *got.Display.DateFormat != "eu" {
+	if got := s.platformSettings.snapshot(); got.Version != platformSettingsDocVersion || got.TradingControlGeneration != 9 || got.Trading.Freeze == nil || !*got.Trading.Freeze || *got.Display.DateFormat != "eu" {
 		t.Fatalf("upgrade lost controls: %+v", got)
 	}
 	for _, raw := range []string{

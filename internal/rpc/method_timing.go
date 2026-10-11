@@ -101,6 +101,10 @@ var methodTimings = []MethodTiming{
 	{Method: MethodOrderPlace, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
 	{Method: MethodOrderModify, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
 	{Method: MethodOrderCancel, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
+	// A client-0 control request: the inventory wait, then connect (10s),
+	// bind (10s) and the broker's answer (5s), each bounded in pkg/ibkr.
+	{Method: MethodOrderTWSCancel, Lifetime: MethodLifetimeUnary, DaemonTimeout: 40 * time.Second},
+	{Method: MethodOrderTWSModify, Lifetime: MethodLifetimeUnary, DaemonTimeout: 40 * time.Second},
 	{Method: MethodAlertCandidates, Lifetime: MethodLifetimeUnary, DaemonTimeout: 2 * time.Second},
 	{Method: MethodAlertStatus, Lifetime: MethodLifetimeUnary, DaemonTimeout: 2 * time.Second},
 	{Method: MethodAlertDeliveryProof, Lifetime: MethodLifetimeUnary, DaemonTimeout: 2 * time.Second},

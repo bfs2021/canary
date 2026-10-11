@@ -251,6 +251,7 @@ Daemon-owned preferences persisted in `$XDG_STATE_HOME/ibkr/daemon.db` and chang
 | `features.rulebook.enabled` | `true/false/null` | runtime | Turns the advisory daily trading-rulebook checklist on; false hides the SPA card, empties rules.snapshot, and stops advisory rule_* preview warnings — it can never affect broker-write gating (default true). |
 | `features.rulebook.earnings_overrides.<SYMBOL>` | `YYYY-MM-DD[Tamc/Tbmo]/null` | runtime | Manual SYMBOL → YYYY-MM-DD (optional Tamc/Tbmo suffix) earnings pins, authoritative over fetched dates for rules 6-8; patches merge per symbol. |
 | `trading.freeze` | `true/false/null` | runtime | Runtime trading brake: true blocks every new broker write while cancels stay allowed; human-only by policy, and the write origin is audited (default false). |
+| `trading.tws_order_control.enabled` | `true/false/null` | runtime | Lets an owner-confirmed cancel or change reach an order placed by hand in TWS through a separate client-0 connection; paper works once enabled, live also needs the daemon-recorded paper proof (trading.tws_order_control.paper_proven_at); human-only by policy (default false). |
 | `regime.journal.enabled` | `true/false/null` | runtime | Turns forward regime decision-event collection in daemon.db on (default true). |
 | `stress.journal.enabled` | `true/false/null` | runtime | Turns forward portfolio-stress decision-event collection in daemon.db on, mirroring regime.journal.enabled (default true). |
 

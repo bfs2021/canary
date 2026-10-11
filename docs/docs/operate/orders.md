@@ -136,9 +136,91 @@ Canary's own stops. A row without an origin
 was not placed through Canary. `canary orders open` also lists, under
 `untracked`, the orders working at the broker that Canary's journal does not
 track, such as orders entered by hand in TWS. They come from the broker's
-complete open-order list, carry no origin and cannot be modified or cancelled
-through Canary. An empty `untracked` list means none only when
+complete open-order list and carry no origin. They are `cancel_eligible` and
+`modify_eligible` only while [TWS order control](#orders-placed-in-tws) is
+available for the current mode (`untracked_control`); otherwise cancel or
+change them in TWS. An empty `untracked` list means none only when
 `untracked_status` is `current`.
+
+## Orders placed in TWS
+
+An order entered by hand in TWS belongs to TWS's client id 0, and the API
+lets only a connection with that id bind and change it. Canary's own
+connection is pinned to another id and stays as it is. When the owner turns
+`trading.tws_order_control.enabled` on, an owner-confirmed cancel or change
+of such an order runs this way (owner decision "TWS B", 2026-10-11):
+
+1. The ordinary broker-write gates run: trading mode, account, the freeze (a
+   cancel passes it, a change does not), the journal.
+2. The order is looked up by its permanent id in the broker's open-order
+   list, and its terms must equal what was reviewed (symbol, side,
+   quantity, filled quantity, order type, limit price, time in force).
+3. A second, short-lived connection opens as client id 0 and asks TWS to
+   list its orders, which binds the manual orders. The order is found again
+   by permanent id and checked against the same terms.
+4. The cancel is sent, or the replacement under the bound order id with the
+   new quantity and limit price. Canary waits a bounded time for TWS's
+   answer, then disconnects.
+
+Side effect, by TWS's design: once bound, the order is an API order for the
+rest of the TWS session. TWS shows it as such.
+
+Only a DAY limit order on a stock or ETF is changed, to a quantity at most
+the reviewed one and above the filled quantity, at a new limit price. Any
+working order with a permanent id can be cancelled.
+
+```sh
+canary settings set trading.tws_order_control.enabled=true   # terminal only
+canary orders open                                           # the perm id
+canary order tws-cancel PERM_ID
+canary order tws-modify PERM_ID --quantity 60 --limit 149.50
+```
+
+Without `--terms`, the command reads the order's current terms from
+`canary orders open`, prints them and sends those. A caller that reviewed the
+terms earlier passes them as `--terms JSON` (`symbol`, `action`, `quantity`,
+`filled`, `order_type`, `limit_price`, `tif`), and `--request-id` makes a
+repeat safe: the same id with the same intent returns the first outcome and
+sends nothing; the same id with another intent is refused.
+
+The outcome is one of four, in the result and in the journal:
+
+| Outcome | Meaning |
+| --- | --- |
+| `confirmed` | TWS confirmed the cancel, or echoed the replacement's terms. |
+| `pending` | TWS acknowledged the request (`PendingCancel`, `PreSubmitted`) without a final status before the connection closed; `canary orders open` settles it. |
+| `refused` | Nothing changed. The control is off, the inventory could not be read, the order is not there, it differs from the reviewed terms, client id 0 is already connected (`tws_client0_busy`), the bind did not finish, or TWS refused with its own code. |
+| `uncertain` | The request may have reached TWS and nothing proves either way. Read `canary orders open` again before deciding anything; Canary never retries it. |
+
+Every request is journaled before any socket opens, under the origin that
+asked and `bound_from_tws`, and its outcome after; a request without an
+outcome is reported uncertain.
+
+### Paper proof
+
+The live account stays off until the path has worked once on the paper
+account. The daemon records that proof itself, as
+`trading.tws_order_control.paper_proven_at`, when a paper request ends
+confirmed or pending; a patch cannot set it. The owner runs the proof, on a
+paper TWS login, with Canary connected to the paper account:
+
+```sh
+canary status                      # paper, connected
+canary settings set trading.tws_order_control.enabled=true
+# In TWS, enter a small DAY limit order by hand, far from the market, e.g.
+# BUY 1 AAPL LMT at half the price, and let it sit as Submitted.
+canary orders open                 # the order is listed under "not placed by
+                                   # Canary" with "tws-cancel or tws-modify"
+canary order tws-modify PERM_ID --quantity 1 --limit <a new price>
+                                   # TWS now shows it as an API order
+canary order tws-cancel PERM_ID
+canary settings show               # "TWS order control ... paper proven <time>"
+```
+
+A refused outcome names what to fix: `tws_client0_busy` means another API
+client (another tool, or a stale session) holds id 0 in TWS; close it and
+run again. Once `paper_proven_at` is set, the live account is eligible with
+the same switch; the first proof is the one kept.
 
 ## Protection and exercise context
 

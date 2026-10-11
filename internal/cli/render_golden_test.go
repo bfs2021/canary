@@ -464,6 +464,11 @@ func goldenSettings() rpc.PlatformSettings {
 	st.Features.Rulebook.Enabled = rpc.SettingsBool{Value: true, Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceConfig}
 	st.Features.Rulebook.EarningsOverrides = rpc.SettingsStringMap{Value: map[string]string{"SYNA": "2026-10-20"}, Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime}
 	st.Trading.Freeze = rpc.SettingsBool{Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime}
+	st.Trading.TWSOrderControl = rpc.TWSOrderControlSettings{
+		Enabled:       rpc.SettingsBool{Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime},
+		PaperProvenAt: rpc.SettingsString{Access: rpc.SettingsAccessRead, Source: rpc.SettingsSourceRuntime},
+		Status:        rpc.SettingsString{Value: rpc.TWSOrderControlStatusOff, Access: rpc.SettingsAccessRead, Source: rpc.SettingsSourceObserved},
+	}
 	st.Trading.Mode = rpc.SettingsString{Value: config.TradingModePaper, Access: rpc.SettingsAccessRead, Source: rpc.SettingsSourceConfig}
 	st.Trading.Endpoint = rpc.SettingsString{Value: "127.0.0.1:4002", Access: rpc.SettingsAccessRead, Source: rpc.SettingsSourceObserved}
 	st.Trading.Account = rpc.SettingsString{Value: "DU0000000", Access: rpc.SettingsAccessRead, Source: rpc.SettingsSourceObserved}

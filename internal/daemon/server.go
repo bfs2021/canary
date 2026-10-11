@@ -535,6 +535,9 @@ type Server struct {
 	orderPlaceBroker           func(context.Context, *ibkrlib.Contract, *ibkrlib.RawOrder) error
 	orderCancelBroker          func(context.Context, int) error
 	optionExerciseBroker       func(context.Context, ibkrlib.OptionExerciseRequest) error
+	// twsOrderControlRun replaces the client-0 control connection in tests;
+	// nil runs ibkrlib.RunTWSOrderControl against the configured endpoint.
+	twsOrderControlRun func(context.Context, ibkrlib.TWSOrderControlConfig, string, ibkrlib.TWSOrderControlTarget, ibkrlib.TWSOrderControlReplacement) (ibkrlib.TWSOrderControlReceipt, error)
 	// orderWriteBindingForTest and orderWriteBeforeBrokerSend are deterministic
 	// nil; broker writes then require a real ready Connector session.
 	orderWriteBindingForTest        func(rpc.TradingStatus) (*ibkrlib.Connector, uint64, ibkrlib.ConnectorSessionBinding, brokerStateScope)
@@ -2993,6 +2996,10 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleOrderModify(ctx, req) })
 	case rpc.MethodOrderCancel:
 		s.unary(req, enc, func() (any, error) { return s.handleOrderCancel(ctx, req) })
+	case rpc.MethodOrderTWSCancel:
+		s.unary(req, enc, func() (any, error) { return s.handleOrderTWSCancel(ctx, req) })
+	case rpc.MethodOrderTWSModify:
+		s.unary(req, enc, func() (any, error) { return s.handleOrderTWSModify(ctx, req) })
 	default:
 		writeError(enc, req.ID, rpc.CodeUnknownMethod, "unknown method: "+req.Method)
 	}

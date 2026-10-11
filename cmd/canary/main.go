@@ -265,6 +265,12 @@ func cliInvocationTiming(cmd string, rest []string) ([]string, time.Duration, ti
 		if hasInvocationToken(rest, "cancel") {
 			return []string{rpc.MethodOrderCancel}, ordinaryHeadroom, ordinaryFloor
 		}
+		if hasInvocationToken(rest, "tws-cancel") {
+			return []string{rpc.MethodOrdersOpen, rpc.MethodOrderTWSCancel}, ordinaryHeadroom, ordinaryFloor
+		}
+		if hasInvocationToken(rest, "tws-modify") {
+			return []string{rpc.MethodOrdersOpen, rpc.MethodOrderTWSModify}, ordinaryHeadroom, ordinaryFloor
+		}
 		return []string{rpc.MethodOrderStatus}, ordinaryHeadroom, ordinaryFloor
 	default:
 		return nil, ordinaryHeadroom, ordinaryFloor
