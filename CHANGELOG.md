@@ -8,8 +8,12 @@ All notable changes to this project are documented here. The project adheres to 
 
 Queue an exact stock or single-leg option order with an owner-approved price
 limit, or approve a stock trailing stop that follows the whole position without
-loosening its trail. TWS compatibility fixes preserve large volume readings,
-track deactivated orders and add read-only API settings diagnostics.
+loosening its trail. TWS / IB Gateway 10.50 compatibility hardening preserves
+large volume readings, tracks deactivated orders and adds read-only API settings
+diagnostics while retaining the main connection's tested protocol.
+
+Live validation used TWS. A running IB Gateway 10.50 session has not yet been
+validated end to end.
 
 Existing policies and broker settings are unchanged. New queues and protection
 mandates require owner confirmation; installation grants no new trading authority.

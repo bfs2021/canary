@@ -8,6 +8,8 @@ Every release publishes two binaries per platform, under two different names. On
 
 ## Moving to 3.21
 
+This release hardens compatibility with TWS / IB Gateway 10.50. Live validation
+used TWS; a running IB Gateway 10.50 session has not yet been validated end to end.
 Existing TWS connections keep their tested protocol. The optional
 `canary status --gateway-diagnostics` probe reads supported API settings on a
 separate connection; unsupported settings remain unknown. No broker settings or

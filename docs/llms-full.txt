@@ -5,8 +5,10 @@ Updated: 2026-10-11 09:10 CEST
 Version 3.21 adds owner-confirmed order queues and whole-position stock trailing
 protection in trading builds. It fixes large volume readings and keeps explicitly
 deactivated orders visible without counting them as active protection. A read-only
-CLI diagnostic reports supported TWS and Gateway API settings while the main
-connection keeps its tested protocol. Existing policies and broker settings stay
+CLI diagnostic reports supported TWS and Gateway API settings as part of
+TWS / IB Gateway 10.50 compatibility hardening. The main connection keeps its
+tested protocol. Live validation used TWS; Gateway 10.50 still needs an end-to-end
+check. Existing policies and broker settings stay
 unchanged. Standard binaries and MCP remain read-only.
 
 Version 3.20 adds exact or maximum stock sizing and read-only portfolio planning
