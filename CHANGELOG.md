@@ -9,6 +9,12 @@ All notable changes to this project are documented here. The project adheres to 
 More reliable chart refreshes and option reads during concurrent use and broker
 reconnects, with clearer log-monitor coverage.
 
+### Changed
+
+- CLI help groups commands with clearer spacing and colour, lists order and proposal actions, includes option-order syntax and shows flag value placeholders.
+- Order previews lead with submission eligibility and retain token details and approval requirements. Stress output always shows when the assessment was generated.
+- Long CLI rows wrap beneath their values. Narrow bond tables keep comparable figures together, with identifiers and notes beneath each row; wider overflow uses labelled records. Trading permissions use plain language. JSON output and trading safeguards are unchanged.
+
 ### Fixed
 
 - Completed history-cache entries no longer block new chart and research reads while fetch capacity is idle. Active request and broker pacing limits remain unchanged. Fixes #57.

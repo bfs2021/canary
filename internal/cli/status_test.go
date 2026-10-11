@@ -333,7 +333,7 @@ func TestProposalAutomaticColumnNamesTheFreezeDeferral(t *testing.T) {
 	var stdout bytes.Buffer
 	env := &Env{Stdout: &stdout, Stderr: &bytes.Buffer{}}
 	renderProposalStatusText(env, &rpc.AutoTradeStatus{PreAuthorised: []string{"trailing_stop"}, VetoWindow: "30m0s", AutomaticPending: 1, AutomaticDeferred: 2})
-	if got := stdout.String(); !strings.Contains(got, "trailing_stop (veto window 30m0s, 1 pending, 2 deferred by the freeze)") {
+	if got := stdout.String(); !strings.Contains(strings.Join(strings.Fields(got), " "), "trailing_stop (veto window 30m0s, 1 pending, 2 deferred by the freeze)") {
 		t.Fatalf("proposal status:\n%s", got)
 	}
 }

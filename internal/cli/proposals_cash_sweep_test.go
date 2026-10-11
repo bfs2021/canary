@@ -22,7 +22,7 @@ func TestCashSweepAdviceDistinguishesUnavailableFromZero(t *testing.T) {
 	a.NetProceeds, a.RemainingGap, a.Currency = new(9990.0), new(10.0), "USD"
 	renderCashSweepEconomicsAdvice(env, &buf, a)
 	for _, want := range []string{"Benefit (advisory)", "€ 0.00", "pending settlement", "remaining cash gap $ 10.00"} {
-		if !strings.Contains(buf.String(), want) {
+		if !strings.Contains(strings.Join(strings.Fields(buf.String()), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("missing %q: %s", want, buf.String())
 		}
 	}

@@ -17,6 +17,7 @@ const (
 	ansiRed    = "\x1b[31m"
 	ansiGreen  = "\x1b[32m"
 	ansiYellow = "\x1b[33m"
+	ansiCyan   = "\x1b[36m"
 	ansiDim    = "\x1b[2m"
 	ansiBold   = "\x1b[1m"
 )
@@ -100,4 +101,12 @@ func (e *Env) bold(s string) string {
 // reads as a separator, narrower as a title underline.
 func (e *Env) rule(n int) string {
 	return e.dim(strings.Repeat("─", n))
+}
+
+// cyan highlights command names and syntax without implying a safety state.
+func (e *Env) cyan(s string) string {
+	if e == nil || !e.Color {
+		return s
+	}
+	return ansiCyan + s + ansiReset
 }

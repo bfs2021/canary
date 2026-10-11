@@ -1,5 +1,6 @@
 # canary stress · COLUMNS=80 · colour off
 Portfolio stress  WATCH
+Assessment generated · 5 Sep 14:00 TZ
 One finding needs review; market stress is unconfirmed.
 Inputs · complete · market confirmation: unconfirmed · portfolio relevance:
   relevant
@@ -21,6 +22,7 @@ Details · canary stress --details · 1 source notes
 Read-only assessment; it places no orders.
 # canary stress · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mPortfolio stress\x1b[0m  \x1b[33m\x1b[1mWATCH\x1b[0m\x1b[0m
+Assessment generated · 5 Sep 14:00 TZ
 One finding needs review; market stress is unconfirmed.
 Inputs · complete · market confirmation: unconfirmed · portfolio relevance:
   relevant

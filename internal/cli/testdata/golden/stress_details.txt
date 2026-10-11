@@ -1,5 +1,6 @@
 # canary stress --details · COLUMNS=80 · colour off
 Portfolio stress  WATCH
+Assessment generated · 5 Sep 14:00 TZ
 One finding needs review; market stress is unconfirmed.
 Inputs · complete · market confirmation: unconfirmed · portfolio relevance:
   relevant
@@ -20,7 +21,6 @@ Coverage gaps
   WATCH   Market events
     Earnings calendar unavailable.
     Retry once the calendar source recovers.
-Snapshot generated · 5 Sep 14:00 TZ
 Overall evidence · 1 act and 1 watch finding across 4 checks.
 Warning · market events: calendar source unavailable
 VIX/VIX3M · green · 0.90 · live · contango
@@ -28,6 +28,7 @@ Source · account · ok · 2026-09-05 14:00 TZ
 Read-only assessment; it places no orders.
 # canary stress --details · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mPortfolio stress\x1b[0m  \x1b[33m\x1b[1mWATCH\x1b[0m\x1b[0m
+Assessment generated · 5 Sep 14:00 TZ
 One finding needs review; market stress is unconfirmed.
 Inputs · complete · market confirmation: unconfirmed · portfolio relevance:
   relevant
@@ -48,7 +49,6 @@ Finding levels · Individual findings exceed the overall rating; see below.
   \x1b[33mWATCH  \x1b[0m \x1b[1mMarket events\x1b[0m
     Earnings calendar unavailable.
     \x1b[2mRetry once the calendar source recovers.\x1b[0m
-Snapshot generated · 5 Sep 14:00 TZ
 Overall evidence · 1 act and 1 watch finding across 4 checks.
 Warning · market events: calendar source unavailable
 VIX/VIX3M · green · 0.90 · live · contango

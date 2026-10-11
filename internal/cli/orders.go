@@ -12,6 +12,9 @@ import (
 )
 
 func runOrders(ctx context.Context, env *Env, args []string) int {
+	if len(args) == 1 && helpArg(args[0]) {
+		return printCommandUsage(env, "orders")
+	}
 	if slicesContains(args, "history") {
 		return runOrdersHistory(ctx, env, args)
 	}
@@ -34,7 +37,7 @@ func runOrders(ctx context.Context, env *Env, args []string) int {
 }
 
 func runOrdersOpen(ctx context.Context, env *Env, args []string) int {
-	fs := flagSet(env, "orders")
+	fs := flagSet(env, "orders open")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
@@ -58,7 +61,7 @@ func runOrdersOpen(ctx context.Context, env *Env, args []string) int {
 }
 
 func runOrdersHistory(ctx context.Context, env *Env, args []string) int {
-	fs := flagSet(env, "orders")
+	fs := flagSet(env, "orders history")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
 	since := fs.String("since", "", "inclusive lower boundary: YYYY-MM-DD UTC day or RFC3339 timestamp")
 	until := fs.String("until", "", "exclusive upper boundary: YYYY-MM-DD UTC day (inclusive date) or RFC3339 timestamp")
@@ -92,7 +95,7 @@ func runOrdersHistory(ctx context.Context, env *Env, args []string) int {
 }
 
 func runOrderStatus(ctx context.Context, env *Env, args []string) int {
-	fs := flagSet(env, "order")
+	fs := flagSet(env, "order status")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)

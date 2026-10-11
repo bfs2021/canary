@@ -56,7 +56,7 @@ func orderSubcommandIndex(args []string) int {
 }
 
 func runOrderPreview(ctx context.Context, env *Env, args []string) int {
-	fs := flagSet(env, "order")
+	fs := flagSet(env, "order preview")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
 	limit := fs.Float64("limit", 0, "explicit LMT limit price")
 	strategy := fs.String("strategy", "", "pricing strategy: patient-limit (default) or explicit-limit")
@@ -361,7 +361,16 @@ func runOrderCancel(ctx context.Context, env *Env, args []string) int {
 func renderOrderPreviewText(env *Env, res *rpc.OrderPreviewResult) {
 	out := env.Stdout
 	fmt.Fprintln(out)
-	fmt.Fprintf(out, "Canary Order Preview  %s\n", env.statusBadge(statusConcern{Text: "TOKEN", Level: statusConcernNotice}))
+	eligibility := statusConcern{Text: "NOT ELIGIBLE TO SUBMIT", Level: statusConcernWarn}
+	if res.SubmitEligible {
+		eligibility = statusConcern{Text: "ELIGIBLE TO SUBMIT", Level: statusConcernNotice}
+	}
+	fmt.Fprintf(out, "%s  %s\n", env.bold("Canary Order Preview"), env.statusBadge(eligibility))
+	fmt.Fprintln(out, "No order submitted.")
+	if res.SubmitEligible {
+		fmt.Fprintln(out, "Submission still requires approval and trading checks.")
+	}
+	fmt.Fprintln(out)
 	statusRow(env, out, "Mode", res.Mode)
 	statusRow(env, out, "Account", res.Account)
 	statusRow(env, out, "Endpoint", fmt.Sprintf("%s client %d", res.Endpoint, res.ClientID))
@@ -386,7 +395,13 @@ func renderOrderPreviewText(env *Env, res *rpc.OrderPreviewResult) {
 	}
 	statusRow(env, out, "Position", formatPositionChange(res.Position.Before, res.Position.After, res.Position.Effect))
 	statusRow(env, out, "Quote", formatOrderPreviewQuote(res.Quote))
-	statusRow(env, out, "WhatIf", fmt.Sprintf("%s (required=%v)", res.WhatIf.Status, res.WhatIf.RequiredForSubmit))
+	preflight := string(res.WhatIf.Status)
+	if res.WhatIf.RequiredForSubmit {
+		preflight += " · required before submission"
+	} else if res.WhatIf.Status == rpc.OrderWhatIfStatusAccepted {
+		preflight += " · requirement satisfied"
+	}
+	statusRow(env, out, "Broker preflight", preflight)
 	statusRow(env, out, "Token minted", fmt.Sprint(res.TokenMinted))
 	statusRow(env, out, "Submit eligible", fmt.Sprint(res.SubmitEligible))
 	statusRow(env, out, "Token scope", res.PreviewTokenScope)
@@ -395,7 +410,7 @@ func renderOrderPreviewText(env *Env, res *rpc.OrderPreviewResult) {
 		statusRow(env, out, "Expires", res.PreviewTokenExpiresAt.Format(time.RFC3339))
 	}
 	if res.PreviewToken != "" {
-		statusRow(env, out, "Token", res.PreviewToken)
+		literalStatusRow(env, out, "Token", res.PreviewToken)
 	}
 	if len(res.Warnings) > 0 {
 		fmt.Fprintln(out)

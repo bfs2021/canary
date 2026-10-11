@@ -1,0 +1,80 @@
+# canary order preview --help · COLUMNS=80 · colour off
+canary order preview — Check an order without submitting it
+
+Usage: canary order preview buy|sell SYMBOL QTY [flags]
+       canary order preview buy|sell SYMBOL YYYYMMDD C|P STRIKE QTY [flags]
+       canary order preview buy|sell ISIN|CUSIP FACE --type BOND|BILL --currency
+       CCY [flags]
+
+Flags
+  --adaptive-priority STRING
+                            IBKR Adaptive priority for a limit: Normal, Patient,
+                            or Urgent
+  --currency STRING         stock quote/order currency override (e.g. USD, EUR);
+                            required for a bond
+  --exchange STRING         IBKR stock exchange/venue override (e.g. SMART,
+                            IBIS)
+  --initial-stop FLOAT      optional initial broker trail stop price; omitted
+                            means use live bid/ask
+  --json                    emit machine-readable JSON
+  --limit FLOAT             explicit LMT limit price
+  --limit-offset FLOAT      TRAIL LIMIT offset from the dynamic stop
+  --market STRING           stock market routing shortcut: us (default) or de
+  --order-type STRING       order type: LMT, TRAIL, or TRAIL-LIMIT
+  --outside-rth             allow outside regular trading hours when supported
+  --primary STRING          IBKR stock primary-exchange hint when routing
+                            through SMART
+  --replace-order STRING    preview a replacement for an existing open order
+                            ref/order-id/perm-id
+  --strategy STRING         pricing strategy: patient-limit (default) or
+                            explicit-limit
+  --tif STRING              time in force: DAY (default), or GTC for
+                            TRAIL/TRAIL-LIMIT
+  --timeout DURATION        quote snapshot timeout (default: 5s)
+  --trail-amount FLOAT      broker trail offset amount
+  --trail-percent FLOAT     broker trail offset percent; 2 means 2%, not 0.02
+  --trigger-method INT      IBKR stop trigger method for TRAIL/TRAIL-LIMIT:
+                            1,2,3,4,7,8
+  --type STRING             BOND or BILL: name a bond by ISIN or CUSIP and give
+                            its face amount instead of a quantity
+
+# canary order preview --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary order preview — Check an order without submitting it\x1b[0m
+
+Usage: \x1b[36mcanary order preview buy|sell SYMBOL QTY [flags]\x1b[0m
+       \x1b[36mcanary order preview buy|sell SYMBOL YYYYMMDD C|P STRIKE QTY [flags]\x1b[0m
+       \x1b[36mcanary order preview buy|sell ISIN|CUSIP FACE --type BOND|BILL --currency\x1b[0m
+       \x1b[36mCCY [flags]\x1b[0m
+
+\x1b[1mFlags\x1b[0m
+  \x1b[36m--adaptive-priority STRING\x1b[0m
+                            IBKR Adaptive priority for a limit: Normal, Patient,
+                            or Urgent
+  \x1b[36m--currency STRING         \x1b[0mstock quote/order currency override (e.g. USD, EUR);
+                            required for a bond
+  \x1b[36m--exchange STRING         \x1b[0mIBKR stock exchange/venue override (e.g. SMART,
+                            IBIS)
+  \x1b[36m--initial-stop FLOAT      \x1b[0moptional initial broker trail stop price; omitted
+                            means use live bid/ask
+  \x1b[36m--json                    \x1b[0memit machine-readable JSON
+  \x1b[36m--limit FLOAT             \x1b[0mexplicit LMT limit price
+  \x1b[36m--limit-offset FLOAT      \x1b[0mTRAIL LIMIT offset from the dynamic stop
+  \x1b[36m--market STRING           \x1b[0mstock market routing shortcut: us (default) or de
+  \x1b[36m--order-type STRING       \x1b[0morder type: LMT, TRAIL, or TRAIL-LIMIT
+  \x1b[36m--outside-rth             \x1b[0mallow outside regular trading hours when supported
+  \x1b[36m--primary STRING          \x1b[0mIBKR stock primary-exchange hint when routing
+                            through SMART
+  \x1b[36m--replace-order STRING    \x1b[0mpreview a replacement for an existing open order
+                            ref/order-id/perm-id
+  \x1b[36m--strategy STRING         \x1b[0mpricing strategy: patient-limit (default) or
+                            explicit-limit
+  \x1b[36m--tif STRING              \x1b[0mtime in force: DAY (default), or GTC for
+                            TRAIL/TRAIL-LIMIT
+  \x1b[36m--timeout DURATION        \x1b[0mquote snapshot timeout (default: 5s)
+  \x1b[36m--trail-amount FLOAT      \x1b[0mbroker trail offset amount
+  \x1b[36m--trail-percent FLOAT     \x1b[0mbroker trail offset percent; 2 means 2%, not 0.02
+  \x1b[36m--trigger-method INT      \x1b[0mIBKR stop trigger method for TRAIL/TRAIL-LIMIT:
+                            1,2,3,4,7,8
+  \x1b[36m--type STRING             \x1b[0mBOND or BILL: name a bond by ISIN or CUSIP and give
+                            its face amount instead of a quantity
+

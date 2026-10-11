@@ -19,7 +19,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary status`](#canary-status) | Desk | Daemon + gateway health (run this first if anything fails) | `read-only` | yes |
 | [`canary data`](#canary-data) | Markets | Canary-owned source health and bounded required-feed checks | `read-only` | yes |
 | [`canary account`](#canary-account) | Desk | Account summary snapshot (NLV, BP, cash, margin, daily P&L) | `read-only` | yes |
-| [`canary positions`](#canary-positions) | Desk | List open positions (stocks + options) | `read-only` | yes |
+| [`canary positions`](#canary-positions) | Desk | List open stock, option, bill and bond positions | `read-only` | yes |
 | [`canary strategies`](#canary-strategies) | Desk | Group option legs and close or reduce them as one guaranteed combo | `confirm` | yes |
 | [`canary portfolio`](#canary-portfolio) | Desk | Signed allocation by asset class and GICS sector, with coverage; plan reads the next portfolio action | `read-only` | yes |
 | [`canary market`](#canary-market) | Markets | Observed quotes, price history and a daily price/breadth/volume tape | `read-only` | yes |
@@ -116,7 +116,7 @@ canary account --currency-settlement-probe --json
 
 ## `canary positions`
 
-List open positions (stocks + options).
+List open stock, option, bill and bond positions.
 
 Guard `read-only`. Also available as an MCP tool.
 
@@ -795,6 +795,7 @@ Guard `read-only`, with `confirm` subcommands. Also available as an MCP tool.
 
 ```text
 canary order preview buy|sell SYMBOL QTY [--limit PRICE|--order-type TRAIL --trail-percent PCT] [--json]
+canary order preview buy|sell SYMBOL YYYYMMDD C|P STRIKE QTY [flags]
 canary order preview buy|sell ISIN|CUSIP FACE --type BOND|BILL --currency CCY [--json]
 canary order status ID [--json]
 canary order place --preview-token TOKEN [--json]

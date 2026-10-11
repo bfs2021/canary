@@ -235,7 +235,7 @@ func renderOpportunityPreviewText(env *Env, res *rpc.OpportunityExercisePreviewR
 		statusRow(env, out, "Token ID", res.PreviewTokenID)
 	}
 	if res.PreviewToken != "" {
-		statusRow(env, out, "Token", res.PreviewToken)
+		literalStatusRow(env, out, "Token", res.PreviewToken)
 	}
 	statusRow(env, out, "Exercise", opportunityExerciseSummary(res.Opportunity))
 	statusRow(env, out, "Expected gain", formatMoneyCcy(res.Opportunity.ExpectedGain, res.Opportunity.ExpectedGainCurrency))

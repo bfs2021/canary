@@ -1,0 +1,28 @@
+# canary order --help · COLUMNS=80 · colour off
+canary order — Preview, place, modify, cancel, or inspect gated orders
+
+Usage: canary order <action> [flags]
+
+Actions
+  preview           Check an order without submitting it
+  status            Read one order from the local journal
+  place             Submit an eligible preview through the trading gates
+  modify            Replace an order using an eligible preview
+  cancel            Request an order cancellation through the trading gates
+
+Run canary order <action> --help for syntax and flags.
+
+# canary order --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary order — Preview, place, modify, cancel, or inspect gated orders\x1b[0m
+
+Usage: \x1b[36mcanary order <action> [flags]\x1b[0m
+
+\x1b[1mActions\x1b[0m
+  \x1b[36mpreview           \x1b[0mCheck an order without submitting it
+  \x1b[36mstatus            \x1b[0mRead one order from the local journal
+  \x1b[36mplace             \x1b[0mSubmit an eligible preview through the trading gates
+  \x1b[36mmodify            \x1b[0mReplace an order using an eligible preview
+  \x1b[36mcancel            \x1b[0mRequest an order cancellation through the trading gates
+
+Run canary order <action> --help for syntax and flags.
+

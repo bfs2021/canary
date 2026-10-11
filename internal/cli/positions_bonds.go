@@ -63,7 +63,32 @@ func renderBondsTable(env *Env, out io.Writer, rows []rpc.PositionBond) {
 			formatPositionQuantity(b.Quantity, ""), formatPositionPrice(b.Mark), formatMoneyCcyForPnL(b.MarketValue, b.Currency), b.Reason,
 		})
 	}
-	renderPositionTable(env, out, cols, table)
+	if positionTableWidth(cols, table) > terminalTextWidth(out) {
+		// Keep comparable figures together; move identifiers and explanations
+		// beneath each row. No bond facts are discarded.
+		indices := []int{0, 1, 3, 4, 5, 6, 7, 8}
+		compactCols := make([]positionTableColumn, len(indices))
+		compactRows := make([][]string, len(table))
+		for i, index := range indices {
+			compactCols[i] = cols[index]
+		}
+		for i, row := range table {
+			for _, index := range indices {
+				compactRows[i] = append(compactRows[i], row[index])
+			}
+		}
+		details := make([]string, len(table))
+		for i, row := range table {
+			detail := "ISIN / CUSIP " + row[2]
+			if row[9] != "" {
+				detail += " · " + row[9]
+			}
+			details[i] = detail
+		}
+		renderPositionTableDetails(env, out, compactCols, compactRows, details)
+	} else {
+		renderPositionTable(env, out, cols, table)
+	}
 	fmt.Fprintln(out)
 }
 
@@ -99,7 +124,7 @@ func renderBondRisk(env *Env, out io.Writer, rows []rpc.PositionBond, book *risk
 	if len(table) > 0 {
 		renderPositionTable(env, out, cols, table)
 	}
-	row := func(label, value string) { fmt.Fprintf(out, "  %-22s %s\n", label, value) }
+	row := func(label, value string) { labeledRow(env, out, "  ", 23, label, value) }
 	row("Bonds held", risk.FormatOrderMoney(math.Round(book.MarketValueBase), ccy)+formatPctNLV(book.PctNLV))
 	row("One-point rise costs", risk.FormatOrderMoney(math.Round(book.RateShockLossBase), ccy)+formatPctNLV(book.RateShockLossPctNLV))
 	if book.NonGovernmentBase != 0 {

@@ -345,6 +345,34 @@ type positionTableColumn struct {
 }
 
 func renderPositionTable(env *Env, out io.Writer, cols []positionTableColumn, rows [][]string) {
+	renderPositionTableDetails(env, out, cols, rows, nil)
+}
+
+// renderPositionTableDetails keeps supplementary identity attached to each row.
+func renderPositionTableDetails(env *Env, out io.Writer, cols []positionTableColumn, rows [][]string, details []string) {
+	printDetail := func(index int) {
+		if index < len(details) && details[index] != "" {
+			labeledRow(env, out, "    ", 1, "", details[index])
+		}
+	}
+	if positionTableWidth(cols, rows) > terminalTextWidth(out) {
+		for index, row := range rows {
+			for i, col := range cols {
+				if i >= len(row) {
+					continue
+				}
+				value := row[i]
+				if i == 0 {
+					value = env.bold(value)
+				}
+				labeledRow(env, out, "  ", 15, col.header, value)
+			}
+			printDetail(index)
+			fmt.Fprintln(out)
+		}
+		return
+	}
+
 	widths := make([]int, len(cols))
 	headers := make([]string, len(cols))
 	for i, col := range cols {
@@ -364,8 +392,9 @@ func renderPositionTable(env *Env, out io.Writer, cols []positionTableColumn, ro
 	header := strings.TrimRight(formatPositionTableRow(cols, widths, headers), " ")
 	fmt.Fprintln(out, env.dim(header))
 	fmt.Fprintln(out, "  "+env.dim(strings.Repeat("─", visibleLen(header)-2)))
-	for _, row := range rows {
+	for index, row := range rows {
 		fmt.Fprintln(out, formatPositionTableRow(cols, widths, row))
+		printDetail(index)
 	}
 }
 

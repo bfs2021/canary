@@ -20,6 +20,9 @@ const queueArmInputMaxBytes = 16 << 10
 // arm reads everything it needs, the reference included, as one JSON object
 // on standard input. cancel, list and status never touch a reference.
 func runProposalsQueue(ctx context.Context, env *Env, args []string) int {
+	if len(args) == 1 && helpArg(args[0]) {
+		return printCommandUsage(env, "proposals queue")
+	}
 	verbIdx := -1
 	for i, arg := range args {
 		switch arg {

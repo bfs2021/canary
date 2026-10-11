@@ -14,10 +14,27 @@ func displayLine(env *Env, text string, style func(string) string) {
 }
 
 func displayRow(env *Env, out io.Writer, label, value string) {
-	copyEnv := *env
-	copyEnv.Stdout = out
-	prefix := env.dim(fmt.Sprintf("%-14s", label)) + " "
-	riskDisplayLine(&copyEnv, prefix, value, nil)
+	labeledRow(env, out, "", 15, label, sanitizeRunText(value))
+}
+
+// labeledRow keeps every value, wraps beneath its column, and gives long
+// labels their own line. Values may already carry the renderer's SGR styles.
+func labeledRow(env *Env, out io.Writer, indent string, column int, label, value string) {
+	width := terminalTextWidth(out)
+	if visibleLen(label) >= column {
+		for _, line := range wrapVisibleText(label, max(1, width-len(indent))) {
+			fmt.Fprintln(out, indent+env.dim(line))
+		}
+		label = ""
+	}
+	prefix := indent + env.dim(padRightVisible(label, column-1)) + " "
+	continuation := strings.Repeat(" ", len(indent)+column)
+	for i, line := range wrapVisibleText(value, max(1, width-len(indent)-column)) {
+		if i > 0 {
+			prefix = continuation
+		}
+		fmt.Fprintln(out, prefix+line)
+	}
 }
 
 func displayNumber(value *float64, scale float64, format string) string {

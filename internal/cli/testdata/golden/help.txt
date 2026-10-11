@@ -1,0 +1,138 @@
+# canary help · COLUMNS=80 · colour off
+Canary — portfolio, risk and order tools for Interactive Brokers
+Runs locally. Broker writes require approval and trading checks.
+
+Usage: canary <subcommand> [flags] [args]
+Start: canary status — check the daemon and gateway connection
+
+Desk
+Account, positions, orders and risk
+
+  status          Daemon + gateway health (run this first if anything fails)
+  account         Net liquidation, buying power, cash, margin and daily P&L
+  positions       List open stock, option, bill and bond positions
+  strategies      Group option legs and close or reduce them as one guaranteed
+                  combo
+  portfolio       Signed allocation by asset class and GICS sector, with
+                  coverage; plan reads the next portfolio action
+  stress          Portfolio stress and its full risk evidence
+  brief           Prioritized desk brief; full evidence with --details
+  edge            Broker-truth review of past trading decisions
+  short-interest  Screen FINRA short positions across US equities
+  lending         Read lending income, borrowing fees and stock market context
+  rules           Advisory daily rule checklist, hardest breach first; your
+                  limits via rules policy
+  policy          Risk constitution and policy files: limits, capital and
+                  drawdown state
+  recon           Post-trade reconciliation against the capital ledger
+  reporting       Shared statement-reporting setup and health
+  proposals       Protection proposals to close or reduce positions
+  opportunities   Option exercise opportunities
+  trading         Local trading gate status and configuration
+  orders          Read the local order journal; never transmits
+  order           Preview, place, modify, cancel, or inspect gated orders
+
+Markets
+Market conditions and analysis of named symbols
+
+  data            Source health and checks of required data feeds
+  market          Observed quotes, price history and a daily
+                  price/breadth/volume tape
+  technical       Trend, relative strength, ATR, and liquidity from daily bars
+  watchlist       Read and edit the durable owner watchlist; no broker or policy
+                  changes
+  setups          Observe volume turns, discover exact standard calls and read
+                  entry markouts; no trade or policy authority
+  calendar        Official exchange sessions, holidays, early closes, and
+                  coverage bounds
+  macro           Economic releases and official publications with source
+                  coverage
+  regime          Market regime and all eight indicator readings
+
+System
+Run, configure and update Canary
+
+  settings        Runtime platform preferences and observed read-only state
+  app             Run the paired mobile PWA application layer
+  mcp             Run the stdio MCP server for local AI clients
+  daemon          Run the stateful gateway daemon (normally autospawned)
+  setup           Configure a local client, app host, or shared broker reporting
+  update          Self-update the Canary binary from the latest GitHub release
+  restart         Gracefully restart the daemon and any running app process
+  stop            Stop the local daemon and app processes
+  version         Print version, commit, build date
+
+Run canary <command> --help for usage and available actions.
+Run canary <command> <action> --help for that action's flags.
+Add --json to data/query commands for machine-readable output.
+
+Colour: NO_COLOR=1 disables it; CANARY_COLOR=always|never overrides.
+# canary help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mCanary — portfolio, risk and order tools for Interactive Brokers\x1b[0m
+Runs locally. Broker writes require approval and trading checks.
+
+Usage: \x1b[36mcanary <subcommand> [flags] [args]\x1b[0m
+Start: canary status — check the daemon and gateway connection
+
+\x1b[1mDesk\x1b[0m
+\x1b[2mAccount, positions, orders and risk\x1b[0m
+
+  \x1b[36mstatus          \x1b[0mDaemon + gateway health (run this first if anything fails)
+  \x1b[36maccount         \x1b[0mNet liquidation, buying power, cash, margin and daily P&L
+  \x1b[36mpositions       \x1b[0mList open stock, option, bill and bond positions
+  \x1b[36mstrategies      \x1b[0mGroup option legs and close or reduce them as one guaranteed
+                  combo
+  \x1b[36mportfolio       \x1b[0mSigned allocation by asset class and GICS sector, with
+                  coverage; plan reads the next portfolio action
+  \x1b[36mstress          \x1b[0mPortfolio stress and its full risk evidence
+  \x1b[36mbrief           \x1b[0mPrioritized desk brief; full evidence with --details
+  \x1b[36medge            \x1b[0mBroker-truth review of past trading decisions
+  \x1b[36mshort-interest  \x1b[0mScreen FINRA short positions across US equities
+  \x1b[36mlending         \x1b[0mRead lending income, borrowing fees and stock market context
+  \x1b[36mrules           \x1b[0mAdvisory daily rule checklist, hardest breach first; your
+                  limits via rules policy
+  \x1b[36mpolicy          \x1b[0mRisk constitution and policy files: limits, capital and
+                  drawdown state
+  \x1b[36mrecon           \x1b[0mPost-trade reconciliation against the capital ledger
+  \x1b[36mreporting       \x1b[0mShared statement-reporting setup and health
+  \x1b[36mproposals       \x1b[0mProtection proposals to close or reduce positions
+  \x1b[36mopportunities   \x1b[0mOption exercise opportunities
+  \x1b[36mtrading         \x1b[0mLocal trading gate status and configuration
+  \x1b[36morders          \x1b[0mRead the local order journal; never transmits
+  \x1b[36morder           \x1b[0mPreview, place, modify, cancel, or inspect gated orders
+
+\x1b[1mMarkets\x1b[0m
+\x1b[2mMarket conditions and analysis of named symbols\x1b[0m
+
+  \x1b[36mdata            \x1b[0mSource health and checks of required data feeds
+  \x1b[36mmarket          \x1b[0mObserved quotes, price history and a daily
+                  price/breadth/volume tape
+  \x1b[36mtechnical       \x1b[0mTrend, relative strength, ATR, and liquidity from daily bars
+  \x1b[36mwatchlist       \x1b[0mRead and edit the durable owner watchlist; no broker or policy
+                  changes
+  \x1b[36msetups          \x1b[0mObserve volume turns, discover exact standard calls and read
+                  entry markouts; no trade or policy authority
+  \x1b[36mcalendar        \x1b[0mOfficial exchange sessions, holidays, early closes, and
+                  coverage bounds
+  \x1b[36mmacro           \x1b[0mEconomic releases and official publications with source
+                  coverage
+  \x1b[36mregime          \x1b[0mMarket regime and all eight indicator readings
+
+\x1b[1mSystem\x1b[0m
+\x1b[2mRun, configure and update Canary\x1b[0m
+
+  \x1b[36msettings        \x1b[0mRuntime platform preferences and observed read-only state
+  \x1b[36mapp             \x1b[0mRun the paired mobile PWA application layer
+  \x1b[36mmcp             \x1b[0mRun the stdio MCP server for local AI clients
+  \x1b[36mdaemon          \x1b[0mRun the stateful gateway daemon (normally autospawned)
+  \x1b[36msetup           \x1b[0mConfigure a local client, app host, or shared broker reporting
+  \x1b[36mupdate          \x1b[0mSelf-update the Canary binary from the latest GitHub release
+  \x1b[36mrestart         \x1b[0mGracefully restart the daemon and any running app process
+  \x1b[36mstop            \x1b[0mStop the local daemon and app processes
+  \x1b[36mversion         \x1b[0mPrint version, commit, build date
+
+Run canary <command> --help for usage and available actions.
+Run canary <command> <action> --help for that action's flags.
+Add --json to data/query commands for machine-readable output.
+
+\x1b[2mColour: NO_COLOR=1 disables it; CANARY_COLOR=always|never overrides.\x1b[0m

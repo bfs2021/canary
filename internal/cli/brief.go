@@ -72,12 +72,24 @@ func splitVisibleWord(word string, width int) (string, string) {
 		return word, ""
 	}
 	used := 0
-	for i := range word {
+	inSGR := false
+	for i, r := range word {
+		if inSGR {
+			if r == 'm' {
+				inSGR = false
+			}
+			continue
+		}
+		if r == '\x1b' {
+			inSGR = true
+			continue
+		}
 		if used == width {
 			return word[:i], word[i:]
 		}
 		used++
 	}
+
 	return word, ""
 }
 

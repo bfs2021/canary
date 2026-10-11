@@ -184,6 +184,11 @@ func runStress(ctx context.Context, env *Env, args []string) int {
 func renderStress(env *Env, res rpc.StressResult, details bool) {
 	action := strings.ToUpper(strings.ReplaceAll(nonEmpty(res.Action, "unavailable"), "_", " "))
 	riskDisplayLine(env, env.bold("Portfolio stress")+"  ", action, func(s string) string { return riskTone(env, string(res.Severity), env.bold(s)) })
+	assessmentTime := "unavailable"
+	if !res.AsOf.IsZero() {
+		assessmentTime = res.AsOf.Local().Format("2 Jan 15:04 MST")
+	}
+	riskReadLine(env, "Assessment generated", assessmentTime)
 	riskDisplayLine(env, "", res.Summary, nil)
 	riskReadLine(env, "Inputs", res.InputHealth, "market confirmation: "+res.MarketConfirmation, "portfolio relevance: "+res.PortfolioFit)
 	rows := slices.Clone(res.Rows)
@@ -237,7 +242,6 @@ func renderStress(env *Env, res rpc.StressResult, details bool) {
 		}
 	}
 	if details {
-		riskReadLine(env, "\nSnapshot generated", res.AsOf.Local().Format("2 Jan 15:04 MST"))
 		if len(res.Rows) > 0 && res.Rows[0].Title == "Portfolio stress" {
 			riskReadLine(env, "Overall evidence", res.Rows[0].Evidence)
 		}

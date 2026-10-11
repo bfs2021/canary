@@ -186,6 +186,21 @@ func renderGoldenCases() []renderGoldenCase {
 	diagnosticHealth.GatewayAPI = &rpc.GatewayAPIHealth{TradingProtocolMax: 203, ConfigReadProtocol: 219, ConfigState: "observed", DiagnosticProtocol: 219,
 		Settings: &rpc.GatewayAPISettings{ReadOnly: new(false), VolumeInLots: new(false), RetainOrdersOnReconnect: new(true), DownloadOpenOrders: new(true)}}
 	return []renderGoldenCase{
+		{name: "help", argv: []string{"help"}, render: renderUsage},
+		{name: "help_order", argv: []string{"order", "--help"}},
+		{name: "help_order_preview", argv: []string{"order", "preview", "--help"}},
+		{name: "help_orders_history", argv: []string{"orders", "history", "--help"}},
+		{name: "help_proposals", argv: []string{"proposals", "--help"}},
+		{name: "help_proposals_queue", argv: []string{"proposals", "queue", "--help"}},
+		{name: "order_preview_ineligible", argv: []string{"order", "preview"}, render: func(env *Env) {
+			r := goldenBondPreview()
+			r.SubmitEligible = false
+			r.TokenMinted = true
+			r.WhatIf.Status = rpc.OrderWhatIfStatusUnavailable
+			r.WhatIf.RequiredForSubmit = true
+			renderOrderPreviewText(env, &r)
+		}},
+		{name: "stress_undated", argv: []string{"stress"}, render: func(env *Env) { r := goldenStress(); r.AsOf = time.Time{}; renderStress(env, r, false) }},
 		{name: "status_gateway_diagnostics", argv: []string{"status", "--gateway-diagnostics"}, conn: goldenConn{rpc.MethodStatusHealth: diagnosticHealth}},
 		{name: "portfolio_plan", argv: []string{"portfolio", "plan"}, conn: goldenConn{rpc.MethodPortfolioPlan: goldenPortfolioPlan()}},
 		{name: "portfolio_plan_held", argv: []string{"portfolio", "plan"}, conn: goldenConn{rpc.MethodPortfolioPlan: rpc.PortfolioPlanResult{State: "held", Reason: "Current portfolio evidence is incomplete.", Blockers: []rpc.TradingBlocker{{Code: "portfolio_book_unavailable", Message: "A complete same-session account and portfolio are required."}}}}},
@@ -258,7 +273,7 @@ func goldenBondPreview() rpc.OrderPreviewResult {
 		Quote:    rpc.OrderQuoteSnapshot{Symbol: "SYNB", Bid: &bid, Ask: &ask, DataType: rpc.MarketDataLive, AsOf: goldenAt},
 		Position: rpc.OrderPositionImpact{Before: 0, After: 10000, Effect: rpc.OrderPositionEffectOpen},
 		Notional: 10092, NotionalCurrency: "EUR", NotionalBase: 10092, BaseCurrency: "EUR",
-		WhatIf: rpc.OrderWhatIfResult{Status: rpc.OrderWhatIfStatusAccepted, RequiredForSubmit: true},
+		WhatIf: rpc.OrderWhatIfResult{Status: rpc.OrderWhatIfStatusAccepted, Available: true},
 	}
 }
 

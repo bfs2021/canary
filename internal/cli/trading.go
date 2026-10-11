@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"github.com/osauer/canary/v2/internal/config"
 	"github.com/osauer/canary/v2/internal/rpc"
@@ -81,8 +80,8 @@ func renderTradingStatusText(env *Env, st *rpc.TradingStatus) {
 		if l.Complete {
 			statusRow(env, out, "Order cap", l.Summary)
 			statusRow(env, out, "Option qty cap", fmt.Sprintf("%d contracts", l.MaxOptionContracts))
-			statusRow(env, out, "Stock short", strconv.FormatBool(l.AllowStockShort))
-			statusRow(env, out, "Option STO", strconv.FormatBool(l.AllowOptionSellToOpen))
+			statusRow(env, out, "Short selling", policyPermission(l.AllowStockShort))
+			statusRow(env, out, "Sell options to open", policyPermission(l.AllowOptionSellToOpen))
 			bond := fmt.Sprintf("at most %d years", l.MaxBondMaturityYears)
 			if l.BondMaturityUnset {
 				bond = env.yellow("not set: bond buys refused until Canary writes it")
@@ -170,4 +169,12 @@ func formatTradingStatusValue(env *Env, st rpc.TradingStatus) string {
 		return env.bold("LIVE") + " · ready"
 	}
 	return env.green(st.Mode + " ready")
+}
+
+// policyPermission describes the configured permission, not current execution eligibility.
+func policyPermission(allowed bool) string {
+	if allowed {
+		return "allowed by policy"
+	}
+	return "not allowed by policy"
 }

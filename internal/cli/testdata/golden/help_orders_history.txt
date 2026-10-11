@@ -1,0 +1,32 @@
+# canary orders history --help · COLUMNS=80 · colour off
+canary orders history — Read order history from the local journal
+
+Usage: canary orders history [--since DATE|TIME] [--until DATE|TIME] [--limit N]
+       [--event-limit N] [--json]
+
+Flags
+  --event-limit INT         max lifecycle events per grouped order (default 20,
+                            max 200)
+  --json                    emit machine-readable JSON
+  --limit INT               max grouped orders to return (default 50, max 500)
+  --since STRING            inclusive lower boundary: YYYY-MM-DD UTC day or
+                            RFC3339 timestamp
+  --until STRING            exclusive upper boundary: YYYY-MM-DD UTC day
+                            (inclusive date) or RFC3339 timestamp
+
+# canary orders history --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary orders history — Read order history from the local journal\x1b[0m
+
+Usage: \x1b[36mcanary orders history [--since DATE|TIME] [--until DATE|TIME] [--limit N]\x1b[0m
+       \x1b[36m[--event-limit N] [--json]\x1b[0m
+
+\x1b[1mFlags\x1b[0m
+  \x1b[36m--event-limit INT         \x1b[0mmax lifecycle events per grouped order (default 20,
+                            max 200)
+  \x1b[36m--json                    \x1b[0memit machine-readable JSON
+  \x1b[36m--limit INT               \x1b[0mmax grouped orders to return (default 50, max 500)
+  \x1b[36m--since STRING            \x1b[0minclusive lower boundary: YYYY-MM-DD UTC day or
+                            RFC3339 timestamp
+  \x1b[36m--until STRING            \x1b[0mexclusive upper boundary: YYYY-MM-DD UTC day
+                            (inclusive date) or RFC3339 timestamp
+

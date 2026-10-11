@@ -72,11 +72,13 @@ func TestRenderOrderPreviewShowsTokenAndSubmitEligibility(t *testing.T) {
 	got := stdout.String()
 	for _, want := range []string{
 		"Token minted   true",
-		"Submit eligible false",
-		"WhatIf         unavailable (required=true)",
+		"NOT ELIGIBLE TO SUBMIT",
+		"No order submitted.",
+		"Submit eligible\n               false",
+		"Broker preflight\n               unavailable · required before submission",
 		"Token ID       tok_123",
 		"Notional       1,001.20 USD",
-		"Notional (base) 921.10 EUR",
+		"Notional (base)\n               921.10 EUR",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("order preview missing %q:\n%s", want, got)

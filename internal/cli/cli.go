@@ -237,7 +237,7 @@ func init() {
 		{"status", "Daemon + gateway health (run this first if anything fails)", "canary status [--json] [--gateway-diagnostics]", runStatus},
 		{"data", "Canary-owned source health and bounded required-feed checks", "canary data health [--offset N --limit N --revision ID] [--json] | canary data check [--json]", runData},
 		{"account", "Account summary snapshot (NLV, BP, cash, margin, daily P&L)", "canary account [--watch --rate 1s] [--json] | canary account --settlement-probe --json | canary account --currency-settlement-probe --json", runAccount},
-		{"positions", "List open positions (stocks + options)", "canary positions [--symbol SYM] [--type stk|opt] [--sort alpha|pnl|value] [--quotes] [--by underlying] [--watch --rate 1s] [--json]", runPositions},
+		{"positions", "List open stock, option, bill and bond positions", "canary positions [--symbol SYM] [--type stk|opt] [--sort alpha|pnl|value] [--quotes] [--by underlying] [--watch --rate 1s] [--json]", runPositions},
 		{"strategies", "Group option legs and close or reduce them as one guaranteed combo", "canary strategies list [--json] | canary strategies close ID REVISION [--limit PRICE] [--submit] | canary strategies reduce ID REVISION --units N [--limit PRICE] [--submit]", runStrategies},
 		{"portfolio", "Signed allocation by asset class and GICS sector, with coverage; plan reads the next portfolio action", "canary portfolio [plan] [--json]", runPortfolio},
 		{"market", "Observed quotes, price history and a daily price/breadth/volume tape", "canary market [--symbol SYMBOL --range 1D] [--json] | canary market tape [--history] [--before YYYY-MM-DD] [--sessions 5] [--explain] [--json]", runMarket},
@@ -262,7 +262,7 @@ func init() {
 		{"trading", "Local trading gate status and configuration", "canary trading status [--json]", runTrading},
 		{"settings", "Runtime platform preferences and observed read-only state", "canary settings show [--json] | canary settings set <supported-key>=<value> [--json]", runSettings},
 		{"orders", "Read current-context local order lifecycle state without transmitting orders", "canary orders open [--json] | canary orders history [--since YYYY-MM-DD|RFC3339] [--until YYYY-MM-DD|RFC3339] [--limit N] [--event-limit N] [--json]", runOrders},
-		{"order", "Preview, place, modify, cancel, or inspect gated orders", "canary order preview buy|sell SYMBOL QTY [--limit PRICE|--order-type TRAIL --trail-percent PCT] [--json] | canary order preview buy|sell ISIN|CUSIP FACE --type BOND|BILL --currency CCY [--json] | canary order status ID [--json] | canary order place --preview-token TOKEN [--json] | canary order modify ID --preview-token TOKEN [--json] | canary order cancel ID [--json]", runOrder},
+		{"order", "Preview, place, modify, cancel, or inspect gated orders", "canary order preview buy|sell SYMBOL QTY [--limit PRICE|--order-type TRAIL --trail-percent PCT] [--json] | canary order preview buy|sell SYMBOL YYYYMMDD C|P STRIKE QTY [flags] | canary order preview buy|sell ISIN|CUSIP FACE --type BOND|BILL --currency CCY [--json] | canary order status ID [--json] | canary order place --preview-token TOKEN [--json] | canary order modify ID --preview-token TOKEN [--json] | canary order cancel ID [--json]", runOrder},
 		{"app", "Run the paired mobile PWA application layer", "canary app [--addr HOST:PORT] | canary app pair", nil},                                                // dispatched in cmd/canary/main.go — long-lived app server
 		{"mcp", "Run the stdio MCP server for local AI clients", "canary mcp", nil},                                                                                   // dispatched in cmd/canary/main.go — long-lived stdio server
 		{"daemon", "Run the stateful gateway daemon (normally autospawned)", "canary daemon [--foreground] [--config PATH] [--socket PATH] [--log PATH|stderr]", nil}, // dispatched in cmd/canary/main.go — long-lived daemon
@@ -310,55 +310,21 @@ func Commands() []Command {
 // stays in `canary <subcommand> --help` — a flat list of 36 long summaries
 // wraps into a wall on an 80-column terminal.
 func PrintUsage(w io.Writer) {
-	fmt.Fprintf(w, "%s — local trading harness (Interactive Brokers connectivity; broker writes are gated)\n", productidentity.ProductName)
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "Usage: %s <subcommand> [flags] [args]\n", productidentity.Executable)
-	specs := Catalog()
-	for _, group := range HelpGroups() {
-		fmt.Fprintf(w, "\n%s — %s\n", group.Title, group.Tagline)
-		for _, spec := range specs {
-			if spec.Group == group.Group {
-				fmt.Fprintf(w, "  %-13s  %s\n", spec.Name, spec.listing())
-			}
-		}
-	}
-	fmt.Fprintln(w)
-	fmt.Fprintf(w, "Run `%s <subcommand> --help` to see the flags it supports.\n", productidentity.Executable)
-	fmt.Fprintln(w, "Add --json to data/query subcommands to emit machine-readable output.")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Color: respects NO_COLOR=1 to disable; CANARY_COLOR=always|never overrides.")
-	fmt.Fprintf(w, "First run? Try `%s status` to verify the gateway is reachable.\n", productidentity.Executable)
+	renderUsage(&Env{Stdout: w, Color: ShouldColor(w)})
 }
 
 // flagSet builds a *flag.FlagSet wired to the env's writers and equipped
 func flagSet(env *Env, name string) *flag.FlagSet {
-	cmd, _ := lookupCommand(name)
-	return describedFlagSet(env, name, cmd.Summary, cmd.Usage)
+	summary, usage := helpDescription(name)
+	return describedFlagSet(env, name, summary, usage)
 }
 
 // describedFlagSet also gives nested commands the standard help presentation.
 func describedFlagSet(env *Env, name, summary, usage string) *flag.FlagSet {
 	fs := flag.NewFlagSet(productidentity.Executable+" "+name, flag.ContinueOnError)
 	fs.SetOutput(env.Stderr)
-	fs.Usage = func() {
-		w := env.Stdout
-		if summary != "" {
-			fmt.Fprintf(w, "%s %s — %s\n\n", productidentity.Executable, name, summary)
-			if usage != "" {
-				fmt.Fprintf(w, "Usage: %s\n\n", usage)
-			}
-		} else {
-			fmt.Fprintf(w, "Usage of %s %s\n\n", productidentity.Executable, name)
-		}
-		var any bool
-		fs.VisitAll(func(f *flag.Flag) {
-			if !any {
-				fmt.Fprintln(w, "Flags:")
-				any = true
-			}
-			fmt.Fprintf(w, "  --%-10s  %s\n", f.Name, f.Usage)
-		})
-	}
+	fs.Usage = func() { renderCommandHelp(env, fs, name, summary, usage) }
+
 	return fs
 }
 

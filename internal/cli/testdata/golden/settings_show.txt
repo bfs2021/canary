@@ -3,9 +3,11 @@
 Canary Settings  DATA UNKNOWN
 
 Date format    eu
-Stock protection true (write/runtime)
+Stock protection
+               true (write/runtime)
 Rulebook       true (write/config)
-Earnings overrides 1 symbol(s)
+Earnings overrides
+               1 symbol(s)
 Trading freeze false (write/runtime)
 Trading        paper
 Endpoint       127.0.0.1:4002
@@ -14,12 +16,16 @@ MCP trading    disabled
 Build          release
 
 Order limits (risk-policy.toml [order_limits]):
-Order cap in force 12,000 EUR (5% of NLV 240,000 EUR; [order_limits])
-Max option qty (every order) 5 (read/policy)
+Order cap in force
+               12,000 EUR (5% of NLV 240,000 EUR; [order_limits])
+Max option qty (every order)
+               5 (read/policy)
 Apparent exits same caps; SELL uses worst-case short/STO gates
-Stock short    false (read/policy)
-Option STO     false (read/policy)
-Bond maturity, buys at most 30 years (read/policy)
+Short selling  not allowed by policy (read/policy)
+Sell options to open
+               not allowed by policy (read/policy)
+Bond maturity, buys
+               at most 30 years (read/policy)
 
 Market data    live - all quotes live
 
@@ -28,9 +34,11 @@ Market data    live - all quotes live
 Canary Settings  \x1b[2m\x1b[1mDATA UNKNOWN\x1b[0m\x1b[0m
 
 \x1b[2mDate format   \x1b[0m eu
-\x1b[2mStock protection\x1b[0m true (write/runtime)
+\x1b[2mStock protection\x1b[0m
+\x1b[2m              \x1b[0m true (write/runtime)
 \x1b[2mRulebook      \x1b[0m true (write/config)
-\x1b[2mEarnings overrides\x1b[0m 1 symbol(s)
+\x1b[2mEarnings overrides\x1b[0m
+\x1b[2m              \x1b[0m 1 symbol(s)
 \x1b[2mTrading freeze\x1b[0m false (write/runtime)
 \x1b[2mTrading       \x1b[0m paper
 \x1b[2mEndpoint      \x1b[0m 127.0.0.1:4002
@@ -39,12 +47,16 @@ Canary Settings  \x1b[2m\x1b[1mDATA UNKNOWN\x1b[0m\x1b[0m
 \x1b[2mBuild         \x1b[0m release
 
 Order limits (risk-policy.toml [order_limits]):
-\x1b[2mOrder cap in force\x1b[0m 12,000 EUR (5% of NLV 240,000 EUR; [order_limits])
-\x1b[2mMax option qty (every order)\x1b[0m 5 (read/policy)
+\x1b[2mOrder cap in force\x1b[0m
+\x1b[2m              \x1b[0m 12,000 EUR (5% of NLV 240,000 EUR; [order_limits])
+\x1b[2mMax option qty (every order)\x1b[0m
+\x1b[2m              \x1b[0m 5 (read/policy)
 \x1b[2mApparent exits\x1b[0m same caps; SELL uses worst-case short/STO gates
-\x1b[2mStock short   \x1b[0m false (read/policy)
-\x1b[2mOption STO    \x1b[0m false (read/policy)
-\x1b[2mBond maturity, buys\x1b[0m at most 30 years (read/policy)
+\x1b[2mShort selling \x1b[0m not allowed by policy (read/policy)
+\x1b[2mSell options to open\x1b[0m
+\x1b[2m              \x1b[0m not allowed by policy (read/policy)
+\x1b[2mBond maturity, buys\x1b[0m
+\x1b[2m              \x1b[0m at most 30 years (read/policy)
 
 \x1b[2mMarket data   \x1b[0m live - all quotes live
 

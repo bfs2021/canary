@@ -42,7 +42,7 @@ func TestRenderProposalsListsShadowRowsUnderTheirOwnHeading(t *testing.T) {
 		"shadow · over budget · premium 56.0% of risk capital (caps 40% total, 15% per line) · 2 protection legs left out",
 		"shadow_mode",
 	} {
-		if !strings.Contains(out, want) {
+		if !strings.Contains(strings.Join(strings.Fields(out), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
 	}
@@ -92,7 +92,7 @@ func TestRenderProposalsPrintsTheBudgetCandidatesAndPlan(t *testing.T) {
 		"                          2. sell 2 AAA 20261218 100 C · raises € 4,000.00 · cycle 2 · rank 1\n",
 		"                          3. sell 2 BBB 20261218 100 C · raises € 4,000.00 · cycle 1 · rank 2\n",
 	} {
-		if !strings.Contains(out, want) {
+		if !strings.Contains(strings.Join(strings.Fields(out), " "), strings.Join(strings.Fields(want), " ")) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
 	}

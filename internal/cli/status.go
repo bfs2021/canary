@@ -248,17 +248,11 @@ func alertSourceLabel(source rpc.AlertSource) string {
 }
 
 func statusRow(env *Env, out io.Writer, label, value string) {
-	fmt.Fprintf(out, "%s %s\n", env.dim(fmt.Sprintf("%-14s", label)), value)
+	labeledRow(env, out, "", 15, label, value)
 }
 
 func statusHealthRow(env *Env, out io.Writer, label, value string) {
-	for i, line := range wrapVisibleText(value, max(1, briefProseWidth(out)-15)) {
-		prefix := strings.Repeat(" ", 15)
-		if i == 0 {
-			prefix = env.dim(fmt.Sprintf("%-14s", label)) + " "
-		}
-		fmt.Fprintln(out, prefix+line)
-	}
+	statusRow(env, out, label, value)
 }
 
 type statusConcernLevel int
@@ -875,4 +869,9 @@ func formatDiagnosticBool(value *bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+// literalStatusRow preserves copyable credentials without inserting whitespace.
+func literalStatusRow(env *Env, out io.Writer, label, value string) {
+	fmt.Fprintf(out, "%s %s\n", env.dim(padRightVisible(label, 14)), value)
 }

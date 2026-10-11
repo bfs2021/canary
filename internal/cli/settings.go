@@ -293,8 +293,8 @@ func renderSettingsText(env *Env, st *rpc.PlatformSettings) {
 	}
 	displayRow(env, out, "Max option qty (every order)", optionText)
 	displayRow(env, out, "Apparent exits", "same caps; SELL uses worst-case short/STO gates")
-	displayRow(env, out, "Stock short", formatSettingsBool(env, st.Trading.Limits.AllowStockShort))
-	displayRow(env, out, "Option STO", formatSettingsBool(env, st.Trading.Limits.AllowOptionSellToOpen))
+	displayRow(env, out, "Short selling", formatSettingsPermission(env, st.Trading.Limits.AllowStockShort))
+	displayRow(env, out, "Sell options to open", formatSettingsPermission(env, st.Trading.Limits.AllowOptionSellToOpen))
 	bond := st.Trading.Limits.MaxBondMaturityYears
 	bondText := fmt.Sprintf("at most %d years (%s)", bond.Value, accessSummary(bond.Access, bond.Source))
 	if bond.Unset {
@@ -333,6 +333,10 @@ func settingsVerdict(st rpc.PlatformSettings) statusConcern {
 
 func formatSettingsBool(_ *Env, v rpc.SettingsBool) string {
 	return fmt.Sprint(v.Value) + " (" + accessSummary(v.Access, v.Source) + ")"
+}
+
+func formatSettingsPermission(_ *Env, v rpc.SettingsBool) string {
+	return policyPermission(v.Value) + " (" + accessSummary(v.Access, v.Source) + ")"
 }
 
 func accessSummary(access, source string) string {

@@ -1,0 +1,48 @@
+# canary proposals --help · COLUMNS=80 · colour off
+canary proposals — Daemon-owned close/reduce-only protection proposals
+
+Usage: canary proposals <action> [flags]
+
+Actions
+  status            Read proposal monitoring and trading status
+  refresh           Refresh protection proposals without submitting orders
+  list              Read current protection proposals
+  preview           Check a proposal without submitting it
+  prepare           Prepare a private proposal handoff; no submission
+  prepared-status   Read a preparation receipt using its private reference
+  prepare-bundle    Prepare a private bundle handoff; no submission
+  submit-bundle     Submit an approved bundle through the trading gates
+  bundle-status     Read a bundle receipt using its private reference
+  submit            Submit an approved proposal through the trading gates
+  reduce            Preview a reduction; --submit requests a gated order
+  request-stop      Draft a protective stop without placing it
+  ignore            Record that a proposal should be ignored
+  veto              Stop a pending pre-authorised submission; human only
+  queue             Prepare, arm, cancel or read an owner-approved order queue
+
+Run canary proposals <action> --help for syntax and flags.
+
+# canary proposals --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary proposals — Daemon-owned close/reduce-only protection proposals\x1b[0m
+
+Usage: \x1b[36mcanary proposals <action> [flags]\x1b[0m
+
+\x1b[1mActions\x1b[0m
+  \x1b[36mstatus            \x1b[0mRead proposal monitoring and trading status
+  \x1b[36mrefresh           \x1b[0mRefresh protection proposals without submitting orders
+  \x1b[36mlist              \x1b[0mRead current protection proposals
+  \x1b[36mpreview           \x1b[0mCheck a proposal without submitting it
+  \x1b[36mprepare           \x1b[0mPrepare a private proposal handoff; no submission
+  \x1b[36mprepared-status   \x1b[0mRead a preparation receipt using its private reference
+  \x1b[36mprepare-bundle    \x1b[0mPrepare a private bundle handoff; no submission
+  \x1b[36msubmit-bundle     \x1b[0mSubmit an approved bundle through the trading gates
+  \x1b[36mbundle-status     \x1b[0mRead a bundle receipt using its private reference
+  \x1b[36msubmit            \x1b[0mSubmit an approved proposal through the trading gates
+  \x1b[36mreduce            \x1b[0mPreview a reduction; --submit requests a gated order
+  \x1b[36mrequest-stop      \x1b[0mDraft a protective stop without placing it
+  \x1b[36mignore            \x1b[0mRecord that a proposal should be ignored
+  \x1b[36mveto              \x1b[0mStop a pending pre-authorised submission; human only
+  \x1b[36mqueue             \x1b[0mPrepare, arm, cancel or read an owner-approved order queue
+
+Run canary proposals <action> --help for syntax and flags.
+
