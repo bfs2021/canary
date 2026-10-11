@@ -1,6 +1,13 @@
 # Canary full context
 
-Updated: 2026-10-10 13:30 CEST
+Updated: 2026-10-11 09:10 CEST
+
+Version 3.21 adds owner-confirmed order queues and whole-position stock trailing
+protection in trading builds. It fixes large volume readings and keeps explicitly
+deactivated orders visible without counting them as active protection. A read-only
+CLI diagnostic reports supported TWS and Gateway API settings while the main
+connection keeps its tested protocol. Existing policies and broker settings stay
+unchanged. Standard binaries and MCP remain read-only.
 
 Version 3.20 adds exact or maximum stock sizing and read-only portfolio planning
 against explicit, expiring owner targets. Routine monitoring reuses verified

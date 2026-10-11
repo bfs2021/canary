@@ -2,12 +2,22 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## v3.21.0 — 2026-10-10 21:37 CEST
+## v3.21.0 — 2026-10-11 09:10 CEST
+
+### What's new
+
+Queue an exact stock or single-leg option order with an owner-approved price
+limit, or approve a stock trailing stop that follows the whole position without
+loosening its trail. TWS compatibility fixes preserve large volume readings,
+track deactivated orders and add read-only API settings diagnostics.
+
+Existing policies and broker settings are unchanged. New queues and protection
+mandates require owner confirmation; installation grants no new trading authority.
+Standard binaries and MCP remain read-only.
 
 ### Added
 
 - Read-only broker API settings diagnostics with `canary status --gateway-diagnostics`, including protocol capabilities, volume units and reconnect order retention. The main TWS connection keeps its tested protocol.
-
 - Owner-confirmed queues for exact stock and single-leg option purchases and sales, priced at the send-time midpoint within an approved maximum buy price or minimum sell price.
 - Explicit Adaptive priority on stock/option limit previews and stock Add previews, bound to the same exact-order confirmation.
 - Whole-position stock trailing-stop mandates that wait for broker acceptance and follow position increases and reductions without resetting or loosening the broker trail. Confirmed closure ends the mandate.
@@ -16,8 +26,8 @@ All notable changes to this project are documented here. The project adheres to 
 
 - Large market-data volumes retain their broker-reported decimal value instead of being divided by one million. Invalid and overflowing sizes are rejected. Fixes #56.
 - Explicitly deactivated orders remain visible and resumable, do not count as active protection, and block competing orders. Recovery regressions cover retained orders and lost acknowledgements without duplicate submissions.
-
 - Queued purchases check fresh shared capacity at execution; attempted and uncertain orders remain commitments, and ambiguous sends are reconciled before another attempt.
+- Gamma calculations retain valid model ticks arriving late within the existing collection window, even when open interest arrived first.
 
 ## v3.20.1 — 2026-10-10 17:46 CEST
 

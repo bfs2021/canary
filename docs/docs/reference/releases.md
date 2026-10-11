@@ -1,10 +1,25 @@
 # Releases and support
 
-Updated: 2026-10-06
+Updated: 2026-10-11
 
 Every release publishes two binaries per platform, under two different names. One is read-only. The other can send orders to your broker. That difference is compiled in rather than configured, so the filename you download decides it.
 
 [Updating](../start/updating.md) covers how to install a new version. This page covers what you are installing, how to check it is genuine, and how long it keeps getting fixes.
+
+## Moving to 3.21
+
+Existing TWS connections keep their tested protocol. The optional
+`canary status --gateway-diagnostics` probe reads supported API settings on a
+separate connection; unsupported settings remain unknown. No broker settings or
+existing policies change on upgrade.
+
+Order reads can now report `deactivated`. It is a nonterminal state that stays
+visible, blocks competing orders and does not count as active protection. Clients
+that exhaustively match lifecycle values should accept this new value.
+
+Trading builds add owner-confirmed order queues and whole-position stock trailing
+protection. Existing orders do not acquire a mandate on upgrade. Standard binaries
+and MCP remain read-only; diagnostics are exposed through the CLI.
 
 ## Moving to 3.18
 
