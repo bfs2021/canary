@@ -2801,6 +2801,15 @@ type OrderDraft struct {
 	OpenClose        string              `json:"open_close,omitempty"`
 	Source           string              `json:"source,omitempty"`
 	StrategyGroup    *StrategyOrderDraft `json:"strategy_group,omitempty"`
+	// OCAGroup and OCAType are the broker one-cancels-all membership the
+	// daemon gives the order when it sends it (never from a request): a
+	// protective stop's own group, or the group of Canary's own working stop
+	// a sale of the same contract joins so that the first fill reduces the
+	// other at the broker (internal-docs/design/protective-stop-guard.md).
+	// OCAType is IBKR's: 1 cancel with block, 2 reduce with block, 3 reduce
+	// without block. Empty and zero mean no group.
+	OCAGroup string `json:"oca_group,omitempty"`
+	OCAType  int    `json:"oca_type,omitempty"`
 	// Bond carries a BOND draft's conventions and grid; nil otherwise.
 	Bond *OrderBondTerms `json:"bond,omitempty"`
 	// FX carries a CASH draft's conversion terms and the live bid and ask
@@ -2959,11 +2968,15 @@ type OrderPlaceResult struct {
 	PreviewTokenID  string     `json:"preview_token_id"`
 	ReservedOrderID int        `json:"reserved_order_id"`
 	Draft           OrderDraft `json:"draft"`
-	Status          string     `json:"status,omitempty"`
-	LifecycleStatus string     `json:"lifecycle_status,omitempty"`
-	SendState       string     `json:"send_state,omitempty"`
-	Message         string     `json:"message,omitempty"`
-	AsOf            time.Time  `json:"as_of"`
+	// OCAGroup and OCAType are the broker one-cancels-all membership the
+	// order was sent with (see OrderDraft); Draft stays the reviewed draft.
+	OCAGroup        string    `json:"oca_group,omitempty"`
+	OCAType         int       `json:"oca_type,omitempty"`
+	Status          string    `json:"status,omitempty"`
+	LifecycleStatus string    `json:"lifecycle_status,omitempty"`
+	SendState       string    `json:"send_state,omitempty"`
+	Message         string    `json:"message,omitempty"`
+	AsOf            time.Time `json:"as_of"`
 }
 
 // OrderModifyResult reports the durable local and broker-send state of a gated
@@ -3098,16 +3111,21 @@ type OrderView struct {
 	LimitPrice       float64         `json:"limit_price,omitempty"`
 	Trail            *OrderTrailSpec `json:"trail,omitempty"`
 	OpenClose        string          `json:"open_close,omitempty"`
-	Status           string          `json:"status,omitempty"`
-	LifecycleStatus  string          `json:"lifecycle_status"`
-	Filled           float64         `json:"filled,omitempty"`
-	Remaining        float64         `json:"remaining,omitempty"`
-	AvgFillPrice     float64         `json:"avg_fill_price,omitempty"`
-	LastFillPrice    float64         `json:"last_fill_price,omitempty"`
-	WhyHeld          string          `json:"why_held,omitempty"`
-	MktCapPrice      float64         `json:"mkt_cap_price,omitempty"`
-	SendState        string          `json:"send_state,omitempty"`
-	LastEvent        string          `json:"last_event,omitempty"`
+	// OCAGroup and OCAType are the order's broker one-cancels-all membership
+	// as journaled when Canary sent it and as the broker reports it; see
+	// OrderDraft. Empty and zero mean none.
+	OCAGroup        string  `json:"oca_group,omitempty"`
+	OCAType         int     `json:"oca_type,omitempty"`
+	Status          string  `json:"status,omitempty"`
+	LifecycleStatus string  `json:"lifecycle_status"`
+	Filled          float64 `json:"filled,omitempty"`
+	Remaining       float64 `json:"remaining,omitempty"`
+	AvgFillPrice    float64 `json:"avg_fill_price,omitempty"`
+	LastFillPrice   float64 `json:"last_fill_price,omitempty"`
+	WhyHeld         string  `json:"why_held,omitempty"`
+	MktCapPrice     float64 `json:"mkt_cap_price,omitempty"`
+	SendState       string  `json:"send_state,omitempty"`
+	LastEvent       string  `json:"last_event,omitempty"`
 	// LastErrorCode is populated only when LastEvent is broker-error. It is
 	// typed audit evidence; LastMessage remains untrusted display text.
 	LastErrorCode       int    `json:"last_error_code,omitempty"`

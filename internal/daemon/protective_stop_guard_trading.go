@@ -68,6 +68,7 @@ func protectiveStopGuardShrinkParams(view rpc.OrderView, target int) rpc.OrderPr
 			ConID: view.ConID, Symbol: view.Symbol, SecType: strings.ToUpper(strings.TrimSpace(view.SecType)),
 			Exchange: view.Exchange, PrimaryExch: view.PrimaryExch, Currency: view.Currency,
 			LocalSymbol: view.LocalSymbol, TradingClass: view.TradingClass,
+			Expiry: view.Expiry, Strike: view.Strike, Right: view.Right, Multiplier: view.Multiplier,
 		},
 		Quantity:      target,
 		OrderType:     view.OrderType,

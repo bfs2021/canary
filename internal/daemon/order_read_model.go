@@ -1072,6 +1072,8 @@ func orderJournalEventFromView(view rpc.OrderView, eventType string, at time.Tim
 		LimitPrice:       view.LimitPrice,
 		Trail:            cloneTrailSpec(view.Trail),
 		OpenClose:        view.OpenClose,
+		OCAGroup:         view.OCAGroup,
+		OCAType:          view.OCAType,
 		Status:           view.Status,
 		Filled:           view.Filled,
 		Remaining:        view.Remaining,
@@ -1198,6 +1200,12 @@ func mergeOrderJournalEventIntoView(view *rpc.OrderView, ev orderJournalEvent) {
 	}
 	if ev.OpenClose != "" {
 		view.OpenClose = ev.OpenClose
+	}
+	// A one-cancels-all membership is set when the order is sent and never
+	// changed by a modify; an event that does not report it (a status or
+	// execution callback, a legacy openOrder) cannot clear it.
+	if ev.OCAGroup != "" {
+		view.OCAGroup, view.OCAType = ev.OCAGroup, ev.OCAType
 	}
 	if ev.Deactivated != nil {
 		view.Deactivated = cloneBoolPtr(ev.Deactivated)
@@ -1401,6 +1409,8 @@ func orderJournalEventFromLifecycle(ev ibkrlib.OrderLifecycleEvent, at time.Time
 		Quantity:         ev.TotalQuantity,
 		LimitPrice:       ev.LimitPrice,
 		Trail:            trailSpecFromLifecycle(ev),
+		OCAGroup:         ev.OcaGroup,
+		OCAType:          ev.OcaType,
 		Status:           ev.Status,
 		Filled:           ev.Filled,
 		Remaining:        ev.Remaining,
@@ -1716,7 +1726,7 @@ func orderViewModifyEligible(view rpc.OrderView) bool {
 		view.ReservedOrderID <= 0 ||
 		!orderViewBrokerConfirmedForWrite(view) ||
 		view.LifecycleStatus == rpc.OrderLifecyclePendingCancel ||
-		!strings.EqualFold(view.SecType, "STK") {
+		(!strings.EqualFold(view.SecType, "STK") && !strings.EqualFold(view.SecType, "OPT")) {
 		return false
 	}
 	switch strings.ToUpper(strings.TrimSpace(view.OrderType)) {

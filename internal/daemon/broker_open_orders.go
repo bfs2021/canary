@@ -78,6 +78,11 @@ type brokerWorkingOrder struct {
 	// Journal is the journal row for the order; nil when the journal does
 	// not track it (placed by hand in TWS or by another API client).
 	Journal *rpc.OrderView
+	// Unseen marks a row the snapshot did not show, built from Canary's own
+	// open journal row sent inside the snapshot's cache window
+	// (journalUnseenWorkingSales). It counts as a working sale and is never
+	// acted on.
+	Unseen bool
 }
 
 // Origin is the journaled request origin of the order, "" when the journal
@@ -181,6 +186,7 @@ func untrackedOrderView(order ibkrlib.OrderLifecycleEvent, scope brokerStateScop
 		Action: order.Action, OrderType: order.OrderType, TIF: order.TIF,
 		TriggerMethod: order.TriggerMethod, OutsideRTH: order.OutsideRth,
 		Quantity: order.TotalQuantity, LimitPrice: order.LimitPrice, Trail: trailSpecFromLifecycle(order),
+		OCAGroup: order.OcaGroup, OCAType: order.OcaType,
 		Status: order.Status, Filled: order.Filled, Remaining: order.Remaining,
 		LifecycleStatus: mapBrokerOrderLifecycleWithDeactivation(order.Status, order.Filled, order.Remaining, order.Deactivated),
 		UpdatedAt:       asOf, Open: true,

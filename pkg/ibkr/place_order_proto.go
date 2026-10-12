@@ -108,6 +108,8 @@ func encodePlaceOrderOrderProto(order *IBKROrder) ([]byte, error) {
 	if order.OutsideRth {
 		msg = protoAppendBool(msg, 19, true)
 	}
+	// IBKR Order.proto: ocaGroup=27, ocaType=30 (one-cancels-all).
+	msg = protoAppendString(msg, 27, order.OcaGroup)
 	msg = protoAppendString(msg, 28, order.OrderRef)
 	msg = protoAppendInt32(msg, 30, int32(order.OcaType))
 	msg = protoAppendInt32(msg, 31, int32(order.TriggerMethod))
@@ -146,6 +148,31 @@ func encodePlaceOrderOrderProto(order *IBKROrder) ([]byte, error) {
 	msg = protoAppendInt32(msg, 98, 0)
 	msg = protoAppendMessage(msg, 105, nil)
 	return msg, nil
+}
+
+// OCA types IBKR accepts (Order.ocaType): when a member fills, wholly or in
+// part, the group's remaining orders are cancelled with block, reduced with
+// block, or reduced without block. "With block" routes one member at a
+// time, so two members can never fill at once (overfill protection).
+const (
+	OcaTypeCancelWithBlock = 1
+	OcaTypeReduceWithBlock = 2
+	OcaTypeReduceNonBlock  = 3
+)
+
+// validatePlaceOrderOCA holds an order to a complete one-cancels-all
+// membership or none: a group names a type and a type names a group.
+func validatePlaceOrderOCA(order *IBKROrder) error {
+	group := strings.TrimSpace(order.OcaGroup)
+	switch {
+	case group == "" && order.OcaType == 0:
+		return nil
+	case group == "":
+		return fmt.Errorf("protobuf placeOrder ocaType %d needs an ocaGroup", order.OcaType)
+	case order.OcaType < OcaTypeCancelWithBlock || order.OcaType > OcaTypeReduceNonBlock:
+		return unsupportedPlaceOrderProtoValue("ocaType", strconv.Itoa(order.OcaType), "1, 2 or 3 with an ocaGroup")
+	}
+	return nil
 }
 
 func validatePlaceOrderProtoSupported(order *IBKROrder) error {
@@ -270,11 +297,13 @@ func validatePlaceOrderProtoSupported(order *IBKROrder) error {
 		}
 	}
 
+	if err := validatePlaceOrderOCA(order); err != nil {
+		return err
+	}
 	for _, field := range []struct {
 		name  string
 		value string
 	}{
-		{"ocaGroup", order.OcaGroup},
 		{"goodAfterTime", order.GoodAfterTime},
 		{"goodTillDate", order.GoodTillDate},
 		{"faGroup", order.FaGroup},
@@ -308,7 +337,6 @@ func validatePlaceOrderProtoSupported(order *IBKROrder) error {
 		{"permID", order.PermID},
 		{"parentID", order.ParentID},
 		{"displaySize", order.DisplaySize},
-		{"ocaType", order.OcaType},
 		{"shortSaleSlot", order.ShortSaleSlot},
 		{"minQty", order.MinQty},
 		{"auctionStrategy", order.AuctionStrategy},

@@ -108,6 +108,13 @@ func TestPreparedProposalSubmitsReviewedDraftOnce(t *testing.T) {
 	expected := previewIBKROrder(p.Preview.Draft)
 	actual := broker.orders[0]
 	expected.OrderID, expected.ClientID, expected.Account = actual.OrderID, actual.ClientID, actual.Account
+	// The stop is born in its own one-cancels-all group at send
+	// (protective_oca.go); the reviewed terms are otherwise exact.
+	if actual.OcaGroup != protectiveOCAGroupFor(p.Preview.Draft.OrderRef) || actual.OcaType != ibkrlib.OcaTypeReduceWithBlock ||
+		out.Place.OCAGroup != actual.OcaGroup || out.Place.OCAType != actual.OcaType {
+		t.Fatalf("stop OCA = %q/%d (result %q/%d), want its own group with type 2", actual.OcaGroup, actual.OcaType, out.Place.OCAGroup, out.Place.OCAType)
+	}
+	expected.OcaGroup, expected.OcaType = actual.OcaGroup, actual.OcaType
 	if !reflect.DeepEqual(*expected, actual) {
 		t.Fatal("broker payload differed from the reviewed draft")
 	}

@@ -385,6 +385,10 @@ type Server struct {
 	// protectiveStopGuardPositionsForTest replaces the guard's portfolio
 	// projection read in hermetic tests; production leaves it nil.
 	protectiveStopGuardPositionsForTest func(ctx context.Context, scope brokerStateScope) ([]*ibkrlib.RawPosition, bool)
+	// protectiveOCAConfirmWaitForTest shortens how long a sale waits for the
+	// broker to confirm the change to Canary's own stop; zero keeps
+	// protectiveOCAConfirmWait.
+	protectiveOCAConfirmWaitForTest time.Duration
 	// Test-only final-boundary seams. Production leaves these nil. They run
 	orderReconcileBeforeCommit     func()
 	orderReconcileBeforeLatchClear func()

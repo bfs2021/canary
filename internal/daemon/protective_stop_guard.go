@@ -16,10 +16,14 @@ import (
 // Protective stop guard (owner decision 2026-10-05 17:36 CEST; see
 // internal-docs/design/protective-stop-guard.md).
 //
-// On the proposal cadence the daemon keeps every working sell stop it placed
-// on a stock no larger than the current long position: a flat or short
-// position cancels the stop, a smaller long position shrinks it to the
-// position with every other term unchanged. It acts only on a current,
+// On the proposal cadence the daemon keeps every working sell stop or trail
+// it placed on a stock, ETF or option no larger than the part of the long
+// position no other Canary sale is committed to: a flat or short position
+// cancels the stop, a smaller long position shrinks it to the position with
+// every other term unchanged, and Canary's own working sale of the same
+// contract that is not in the stop's one-cancels-all group counts against
+// the position (protective_oca.go), while a linked sale does not, because
+// the broker reduces the stop itself. It acts only on a current,
 // complete portfolio projection and a complete current broker open-order
 // inventory for the connected account, and only after the same step was
 // planned on two consecutive passes at least protectiveStopGuardSettle apart,
@@ -58,6 +62,10 @@ type protectiveStopGuardStep struct {
 	View      rpc.OrderView // the journal row; zero for an order Canary did not place
 	Position  float64
 	Remaining float64
+	// Committed is the remaining quantity of Canary's own working sales of
+	// the contract that are not linked to the stop; the stop may sell at
+	// most Position − Committed.
+	Committed float64
 	// Target is the shrunk quantity; zero for a cancel or a report.
 	Target int
 	// Reason says, without account or order numbers, why the step exists.
@@ -92,14 +100,72 @@ type protectiveStopGuardState struct {
 	paused string
 }
 
-// protectiveStopGuardStockOrder reports whether a working broker order is a
-// sell stop on a stock or ETF.
-func protectiveStopGuardStockOrder(order ibkrlib.OrderLifecycleEvent) bool {
+// protectiveStopGuardOrder reports whether a working broker order is a sell
+// stop or trail on a stock, ETF or option.
+func protectiveStopGuardOrder(order ibkrlib.OrderLifecycleEvent) bool {
 	secType := strings.TrimSpace(order.SecType)
-	if secType != "" && !isStockLikeRiskSecType(secType) {
+	if secType != "" && !isStockLikeRiskSecType(secType) && !strings.EqualFold(secType, "OPT") {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(order.Action), rpc.OrderActionSell) && isProtectiveStopOrderType(order.OrderType)
+}
+
+// protectiveStopGuardContract is the exact contract a working row protects,
+// for the position lookup: the broker row's identity, completed from the
+// journal row.
+func protectiveStopGuardContract(row brokerWorkingOrder) rpc.ContractParams {
+	order := row.Order
+	contract := rpc.ContractParams{ConID: order.ConID, Symbol: order.Symbol, SecType: strings.ToUpper(strings.TrimSpace(order.SecType)), Currency: order.Currency,
+		Expiry: order.Expiry, Strike: order.Strike, Right: order.Right, Multiplier: order.Multiplier}
+	if row.Journal != nil {
+		contract.ConID = cmp.Or(contract.ConID, row.Journal.ConID)
+		contract.Symbol = cmp.Or(contract.Symbol, row.Journal.Symbol)
+		contract.SecType = cmp.Or(contract.SecType, strings.ToUpper(strings.TrimSpace(row.Journal.SecType)))
+		contract.Currency = cmp.Or(contract.Currency, row.Journal.Currency)
+	}
+	if !strings.EqualFold(contract.SecType, "OPT") {
+		contract.SecType = "STK"
+	}
+	return contract
+}
+
+// protectiveStopGuardGroup is a working row's one-cancels-all group: the
+// broker's echo, else what the journal sent.
+func protectiveStopGuardGroup(row brokerWorkingOrder) string {
+	if group := strings.TrimSpace(row.Order.OcaGroup); group != "" {
+		return group
+	}
+	if row.Journal != nil {
+		return strings.TrimSpace(row.Journal.OCAGroup)
+	}
+	return ""
+}
+
+// protectiveStopGuardCommitted is the remaining quantity of Canary's own
+// working sales of the stop's contract that are not stops themselves and
+// not in the stop's one-cancels-all group: the part of the position the
+// stop must not sell again. A linked sale is left to the broker, which
+// reduces the stop by its fill; a hand sale in TWS is the owner's and does
+// not count.
+func protectiveStopGuardCommitted(working []brokerWorkingOrder, stop brokerWorkingOrder, contract rpc.ContractParams, scope brokerStateScope) float64 {
+	group := protectiveStopGuardGroup(stop)
+	total := 0.0
+	for _, row := range working {
+		if row.Journal == nil || !protectiveStopGuardCanaryPlaced(row.Journal, scope) ||
+			(stop.Journal != nil && row.Journal.OrderRef == stop.Journal.OrderRef && row.Journal.ReservedOrderID == stop.Journal.ReservedOrderID) {
+			continue
+		}
+		order := row.Order
+		if !strings.EqualFold(strings.TrimSpace(order.Action), rpc.OrderActionSell) || isProtectiveStopOrderType(order.OrderType) ||
+			!brokerOrderIdentity(order).sameContract(contract) {
+			continue
+		}
+		if linked := protectiveStopGuardGroup(row); linked != "" && linked == group {
+			continue
+		}
+		total += brokerOrderRemaining(order)
+	}
+	return total
 }
 
 // protectiveStopGuardCanaryPlaced reports whether the journal row is an
@@ -119,19 +185,14 @@ func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.
 	var steps []protectiveStopGuardStep
 	for _, row := range working {
 		order := row.Order
-		if !protectiveStopGuardStockOrder(order) {
+		if row.Unseen || !protectiveStopGuardOrder(order) {
 			continue
 		}
 		remaining := brokerOrderRemaining(order)
 		if remaining <= 0 {
 			continue
 		}
-		contract := rpc.ContractParams{ConID: order.ConID, Symbol: order.Symbol, SecType: "STK", Currency: order.Currency}
-		if row.Journal != nil {
-			contract.ConID = cmp.Or(contract.ConID, row.Journal.ConID)
-			contract.Symbol = cmp.Or(contract.Symbol, row.Journal.Symbol)
-			contract.Currency = cmp.Or(contract.Currency, row.Journal.Currency)
-		}
+		contract := protectiveStopGuardContract(row)
 		step := protectiveStopGuardStep{Order: order, Remaining: remaining}
 		if row.Journal != nil {
 			step.View = *row.Journal
@@ -142,20 +203,30 @@ func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.
 			continue
 		}
 		step.Position = position
+		step.Committed = protectiveStopGuardCommitted(working, row, contract, scope)
+		headroom := position - step.Committed
+		units := positionUnits(contract.SecType)
+		held := fmt.Sprintf("%.4g %s are held", position, units)
+		if step.Committed > 0 {
+			held = fmt.Sprintf("%.4g %s are held and Canary's own sale of %.4g is working beside it", position, units, step.Committed)
+		}
 		follows := len(mandates) > 0 && mandates[0][step.View.OrderRef]
-		if position+1e-9 >= remaining && (!follows || math.Abs(position-remaining) < 1e-9) {
+		if headroom+1e-9 >= remaining && (!follows || math.Abs(headroom-remaining) < 1e-9) {
 			continue
 		}
 		switch {
 		case !protectiveStopGuardCanaryPlaced(row.Journal, scope):
 			step.Kind = protectiveStopGuardReport
-			step.Reason = fmt.Sprintf("a sell stop Canary did not place would sell %.4g shares while %.4g are held; it is yours to change", remaining, position)
-		case math.Floor(position+1e-9) < 1:
+			step.Reason = fmt.Sprintf("a sell stop Canary did not place would sell %.4g %s while %s; it is yours to change", remaining, units, held)
+		case math.Floor(headroom+1e-9) < 1:
 			step.Kind = protectiveStopGuardCancel
-			step.Reason = fmt.Sprintf("the position is %.4g shares, so the stop for %.4g would open a short; cancelling it", position, remaining)
-		case follows:
+			step.Reason = fmt.Sprintf("%s, so the stop for %.4g would sell what is not there; cancelling it", held, remaining)
+		case follows && (step.Committed == 0 || position+1e-9 < remaining):
 			// A current broker ratchet is mandatory, even for a shrink. Never
-			// reseed from a new quote or silently weaken a reached stop.
+			// reseed from a new quote or silently weaken a reached stop. With
+			// a committed sale beside a stop larger than the position, the
+			// stop first follows the position; the next pass takes the sale
+			// off it.
 			if !isTrailOrderType(step.View.OrderType) || step.View.Trail == nil || !positiveFinite(order.TrailStopPrice) || order.TrailStopPrice < step.View.Trail.InitialStopPrice ||
 				math.Trunc(position) != position || math.Trunc(step.View.Filled) != step.View.Filled {
 				continue
@@ -169,11 +240,17 @@ func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.
 			step.View.Trail = cloneTrailSpec(step.View.Trail)
 			step.View.Trail.InitialStopPrice = order.TrailStopPrice
 			step.Kind, step.Target = protectiveStopGuardResize, int(position)
-			step.Reason = fmt.Sprintf("full-position protection follows %.4g shares without changing its trail", position)
+			step.Reason = fmt.Sprintf("full-position protection follows %.4g %s without changing its trail", position, units)
 		default:
 			step.Kind = protectiveStopGuardShrink
-			step.Target = int(math.Floor(position + 1e-9))
-			step.Reason = fmt.Sprintf("the position is %.4g shares, so the stop for %.4g is shrunk to %d", position, remaining, step.Target)
+			step.Target = int(math.Floor(headroom + 1e-9))
+			if follows && isTrailOrderType(step.View.OrderType) && step.View.Trail != nil && positiveFinite(order.TrailStopPrice) && order.TrailStopPrice >= step.View.Trail.InitialStopPrice {
+				// A mandated stop keeps the broker's current ratchet through
+				// the shrink.
+				step.View.Trail = cloneTrailSpec(step.View.Trail)
+				step.View.Trail.InitialStopPrice = order.TrailStopPrice
+			}
+			step.Reason = fmt.Sprintf("%s, so the stop for %.4g is shrunk to %d", held, remaining, step.Target)
 		}
 		steps = append(steps, step)
 	}
@@ -290,7 +367,9 @@ func (s *Server) planProtectiveStopGuardPass(ctx context.Context, scope brokerSt
 	if err != nil {
 		return nil, "the order journal is unavailable"
 	}
-	return planProtectiveStopGuard(brokerWorkingOrders(snapshot, views, scope), positions, scope, s.fullPositionStopMandates(scope, views)), ""
+	working := brokerWorkingOrders(snapshot, views, scope)
+	working = append(working, journalUnseenWorkingSales(snapshot, views, scope, working)...)
+	return planProtectiveStopGuard(working, positions, scope, s.fullPositionStopMandates(scope, views)), ""
 }
 
 // applyProtectiveStopGuardStep reports, or acts on, one settled step.

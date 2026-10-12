@@ -72,6 +72,8 @@ type OrderLifecycleEvent struct {
 	ExecID           string
 	ExecTime         string
 	Account          string
+	OcaGroup         string // OcaGroup is the order's one-cancels-all group as the broker reports it; empty means none or not reported.
+	OcaType          int    // OcaType is that group's type (1 cancel with block, 2 reduce with block, 3 reduce without block); zero means none or not reported.
 	ExecutionSide    string
 	Shares           float64 // Shares is this execution's quantity in shares or contracts.
 	Price            float64 // Price is this execution's price in quote-currency units.
@@ -277,6 +279,8 @@ func parseOpenOrderProtoEvent(fields []string) (OrderLifecycleEvent, bool) {
 		WhatIf:           protoSummaryBool(fields, "whatIf="),
 		Account:          strings.TrimSpace(summaryFieldValue(fields, "account=")),
 		OrderRef:         strings.TrimSpace(summaryFieldValue(fields, "orderRef=")),
+		OcaGroup:         strings.TrimSpace(summaryFieldValue(fields, "ocaGroup=")),
+		OcaType:          orderEventInt(summaryFieldValue(fields, "ocaType=")),
 		Status:           strings.TrimSpace(summaryFieldValue(fields, "status=")),
 		Message:          orderEventWarningMessage(fields),
 		Raw:              append([]string{}, fields...),

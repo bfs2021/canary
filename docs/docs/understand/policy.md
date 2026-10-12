@@ -352,10 +352,12 @@ it (owner decision 2026-10-12 19:55 CEST). Selling more than you hold, or
 selling with no position, still needs `allow_stock_short` or
 `allow_option_sell_to_open`; a stale or incomplete position read refuses the
 order until the next refresh. The order cap and the option contract cap still
-apply as above. If another sale of the same line is working at the same time,
-both can fill: a stop Canary placed on a stock is shrunk or cancelled by the
-protective stop guard once the position has changed, a stop or a hand order
-Canary did not place is yours to cancel.
+apply as above. A sale beside a stop Canary placed on the same line joins the
+stop's broker one-cancels-all group, or shrinks the stop first and is refused
+when that fails, so the two never sell the line twice
+([Protection](../operate/protection.md#protective-stop-exemption-and-guard));
+a stop or a hand order Canary did not place can still fill beside the sale and
+is yours to cancel.
 
 The bond maturity limit (owner decision 2026-10-06 20:17 CEST) counts whole
 years from today's UTC date: with 30 written, a buy on 2026-10-06 may mature on

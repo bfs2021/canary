@@ -59,8 +59,9 @@ func validateModifyDraft(view rpc.OrderView, draft rpc.OrderDraft) error {
 	if !orderAlgorithmMatches(draft.AdaptivePriority, view.AdaptivePriority, view.AlgoStrategy, view.AlgoKnown) {
 		return errBadRequest("order modify cannot change or discard the broker algorithm")
 	}
-	if strings.ToUpper(strings.TrimSpace(view.SecType)) != "STK" || strings.ToUpper(strings.TrimSpace(draft.Contract.SecType)) != "STK" {
-		return errBadRequest("order modify supports STK contracts only")
+	viewSecType := strings.ToUpper(strings.TrimSpace(view.SecType))
+	if (viewSecType != "STK" && viewSecType != "OPT") || strings.ToUpper(strings.TrimSpace(draft.Contract.SecType)) != viewSecType {
+		return errBadRequest("order modify supports STK and OPT contracts only, and cannot change the security type")
 	}
 	if !strings.EqualFold(view.Symbol, draft.Contract.Symbol) {
 		return errBadRequest("order modify cannot change symbol")
@@ -208,6 +209,11 @@ func modifyContractForView(view rpc.OrderView, contract rpc.ContractParams) rpc.
 	contract.Currency = view.Currency
 	contract.LocalSymbol = view.LocalSymbol
 	contract.TradingClass = view.TradingClass
+	// An option's identity is the open order's; a modify cannot name another.
+	contract.Expiry = view.Expiry
+	contract.Strike = view.Strike
+	contract.Right = view.Right
+	contract.Multiplier = view.Multiplier
 	return contract
 }
 

@@ -518,9 +518,12 @@ was refused or had to be split, and a tighter cap made that worse. Implemented
     competing-sell condition (protective-stop-guard.md). Bills and bonds keep
     the cap under this rule (no equity delta) unless the sweep bill exemption
     covers them. The accepted residual risk is the double sell the owner
-    named: a sale beside another working sell of the same line can together
-    sell more than is held; the stop guard's timing for Canary's own stock
-    stops is in protective-stop-guard.md.
+    named: a sale beside a hand order in TWS can together sell more than is
+    held. Beside Canary's own stop it cannot: the sale joins the stop's
+    one-cancels-all group at the broker, or the stop is shrunk first and the
+    sale refused if that fails (protective-stop-guard.md,
+    "One-cancels-all beside Canary's own stop"); the stop guard remains the
+    second line.
 
 ## Safety invariants
 

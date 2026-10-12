@@ -47,6 +47,8 @@ type inboundOrderProtoSummary struct {
 	triggerMethod        int
 	account              string
 	orderRef             string
+	ocaGroup             string
+	ocaType              int
 	outsideRth           bool
 	whatIf               bool
 	transmit             bool
@@ -217,6 +219,8 @@ func appendOrderSummaryFields(fields []string, summary inboundOrderProtoSummary)
 		"triggerMethod="+strconv.Itoa(summary.triggerMethod),
 		"account="+summary.account,
 		"orderRef="+summary.orderRef,
+		"ocaGroup="+summary.ocaGroup,
+		"ocaType="+strconv.Itoa(summary.ocaType),
 		"outsideRth="+strconv.FormatBool(summary.outsideRth),
 		"whatIf="+strconv.FormatBool(summary.whatIf),
 		"transmit="+strconv.FormatBool(summary.transmit),
@@ -462,8 +466,16 @@ func parseInboundOrderProto(body []byte, summary *inboundOrderProtoSummary) erro
 				return err
 			}
 			summary.trailStopPrice = math.Float64frombits(v)
+		case 27:
+			summary.ocaGroup = string(value)
 		case 28:
 			summary.orderRef = string(value)
+		case 30:
+			v, err := protoVarintValue(fieldNumber, wireType, value)
+			if err != nil {
+				return err
+			}
+			summary.ocaType = int(v)
 		case 31:
 			v, err := protoVarintValue(fieldNumber, wireType, value)
 			if err != nil {

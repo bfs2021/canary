@@ -327,6 +327,11 @@ func copyOrderJournalIdentityFromView(ev *orderJournalEvent, view rpc.OrderView)
 	if ev.ConID == 0 {
 		ev.ConID = view.ConID
 	}
+	if ev.OCAGroup == "" {
+		// Membership is identity Canary set at send time; a callback that
+		// does not report it (status, execution, a legacy openOrder) keeps it.
+		ev.OCAGroup, ev.OCAType = view.OCAGroup, view.OCAType
+	}
 	if ev.Symbol == "" {
 		ev.Symbol = view.Symbol
 	}

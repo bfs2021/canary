@@ -67,6 +67,15 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 	if err := s.bindPreviewOrderRiskAuthority(ctx, &binding, status, payload, payload.Draft); err != nil {
 		return nil, err
 	}
+	// A sale beside Canary's own stop on the contract is linked to it, or
+	// the stop is shrunk first (protective_oca.go); the membership is
+	// stamped on the order sent and journaled, never on the signed draft.
+	link, err := s.protectiveOCABeforePlace(ctx, status, binding.riskPosition.Before, payload.Draft)
+	if err != nil {
+		return nil, err
+	}
+	draft := payload.Draft
+	draft.OCAGroup, draft.OCAType = link.Group, link.Type
 	reservedOrderID, err := s.reserveBoundBrokerOrderID(ctx, binding)
 	if err != nil {
 		return nil, err
@@ -77,8 +86,8 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 		return nil, fmt.Errorf("prepare broker place attempt: %w", err)
 	}
 	confirm := previewTokenConfirmedEvent(payload, reservedOrderID, now, fmt.Sprintf("preview token confirmed for %s broker transmit", auth.Route))
-	confirm.AddWarningsAccepted = p.AcceptAddWarnings && payload.Draft.Add != nil && len(payload.Draft.Add.Plan.Warnings) > 0
-	attempt := orderJournalEventForDraft(payload.Draft, orderJournalEventSendAttempted, status, payload.TokenID, reservedOrderID, now)
+	confirm.AddWarningsAccepted = p.AcceptAddWarnings && draft.Add != nil && len(draft.Add.Plan.Warnings) > 0
+	attempt := orderJournalEventForDraft(draft, orderJournalEventSendAttempted, status, payload.TokenID, reservedOrderID, now)
 	attachOrderFeeBound(&attempt, payload.WhatIf)
 	attempt.AttemptID = attemptID
 	attempt.ActionKind = corestore.ActionPlace
@@ -91,20 +100,20 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 	if err := s.orderJournal.StagePreTransmit(payload.TokenID, payload.AuthorityEpoch, payload.SignerGeneration, reservedOrderID, corestore.ActionPlace, coreOrderOrigin(p.Origin), []orderJournalEvent{confirm, attempt}); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrTradingDisabled, err)
 	}
-	s.rememberStrategyLineage(payload.Draft.StrategyGroup)
+	s.rememberStrategyLineage(draft.StrategyGroup)
 
-	contract := previewIBKRStrategyContract(payload.Draft)
-	order := previewIBKROrder(payload.Draft)
+	contract := previewIBKRStrategyContract(draft)
+	order := previewIBKROrder(draft)
 	order.OrderID = reservedOrderID
 	order.ClientID = status.ClientID
 	order.Account = status.Account
 	if err := s.submitBoundConfiguredOrder(ctx, binding, status, contract, order); err != nil {
-		if journalErr := s.appendOrderSendError(payload.Draft, status, payload.TokenID, reservedOrderID, attemptID, corestore.ActionPlace, err); journalErr != nil {
+		if journalErr := s.appendOrderSendError(draft, status, payload.TokenID, reservedOrderID, attemptID, corestore.ActionPlace, err); journalErr != nil {
 			err = errors.Join(err, journalErr)
 		}
 		return nil, fmt.Errorf("%s order transmit: %w", auth.Route, err)
 	}
-	if err := s.appendOrderSendCompleted(payload.Draft, status, payload.TokenID, reservedOrderID, attemptID, corestore.ActionPlace); err != nil {
+	if err := s.appendOrderSendCompleted(draft, status, payload.TokenID, reservedOrderID, attemptID, corestore.ActionPlace); err != nil {
 		return nil, fmt.Errorf("%s order transmit outcome: %w", auth.Route, ibkrlib.WithSendDisposition(err, ibkrlib.SendDispositionMayHaveWritten))
 	}
 
@@ -114,10 +123,12 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 		Account:         status.Account,
 		Endpoint:        status.Endpoint,
 		ClientID:        status.ClientID,
-		OrderRef:        payload.Draft.OrderRef,
+		OrderRef:        draft.OrderRef,
 		PreviewTokenID:  payload.TokenID,
 		ReservedOrderID: reservedOrderID,
 		Draft:           payload.Draft,
+		OCAGroup:        link.Group,
+		OCAType:         link.Type,
 		LifecycleStatus: rpc.OrderLifecyclePendingSubmit,
 		SendState:       orderSendStateSendAttempted,
 		Message:         fmt.Sprintf("%s broker placeOrder transmit attempted; waiting for broker lifecycle callback", auth.Route),
@@ -164,6 +175,8 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	modifiedDraft.OrderRef = view.OrderRef
 	modifiedDraft.Contract = modifyContractForView(view, modifiedDraft.Contract)
 	modifiedDraft.OutsideRTH = view.OutsideRTH
+	// A modify never changes the order's one-cancels-all membership.
+	modifiedDraft.OCAGroup, modifiedDraft.OCAType = view.OCAGroup, view.OCAType
 	if bindingErr != nil {
 		return nil, bindingErr
 	}
@@ -590,6 +603,8 @@ func orderJournalEventForDraft(draft rpc.OrderDraft, eventType string, status rp
 		LimitPrice:       draft.LimitPrice,
 		Trail:            cloneTrailSpec(draft.Trail),
 		OpenClose:        draft.OpenClose,
+		OCAGroup:         draft.OCAGroup,
+		OCAType:          draft.OCAType,
 		StrategyGroup:    draft.StrategyGroup,
 		Bond:             rpc.CloneOrderBondTerms(draft.Bond),
 		Add:              rpc.CloneAddReview(draft.Add),
@@ -663,5 +678,7 @@ func orderDraftFromView(view rpc.OrderView) rpc.OrderDraft {
 		OutsideRTH:    view.OutsideRTH,
 		OrderRef:      view.OrderRef,
 		OpenClose:     view.OpenClose,
+		OCAGroup:      view.OCAGroup,
+		OCAType:       view.OCAType,
 	}
 }

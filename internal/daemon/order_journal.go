@@ -100,6 +100,8 @@ type orderJournalEvent struct {
 	LimitPrice          float64                  `json:"limit_price,omitempty"`
 	Trail               *rpc.OrderTrailSpec      `json:"trail,omitempty"`
 	OpenClose           string                   `json:"open_close,omitempty"`
+	OCAGroup            string                   `json:"oca_group,omitempty"`
+	OCAType             int                      `json:"oca_type,omitempty"`
 	Status              string                   `json:"status,omitempty"`
 	Filled              float64                  `json:"filled,omitempty"`
 	Remaining           float64                  `json:"remaining,omitempty"`

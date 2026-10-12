@@ -4909,6 +4909,12 @@ type RawOrder struct {
 	OrderRef         string // Our internal order ID
 	OutsideRth       bool   // Allow execution outside regular trading hours
 	OpenClose        string // O=open, C=close
+	// OcaGroup and OcaType place the order in an IBKR one-cancels-all
+	// group (Order.proto ocaGroup=27, ocaType=30). OcaType is 1 (cancel the
+	// others with block), 2 (reduce the others with block) or 3 (reduce
+	// without block); a group needs a type and a type needs a group.
+	OcaGroup string
+	OcaType  int
 }
 
 // SubmitOrder sends an unrestricted order through the active broker
@@ -5024,6 +5030,8 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 		TriggerMethod:    order.TriggerMethod,
 		OrderRef:         order.OrderRef,
 		OutsideRth:       order.OutsideRth,
+		OcaGroup:         strings.TrimSpace(order.OcaGroup),
+		OcaType:          order.OcaType,
 		Account:          order.Account,
 		Transmit:         true,
 		OpenClose:        strings.ToUpper(strings.TrimSpace(order.OpenClose)),

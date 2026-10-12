@@ -890,6 +890,8 @@ func previewIBKROrder(draft rpc.OrderDraft) *ibkrlib.RawOrder {
 		OrderRef:         draft.OrderRef,
 		OutsideRth:       draft.OutsideRTH,
 		OpenClose:        strings.ToUpper(strings.TrimSpace(draft.OpenClose)),
+		OcaGroup:         draft.OCAGroup,
+		OcaType:          draft.OCAType,
 	}
 	if draft.Trail != nil {
 		order.TrailStopPrice = draft.Trail.InitialStopPrice

@@ -393,9 +393,9 @@ the exact quantity a reduce-modify has to target, and it appears with
 `canary positions` as `reconcile_required` under protection coverage, where a
 stale protective order is deliberately not counted as protection.
 
-For a sell stop Canary placed on a stock or ETF, the protective stop guard
-makes that fix itself (next section). An order placed by hand in TWS is yours:
-Canary reports it and leaves it alone.
+For a sell stop or trail Canary placed on a stock, ETF or option, the
+protective stop guard makes that fix itself (next section). An order placed by
+hand in TWS is yours: Canary reports it and leaves it alone.
 
 ## Protective stop exemption and guard
 
@@ -431,18 +431,37 @@ broker) when the open orders cannot be read, or
 
 A resting GTC stop outlives a later hand sale, so the exemption comes with a
 guard. On the proposal cadence (30 seconds by default) the daemon compares each
-working sell stop it placed on a stock with the current position: at zero or
-short it cancels the stop; below the stop's remaining quantity it shrinks the
-stop to the whole-share position, keeping the trail amount or percent, the
-current stop price, the limit offset, trigger method, time in force and
-outside-hours flag. It acts only on a current, complete portfolio download for
-the connected account and a complete open-order list, and only when the same
-correction is planned on two passes at least 20 seconds apart, so a partial
-download or an out-of-order fill never moves an order. Each change goes through
-the ordinary modify or cancel path with the origin `daemon-protective-guard`,
-is journaled on the order, and is written to the decision log
-(`protective_stop_guard.shrink` or `.cancel`). The order's
-`position_mismatch` notice stays open until the change lands.
+working sell stop or trail it placed on a stock, ETF or option with the current
+position, less any sale of Canary's own that is working beside it without being
+linked to it (next paragraph): at zero or short it cancels the stop; below the
+stop's remaining quantity it shrinks the stop to the whole-unit position,
+keeping the trail amount or percent, the current stop price, the limit offset,
+trigger method, time in force and outside-hours flag. It acts only on a
+current, complete portfolio download for the connected account and a complete
+open-order list, and only when the same correction is planned on two passes at
+least 20 seconds apart, so a partial download or an out-of-order fill never
+moves an order. Each change goes through the ordinary modify or cancel path
+with the origin `daemon-protective-guard`, is journaled on the order, and is
+written to the decision log (`protective_stop_guard.shrink` or `.cancel`). The
+order's `position_mismatch` notice stays open until the change lands.
+
+Two orders Canary placed never sell the same shares twice. Every stop or trail
+Canary places is born in its own broker one-cancels-all group, named after its
+order reference (`oca_group` in `canary orders open --json`). When you sell
+the line through Canary while that stop works and the two together would sell
+more than you hold, the sale joins the stop's group: the broker reduces the
+other order by whatever fills first, a partial fill included, and routes one
+of them at a time, so the stop cannot sell what the sale already sold, nor the
+other way round, without waiting for the guard (decision log
+`protective_oca.link`). A stop from before this release has no group, and a
+working order cannot be moved into one, so Canary first shrinks that stop to
+what the sale leaves, or cancels it when nothing is left, waits for the
+broker's answer, and only then sends the sale (`protective_oca.shrink`,
+`.cancel`). If that change is refused, unconfirmed within a few seconds, or
+its send is uncertain, the sale is refused with the reason and the stop stays
+as it is (`protective_oca.refuse`); a sale is never sent unlinked beside
+Canary's own stop. A stop you placed by hand in TWS is never linked or
+changed: the sale goes out as it is, and the guard reports the hand stop.
 
 Every write gate still decides. With trading disabled, the broker link down or
 daemon storage unhealthy the guard does nothing and logs the blocker once.
@@ -452,7 +471,8 @@ cancelling.
 
 The residual gap: while the daemon is down, a hand sale is not followed, so a
 stop can stay larger than the position until Canary is back and the guard has
-run.
+run; and a hand sale beside Canary's stop, or beside a Canary sale, can still
+sell the line twice until the guard's next passes.
 
 ## Pre-authorised buckets
 

@@ -1,6 +1,6 @@
 # Protective stop exemption and guard
 
-Updated: 2026-10-12 20:40 CEST
+Updated: 2026-10-12 20:53 CEST
 Status: implemented
 
 Contract per `.agents/docs/daemon-cli-trading-contract.md` and
@@ -41,6 +41,13 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   and keeps its competing-sell condition, so the inventory is still read for
   a stop and for a delta-reducing exit, and the readiness blockers below
   still describe that exemption.
+- **Amendment (2026-10-12 20:53 CEST, residual-risk fix):** the double-sell
+  window the 19:55 admission left open beside Canary's own stop is closed
+  with one-cancels-all at the broker ("One-cancels-all beside Canary's own
+  stop" below). The owner's boundary stands: a hand order placed in TWS is
+  the owner's problem; two orders Canary itself placed or admitted must
+  never double-sell. The guard stays as the second line and now covers
+  Canary-placed option trails too.
 - **Amendment (2026-10-10 07:28 CEST, superseded 2026-10-12):** the short
   re-read excuse covered a sale of a held long of any order type under the
   same inventory guard (owner: "Admit them"; `heldStockExitAdmitted`).
@@ -88,16 +95,76 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   `protective_exit_exceeds_position`. With `allow_stock_short = true` the row
   carries none; the notional cap then decides at preview from exact-session
   FX evidence the row does not have.
+- **One-cancels-all beside Canary's own stop (`protective_oca.go`,
+  `protective_oca_trading.go`; 2026-10-12 20:53 CEST).** Every `SELL` stop
+  or trail Canary places (a stock, ETF or option; the Rulebook's
+  `trailing_stop` bucket and `option-profit-lock-v1` trails included) is
+  sent in its own IBKR one-cancels-all group, `canary-oca-<order ref>`,
+  type 2. The IB API evidence: `Order.proto` `ocaGroup = 27` (string) and
+  `ocaType = 30` (int32); the API's `Order.OCAType` is "1 =
+  CANCEL_WITH_BLOCK, 2 = REDUCE_WITH_BLOCK, 3 = REDUCE_NON_BLOCK", a group
+  is joined by naming it, and OCA covers STK, OPT, BOND, CASH, FUT, FOP and
+  WAR (github.com/ajef/ibapi, `proto/Order.proto`, `order.go`,
+  `order_sample.go` `OneCancelsAll`). With type 2 the broker reduces the
+  group's other members when one fills, in whole or in part, and routes one
+  member at a time ("block"), so two members never fill at once. IB's word
+  for the reduction is "proportionately"; Canary relies on no reading of it
+  beyond this: no member can sell what another member sold. The membership
+  is decided at admission (`placeOrder`, after `bindPreviewOrderRiskAuthority`,
+  under `brokerWriteMu`), stamped on the wire order and journaled
+  (`oca_group`, `oca_type` on the event and the view) and reported beside
+  the reviewed draft on the place result (`OrderPlaceResult.oca_group`,
+  `.oca_type`; `draft` stays the reviewed draft, so a prepared proposal
+  still submits exactly what was reviewed), never on the signed draft; a
+  modify re-sends the view's membership unchanged; the broker's
+  openOrder echo (proto field 27/30, `OrderLifecycleEvent.OcaGroup`) is the
+  authoritative report of it. `planProtectiveOCA` reads Canary's own open
+  sell stops on the exact contract from the journal, with the broker's
+  remaining quantity and group echo where the complete inventory shows them
+  (`canaryWorkingSellStops`; a row the complete inventory no longer shows is
+  gone unless it moved inside the snapshot's cache window; an unavailable
+  inventory leaves the journal rows standing without an echo): no stop, or
+  the stops and this sale together within the confirmed position → the sale
+  is plain (a stop still gets its own group); exactly one stop whose echoed
+  group has type 2 → the sale joins it by name, and nothing is modified;
+  otherwise → the stops are cut, in order of reference, to what the sale
+  leaves of the position, cancelled when nothing is left, through the
+  guard's grant, origin and write path (`protectiveOCAStep`), each change
+  awaited in the journal for `protectiveOCAConfirmWait` (3 s; a cancelled or
+  gone stop, or an acknowledged quantity at or below the target, confirms),
+  and only then is the sale sent, plain. The fallback exists because a
+  working order's OCA group cannot be changed: the API offers no operation
+  for it other than a full modify re-send whose acceptance of a changed group
+  is undocumented, and Canary sends no broker request it cannot verify. A
+  change the gates refuse, a send with disposition may-have-written, a stop
+  that filled meanwhile or no answer in time refuses the sale with the reason
+  (`ErrTradingDisabled`) and leaves the stop as the broker last reported it;
+  an unlinked sale is never sent beside Canary's own stop. A stop Canary did
+  not place is never linked or changed: the sale goes out as it is and the
+  guard reports the hand stop. Decision log: `protective_oca.link` (sent),
+  `.shrink` and `.cancel` (sent or failed, on the stop's reference),
+  `.refuse` (refused, on the sale's). Daemon log: one line per link, change
+  or refusal.
 - **Guard (`protective_stop_guard.go`).** After each proposal refresh and the
   pre-authorised and queued cycles (the proposal cadence, 30 s by default) the
-  daemon plans, for each working broker order that is a stock `SELL` stop and
-  that the journal tracks as Canary-placed (reserved order ID, order
-  reference, preview token, same account and mode): position `<= 0` (or under
-  one whole share) → cancel; `0 < position < remaining` → shrink to
-  `floor(position)` through a replacement preview and the ordinary modify
-  path, keeping trail amount or percent, current stop price, limit offset,
-  trigger method, TIF and outside-RTH. A stop Canary did not place is
-  reported (daemon log and decision log, once per reason), never touched.
+  daemon plans, for each working broker order that is a stock, ETF or option
+  `SELL` stop or trail and that the journal tracks as Canary-placed (reserved
+  order ID, order reference, preview token, same account and mode), against
+  the headroom `position − committed`, where committed is the remaining
+  quantity of Canary's own working sales of the contract that are not stops
+  and not in the stop's one-cancels-all group (a linked sale is left to the
+  broker; a hand sale in TWS is the owner's; a Canary sale sent inside the
+  inventory's cache window and not yet shown counts from the journal):
+  headroom `<= 0` (or under one whole unit) → cancel; `0 < headroom <
+  remaining` → shrink to `floor(headroom)` through a replacement preview and
+  the ordinary modify path, keeping trail amount or percent, current stop
+  price, limit offset, trigger method, TIF and outside-RTH (a mandated stop
+  keeps the broker's current ratchet through the shrink; one larger than the
+  position first follows the position, the next pass takes the sale off it).
+  A stop Canary did not place is reported (daemon log and decision log, once
+  per reason), never touched; the report names a Canary sale working beside
+  it. The modify path and the replacement preview accept `OPT` orders for
+  this; a modify never changes the security type.
 - **Evidence and debounce.** A pass needs a concrete broker scope, a current
   portfolio projection (`classifyPortfolioStreamHealth == current`: completed
   receipt for the account, no short download, fresh) with every row in scope,
@@ -130,27 +197,31 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   passes.
 - Between a hand sale and the guard's second pass (about 30–60 s) a triggered
   stop can still sell shares no longer held.
-- **Double sell beside Canary's own stop (owner decision 2026-10-12 19:55
-  CEST).** A full close of a stock sent through Canary while its own
-  full-position stop is working is admitted, and nothing shrinks or cancels
-  that stop when the close is sent; both work at the broker until one fills.
-  If the close fills first, the stop is cancelled by the guard on the first
-  settle after the projection reads flat: the position change reaches the
-  projection on the broker's portfolio stream, the next pass (30 s cadence)
-  plans the cancel, and the pass at least 20 s later sends it, so the stop
-  can still trigger for about 30–60 s after the fill and sell the whole
-  position again, short (`TestProtectiveStopGuardCancelsOwnStopAfterAFullCloseFills`).
-  If the stop triggers first, the close is a working limit order the guard
-  never touches (it manages only stops it placed), so it can fill whenever
-  the price returns to its limit, for as long as it works; only the owner
-  cancels it, and the Protection reconciliation episode names the mismatch.
-  A Canary-placed option profit-lock trail (`option-profit-lock-v1`) is not
-  guarded at all, so beside an option full close both orderings are open for
-  as long as the other order works. Whether the second fill actually opens a
-  short is the broker's: a margin account sells a shortable stock short, a
-  naked option sale needs the option permission level. A pre-emptive shrink
-  or cancel of Canary's own stop when a full close is sent would close the
-  stock windows; it is not built, pending the owner's decision.
+- **Beside Canary's own stop (closed 2026-10-12 20:53 CEST).** Until this
+  fix a full close sent through Canary beside its own full-position stop
+  left both working until one filled: the close first, and the stop could
+  trigger for the 30–60 s before the guard's cancel and sell the position
+  again, short; the stop first, and the close worked on, unguarded, for as
+  long as its limit was reachable; an option profit-lock trail was not
+  guarded at all. Now the sale joins the stop's one-cancels-all group, or
+  the stop is cut first and the sale refused when that fails, and the guard
+  counts an unlinked Canary sale against its stops and covers option trails
+  (`TestCloseJoinsCanarysOwnStopOCAGroup`,
+  `TestCloseShrinksAnUnlinkedStopBeforeItIsSent`,
+  `TestCloseIsRefusedWhenTheStopCannotBeChanged`). What remains: a stop
+  placed before this release has no group, so its first sale through Canary
+  shrinks it before the sale is sent, lowering protection while the sale
+  works unfilled; after a linked partial fill the broker's "proportionate"
+  reduction may leave the stop smaller than the rest of the position, which
+  protects less, never sells more, and a mandated stop grows back to the
+  position on the guard's next passes; a sale whose change to the stop is
+  sent but unconfirmed within 3 s is refused while the stop stays at its
+  new, smaller size. Whether a second fill would actually open a short is
+  the broker's: a margin account sells a shortable stock short, a naked
+  option sale needs the option permission level.
+- A hand sale in TWS beside Canary's stop, or beside a Canary sale, is the
+  owner's (decision 2026-10-12 19:55 CEST): nothing links it, and the two
+  can sell the line twice until the guard's next passes.
 - A shrink needs a submit-eligible replacement preview (a quote and an
   accepted broker WhatIf); while it cannot get one
   the guard logs the failure and retries every pass. A freeze holds a shrink
@@ -176,3 +247,25 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   shrink, cancel at zero (also while frozen), cancel on the first settle
   after a full close fills, shrink held by the freeze, kill switch, stale
   projection and settle restart, hand order untouched, origin grant.
+- `internal/daemon/protective_oca_test.go`: the planner table (no stop; a
+  stop born in its own group; an echoed group joined; a sale that fits is
+  plain; a stop without a group cancelled before a full close and shrunk
+  before a reduction; the broker's remaining counts; a group of another type
+  not joined; no inventory shrinks from the journal and never joins; a stop
+  the complete inventory no longer shows is gone; one sent inside the cache
+  window counts; two stops cut in order; a new stop beside a legacy stop; a
+  buy never linked) and `TestOCAMembershipSurvivesJournalReplay` (the
+  membership survives status, execution and legacy openOrder events; the
+  broker's echo reaches the journal; a hand order's group is reported).
+- `internal/daemon/protective_oca_trading_test.go` (trading build, through
+  preview, admission and the fake broker, with a model of an IBKR type-2
+  group): close fills first, stop fills first, partial fills reduce the
+  other; a legacy stop is cancelled or shrunk, confirmed, then the sale is
+  sent; a sale that fits needs no change; a refused, uncertain or unanswered
+  change refuses the sale and leaves the stop; no stop and a hand stop send
+  the sale plain and the hand stop is reported; an option close joins the
+  profit trail; a new stop is born in its own group; the guard shrinks a
+  stop for an unlinked Canary sale and leaves it for a linked one; the guard
+  shrinks and cancels an option trail.
+- `pkg/ibkr/place_order_oca_test.go`: the membership round-trips the proto
+  wire (fields 27 and 30) and half a membership is refused.
