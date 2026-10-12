@@ -22,6 +22,12 @@ import (
 // start. Documents written before then may hold one exact-session key per
 // order preview ("…|EXACT:<seq>"); loading merges them into one gap per
 // instrument (MarketDataMemory.WithEntitlementGaps normalises the keys).
+//
+// Owner instruction (Oliver, 2026-10-12 06:40 CEST): the rule must hold for
+// every refused line. The connector now keys a gap by the instrument the
+// request named ("NDX IND USD"), not by a subscription key that a released
+// probe or an option line never had. Keys recorded before then match no new
+// notice and lapse within the day: one more warning per gap, once.
 const (
 	entitlementGapScope = "market-data"
 	entitlementGapKind  = "entitlement_gaps"

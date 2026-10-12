@@ -341,9 +341,11 @@ func classifyDaemon(scanned scannedLog, maxSignals int) logReport {
 					level = "ERROR"
 				}
 				message := "broker read notice requires outcome assessment: " + family
-				if family == "broker_code_200_no_definition" {
-					// A definition failure is about one contract; name it so
-					// a recurring miss can be traced without the raw log.
+				if family == "broker_code_200_no_definition" || family == "broker_code_354" {
+					// A definition failure or a refused market-data line is
+					// about one contract; name it so a recurring miss can be
+					// traced without the raw log. Owner instruction (Oliver,
+					// 2026-10-12 06:40 CEST): code 354 names its contract too.
 					message += " (" + noticeContractLabel(trimmed) + ")"
 				}
 				addSignal(&result, level, "broker_read_notice", message, 0)

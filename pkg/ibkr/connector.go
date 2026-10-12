@@ -159,8 +159,9 @@ type Connector struct {
 	absenceMu     sync.Mutex
 	mktDataAbsent map[string]marketDataAbsence
 	absenceNow    func() time.Time
-	// entitlementGapWarned records, per subscription key, when a terminal 354
-	// first warned; repeat probes inside entitlementGapMemory log at INFO.
+	// entitlementGapWarned records, per instrument (entitlementGapNoticeKey),
+	// when a terminal 354 first warned; repeats inside entitlementGapMemory
+	// log at INFO.
 	// Guarded by absenceMu.
 	entitlementGapWarned map[string]time.Time
 	// contractMisses rate-bounds re-resolution of symbols the broker answered
@@ -447,15 +448,38 @@ const entitlementGapMemory = 24 * time.Hour
 // from its instrument key (SubscribeMarketDataWithContractForSession).
 const exactQuoteKeyMarker = "|EXACT:"
 
-// entitlementGapKey is the warned-gap memory's key for a subscription key. An
+// entitlementGapKey is the warned-gap memory's key for a subscription key,
+// used for a request without a recorded contract and for gaps recorded before
+// 2026-10-12 (see entitlementGapInstrumentKey for the live key). An
 // exact-session quote's key carries a fresh sequence per request, so the
-// memory drops it: every preview of one instrument then shares one gap and
-// the daemon records one key per instrument. Only the log memory is keyed
-// this way; the absence verdict stays per request, so a gap recorded here
-// never blocks an order-preview quote.
+// memory drops it: every preview of one instrument then shares one gap. Only
+// the log memory is keyed this way; the absence verdict stays per request, so
+// a gap recorded here never blocks an order-preview quote.
 func entitlementGapKey(key string) string {
 	base, _, _ := strings.Cut(key, exactQuoteKeyMarker)
 	return base
+}
+
+// entitlementGapInstrumentKey names the instrument a 354 refused, from the
+// contract the request carried: symbol, security type and currency, e.g.
+// "NDX IND USD" or "SPX OPT USD". The connection keeps a request's contract
+// for its lifetime, so a notice that lands after its requester released the
+// line still names it. Every option of one class shares the key, as they
+// share the subscription the refusal is about. Empty without a symbol.
+func entitlementGapInstrumentKey(alias reqAliasEntry) string {
+	symbol := strings.ToUpper(strings.TrimSpace(alias.symbol))
+	if symbol == "" {
+		return ""
+	}
+	secType := strings.ToUpper(strings.TrimSpace(alias.secType))
+	if secType == "" {
+		secType = "STK"
+	}
+	currency := strings.ToUpper(strings.TrimSpace(alias.currency))
+	if currency == "" {
+		currency = "USD"
+	}
+	return symbol + " " + secType + " " + currency
 }
 
 // inactiveMarkTTL bounds an inactive mark the same way marketDataAbsenceRetry
@@ -507,18 +531,19 @@ func (c *Connector) rememberMarketDataAbsence(key string, code int, message stri
 	}
 	prev, had := c.mktDataAbsent[key]
 	c.mktDataAbsent[key] = marketDataAbsence{code: code, message: message, at: now}
-	if code == 354 {
-		c.recordEntitlementGapLocked(key, now)
-	}
 	c.absenceMu.Unlock()
 	if !had || now.Sub(prev.at) >= marketDataAbsenceRetry {
 		c.logInfo("Market data for %s rejected (code %d); suppressing resubscribes for %s", key, code, marketDataAbsenceRetry)
 	}
 }
 
-// rememberEntitlementGap records a warned 354 in the log memory alone, for a
-// rejection that is no absence verdict (see maybeRememberAbsenceForReqID).
+// rememberEntitlementGap records a warned 354 in the log memory under the key
+// knownEntitlementGap judged its line by (entitlementGapNoticeKey). It is
+// independent of the absence verdict: the line has warned either way.
 func (c *Connector) rememberEntitlementGap(key string) {
+	if key == "" {
+		return
+	}
 	now := c.absenceClock()
 	c.absenceMu.Lock()
 	c.recordEntitlementGapLocked(key, now)
@@ -546,12 +571,21 @@ func (c *Connector) recordEntitlementGapLocked(key string, now time.Time) {
 // subscribed" notice warns once per subscription key per 24 h; repeats inside
 // the window log at INFO, remembered across reconnects and daemon restarts.
 // This replaces the 2026-10-03 rule that warned again after every daemon
-// start. The memory is keyed by the same unvetoed key this check resolves,
-// with an exact-session sequence dropped (entitlementGapKey), and is recorded
-// even while a data farm is impaired: the farm veto gates only the absence
-// verdict, never whether a line that warned is remembered.
+// start. The memory is recorded even while a data farm is impaired: the farm
+// veto gates only the absence verdict, never whether a line that warned is
+// remembered.
+//
+// Owner instruction (Oliver, 2026-10-12 06:40 CEST): the one warning per 24 h
+// must hold. It did not: the memory was keyed by the connector's subscription
+// key, which exists only while the requester holds its line, and a 354 often
+// lands after a short probe released it (borrow-inventory probes poll for
+// 2.5 s), and option lines have no such key at all. Those lines warned and
+// were never remembered, so every repeat warned again: 285 WARN lines with
+// no repeat at INFO, and an empty recorded document. The memory now keys the
+// instrument the request named (entitlementGapNoticeKey), whoever still holds
+// the line.
 func (c *Connector) knownEntitlementGap(reqID int, alias reqAliasEntry) bool {
-	key := entitlementGapKey(c.subscriptionMissKeyForNotice(reqID, alias))
+	key := c.entitlementGapNoticeKey(reqID, alias)
 	if key == "" {
 		return false
 	}
@@ -567,6 +601,18 @@ func (c *Connector) knownEntitlementGap(reqID int, alias reqAliasEntry) bool {
 		return false
 	}
 	return true
+}
+
+// entitlementGapNoticeKey is the warned-gap memory's key for a 354 on reqID:
+// the instrument the request named (entitlementGapInstrumentKey), else, for a
+// request without a recorded contract, its subscription key with an
+// exact-session sequence dropped (entitlementGapKey). The line's severity and
+// the record use this one key, so a gap that warned is the gap remembered.
+func (c *Connector) entitlementGapNoticeKey(reqID int, alias reqAliasEntry) string {
+	if key := entitlementGapInstrumentKey(alias); key != "" {
+		return key
+	}
+	return entitlementGapKey(c.subscriptionMissKeyForNotice(reqID, alias))
 }
 
 // backendLinkBroken is true from a 1100 or 2110 until the 1101/1102 restore:
@@ -595,7 +641,8 @@ func (c *Connector) noticeLogContext() noticeLogContext {
 // memory: terminal 354 absences still inside their retry window and the keys
 // whose entitlement gap already warned. A successor connector inherits it so a
 // reconnect neither re-probes a fresh gap nor warns about a known one again.
-// It carries subscription keys and broker notice text, never account data.
+// It carries subscription and instrument keys and broker notice text, never
+// account data.
 type MarketDataMemory struct {
 	absences  map[string]marketDataAbsence
 	gapWarned map[string]time.Time
@@ -1473,6 +1520,12 @@ func (c *Connector) recoverFromSystemNotice(origin ConnectorSessionBinding, alia
 	reqID := int(note.tickerID)
 	code := note.code
 
+	if code == 354 {
+		// Whatever the request was, its line warned unless the gap is
+		// known; remember it before any requester-specific exit below.
+		c.rememberEntitlementGap(c.entitlementGapNoticeKey(reqID, alias))
+	}
+
 	if c.failPendingHistorical(reqID, code, note.message) {
 		return nil
 	}
@@ -1669,10 +1722,10 @@ func (c *Connector) markSubscriptionRejected(reqID int) {
 // terminal 354, keyed by the connector's own subscription key (see
 // subscriptionKeyForNotice) so the record key is identical to what the
 // subscribe paths check. A rejection that is no absence verdict (a farm is
-// impaired, or the delayed fallback drew it) still enters the warned-gap log
-// memory under the key knownEntitlementGap judged its line by: the line has
-// warned either way, and withholding the record made every later probe of
-// the gap warn again (2026-10-07, while an unrelated farm was down).
+// impaired, or the delayed fallback drew it) forms none. The warned-gap log
+// memory is recorded apart from it, for every 354 (recoverFromSystemNotice):
+// withholding that record made every later probe of the gap warn again
+// (2026-10-07, while an unrelated farm was down).
 func (c *Connector) maybeRememberAbsenceForReqID(reqID int, alias reqAliasEntry, code int, message string) {
 	key := c.subscriptionMissKeyForNotice(reqID, alias)
 	if key == "" {
@@ -1684,8 +1737,6 @@ func (c *Connector) maybeRememberAbsenceForReqID(reqID int, alias reqAliasEntry,
 	c.subMu.RUnlock()
 	if !delayed && !c.marketDataFarmImpaired() {
 		c.rememberMarketDataAbsence(key, code, message)
-	} else if code == 354 {
-		c.rememberEntitlementGap(key)
 	}
 }
 

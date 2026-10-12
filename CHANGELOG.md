@@ -31,6 +31,10 @@ their gain since purchase split into carry, rates and spread.
 
 - `cash_interest_rate_upper` and `cash_interest_valid_through` are retired and no longer read; the file still loads with them. `dated_assumption_expired` no longer reads `cash_interest_valid_through`.
 
+### Fixed
+
+- A "market data is not subscribed" refusal (IBKR 354) now warns once per instrument per 24 hours, as decided on 2026-10-08. A refusal that arrived after a short probe had released its line, and every option line, was neither recognised as a repeat nor remembered, so each repeat warned again and the daemon kept an empty record. The daemon log check names the refused contract per signal, as it does for code 200 (owner instruction, 2026-10-12).
+
 ## v3.21.1 — 2026-10-11 12:16 CEST
 
 ### What's new

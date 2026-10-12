@@ -53,8 +53,8 @@ func TestRepeatEntitlementGapProbeLogsInfo(t *testing.T) {
 	}
 }
 
-// The connector remembers a warned 354 per subscription key for a day and
-// hands that memory, with the live absence window, to its successor.
+// The connector remembers a warned 354 per instrument for a day and hands
+// that memory, with the live absence window, to its successor.
 func TestConnectorEntitlementGapMemoryAndHandover(t *testing.T) {
 	now := time.Date(2026, 10, 2, 9, 22, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
@@ -71,11 +71,18 @@ func TestConnectorEntitlementGapMemoryAndHandover(t *testing.T) {
 		t.Fatal("gap known before any rejection")
 	}
 	c.rememberMarketDataAbsence("NDX", 354, "Requested market data is not subscribed")
+	c.rememberEntitlementGap(c.entitlementGapNoticeKey(11, alias))
+	if got := c.ExportMarketDataMemory().EntitlementGaps(); len(got) != 1 || got["NDX IND USD"].IsZero() {
+		t.Fatalf("recorded gaps = %v, want the instrument key alone", got)
+	}
 	if !c.knownEntitlementGap(11, alias) {
 		t.Fatal("warned gap not remembered")
 	}
-	if c.knownEntitlementGap(12, alias) {
-		t.Fatal("unowned reqID matched")
+	if !c.knownEntitlementGap(12, alias) {
+		t.Fatal("a request the connector no longer owns missed its instrument's gap")
+	}
+	if c.knownEntitlementGap(11, reqAliasEntry{symbol: "NDX", secType: "OPT"}) {
+		t.Fatal("another instrument matched")
 	}
 	successor := newConn()
 	successor.InheritMarketDataMemory(c.ExportMarketDataMemory())
@@ -180,6 +187,11 @@ func wiredNoticeConnector(t *testing.T) (*Connector, *Connection, uint64) {
 	return c, conn, conn.BrokerSessionEpoch()
 }
 
+// gapKeyFor is the warned-gap memory key of a contract's request.
+func gapKeyFor(contract Contract) string {
+	return entitlementGapInstrumentKey(reqAliasEntry{symbol: contract.Symbol, secType: contract.SecType, currency: contract.Currency})
+}
+
 func subscriptionReqID(c *Connector, key string) int {
 	c.subMu.RLock()
 	defer c.subMu.RUnlock()
@@ -242,7 +254,7 @@ func TestEntitlementGapRememberedWhileAFarmIsImpaired(t *testing.T) {
 					t.Fatal(err)
 				}
 				conn.processSystemNoticeMessageAtEpoch(timestampedSystemNotice(int64(subscriptionReqID(c, key)), at, 354, notSubscribed354), epoch)
-				if _, ok := c.ExportMarketDataMemory().EntitlementGaps()[key]; !ok {
+				if _, ok := c.ExportMarketDataMemory().EntitlementGaps()[gapKeyFor(contract)]; !ok {
 					t.Fatal("the warned gap was not remembered for the daemon")
 				}
 				if c.marketDataAbsenceFor(key) != nil {
@@ -282,6 +294,7 @@ func TestExactSessionEntitlementGapIsOnePerInstrument(t *testing.T) {
 				t.Fatal("no session")
 			}
 			instrument := MarketDataKeyForContract(normalizeMarketDataContract(contract))
+			gap := gapKeyFor(contract)
 			for range 2 {
 				key, err := c.SubscribeMarketDataWithContractForSession(t.Context(), binding, contract, nil)
 				if err != nil {
@@ -301,8 +314,8 @@ func TestExactSessionEntitlementGapIsOnePerInstrument(t *testing.T) {
 				t.Fatalf("354 severities, want WARN then INFO: %v", lines)
 			}
 			gaps := c.ExportMarketDataMemory().EntitlementGaps()
-			if _, ok := gaps[instrument]; !ok || len(gaps) != 1 {
-				t.Fatalf("exported gaps = %v, want the instrument key %q alone", gaps, instrument)
+			if _, ok := gaps[gap]; !ok || len(gaps) != 1 {
+				t.Fatalf("exported gaps = %v, want the instrument key %q alone", gaps, gap)
 			}
 			if c.marketDataAbsenceFor(instrument) != nil {
 				t.Fatal("an exact-session rejection formed an instrument-wide absence")
@@ -333,7 +346,7 @@ func TestDelayedFallback354RemembersTheGapWithoutAnAbsence(t *testing.T) {
 		t.Fatal("fixture: a farm is impaired; the farm branch would decide instead")
 	}
 	conn.processSystemNoticeMessageAtEpoch(syntheticSystemNoticeText(subscriptionReqID(c, key), 354, notSubscribed354), epoch)
-	if _, ok := c.ExportMarketDataMemory().EntitlementGaps()[key]; !ok {
+	if _, ok := c.ExportMarketDataMemory().EntitlementGaps()["SYNTHDLY STK USD"]; !ok {
 		t.Fatal("the warned gap was not remembered for the daemon")
 	}
 	if c.marketDataAbsenceFor(key) != nil {
@@ -341,5 +354,55 @@ func TestDelayedFallback354RemembersTheGapWithoutAnAbsence(t *testing.T) {
 	}
 	if lines := logLines(buf, "code=354"); len(lines) != 1 || !strings.Contains(lines[0], "level=WARN") {
 		t.Fatalf("354 severities, want one WARN: %v", lines)
+	}
+}
+
+// The live shape of 2026-10-08 to 2026-10-12: a short probe releases its line
+// before the broker's 354 lands, and an option line has no subscription key.
+// Every one of those lines warned and none was remembered, so each repeat
+// warned again and the daemon recorded an empty document. The second refusal
+// of one instrument inside the day is INFO, whoever still holds the line, and
+// the memory survives a restart.
+func TestRepeat354ForOneInstrumentIsInfoAfterTheLineIsReleased(t *testing.T) {
+	buf := captureConnectorLogs(t)
+	c, conn, epoch := wiredNoticeConnector(t)
+	contract := Contract{ConID: 900201, Symbol: "SYNTHLATE", SecType: "STK", Exchange: "SMART", Currency: "USD"}
+	for range 2 {
+		key, err := c.SubscribeMarketDataWithContract(t.Context(), contract, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reqID := subscriptionReqID(c, key)
+		if err := c.UnsubscribeMarketData(key); err != nil {
+			t.Fatal(err)
+		}
+		conn.processSystemNoticeMessageAtEpoch(syntheticSystemNoticeText(reqID, 354, notSubscribed354), epoch)
+	}
+	// Two option lines of one class: requests the connector never keys.
+	for _, reqID := range []int{9101, 9102} {
+		conn.registerReqAlias(t.Context(), reqID, Contract{Symbol: "SYNTHIDX", SecType: "OPT", Exchange: "SMART", Currency: "USD", LocalSymbol: "SYNTHIDX " + strconv.Itoa(reqID)})
+		conn.processSystemNoticeMessageAtEpoch(syntheticSystemNoticeText(reqID, 354, notSubscribed354), epoch)
+	}
+	lines := logLines(buf, "code=354")
+	if len(lines) != 4 {
+		t.Fatalf("354 lines = %v", lines)
+	}
+	for i, want := range []string{"level=WARN", "level=INFO", "level=WARN", "level=INFO"} {
+		if !strings.Contains(lines[i], want) {
+			t.Fatalf("354 line %d, want %s: %v", i, want, lines)
+		}
+	}
+	gaps := c.ExportMarketDataMemory().EntitlementGaps()
+	if len(gaps) != 2 || gaps["SYNTHLATE STK USD"].IsZero() || gaps["SYNTHIDX OPT USD"].IsZero() {
+		t.Fatalf("recorded gaps = %v, want one per instrument", gaps)
+	}
+
+	// A new process seeded from the recorded gaps keeps the next refusal INFO.
+	restarted, restartedConn, restartedEpoch := wiredNoticeConnector(t)
+	restarted.InheritMarketDataMemory(MarketDataMemory{}.WithEntitlementGaps(gaps))
+	restartedConn.registerReqAlias(t.Context(), 9201, contract)
+	restartedConn.processSystemNoticeMessageAtEpoch(syntheticSystemNoticeText(9201, 354, notSubscribed354), restartedEpoch)
+	if lines := logLines(buf, "code=354"); len(lines) != 5 || !strings.Contains(lines[4], "level=INFO") {
+		t.Fatalf("354 after a restart, want INFO: %v", lines)
 	}
 }

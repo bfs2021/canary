@@ -444,3 +444,42 @@ func TestDaemonBuildsAndInfoNoticesStayQuiet(t *testing.T) {
 		t.Fatalf("families = %v", got.Families)
 	}
 }
+
+// A report counted eleven code-354 refusals without saying which line was
+// refused. Each attributed contract is now its own signal with its count, as
+// code 200's are; a current holding stays masked.
+func TestEntitlementNoticeNamesItsContract(t *testing.T) {
+	saved := held
+	t.Cleanup(func() { held = saved })
+	held = newHoldings(holdingsFromCache, []string{"SYNTHQ"})
+	notice := func(tag string) string {
+		return `time=2026-10-11T20:00:29.146+02:00 level=WARN msg="[IBKR cid=15] System notice ` + tag + ` code=354 @ 2026-10-11T17:59:35Z: Requested market data is not subscribed. Check API status by selecting the Account menu then under Management choose Market Data Subscription Manager and/or Market Data Subscriptions." component=IBKR`
+	}
+	lines := []string{
+		notice("reqID=49175 (CRWV STK)"),
+		notice("reqID=49180 (CRWV STK)"),
+		notice("reqID=49176 (SYNTHQ STK)"),
+		notice("reqID=103007 (SPX OPT)"),
+		notice("reqID=49190"),
+	}
+	got := classifyDaemon(scannedLog{state: "scanned", lines: lines}, defaultMaxSignals)
+	want := map[string]int{
+		"broker read notice requires outcome assessment: broker_code_354 (CRWV STK)":      2,
+		"broker read notice requires outcome assessment: broker_code_354 ([holding] STK)": 1,
+		"broker read notice requires outcome assessment: broker_code_354 (SPX OPT)":       1,
+		"broker read notice requires outcome assessment: broker_code_354 (untagged)":      1,
+	}
+	if len(got.Signals) != len(want) || got.Families["broker_code_354"] != 5 {
+		t.Fatalf("signals = %+v families = %v", got.Signals, got.Families)
+	}
+	for _, s := range got.Signals {
+		if n, ok := want[s.Message]; !ok || effectiveCount(s) != n {
+			t.Fatalf("unexpected signal %+v", s)
+		}
+	}
+
+	held = holdings{source: holdingsUnavailable}
+	if got := noticeContractLabel(notice("reqID=49175 (CRWV STK)")); got != "[contract] STK" {
+		t.Fatalf("label without a holdings list = %q, want the name withheld", got)
+	}
+}

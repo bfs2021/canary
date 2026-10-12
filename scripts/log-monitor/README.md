@@ -47,9 +47,10 @@ copy is no evidence while the mirror is behind. The report's `daemon.mirror`
 states which. The mirror must append in place and rotate its copy by rename, as
 the daemon does, so cursor identity and rotated-tail recovery still apply.
 
-A "no security definition" (code 200) notice is about one contract, so its
-signal names the contract the connector tagged it with, `(OKE STK)`, or
-`(untagged)`; each contract counts separately. Reports never name a current
+A "no security definition" (code 200) or "market data is not subscribed"
+(code 354) notice is about one contract, so its signal names the contract the
+connector tagged it with, `(OKE STK)`, or `(untagged)`; each contract counts
+separately. Reports never name a current
 holding: the monitor reads the account-data gate's holdings list (the latest
 Flex position report in the daemon store, opened read-only, else the gate's
 private cache at `~/.cache/ibkr/holdings-denylist`) and writes `[holding]` in
