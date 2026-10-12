@@ -68,10 +68,11 @@ answers `unknown`; an unreadable journal fails the call. Capabilities list
 `capabilities` and `lookup` only, with no authorisations, until submit is
 served.
 
-## Known constraint for reductions
+## Reductions of a held long
 
-With `[order_limits].allow_stock_short = false`, every stock sell that is
-not a protective stop is re-read as opening a short
-(`internal/daemon/order_risk_authority.go:620`) and refused. A limit or
-Adaptive reduction of a held long therefore comes back `refused` under this
-contract until the owner decides that rule; the contract does not change it.
+A limit or Adaptive reduction of a held long is admitted when it sells at
+most the position the broker's current projection confirms, whatever else
+is working on the contract (owner decision 2026-10-12 19:55 CEST;
+risk-policy.md, "Order limits", item 10). The short re-read that refused it
+under this contract until then is gone; `allow_stock_short` and
+`allow_option_sell_to_open` judge only an order that opens or flips a short.

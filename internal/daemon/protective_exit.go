@@ -15,15 +15,20 @@ import (
 // "exempt with the guard"; see internal-docs/design/protective-stop-guard.md).
 //
 // A broker-side stop that sells at most the long stock position it protects
-// passes both the order cap in force ([order_limits]) and the apparent-exit
-// re-read as a short
-// open, provided the complete current broker open-order inventory shows no
-// other working sell for the same contract that, together with this one,
-// would sell more than is held. A modify that only lowers the quantity of a
-// working protective stop passes on the same terms, without the competing-sell
-// condition: it can only shrink what the book already carries. Everything
-// else keeps both gates. The protective stop guard keeps Canary's own working
-// stops no larger than the position afterwards.
+// passes the order cap in force ([order_limits]), provided the complete
+// current broker open-order inventory shows no other working sell for the
+// same contract that, together with this one, would sell more than is held.
+// A modify that only lowers the quantity of a working protective stop passes
+// on the same terms, without the competing-sell condition: it can only
+// shrink what the book already carries. Everything else keeps the cap. The
+// protective stop guard keeps Canary's own working stops no larger than the
+// position afterwards.
+//
+// The exemption once also excused the apparent-exit re-read as a short open.
+// That re-read is gone: a sale of at most the confirmed long position is
+// admitted for every contract class, whatever else is working (owner decision
+// 2026-10-12 19:55 CEST; validateOrderRiskAuthority). The notional cap
+// exemption keeps its competing-sell condition here.
 
 // Blocker codes a trailing-stop proposal row carries when its placement would
 // be refused because the exemption cannot apply.
@@ -33,8 +38,8 @@ const (
 	protectiveExitExceedsPositionCode      = "protective_exit_exceeds_position"
 )
 
-// protectiveExitInventory is the broker open-order evidence the exemptions
-// read: the protective stock exit, the bond sale and the delta-reducing exit
+// protectiveExitInventory is the broker open-order evidence the cap
+// exemptions read: the protective stock exit and the delta-reducing exit
 // (delta_reduction.go) each require that this order and every other working
 // order in its direction together stay within the held line. The zero value
 // is "unavailable" and never exempts.
@@ -85,7 +90,8 @@ func protectiveStockExitCandidate(draft rpc.OrderDraft, position rpc.OrderPositi
 }
 
 // heldStockExitCandidate is a single-contract stock/ETF sell of any order
-// type that sells at most the long position held.
+// type that sells at most the long position held: the shape the stop
+// exemption reads.
 func heldStockExitCandidate(draft rpc.OrderDraft, position rpc.OrderPositionImpact) bool {
 	if draft.StrategyGroup != nil || !isStockLikeRiskSecType(draft.Contract.SecType) {
 		return false
@@ -113,20 +119,6 @@ func protectiveStockExitExempt(draft rpc.OrderDraft, position rpc.OrderPositionI
 		return true
 	}
 	if math.IsNaN(inv.OtherWorkingSameSide) || math.IsInf(inv.OtherWorkingSameSide, 0) || inv.OtherWorkingSameSide < 0 {
-		return false
-	}
-	return inv.OtherWorkingSameSide+float64(draft.Quantity) <= position.Before+1e-9
-}
-
-// heldStockExitAdmitted decides whether a sale of a held long, of any order
-// type, is excused from the short re-read: the complete, current open-order
-// inventory shows that this sale and every other working sell of the
-// contract stay within the shares held (owner decision 2026-10-10 07:28
-// CEST). It excuses nothing else; the order cap and every other gate still
-// apply. Stale or incomplete inventory never admits.
-func heldStockExitAdmitted(draft rpc.OrderDraft, position rpc.OrderPositionImpact, inv protectiveExitInventory) bool {
-	if !heldStockExitCandidate(draft, position) || !inv.Current ||
-		math.IsNaN(inv.OtherWorkingSameSide) || math.IsInf(inv.OtherWorkingSameSide, 0) || inv.OtherWorkingSameSide < 0 {
 		return false
 	}
 	return inv.OtherWorkingSameSide+float64(draft.Quantity) <= position.Before+1e-9
@@ -254,8 +246,8 @@ func (w workingOrderIdentity) competesWith(contract rpc.ContractParams, action s
 }
 
 // bondSaleCandidate is a bill or bond sale that reduces or closes a held
-// line. Its admission needs the open-order inventory: a sale may never sell
-// more than the held face less every other working sale of the line.
+// line. It is admitted as such (validateOrderRiskAuthority); the delta rule
+// names it only to say why no delta exemption can apply.
 func bondSaleCandidate(draft rpc.OrderDraft, position rpc.OrderPositionImpact) bool {
 	return draft.StrategyGroup == nil && ibkrlib.IsBillOrBond(draft.Contract.SecType) &&
 		strings.EqualFold(strings.TrimSpace(draft.Action), rpc.OrderActionSell) && draft.Quantity > 0 && isRiskReducing(position.Effect)
@@ -372,12 +364,12 @@ func (s *Server) journalOrderViewsForInventory() (journalInventory, bool) {
 
 // captureProtectiveExitInventory reads the complete broker open-order
 // inventory (the cached protection snapshot, completed with Canary's own
-// journal rows; no new broker request) for a protective-exit, bond-sale or
+// journal rows; no new broker request) for a protective-exit or
 // delta-reducing-exit candidate. Only when the journal cannot be read is the
 // inventory read from the broker afresh. A non-candidate, an unavailable
 // inventory or one for another account/mode returns the unavailable value.
 func (s *Server) captureProtectiveExitInventory(ctx context.Context, status rpc.TradingStatus, draft rpc.OrderDraft, position rpc.OrderPositionImpact, target orderPreviewReplaceTarget) protectiveExitInventory {
-	if s == nil || ctx == nil || (!heldStockExitCandidate(draft, position) && !bondSaleCandidate(draft, position) && !deltaReductionCandidate(draft, position)) {
+	if s == nil || ctx == nil || (!protectiveStockExitCandidate(draft, position) && !deltaReductionCandidate(draft, position)) {
 		return protectiveExitInventory{}
 	}
 	want := brokerStateScope{Account: status.Account, Mode: status.Mode}

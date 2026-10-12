@@ -1,6 +1,6 @@
 # Protective stop exemption and guard
 
-Updated: 2026-10-07 08:42 CEST
+Updated: 2026-10-12 20:40 CEST
 Status: implemented
 
 Contract per `.agents/docs/daemon-cli-trading-contract.md` and
@@ -17,10 +17,33 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   `ready`; the owner learned at prepare/preview (`order_risk_limit`).
 - **Policy owner and approval:** the owner, 2026-10-05 17:36 CEST, "exempt
   with the guard".
-- **Amendment (2026-10-10 07:28 CEST):** the short re-read excuse now covers
-  a sale of a held long of any order type under the same inventory guard
-  (owner: "Admit them"; `heldStockExitAdmitted`). The notional cap exemption
-  stays with protective stops only.
+- **Amendment (2026-10-12 19:55 CEST):** the short re-read is gone. The
+  owner: "I'm happy to lift a rule, but the system needs to work with common
+  sense: if my confirmed (through API) position size is 70, one must be able
+  to sell 70. Everything else is bollocks. If someone sells at the same time
+  through TWS, that's unfortunate and should be restricted outside of Desk."
+  A sell of at most the confirmed long position of its exact contract is
+  admitted as the close or reduction it is, for a stock, ETF, option, bill or
+  bond and any order type, whatever else is working on the contract, Canary's
+  own full-position stop and hand orders in TWS included, and whether or not
+  the open-order inventory can be read (`validateOrderRiskAuthority`;
+  risk-policy.md "Order limits" item 10). "Confirmed" is the current,
+  complete, account-scoped portfolio projection every order position read
+  passes (`confirmedPositionProjection`); a stale or incomplete projection
+  refuses in plain words. Only an order that opens or flips a short needs
+  `allow_stock_short` or `allow_option_sell_to_open`. The incident: Canary
+  proposed the Rulebook exit of 70 held calls with no working orders and
+  refused it as a sell-to-open; a hand full close of a stock failed while
+  Canary's own full-position stop was working. This supersedes the narrower
+  stock-only admission under the inventory guard of 2026-10-10 07:28 CEST
+  ("Admit them", `heldStockExitAdmitted`, 2f871699), which is removed. The
+  notional cap exemption below is unchanged: it stays with protective stops
+  and keeps its competing-sell condition, so the inventory is still read for
+  a stop and for a delta-reducing exit, and the readiness blockers below
+  still describe that exemption.
+- **Amendment (2026-10-10 07:28 CEST, superseded 2026-10-12):** the short
+  re-read excuse covered a sale of a held long of any order type under the
+  same inventory guard (owner: "Admit them"; `heldStockExitAdmitted`).
 - **Amendment (2026-10-05 20:28 CEST):** the notional cap and
   `allow_stock_short` moved to the risk constitution's `[order_limits]`
   (owner decision 2026-10-05 19:56 CEST); the cap now scales with the book.
@@ -49,8 +72,9 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   remaining quantity is exempt without the competing-sell condition: it can
   only shrink what is already working. Unavailable, stale, incomplete or
   foreign-scope inventory never exempts. The exempt order skips the notional
-  cap and the short re-read; FX evidence checks, `max_option_contracts`,
-  option rules, bond rules and strategy rules are unchanged.
+  cap (until 2026-10-12 also the short re-read, which no longer exists); FX
+  evidence checks, `max_option_contracts`, option rules, bond rules and
+  strategy rules are unchanged.
 - **Where it is read.** Preview reads the inventory once per candidate;
   admission (`bindPreviewOrderRiskAuthority`) reads it again, so a hand sale
   entered after the preview withdraws the exemption; the first-byte guard
@@ -106,6 +130,27 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   passes.
 - Between a hand sale and the guard's second pass (about 30–60 s) a triggered
   stop can still sell shares no longer held.
+- **Double sell beside Canary's own stop (owner decision 2026-10-12 19:55
+  CEST).** A full close of a stock sent through Canary while its own
+  full-position stop is working is admitted, and nothing shrinks or cancels
+  that stop when the close is sent; both work at the broker until one fills.
+  If the close fills first, the stop is cancelled by the guard on the first
+  settle after the projection reads flat: the position change reaches the
+  projection on the broker's portfolio stream, the next pass (30 s cadence)
+  plans the cancel, and the pass at least 20 s later sends it, so the stop
+  can still trigger for about 30–60 s after the fill and sell the whole
+  position again, short (`TestProtectiveStopGuardCancelsOwnStopAfterAFullCloseFills`).
+  If the stop triggers first, the close is a working limit order the guard
+  never touches (it manages only stops it placed), so it can fill whenever
+  the price returns to its limit, for as long as it works; only the owner
+  cancels it, and the Protection reconciliation episode names the mismatch.
+  A Canary-placed option profit-lock trail (`option-profit-lock-v1`) is not
+  guarded at all, so beside an option full close both orderings are open for
+  as long as the other order works. Whether the second fill actually opens a
+  short is the broker's: a margin account sells a shortable stock short, a
+  naked option sale needs the option permission level. A pre-emptive shrink
+  or cancel of Canary's own stop when a full close is sent would close the
+  stock windows; it is not built, pending the owner's decision.
 - A shrink needs a submit-eligible replacement preview (a quote and an
   accepted broker WhatIf); while it cannot get one
   the guard logs the failure and retries every pass. A freeze holds a shrink
@@ -116,8 +161,18 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
 - `internal/daemon/protective_exit_test.go`: exemption boundary table (stop vs
   limit, long vs flat/short, quantity above position, competing sell, stale
   inventory, ETF, option unaffected, shrink of a working stop), inventory
-  counting, and trailing-stop row readiness.
+  counting, and trailing-stop row readiness; `TestHeldLongExitAdmission`
+  (70 of 70 held calls with no working orders, beside a full-position stop,
+  and without the inventory; 71 of 70 and a short open refused; a stock
+  full close beside Canary's stop; bond and bill sales of the held face
+  beside a working sale and without the inventory; a sale above the face
+  refused; the cap still binds) and `TestHeldLongExitNeedsAConfirmedPosition`
+  (a stale receipt, an incomplete or short download and another account's
+  rows refuse in plain words).
+- `internal/daemon/order_preview_bond_request_test.go`: a bond sale of the
+  held face is admitted beside working sales and without the open-order
+  list; above the face it is refused as a short.
 - `internal/daemon/protective_stop_guard_trading_test.go` (trading build):
-  shrink, cancel at zero (also while frozen), shrink held by the freeze, kill
-  switch, stale projection and settle restart, hand order untouched, origin
-  grant.
+  shrink, cancel at zero (also while frozen), cancel on the first settle
+  after a full close fills, shrink held by the freeze, kill switch, stale
+  projection and settle restart, hand order untouched, origin grant.

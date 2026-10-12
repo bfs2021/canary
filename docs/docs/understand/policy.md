@@ -340,11 +340,22 @@ absolute delta of SYNA (110,400 EUR before, 158,400 EUR after), so the cap
 applies`. Bills, bonds and conversions carry no equity delta and never
 qualify. A pre-authorised protection bucket's option exit passes the same way
 without a per-order approval, after its notice and veto window (owner
-decision 2026-10-07 12:28 CEST). The short and sell-to-open permissions, the
-bond maturity limit and the currency checks have no exemption: a stock exit
-above the cap still needs
-`allow_stock_short` and an option sell-to-close still needs
-`allow_option_sell_to_open`, exactly as below the cap.
+decision 2026-10-07 12:28 CEST). The bond maturity limit and the currency
+checks have no exemption.
+
+The short and sell-to-open permissions judge only an order that opens or
+flips a short. A sale of at most the position the broker confirms you hold
+in that exact contract (a stock, ETF, option, bill or bond, any order type)
+is the close or reduction it is, whatever else is working on the contract:
+Canary's own protective stop and orders placed by hand in TWS do not block
+it (owner decision 2026-10-12 19:55 CEST). Selling more than you hold, or
+selling with no position, still needs `allow_stock_short` or
+`allow_option_sell_to_open`; a stale or incomplete position read refuses the
+order until the next refresh. The order cap and the option contract cap still
+apply as above. If another sale of the same line is working at the same time,
+both can fill: a stop Canary placed on a stock is shrunk or cancelled by the
+protective stop guard once the position has changed, a stop or a hand order
+Canary did not place is yours to cancel.
 
 The bond maturity limit (owner decision 2026-10-06 20:17 CEST) counts whole
 years from today's UTC date: with 30 written, a buy on 2026-10-06 may mature on

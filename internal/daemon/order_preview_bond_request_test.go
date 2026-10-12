@@ -356,16 +356,20 @@ func TestOrderRiskAuthorityChecksBondBuyMaturity(t *testing.T) {
 	if err := validateOrderRiskAuthority(limits, sale, reduce, auth, "EUR", protectiveExitInventory{Current: true}, deltaReductionEvidence{}); err != nil {
 		t.Fatalf("a sale was limited by maturity: %v", err)
 	}
-	// Two sales of one held face would sell short together: the open-order
-	// list must be current and leave room for this sale beside the others.
-	if err := validateOrderRiskAuthority(limits, sale, reduce, auth, "EUR", protectiveExitInventory{}, deltaReductionEvidence{}); err == nil || !strings.Contains(err.Error(), "open-order list") {
-		t.Fatalf("a sale without the open-order list: %v", err)
+	// A sale of at most the held face is admitted whatever else is working
+	// on the line and without the open-order list (owner decision 2026-10-12
+	// 19:55 CEST); only a sale above the face is refused, as a short.
+	if err := validateOrderRiskAuthority(limits, sale, reduce, auth, "EUR", protectiveExitInventory{}, deltaReductionEvidence{}); err != nil {
+		t.Fatalf("a sale without the open-order list was refused: %v", err)
 	}
-	if err := validateOrderRiskAuthority(limits, sale, reduce, auth, "EUR", protectiveExitInventory{Current: true, OtherWorkingSameSide: 5000}, deltaReductionEvidence{}); err != nil {
-		t.Fatalf("a sale that fits beside a working one was refused: %v", err)
+	if err := validateOrderRiskAuthority(limits, sale, reduce, auth, "EUR", protectiveExitInventory{Current: true, OtherWorkingSameSide: 10000}, deltaReductionEvidence{}); err != nil {
+		t.Fatalf("a sale beside a working sale of the whole face was refused: %v", err)
 	}
-	if err := validateOrderRiskAuthority(limits, sale, reduce, auth, "EUR", protectiveExitInventory{Current: true, OtherWorkingSameSide: 5001}, deltaReductionEvidence{}); err == nil || !strings.Contains(err.Error(), "already working") {
-		t.Fatalf("a sale beyond the held face with working sales: %v", err)
+	over := sale
+	over.Quantity = 10001
+	flip := rpc.OrderPositionImpact{Before: 10000, After: -1, Effect: rpc.OrderPositionEffectFlip}
+	if err := validateOrderRiskAuthority(limits, over, flip, auth, "EUR", protectiveExitInventory{Current: true}, deltaReductionEvidence{}); err == nil || !strings.Contains(err.Error(), "opens or flips a short") {
+		t.Fatalf("a sale above the held face: %v", err)
 	}
 }
 
@@ -412,9 +416,10 @@ func TestBondOrderByIdentifierRemembersAFactorPricedLine(t *testing.T) {
 	}
 }
 
-// A sale sees every other working sale of the line in the broker's open
-// orders: together they may not sell more than the held face.
-func TestBondOrderByIdentifierSaleCountsWorkingSales(t *testing.T) {
+// A sale of at most the held face is admitted beside every other working
+// sale of the line (owner decision 2026-10-12 19:55 CEST); the broker's open
+// orders no longer bound it.
+func TestBondOrderByIdentifierSaleIsAdmittedBesideWorkingSales(t *testing.T) {
 	rig := newBondRequestRig(t)
 	id := syntheticISIN(t, "XS000SYN010")
 	rig.line(id, "EUR", 8601)
@@ -423,12 +428,13 @@ func TestBondOrderByIdentifierSaleCountsWorkingSales(t *testing.T) {
 	rig.srv.openOrderInventoryForTest = func(context.Context, bool) (ibkrlib.OpenOrderSnapshot, brokerStateScope, error) {
 		return ibkrlib.OpenOrderSnapshot{Complete: true, AsOf: rig.now, Orders: []ibkrlib.OrderLifecycleEvent{working}}, brokerStateScope{Account: "DU1234567", Mode: "paper"}, nil
 	}
-	// 50,000 held, 40,000 already working: 20,000 more would sell short.
-	if _, err := rig.preview(rpc.OrderActionSell, id, "BOND", "EUR", 20000); err == nil || !strings.Contains(err.Error(), "already working") {
-		t.Fatalf("sale beside a working sale: %v", err)
+	// 50,000 held, 40,000 already working: 20,000 more, and the whole face,
+	// are each at most the held face and admitted.
+	if _, err := rig.preview(rpc.OrderActionSell, id, "BOND", "EUR", 20000); err != nil {
+		t.Fatalf("sale beside a working sale: %v (%v)", err, refusalCodes(err))
 	}
-	if _, err := rig.preview(rpc.OrderActionSell, id, "BOND", "EUR", 10000); err != nil {
-		t.Fatalf("sale that fits: %v (%v)", err, refusalCodes(err))
+	if _, err := rig.preview(rpc.OrderActionSell, id, "BOND", "EUR", 50000); err != nil {
+		t.Fatalf("sale of the whole face beside a working sale: %v (%v)", err, refusalCodes(err))
 	}
 }
 

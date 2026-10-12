@@ -178,6 +178,29 @@ func TestProtectiveStopGuardCancelsAtZeroEvenWhenFrozen(t *testing.T) {
 	}
 }
 
+// A full close sent beside Canary's own full-position stop is admitted
+// (owner decision 2026-10-12 19:55 CEST); the guard does nothing while both
+// work and the position is still held, and cancels its stop on the first
+// settle after the close fills and the projection reads flat.
+func TestProtectiveStopGuardCancelsOwnStopAfterAFullCloseFills(t *testing.T) {
+	t.Parallel()
+	r := newStopGuardRig(t, config.Trading{})
+	r.pass(t)
+	if m, c := r.writes(); m != 0 || c != 0 {
+		t.Fatalf("a fully held position wrote %d modifies %d cancels, want none", m, c)
+	}
+	r.set(0, true)
+	r.srv.runProtectiveStopGuard(t.Context())
+	if m, c := r.writes(); m != 0 || c != 0 {
+		t.Fatalf("the first flat sighting wrote %d modifies %d cancels, want none before the settle time", m, c)
+	}
+	r.advance(protectiveStopGuardSettle + time.Second)
+	r.srv.runProtectiveStopGuard(t.Context())
+	if m, c := r.writes(); m != 0 || c != 1 || r.cancelled[0] != 1002 {
+		t.Fatalf("writes = %d modifies %v cancels, want one cancel of order 1002 on the first settle after the fill", m, r.cancelled)
+	}
+}
+
 // The freeze blocks every modify (docs/docs/reference/config.md), so a
 // shrink waits while frozen and is recorded as blocked.
 func TestProtectiveStopGuardShrinkWaitsWhileFrozen(t *testing.T) {

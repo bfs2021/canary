@@ -64,16 +64,18 @@ func TestProtectiveStockExitExemptionBoundary(t *testing.T) {
 			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 2000), notional: 15000, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 2000}},
 		{name: "limit sell keeps the notional cap", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 4000),
 			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 4000), notional: 30000, inv: current, wantErr: "order cap in force 12,000 EUR (5% of NLV 240,000 EUR"},
-		// A sale of a held long, of any order type, passes the short re-read
-		// when the complete inventory keeps all working sells within the
-		// shares held (owner decision 2026-10-10 07:28 CEST).
+		// A sale of at most the confirmed long position, of any order type,
+		// is admitted whatever else is working and whether or not the
+		// open-order inventory can be read (owner decision 2026-10-12 19:55
+		// CEST; TestHeldLongExitAdmission). Only a sale above the position
+		// needs allow_stock_short.
 		{name: "small limit sell of a held long passes", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 10),
 			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 10), notional: 75, inv: current},
-		{name: "limit sell with a competing sell beyond the position keeps the short re-read", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 100),
-			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 100), notional: 750, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 3901}, wantErr: "allow_stock_short"},
-		{name: "limit sell on stale inventory keeps the short re-read", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 10),
-			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 10), notional: 75, inv: protectiveExitInventory{}, wantErr: "allow_stock_short"},
-		{name: "limit sell above the position keeps the short re-read", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 4001),
+		{name: "limit sell beside a competing sell beyond the position is admitted", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 100),
+			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 100), notional: 750, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 3901}},
+		{name: "limit sell without the open-order inventory is admitted", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 10),
+			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 10), notional: 75, inv: protectiveExitInventory{}},
+		{name: "limit sell above the position needs allow_stock_short", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 4001),
 			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 4001), notional: 7.5, inv: current, wantErr: "allow_stock_short"},
 		{name: "flat position", draft: protectiveExitTestDraft("STK", rpc.OrderTypeTRAIL, 10),
 			position: protectiveExitTestPosition(0, rpc.OrderActionSell, 10), notional: 75, inv: current, wantErr: "allow_stock_short"},
@@ -83,8 +85,8 @@ func TestProtectiveStockExitExemptionBoundary(t *testing.T) {
 			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 4001), notional: 30007.5, inv: current, wantErr: "order cap in force 12,000 EUR (5% of NLV 240,000 EUR"},
 		{name: "another working sell exceeds the position", draft: protectiveExitTestDraft("STK", rpc.OrderTypeTRAIL, 4000),
 			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 4000), notional: 30000, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 1}, wantErr: "order cap in force 12,000 EUR (5% of NLV 240,000 EUR"},
-		{name: "small stop with a competing sell keeps the short re-read", draft: protectiveExitTestDraft("STK", rpc.OrderTypeTRAIL, 100),
-			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 100), notional: 750, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 3901}, wantErr: "allow_stock_short"},
+		{name: "small stop with a competing sell is admitted under the cap", draft: protectiveExitTestDraft("STK", rpc.OrderTypeTRAIL, 100),
+			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 100), notional: 750, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 3901}},
 		{name: "stale inventory fails closed", draft: protectiveExitTestDraft("STK", rpc.OrderTypeTRAIL, 4000),
 			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 4000), notional: 30000, inv: protectiveExitInventory{}, wantErr: "order cap in force 12,000 EUR (5% of NLV 240,000 EUR"},
 		{name: "a shrink of a working stop passes despite a hand sale", draft: protectiveExitTestDraft("STK", rpc.OrderTypeTRAIL, 3000),
@@ -118,6 +120,122 @@ func TestProtectiveStockExitExemptionBoundary(t *testing.T) {
 				t.Fatalf("err = %v, want the protective exit to pass", err)
 			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
 				t.Fatalf("err = %v, want a refusal naming %s", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Owner decision 2026-10-12 19:55 CEST: "if my confirmed (through API)
+// position size is 70, one must be able to sell 70." A sell of at most the
+// confirmed long position of its exact contract is admitted for a stock,
+// ETF, option, bill or bond, whatever else is working on it, Canary's own
+// full-position stop and hand orders in TWS included, and whether or not the
+// open-order inventory can be read. A sale above the position, a flat-position
+// sell and a short open keep allow_stock_short and allow_option_sell_to_open.
+// The notional cap (12,000 EUR here) and the option contract cap still apply:
+// the table lifts the contract cap to isolate the admission.
+func TestHeldLongExitAdmission(t *testing.T) {
+	t.Parallel()
+	call := func(orderType string, qty int) rpc.OrderDraft {
+		d := protectiveExitTestDraft("OPT", orderType, qty)
+		d.Contract.ConID, d.Contract.Right, d.Contract.Strike, d.Contract.Expiry, d.Contract.Multiplier = 5002, "C", 120, "20261120", 100
+		return d
+	}
+	bond := func(secType string, qty int) rpc.OrderDraft {
+		d := protectiveExitTestDraft(secType, rpc.OrderTypeLMT, qty)
+		d.Contract.ConID = 5003
+		d.Bond = &rpc.OrderBondTerms{Instrument: rpc.OrderBondInstrumentByIdentifier, Maturity: "2027-06-30", FacePerUnit: 1}
+		return d
+	}
+	none := protectiveExitInventory{Current: true}
+	cases := []struct {
+		name     string
+		draft    rpc.OrderDraft
+		position rpc.OrderPositionImpact
+		notional float64
+		inv      protectiveExitInventory
+		wantErr  string
+	}{
+		{name: "70 of 70 held calls with no working orders", draft: call(rpc.OrderTypeLMT, 70),
+			position: protectiveExitTestPosition(70, rpc.OrderActionSell, 70), notional: 10500, inv: none},
+		{name: "70 of 70 held calls while a full-position stop is working", draft: call(rpc.OrderTypeLMT, 70),
+			position: protectiveExitTestPosition(70, rpc.OrderActionSell, 70), notional: 10500, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 70}},
+		{name: "70 of 70 held calls without the open-order inventory", draft: call(rpc.OrderTypeLMT, 70),
+			position: protectiveExitTestPosition(70, rpc.OrderActionSell, 70), notional: 10500, inv: protectiveExitInventory{}},
+		{name: "a partial close of the calls beside a hand sale", draft: call(rpc.OrderTypeTRAILLIMIT, 30),
+			position: protectiveExitTestPosition(70, rpc.OrderActionSell, 30), notional: 4500, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 70}},
+		{name: "71 of 70 held calls is a sell-to-open", draft: call(rpc.OrderTypeLMT, 71),
+			position: protectiveExitTestPosition(70, rpc.OrderActionSell, 71), notional: 10650, inv: none, wantErr: "allow_option_sell_to_open"},
+		{name: "a short option open is still refused", draft: call(rpc.OrderTypeLMT, 5),
+			position: protectiveExitTestPosition(0, rpc.OrderActionSell, 5), notional: 750, inv: none, wantErr: "allow_option_sell_to_open"},
+		{name: "stock full close while Canary's full-position stop is working", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 4000),
+			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 4000), notional: 10000, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 4000}},
+		{name: "ETF full close beside a hand sale of the whole line", draft: protectiveExitTestDraft("ETF", rpc.OrderTypeLMT, 300),
+			position: protectiveExitTestPosition(300, rpc.OrderActionSell, 300), notional: 9000, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 300}},
+		{name: "4001 of 4000 shares is a flip", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 4001),
+			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 4001), notional: 10002.5, inv: none, wantErr: "allow_stock_short"},
+		{name: "bond sale of the held face beside another working sale", draft: bond("BOND", 10000),
+			position: protectiveExitTestPosition(10000, rpc.OrderActionSell, 10000), notional: 9842, inv: protectiveExitInventory{Current: true, OtherWorkingSameSide: 10000}},
+		{name: "bill sale of the held face without the open-order inventory", draft: bond("BILL", 10000),
+			position: protectiveExitTestPosition(10000, rpc.OrderActionSell, 10000), notional: 9900, inv: protectiveExitInventory{}},
+		{name: "bond sale above the held face is a flip", draft: bond("BOND", 10001),
+			position: protectiveExitTestPosition(10000, rpc.OrderActionSell, 10001), notional: 9843, inv: none, wantErr: "opens or flips a short"},
+		{name: "the notional cap still binds a full close", draft: protectiveExitTestDraft("STK", rpc.OrderTypeLMT, 4000),
+			position: protectiveExitTestPosition(4000, rpc.OrderActionSell, 4000), notional: 30000, inv: none, wantErr: "order cap in force 12,000 EUR"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			table := testOrderLimitsTable(10000)
+			table.MaxOptionContracts = new(100)
+			limits := risk.EvaluateOrderLimits(table, "EUR", risk.OrderLimitsNLV{Base: 240000, AsOf: time.Now()}, nil, "")
+			err := validateOrderRiskAuthority(limits, tc.draft, tc.position, protectiveExitTestNotional(tc.notional), "EUR", tc.inv, deltaReductionEvidence{})
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("err = %v, want the sale of a held long admitted", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("err = %v, want a refusal naming %s", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// The admission rests on a confirmed position: every position read for an
+// order (preview, admission and the wire guard) passes
+// confirmedPositionProjection first, and a stale, incomplete or foreign
+// projection refuses the order there in plain words before any rule reads
+// position.Before.
+func TestHeldLongExitNeedsAConfirmedPosition(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 12, 18, 0, 0, 0, time.UTC)
+	held := []*ibkrlib.RawPosition{{Account: "DU1234567", Position: 70, Contract: ibkrlib.Contract{ConID: 5002, Symbol: "SYNA", SecType: "OPT", Currency: "EUR"}}}
+	cases := []struct {
+		name       string
+		projection ibkrlib.PortfolioProjectionBinding
+		wantErr    string
+	}{
+		{name: "a current projection confirms the position",
+			projection: ibkrlib.PortfolioProjectionBinding{Positions: held, Health: ibkrlib.PortfolioStreamHealth{Account: "DU1234567", InitialCompletedAt: now.Add(-time.Minute)}}},
+		{name: "a stale receipt refuses",
+			projection: ibkrlib.PortfolioProjectionBinding{Positions: held, Health: ibkrlib.PortfolioStreamHealth{Account: "DU1234567", InitialCompletedAt: now.Add(-portfolioStreamReceiptMaxAge - time.Second)}},
+			wantErr:    "current account-scoped portfolio evidence is stale; refresh and preview again"},
+		{name: "an incomplete download refuses",
+			projection: ibkrlib.PortfolioProjectionBinding{Positions: held, Health: ibkrlib.PortfolioStreamHealth{Account: "DU1234567"}},
+			wantErr:    "current account-scoped portfolio evidence is unavailable; refresh and preview again"},
+		{name: "a short download refuses",
+			projection: ibkrlib.PortfolioProjectionBinding{Positions: held, Health: ibkrlib.PortfolioStreamHealth{Account: "DU1234567", InitialCompletedAt: now.Add(-time.Minute), DownloadShortAt: now.Add(-time.Minute)}},
+			wantErr:    "current account-scoped portfolio evidence is unavailable; refresh and preview again"},
+		{name: "another account's rows refuse",
+			projection: ibkrlib.PortfolioProjectionBinding{Positions: []*ibkrlib.RawPosition{{Account: "DU7654321", Position: 70, Contract: held[0].Contract}}, Health: ibkrlib.PortfolioStreamHealth{Account: "DU1234567", InitialCompletedAt: now.Add(-time.Minute)}},
+			wantErr:    "portfolio evidence belongs to another account; refresh and preview again"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := confirmedPositionProjection(protectiveExitTestScope, tc.projection, now)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("err = %v, want the projection confirmed", err)
+			case tc.wantErr != "" && (err == nil || !errors.Is(err, ErrTradingDisabled) || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("err = %v, want a trading-disabled refusal saying %q", err, tc.wantErr)
 			}
 		})
 	}

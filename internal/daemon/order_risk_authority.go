@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -146,6 +145,24 @@ func (s *Server) resolvePreviewOrderContract(ctx context.Context, authority *ord
 	return result, nil
 }
 
+// confirmedPositionProjection is the one trust boundary every position read
+// for an order passes before any rule reads position.Before: the broker's
+// portfolio projection is current for the order's own account and mode (a
+// completed account-scoped receipt, no short download, fresh within
+// portfolioStreamReceiptMaxAge) and every row is in scope. A stale or
+// incomplete projection refuses here, in plain words, so the held-long exit
+// admission in validateOrderRiskAuthority only ever sees a confirmed
+// position (owner decision 2026-10-12 19:55 CEST: "confirmed (through API)").
+func confirmedPositionProjection(scope brokerStateScope, projection ibkrlib.PortfolioProjectionBinding, now time.Time) error {
+	if health := classifyPortfolioStreamHealth(scope, projection.Health, now); health != orderIntegrityHealthCurrent {
+		return fmt.Errorf("%w: current account-scoped portfolio evidence is %s; refresh and preview again", ErrTradingDisabled, health)
+	}
+	if !cachedPositionsMatchBrokerScope(projection.Positions, scope) {
+		return fmt.Errorf("%w: portfolio evidence belongs to another account; refresh and preview again", ErrTradingDisabled)
+	}
+	return nil
+}
+
 func (s *Server) capturePreviewOrderPositionAuthority(ctx context.Context, status rpc.TradingStatus, contract rpc.ContractParams, action string, qty int) (orderPositionAuthority, error) {
 	if s.orderRiskAuthorityForTest != nil {
 		return s.orderRiskAuthorityForTest(ctx, status, contract, action, qty)
@@ -195,11 +212,8 @@ func (s *Server) captureBoundOrderPositionAuthority(ctx context.Context, connect
 		return orderPositionAuthority{}, brokerWriteTransactionDriftError()
 	}
 	scope := brokerStateScope{Account: status.Account, Mode: status.Mode}
-	if health := classifyPortfolioStreamHealth(scope, projection.Health, s.orderNow()); health != orderIntegrityHealthCurrent {
-		return orderPositionAuthority{}, fmt.Errorf("%w: current account-scoped portfolio evidence is %s; refresh and preview again", ErrTradingDisabled, health)
-	}
-	if !cachedPositionsMatchBrokerScope(projection.Positions, scope) {
-		return orderPositionAuthority{}, fmt.Errorf("%w: portfolio evidence belongs to another account; refresh and preview again", ErrTradingDisabled)
+	if err := confirmedPositionProjection(scope, projection, s.orderNow()); err != nil {
+		return orderPositionAuthority{}, err
 	}
 	positionEvidence, err := exactRiskPositionEvidenceForContract(projection.Positions, contract)
 	if err != nil {
@@ -218,9 +232,9 @@ func (s *Server) captureBoundOrderPositionAuthority(ctx context.Context, connect
 		Generation: projection.Generation, Health: projection.Health,
 		EvidenceAt: portfolioStreamEvidenceAsOf(projection.Health),
 	}
-	// A position-only close/reduce classification does not grant a risk
-	// exemption: reqAllOpenOrders cannot prove future manual-TWS activity. Only
-	// the narrow protective stock exit (protective_exit.go) is excused.
+	// The confirmed projection above is what admits a sale of a held long as
+	// the close or reduction it is (validateOrderRiskAuthority); the cap
+	// exemptions (protective_exit.go, delta_reduction.go) read more.
 	// Account base currency is immutable for one concrete broker account and
 	// ExchangeRate=1 inference is never authority for an order cap.
 	account, provenance, err := connector.RequestAccountSummaryWithProvenance(ctx, 3*time.Second)
@@ -290,11 +304,8 @@ func (s *Server) captureWireOrderPositionAuthority(binding brokerWriteTransactio
 		return orderPositionAuthority{}, brokerWriteTransactionDriftError()
 	}
 	scope := brokerStateScope{Account: status.Account, Mode: status.Mode}
-	if health := classifyPortfolioStreamHealth(scope, projection.Health, s.orderNow()); health != orderIntegrityHealthCurrent {
-		return orderPositionAuthority{}, fmt.Errorf("%w: current account-scoped portfolio evidence is %s; refresh and preview again", ErrTradingDisabled, health)
-	}
-	if !cachedPositionsMatchBrokerScope(projection.Positions, scope) {
-		return orderPositionAuthority{}, fmt.Errorf("%w: portfolio evidence belongs to another account; refresh and preview again", ErrTradingDisabled)
+	if err := confirmedPositionProjection(scope, projection, s.orderNow()); err != nil {
+		return orderPositionAuthority{}, err
 	}
 	if draft.StrategyGroup != nil {
 		if err := verifyStrategyPositionProjection(projection.Positions, *draft.StrategyGroup); err != nil {
@@ -587,21 +598,9 @@ func validateOrderRiskAuthority(limits risk.OrderLimitsInForce, draft rpc.OrderD
 		return nil
 	}
 	if ibkrlib.IsBillOrBond(draft.Contract.SecType) && stockShortOrFlip(position.Effect) {
-		// A bond sale only ever reduces or closes a held line.
+		// A bond sale only ever reduces or closes a held line; one of at most
+		// the held face is admitted below like every other held-long exit.
 		return fmt.Errorf("a bond order that opens or flips a short position is not supported")
-	}
-	if bondSaleCandidate(draft, position) {
-		// Two sales of the same held face, each judged against the unfilled
-		// position, would together sell short. The complete open-order list
-		// must show room for this sale beside every other working one.
-		switch {
-		case !exit.Current:
-			return fmt.Errorf("a bond sale needs the broker's complete, current open-order list to show no other working sale already sells the held face; preview again")
-		case math.IsNaN(exit.OtherWorkingSameSide) || math.IsInf(exit.OtherWorkingSameSide, 0) || exit.OtherWorkingSameSide < 0 ||
-			exit.OtherWorkingSameSide+float64(draft.Quantity) > position.Before+1e-9:
-			return fmt.Errorf("this bond sale of %d units with %s already working to sell exceeds the %s held; cancel a working sale first",
-				draft.Quantity, strconv.FormatFloat(exit.OtherWorkingSameSide, 'f', -1, 64), strconv.FormatFloat(position.Before, 'f', -1, 64))
-		}
 	}
 	if ibkrlib.IsBillOrBond(draft.Contract.SecType) && strings.EqualFold(draft.Action, rpc.OrderActionBuy) {
 		// A bond buy matures within [order_limits].max_bond_maturity_years
@@ -617,21 +616,24 @@ func validateOrderRiskAuthority(limits risk.OrderLimitsInForce, draft rpc.OrderD
 			return err
 		}
 	}
-	riskEffect := position.Effect
-	if strings.EqualFold(draft.Action, rpc.OrderActionSell) && isRiskReducing(riskEffect) && !protectiveExit && !heldStockExitAdmitted(draft, position, exit) {
-		// Incomplete manual-order visibility means the apparent long exit may
-		// arrive after another sell consumed that capacity. Apply the same
-		// explicit short-opening permission as a zero-position sell. A sale of
-		// a held long is excused when the complete inventory shows it and
-		// every other working sell within the shares held (owner decision
-		// 2026-10-10 07:28 CEST); what remains is a hand order placed in TWS
-		// after this one is sent, as for the protective exit.
-		riskEffect = rpc.OrderPositionEffectOpenShort
-	}
+	// Held-long exit admission (owner decision 2026-10-12 19:55 CEST: "if my
+	// confirmed (through API) position size is 70, one must be able to sell
+	// 70. Everything else is bollocks. If someone sells at the same time
+	// through TWS, that's unfortunate and should be restricted outside of
+	// Desk"). A sell of at most the confirmed long position of its exact
+	// contract (position.Before, from the projection confirmedPositionProjection
+	// admitted) is the close or reduction its effect says, for a stock, ETF,
+	// option, bill or bond alike; other working sells, Canary's own
+	// protective stop and hand orders in TWS included, do not block it. Only
+	// an order that opens or flips a short needs the permission below. This
+	// supersedes the apparent-exit re-read as a short open (incomplete
+	// manual-order visibility) and the narrower stock-only admission under the
+	// open-order inventory of 2026-10-10 07:28 CEST (2f871699). The order cap
+	// above and every other gate still apply.
 	switch {
-	case isStockLikeRiskSecType(draft.Contract.SecType) && stockShortOrFlip(riskEffect) && !limits.AllowStockShort:
+	case isStockLikeRiskSecType(draft.Contract.SecType) && stockShortOrFlip(position.Effect) && !limits.AllowStockShort:
 		return fmt.Errorf("stock short/flip requires [order_limits].allow_stock_short = true")
-	case strings.EqualFold(draft.Contract.SecType, "OPT") && optionSellToOpen(draft.Action, riskEffect) && !limits.AllowOptionSellToOpen:
+	case strings.EqualFold(draft.Contract.SecType, "OPT") && optionSellToOpen(draft.Action, position.Effect) && !limits.AllowOptionSellToOpen:
 		return fmt.Errorf("option sell-to-open requires [order_limits].allow_option_sell_to_open = true")
 	}
 	return nil

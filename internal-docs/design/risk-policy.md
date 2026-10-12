@@ -389,12 +389,12 @@ was refused or had to be split, and a tighter cap made that worse. Implemented
    same way and reads the inventory per leg. Proposal rows are not re-judged:
    reduce, sweep, governor and risk-reduction rows all go through the preview.
 5. **Unchanged.** Freeze, account and route pins, previews and WhatIf, the
-   sell-as-short re-read (`allow_stock_short`, narrowed for held longs on
-   2026-10-10, item 10) and the sell-to-open re-read
-   (`allow_option_sell_to_open`), origin gating, owner approval, the drawdown
-   brake, sell-only and the governor. The protective stock exit keeps its own
-   exemption: it reads the open-order inventory, not deltas, also passes the
-   short re-read, and admits an over-hedged stock's stop that this rule would
+   short and sell-to-open permissions (`allow_stock_short`,
+   `allow_option_sell_to_open`; since 2026-10-12 they judge only an order
+   that opens or flips a short, item 10), origin gating, owner approval, the
+   drawdown brake, sell-only and the governor. The protective stock exit
+   keeps its own exemption: it reads the open-order inventory, not deltas,
+   and admits an over-hedged stock's stop that this rule would
    not, so it is not a special case and was not folded in. The sweep bill
    exemption is unchanged.
 6. **What still bounds cost and risk.** A qualifying order can only shrink a
@@ -491,18 +491,36 @@ was refused or had to be split, and a tighter cap made that worse. Implemented
    option line's right, expiry and multiplier so `exitLowersAbsoluteDelta`
    judges exactly as the gate does (`deltaReductionEvidence.judge`), minus
    the working-order inventory.
-10. **Still open.** An option sell-to-close still needs
-    `allow_option_sell_to_open`, so with it false the owner's option exits
-    remain refused by the re-read, not by the caps. A stock exit no longer
-    needs `allow_stock_short` when the complete, current open-order inventory
-    keeps it and every other working sell within the long position held
-    (owner decision 2026-10-10 07:28 CEST: "Admit them";
-    `heldStockExitAdmitted` in `protective_exit.go`). Any order type
-    qualifies; stale or incomplete inventory, a sale above the position, or
-    working sells beyond it keep the re-read. The residual risk is a hand
-    order placed in TWS after Canary sends, as for the protective exit. Bills and bonds keep the
-    cap under this rule (no equity delta) unless the sweep bill exemption
-    covers them.
+10. **Held-long exits (owner decision 2026-10-12 19:55 CEST).** "I'm happy
+    to lift a rule, but the system needs to work with common sense: if my
+    confirmed (through API) position size is 70, one must be able to sell
+    70. Everything else is bollocks. If someone sells at the same time
+    through TWS, that's unfortunate and should be restricted outside of
+    Desk." A sell of at most the confirmed long position of its exact
+    contract is admitted as the close or reduction it is, for a stock, ETF,
+    option, bill or bond and any order type, whatever else is working on the
+    contract (Canary's own full-position stop and hand orders in TWS
+    included) and whether or not the open-order inventory can be read
+    (`validateOrderRiskAuthority`, `TestHeldLongExitAdmission`). "Confirmed"
+    is the broker's current, complete, account-scoped portfolio projection
+    (`confirmedPositionProjection`); a stale or incomplete projection refuses
+    the order in plain words before any rule reads the position. Only an
+    order that opens or flips a short needs `allow_stock_short` or
+    `allow_option_sell_to_open`. The bond-sale inventory rule ("cancel a
+    working sale first") is gone on the same terms. This supersedes the
+    apparent-exit re-read as a short open and the narrower stock-only
+    admission under the open-order inventory of 2026-10-10 07:28 CEST
+    (2f871699). Before this the Rulebook proposed a held option's exit and
+    the gate refused it as a sell-to-open (incident 2026-10-12, 70 of 70 held
+    calls, no working orders). The notional cap, the option contract cap
+    (both with the delta-reducing exit exemption above) and every other gate
+    still apply; the protective stop's own notional cap exemption keeps its
+    competing-sell condition (protective-stop-guard.md). Bills and bonds keep
+    the cap under this rule (no equity delta) unless the sweep bill exemption
+    covers them. The accepted residual risk is the double sell the owner
+    named: a sale beside another working sell of the same line can together
+    sell more than is held; the stop guard's timing for Canary's own stock
+    stops is in protective-stop-guard.md.
 
 ## Safety invariants
 
