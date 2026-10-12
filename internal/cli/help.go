@@ -41,7 +41,7 @@ func commandActions(name string) []actionHelp {
 			{"submit-bundle", "Submit an approved bundle through the trading gates", "canary proposals submit-bundle --stdin [--json]"},
 			{"bundle-status", "Read a bundle receipt using its private reference", "canary proposals bundle-status --bundle-ref-stdin [--json]"},
 			{"submit", "Submit an approved proposal through the trading gates", "canary proposals submit KEY REVISION [flags]"},
-			{"reduce", "Preview a reduction; --submit requests a gated order", "canary proposals reduce [SYMBOL] --percent N [--con-id ID] [flags]\ncanary proposals reduce --portfolio --percent N [flags]"},
+			{"reduce", "Preview a reduction with its token; --submit --preview-token places the reviewed terms", "canary proposals reduce [SYMBOL] --percent N [--con-id ID] [--adaptive-priority P] [--json]\ncanary proposals reduce --submit --preview-token TOKEN [--request-ref REF] [--json]\ncanary proposals reduce --portfolio --percent N [--adaptive-priority P] [--json]\ncanary proposals reduce --portfolio --submit --preview-token TOKEN... [--request-ref REF] [--json]"},
 			{"request-stop", "Draft a protective stop without placing it", "canary proposals request-stop [SYMBOL] [--con-id ID] [--json]"},
 			{"ignore", "Record that a proposal should be ignored", "canary proposals ignore KEY [REVISION] [--reason TEXT] [--json]"},
 			{"veto", "Stop a pending pre-authorised submission; human only", "canary proposals veto KEY [REVISION] [--reason TEXT] [--json]"},

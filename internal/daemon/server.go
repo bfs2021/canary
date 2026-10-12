@@ -117,10 +117,11 @@ type Server struct {
 	protectiveStopGuardMu sync.Mutex
 	protectiveStopGuard   protectiveStopGuardState
 
-	// reduceBasketMu guards reduceBasketDedupe, the short-TTL replay cache for
-	// so a double-tap or client retry can never fan the basket out twice.
-	reduceBasketMu     sync.Mutex
-	reduceBasketDedupe map[string]reduceBasketDedupeEntry
+	// reduceDedupeMu guards reduceDedupe, the short-TTL replay cache keyed by
+	// a reduce submit's request_ref, so a double-tap or client retry replays
+	// the recorded result and never sends a reduction or a basket twice.
+	reduceDedupeMu sync.Mutex
+	reduceDedupe   map[string]reduceDedupeEntry
 
 	// minTickByConID caches broker-reported minimum price increments per
 	// contract (see resolveContractMinTick).
@@ -531,14 +532,17 @@ type Server struct {
 	// orderDeltaPositionsForTest replaces the positions read the
 	// delta-reducing exit exemption measures its underlying from.
 	orderDeltaPositionsForTest func(context.Context) (*rpc.PositionsResult, error)
-	orderPreviewWhatIf         func(context.Context, rpc.OrderDraft) (rpc.OrderWhatIfResult, error)
-	orderWritesEnabled         func() bool
-	gatewayReadyForTrading     func() bool
-	gatewayAccountForTrading   func() string
-	orderReserveBrokerID       func(context.Context) (int, error)
-	orderPlaceBroker           func(context.Context, *ibkrlib.Contract, *ibkrlib.RawOrder) error
-	orderCancelBroker          func(context.Context, int) error
-	optionExerciseBroker       func(context.Context, ibkrlib.OptionExerciseRequest) error
+	// reducePositionsForTest replaces the positions read behind a reduce
+	// preview, sweep and tokened submit (reducePositions).
+	reducePositionsForTest   func(context.Context) (*rpc.PositionsResult, error)
+	orderPreviewWhatIf       func(context.Context, rpc.OrderDraft) (rpc.OrderWhatIfResult, error)
+	orderWritesEnabled       func() bool
+	gatewayReadyForTrading   func() bool
+	gatewayAccountForTrading func() string
+	orderReserveBrokerID     func(context.Context) (int, error)
+	orderPlaceBroker         func(context.Context, *ibkrlib.Contract, *ibkrlib.RawOrder) error
+	orderCancelBroker        func(context.Context, int) error
+	optionExerciseBroker     func(context.Context, ibkrlib.OptionExerciseRequest) error
 	// twsOrderControlRun replaces the client-0 control connection in tests;
 	// nil runs ibkrlib.RunTWSOrderControl against the configured endpoint.
 	twsOrderControlRun func(context.Context, ibkrlib.TWSOrderControlConfig, string, ibkrlib.TWSOrderControlTarget, ibkrlib.TWSOrderControlReplacement) (ibkrlib.TWSOrderControlReceipt, error)

@@ -1253,16 +1253,66 @@ type TradeProposalReduceParams struct {
 	Symbol        string `json:"symbol,omitempty"`
 	Percent       int    `json:"percent"`
 	IncludeHedges bool   `json:"include_hedges,omitempty"`
-	TimeoutMs     int    `json:"timeout_ms,omitempty"`
+	// AdaptivePriority asks for the IBKR Adaptive algorithm on the limit:
+	// Normal, Patient or Urgent, or "none" for a plain limit. Empty means
+	// Normal where the contract supports Adaptive (a US stock or ETF routed
+	// SMART); elsewhere the preview sends a plain limit at the mid and says
+	// so in its terms. Preview only; a tokened submit carries it in the token.
+	AdaptivePriority string `json:"adaptive_priority,omitempty"`
+	TimeoutMs        int    `json:"timeout_ms,omitempty"`
 	// Origin identifies who is asking (OrderOrigin*) for audit and the
 	// live-origin write gate; submit only.
 	Origin string `json:"origin,omitempty"`
+	// PreviewToken, on submit, places exactly the terms a reduce preview
+	// returned and nothing else: the daemon never re-sizes or re-prices a
+	// tokened reduction. Without it, submit previews the holding at the live
+	// book and places that (the human CLI path).
+	PreviewToken string `json:"preview_token,omitempty"`
+	// RequestRef, on submit, names this one submission so a retry with the
+	// same reference replays the recorded result instead of sending again.
+	RequestRef string `json:"request_ref,omitempty"`
+}
+
+// TradeProposalReduceTerms are the exact terms one reduce preview token
+// binds: the contract, side, quantity, order type, limit, time in force and
+// algorithm the broker will receive, verbatim, when the token is submitted.
+// PriceBound is the only thing a tokened submit re-checks against the
+// market: the current mid must lie within it, or the submit refuses and
+// asks for a new preview. The limit itself never moves.
+type TradeProposalReduceTerms struct {
+	PreviewTokenID string         `json:"preview_token_id"`
+	ExpiresAt      time.Time      `json:"expires_at"`
+	Contract       ContractParams `json:"contract"`
+	Action         string         `json:"action"`
+	Quantity       int            `json:"quantity"`
+	OrderType      string         `json:"order_type"`
+	LimitPrice     float64        `json:"limit_price"`
+	TIF            string         `json:"tif"`
+	// Algo is "Adaptive" when the order carries the IBKR Adaptive algorithm
+	// with AdaptivePriority; empty for a plain limit, with AlgoNote saying
+	// why when Adaptive was asked for or expected.
+	Algo             string                        `json:"algo,omitempty"`
+	AdaptivePriority string                        `json:"adaptive_priority,omitempty"`
+	AlgoNote         string                        `json:"algo_note,omitempty"`
+	PriceBound       TradeProposalReducePriceBound `json:"price_bound"`
+}
+
+// TradeProposalReducePriceBound states how far the market may move from the
+// reviewed mid before a tokened submit refuses to send the reviewed limit:
+// the current mid must satisfy Low <= mid <= High.
+type TradeProposalReducePriceBound struct {
+	ReferenceMid float64 `json:"reference_mid"`
+	MaxMovePct   float64 `json:"max_move_pct"`
+	Low          float64 `json:"low"`
+	High         float64 `json:"high"`
 }
 
 // TradeProposalReduceResult is returned by both reduce_preview and
-// reduce_submit. Preview carries the sanitized order preview (the raw token
-// never leaves the daemon; PreviewTokenID is for audit only) and SubmitEligible.
-// opted into hedges, Blockers carries hedge_excluded and no token is minted.
+// reduce_submit. Preview carries the signed PreviewToken with its exact
+// Terms, the sanitized order preview and SubmitEligible; a tokened submit
+// echoes the token's terms and the place outcome. When the holding is a
+// hedge the caller has not opted into, Blockers carries hedge_excluded and
+// no token is minted.
 type TradeProposalReduceResult struct {
 	Accepted              bool                       `json:"accepted"`
 	ConID                 int                        `json:"con_id,omitempty"`
@@ -1273,12 +1323,16 @@ type TradeProposalReduceResult struct {
 	PositionQuantity      float64                    `json:"position_quantity"`
 	ReduceQuantity        int                        `json:"reduce_quantity"`
 	HedgeLike             bool                       `json:"hedge_like,omitempty"`
+	PreviewToken          string                     `json:"preview_token,omitempty"`
 	PreviewTokenID        string                     `json:"preview_token_id,omitempty"`
 	PreviewTokenExpiresAt time.Time                  `json:"preview_token_expires_at,omitzero"`
+	Terms                 *TradeProposalReduceTerms  `json:"terms,omitempty"`
 	SubmitEligible        bool                       `json:"submit_eligible"`
 	Preview               *TradeProposalOrderPreview `json:"preview,omitempty"`
 	Place                 *OrderPlaceResult          `json:"place,omitempty"`
 	OrderRef              string                     `json:"order_ref,omitempty"`
+	RequestRef            string                     `json:"request_ref,omitempty"`
+	Replayed              bool                       `json:"replayed,omitempty"`
 	Blockers              []TradingBlocker           `json:"blockers,omitempty"`
 	Message               string                     `json:"message,omitempty"`
 	AsOf                  time.Time                  `json:"as_of"`
@@ -1287,10 +1341,17 @@ type TradeProposalReduceResult struct {
 // TradeProposalReducePortfolioParams is the one-tap portfolio risk-off sweep:
 // never selected: trimming them would increase net risk, not reduce it, so
 type TradeProposalReducePortfolioParams struct {
-	Percent    int    `json:"percent"`
-	TimeoutMs  int    `json:"timeout_ms,omitempty"`
-	Origin     string `json:"origin,omitempty"`
-	RequestRef string `json:"request_ref,omitempty"`
+	Percent int `json:"percent"`
+	// AdaptivePriority applies to every leg as in TradeProposalReduceParams.
+	AdaptivePriority string `json:"adaptive_priority,omitempty"`
+	TimeoutMs        int    `json:"timeout_ms,omitempty"`
+	Origin           string `json:"origin,omitempty"`
+	RequestRef       string `json:"request_ref,omitempty"`
+	// PreviewTokens, on submit, are the legs' tokens from a portfolio preview:
+	// each is placed on its own at exactly its reviewed terms, and a refused
+	// leg never holds the others. Without them, submit sizes the sweep from
+	// the live book (the paired app's path).
+	PreviewTokens []string `json:"preview_tokens,omitempty"`
 }
 
 // TradeProposalReduceLeg is one position's slice of a portfolio sweep. On
@@ -1309,7 +1370,9 @@ type TradeProposalReduceLeg struct {
 	NotionalBase              *float64                   `json:"notional_base,omitempty"`
 	PositionUnrealizedPnL     float64                    `json:"position_unrealized_pnl_ccy,omitempty"`
 	PositionUnrealizedPnLBase *float64                   `json:"position_unrealized_pnl_base,omitempty"`
+	PreviewToken              string                     `json:"preview_token,omitempty"`
 	PreviewTokenID            string                     `json:"preview_token_id,omitempty"`
+	Terms                     *TradeProposalReduceTerms  `json:"terms,omitempty"`
 	SubmitEligible            bool                       `json:"submit_eligible"`
 	Preview                   *TradeProposalOrderPreview `json:"preview,omitempty"`
 	Place                     *OrderPlaceResult          `json:"place,omitempty"`
@@ -1335,6 +1398,7 @@ type TradeProposalReducePortfolioResult struct {
 	TotalNotional        float64                  `json:"total_notional,omitempty"`
 	BaseCurrency         string                   `json:"base_currency,omitempty"`
 	FXIncomplete         bool                     `json:"fx_incomplete,omitempty"`
+	RequestRef           string                   `json:"request_ref,omitempty"`
 	Replayed             bool                     `json:"replayed,omitempty"`
 	Blockers             []TradingBlocker         `json:"blockers,omitempty"`
 	Message              string                   `json:"message,omitempty"`

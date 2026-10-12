@@ -1,0 +1,34 @@
+# canary proposals reduce --submit --preview-token ibkrp4.synthetic-reduce-leg-1.sig --request-ref desk-7f3a · COLUMNS=80 · colour off
+
+Reduce Submit  accepted=true submit_eligible=true
+Holding        SYNA (conID 700001)
+Reduce         SELL 50 of 100 sh (50%)
+Token ID       cmVkdWNlLXRva2VuLTE
+Terms          SELL 50 SYNA LMT 25.00 DAY · Adaptive Normal
+Price bound    mid 25.00 ±0.50% (24.8750 to 25.1250)
+Expires        2026-09-05T12:10:00Z
+Order ref      canary-20260905-140000
+Broker ID      1003
+Lifecycle      pending_submit
+OCA group      canary-oca-canary-20260905-120000 (type 2)
+Request ref    desk-7f3a
+Message        paper broker placeOrder transmit attempted; waiting for broker
+               lifecycle callback
+
+# canary proposals reduce --submit --preview-token ibkrp4.synthetic-reduce-leg-1.sig --request-ref desk-7f3a · COLUMNS=80 · colour on, ESC written as \x1b
+
+Reduce Submit  accepted=true submit_eligible=true
+\x1b[2mHolding       \x1b[0m SYNA (conID 700001)
+\x1b[2mReduce        \x1b[0m SELL 50 of 100 sh (50%)
+\x1b[2mToken ID      \x1b[0m cmVkdWNlLXRva2VuLTE
+\x1b[2mTerms         \x1b[0m SELL 50 SYNA LMT 25.00 DAY · Adaptive Normal
+\x1b[2mPrice bound   \x1b[0m mid 25.00 ±0.50% (24.8750 to 25.1250)
+\x1b[2mExpires       \x1b[0m 2026-09-05T12:10:00Z
+\x1b[2mOrder ref     \x1b[0m canary-20260905-140000
+\x1b[2mBroker ID     \x1b[0m 1003
+\x1b[2mLifecycle     \x1b[0m pending_submit
+\x1b[2mOCA group     \x1b[0m canary-oca-canary-20260905-120000 (type 2)
+\x1b[2mRequest ref   \x1b[0m desk-7f3a
+\x1b[2mMessage       \x1b[0m paper broker placeOrder transmit attempted; waiting for broker
+               lifecycle callback
+

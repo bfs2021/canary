@@ -676,6 +676,9 @@ canary proposals status|refresh|list|preview|prepare|prepared-status|prepare-bun
 | `--con-id` | yes | - |
 | `--include-hedges` | no | - |
 | `--portfolio` | no | - |
+| `--adaptive-priority` | yes | `Normal`, `Patient`, `Urgent`, `none` |
+| `--preview-token` | yes | - |
+| `--request-ref` | yes | - |
 | `--submit` | no | - |
 | `--json` | no | - |
 | `--all` | no | - |

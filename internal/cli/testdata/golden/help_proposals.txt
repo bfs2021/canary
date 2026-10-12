@@ -14,7 +14,8 @@ Actions
   submit-bundle     Submit an approved bundle through the trading gates
   bundle-status     Read a bundle receipt using its private reference
   submit            Submit an approved proposal through the trading gates
-  reduce            Preview a reduction; --submit requests a gated order
+  reduce            Preview a reduction with its token; --submit --preview-token
+                    places the reviewed terms
   request-stop      Draft a protective stop without placing it
   ignore            Record that a proposal should be ignored
   veto              Stop a pending pre-authorised submission; human only
@@ -38,7 +39,8 @@ Usage: \x1b[36mcanary proposals <action> [flags]\x1b[0m
   \x1b[36msubmit-bundle     \x1b[0mSubmit an approved bundle through the trading gates
   \x1b[36mbundle-status     \x1b[0mRead a bundle receipt using its private reference
   \x1b[36msubmit            \x1b[0mSubmit an approved proposal through the trading gates
-  \x1b[36mreduce            \x1b[0mPreview a reduction; --submit requests a gated order
+  \x1b[36mreduce            \x1b[0mPreview a reduction with its token; --submit --preview-token
+                    places the reviewed terms
   \x1b[36mrequest-stop      \x1b[0mDraft a protective stop without placing it
   \x1b[36mignore            \x1b[0mRecord that a proposal should be ignored
   \x1b[36mveto              \x1b[0mStop a pending pre-authorised submission; human only

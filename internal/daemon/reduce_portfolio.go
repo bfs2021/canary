@@ -14,10 +14,6 @@ import (
 // never count toward this cap.
 const maxBasketLegs = 25
 
-// reduceBasketDedupeTTL is how long a submit RequestRef is remembered so a
-// double-tap or client retry replays the prior result instead of placing again.
-const reduceBasketDedupeTTL = 90 * time.Second
-
 // minNetDeltaForSweepFraction is the materiality floor for net portfolio
 // account and noise for a large one, so this scales with NLV when available.
 const minNetDeltaForSweepFraction = 0.001 // 0.1% of NLV
@@ -25,11 +21,6 @@ const minNetDeltaForSweepFraction = 0.001 // 0.1% of NLV
 // minNetDeltaForSweepFloor is the absolute-dollar fallback materiality floor
 // used only when net liquidation value is unavailable to scale against.
 const minNetDeltaForSweepFloor = 100.0
-
-type reduceBasketDedupeEntry struct {
-	at     time.Time
-	result *rpc.TradeProposalReducePortfolioResult
-}
 
 // reduceSweepCandidate is one position the sweep will act on. dollarDelta is
 // portfolio delta, since opposite-sign rows never become candidates); qty is
@@ -214,13 +205,13 @@ func legContext(parent context.Context, timeoutMs int) (context.Context, context
 
 // reduceLegPrepare sizes and previews one candidate through the gated order
 // leg is submit-eligible, the raw preview so the caller can redeem its token.
-func (s *Server) reduceLegPrepare(ctx context.Context, c reduceSweepCandidate, timeoutMs int) (rpc.TradeProposalReduceLeg, *rpc.OrderPreviewResult) {
+func (s *Server) reduceLegPrepare(ctx context.Context, c reduceSweepCandidate, timeoutMs int, adaptive string) (rpc.TradeProposalReduceLeg, *rpc.OrderPreviewResult) {
 	leg := reduceLegBase(c)
 	if len(c.blockers) > 0 {
 		leg.Blockers = c.blockers
 		return leg, nil
 	}
-	prep, blockers := preparedReduceWithQty(c.row, c.qty, timeoutMs)
+	prep, blockers := preparedReduceWithQty(c.row, c.qty, timeoutMs, adaptive)
 	if len(blockers) > 0 {
 		leg.Blockers = blockers
 		return leg, nil
@@ -243,6 +234,7 @@ func (s *Server) reduceLegPrepare(ctx context.Context, c reduceSweepCandidate, t
 	leg.PreviewTokenID = preview.PreviewTokenID
 	leg.SubmitEligible = preview.SubmitEligible
 	leg.Preview = sanitizeProposalPreviewForProposal(preview, rpc.TradeProposal{})
+	leg.Terms = reduceTermsFor(preview.Draft, preview.Quote, preview.PreviewTokenID, preview.PreviewTokenExpiresAt, prep.algoNote)
 	if b := reduceCloseReduceBlockers(preview); len(b) > 0 {
 		leg.Blockers = b
 		return leg, nil
@@ -254,8 +246,8 @@ func (s *Server) reduceLegPrepare(ctx context.Context, c reduceSweepCandidate, t
 	return leg, preview
 }
 
-func (s *Server) reduceLegSubmit(ctx context.Context, c reduceSweepCandidate, timeoutMs int, origin string) rpc.TradeProposalReduceLeg {
-	leg, preview := s.reduceLegPrepare(ctx, c, timeoutMs)
+func (s *Server) reduceLegSubmit(ctx context.Context, c reduceSweepCandidate, timeoutMs int, origin, adaptive string) rpc.TradeProposalReduceLeg {
+	leg, preview := s.reduceLegPrepare(ctx, c, timeoutMs, adaptive)
 	if preview == nil {
 		return leg // terminal: blocked or not submit-eligible; nothing placed
 	}
@@ -340,7 +332,12 @@ func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposal
 		res.Blockers = []rpc.TradingBlocker{{Code: "bad_request", Message: fmt.Sprintf("percent %d must be between 1 and 100", p.Percent), Action: "Choose 25, 50, 75, or 100."}}
 		return res, nil
 	}
-	pos, err := s.handlePositionsList(ctx, &rpc.Request{})
+	adaptive, blockers := reduceAdaptivePriority(p.AdaptivePriority)
+	if len(blockers) > 0 {
+		res.Blockers = blockers
+		return res, nil
+	}
+	pos, err := s.reducePositions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -360,7 +357,12 @@ func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposal
 		res.BaseCurrency = pos.Portfolio.BaseCurrency
 	}
 	for _, c := range cands {
-		leg, _ := s.reduceLegPrepare(ctx, c, p.TimeoutMs)
+		leg, preview := s.reduceLegPrepare(ctx, c, p.TimeoutMs, adaptive)
+		if preview != nil {
+			// The signed token leaves with the preview so the exact leg can
+			// be submitted later; a leg that is not submit-eligible has none.
+			leg.PreviewToken = preview.PreviewToken
+		}
 		res.Legs = append(res.Legs, leg)
 	}
 	aggregateBasket(res, false)
@@ -370,21 +372,32 @@ func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposal
 func (s *Server) reducePortfolioSubmit(ctx context.Context, p rpc.TradeProposalReducePortfolioParams) (*rpc.TradeProposalReducePortfolioResult, error) {
 	now := s.reduceClock()
 	res := &rpc.TradeProposalReducePortfolioResult{Percent: p.Percent, AsOf: now}
-	if p.Percent <= 0 || p.Percent > 100 {
-		res.Blockers = []rpc.TradingBlocker{{Code: "bad_request", Message: fmt.Sprintf("percent %d must be between 1 and 100", p.Percent), Action: "Choose 25, 50, 75, or 100."}}
-		return res, nil
-	}
 	// Write gate before the dedupe replay: a freeze engaged between the
 	// original call and a RequestRef retry must surface as a blocker, not
-	// replay a pre-freeze "ok" result. Blocked results are never cached, so
+	// replay a pre-freeze "ok" result.
 	if blockers := s.proposalSubmitWriteBlockers(p.Origin); len(blockers) > 0 {
 		res.Blockers = blockers
 		return res, nil
 	}
-	if cached, ok := s.reduceBasketReplay(p.RequestRef); ok {
-		return cached, nil
+	if e, ok := s.reduceReplay(p.RequestRef); ok && e.basket != nil {
+		clone := *e.basket
+		clone.Replayed = true
+		return &clone, nil
 	}
-	pos, err := s.handlePositionsList(ctx, &rpc.Request{})
+	if len(p.PreviewTokens) > 0 {
+		// The tokens carry the legs' terms; the percent is a preview input.
+		return s.reducePortfolioSubmitTokens(ctx, p, res)
+	}
+	if p.Percent <= 0 || p.Percent > 100 {
+		res.Blockers = []rpc.TradingBlocker{{Code: "bad_request", Message: fmt.Sprintf("percent %d must be between 1 and 100", p.Percent), Action: "Choose 25, 50, 75, or 100."}}
+		return res, nil
+	}
+	adaptive, blockers := reduceAdaptivePriority(p.AdaptivePriority)
+	if len(blockers) > 0 {
+		res.Blockers = blockers
+		return res, nil
+	}
+	pos, err := s.reducePositions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -404,11 +417,88 @@ func (s *Server) reducePortfolioSubmit(ctx context.Context, p rpc.TradeProposalR
 		res.BaseCurrency = pos.Portfolio.BaseCurrency
 	}
 	for _, c := range cands {
-		res.Legs = append(res.Legs, s.reduceLegSubmit(ctx, c, p.TimeoutMs, p.Origin))
+		res.Legs = append(res.Legs, s.reduceLegSubmit(ctx, c, p.TimeoutMs, p.Origin, adaptive))
 	}
 	aggregateBasket(res, true)
-	s.reduceBasketStore(p.RequestRef, res)
+	res.RequestRef = strings.TrimSpace(p.RequestRef)
+	s.reduceRemember(p.RequestRef, reduceDedupeEntry{basket: res})
 	return res, nil
+}
+
+// reducePortfolioSubmitTokens places the legs of a reviewed basket at exactly
+// their reviewed terms: each token is taken through the reduce submit checks
+// and placed on its own, so one refused leg never holds another, and the
+// whole basket is remembered under its RequestRef. The write gate and the
+// replay have already run.
+func (s *Server) reducePortfolioSubmitTokens(ctx context.Context, p rpc.TradeProposalReducePortfolioParams, res *rpc.TradeProposalReducePortfolioResult) (*rpc.TradeProposalReducePortfolioResult, error) {
+	res.RequestRef = strings.TrimSpace(p.RequestRef)
+	if len(p.PreviewTokens) > maxBasketLegs {
+		res.Blockers = []rpc.TradingBlocker{{Code: "too_many_legs", Message: fmt.Sprintf("the basket names %d legs, above the %d-leg cap", len(p.PreviewTokens), maxBasketLegs), Action: "Submit fewer legs; nothing was sent."}}
+		return res, nil
+	}
+	pos, err := s.reducePositions(ctx)
+	if err != nil {
+		res.Blockers = []rpc.TradingBlocker{{Code: "positions_unavailable", Message: err.Error(), Action: "Retry once the daemon has refreshed positions; nothing was sent."}}
+		return res, nil
+	}
+	if pos != nil && pos.Portfolio != nil {
+		res.BaseCurrency = pos.Portfolio.BaseCurrency
+	}
+	seen := make(map[string]struct{}, len(p.PreviewTokens))
+	for _, token := range p.PreviewTokens {
+		token = strings.TrimSpace(token)
+		if _, dup := seen[token]; dup {
+			res.Legs = append(res.Legs, rpc.TradeProposalReduceLeg{Blockers: []rpc.TradingBlocker{{Code: "token_duplicate", Message: "this leg's token appears twice in the basket", Action: "Submit each leg once; the repeat was not sent."}}})
+			continue
+		}
+		seen[token] = struct{}{}
+		res.Legs = append(res.Legs, reduceLegFromTokenOutcome(s.reduceTokenLeg(ctx, token, pos, p.TimeoutMs, p.Origin)))
+	}
+	aggregateBasket(res, true)
+	s.reduceRemember(p.RequestRef, reduceDedupeEntry{basket: res})
+	return res, nil
+}
+
+// reduceLegFromTokenOutcome writes a token outcome into a basket leg: the
+// reviewed terms, the position the leg was checked against, and the place
+// outcome or the blockers. The risk-contribution fields stay zero: a
+// tokened basket reports what was sent, not a fresh delta allocation.
+func reduceLegFromTokenOutcome(out reduceTokenOutcome) rpc.TradeProposalReduceLeg {
+	var leg rpc.TradeProposalReduceLeg
+	if out.verified {
+		draft := out.payload.Draft
+		leg.ConID = draft.Contract.ConID
+		leg.Symbol = strings.ToUpper(strings.TrimSpace(draft.Contract.Symbol))
+		leg.SecType = draft.Contract.SecType
+		leg.Action = draft.Action
+		leg.ReduceQuantity = draft.Quantity
+		leg.PreviewTokenID = out.payload.TokenID
+		leg.SubmitEligible = true
+		leg.Terms = reduceTermsFor(draft, out.payload.Quote, out.payload.TokenID, out.payload.ExpiresAt, reduceAlgoNoteFor(draft))
+		leg.Notional = float64(draft.Quantity) * draft.LimitPrice * float64(contractMultiplier(draft.Contract))
+		leg.NotionalCurrency = draft.Contract.Currency
+	}
+	if out.rowFound {
+		leg.PositionQuantity = out.row.Quantity
+		leg.PositionUnrealizedPnL = out.row.UnrealizedPnL
+		if out.row.UnrealizedPnLBase != nil {
+			v := *out.row.UnrealizedPnLBase
+			leg.PositionUnrealizedPnLBase = &v
+		}
+		if out.verified && out.row.FXRate != nil && *out.row.FXRate > 0 {
+			base := leg.Notional * *out.row.FXRate
+			leg.NotionalBase = &base
+		}
+	}
+	if len(out.blockers) > 0 {
+		leg.Blockers = out.blockers
+		return leg
+	}
+	leg.Placed = out.place.Accepted
+	leg.Place = out.place
+	leg.OrderRef = out.place.OrderRef
+	leg.Message = out.place.Message
+	return leg
 }
 
 // reduceSweepActionableCount counts candidates that will become a real
@@ -421,42 +511,6 @@ func reduceSweepActionableCount(cands []reduceSweepCandidate) int {
 		}
 	}
 	return n
-}
-
-// reduceBasketReplay returns a prior submit result for a repeated RequestRef
-func (s *Server) reduceBasketReplay(ref string) (*rpc.TradeProposalReducePortfolioResult, bool) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return nil, false
-	}
-	s.reduceBasketMu.Lock()
-	defer s.reduceBasketMu.Unlock()
-	now := s.reduceClock()
-	for k, e := range s.reduceBasketDedupe {
-		if now.Sub(e.at) > reduceBasketDedupeTTL {
-			delete(s.reduceBasketDedupe, k)
-		}
-	}
-	e, ok := s.reduceBasketDedupe[ref]
-	if !ok {
-		return nil, false
-	}
-	clone := *e.result
-	clone.Replayed = true
-	return &clone, true
-}
-
-func (s *Server) reduceBasketStore(ref string, res *rpc.TradeProposalReducePortfolioResult) {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return
-	}
-	s.reduceBasketMu.Lock()
-	defer s.reduceBasketMu.Unlock()
-	if s.reduceBasketDedupe == nil {
-		s.reduceBasketDedupe = make(map[string]reduceBasketDedupeEntry)
-	}
-	s.reduceBasketDedupe[ref] = reduceBasketDedupeEntry{at: s.reduceClock(), result: res}
 }
 
 func (s *Server) handleTradeProposalsReducePortfolioPreview(ctx context.Context, req *rpc.Request) (*rpc.TradeProposalReducePortfolioResult, error) {

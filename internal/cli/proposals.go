@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -205,6 +206,14 @@ func runProposalsSubmit(ctx context.Context, env *Env, args []string) int {
 // one would increase net risk rather than reduce it. --include-hedges only
 // applies to the single-holding path, so it is a hard error alongside
 // --portfolio rather than a silent no-op.
+//
+// A preview returns a signed token per order with the exact terms it binds.
+// `--submit --preview-token TOKEN` places exactly those terms (one token per
+// leg with --portfolio); the daemon refuses, and sends nothing, when the token
+// is stale, the position shrank below the reviewed quantity, the mid left the
+// reviewed bound, or any gate refuses. `--submit` without a token previews at
+// the live book and places that: the human path, where no one reviewed exact
+// terms beforehand.
 func runProposalsReduce(ctx context.Context, env *Env, args []string) int {
 	fs := flagSet(env, "proposals reduce")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
@@ -213,31 +222,51 @@ func runProposalsReduce(ctx context.Context, env *Env, args []string) int {
 	includeHedges := fs.Bool("include-hedges", false, "allow trimming a protective short (hedge) such as long index puts")
 	portfolio := fs.Bool("portfolio", false, "trim net portfolio delta-adjusted risk (risk-off sweep) instead of one holding")
 	submit := fs.Bool("submit", false, "place the order; without this flag the command only previews")
+	adaptive := fs.String("adaptive-priority", "", "IBKR Adaptive priority on the limit: Normal (the default where the contract supports it), Patient, Urgent, or none for a plain limit")
+	requestRef := fs.String("request-ref", "", "name this submission; a retry with the same reference replays its result and never sends twice")
+	var tokens []string
+	fs.Func("preview-token", "with --submit, place exactly the reviewed terms of this token from a reduce preview (repeat once per leg with --portfolio)", func(v string) error {
+		if v = strings.TrimSpace(v); v != "" {
+			tokens = append(tokens, v)
+		}
+		return nil
+	})
 	timeout := fs.Duration("timeout", 5*time.Second, "quote/WhatIf timeout")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
 	}
-	if *percent <= 0 || *percent > 100 {
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	if *adaptive != "" && !slices.Contains([]string{"normal", "patient", "urgent", "none"}, strings.ToLower(*adaptive)) {
+		return fail(env, "proposals reduce: --adaptive-priority must be Normal, Patient, Urgent or none")
+	}
+	if !*submit && (len(tokens) > 0 || set["request-ref"]) {
+		return fail(env, "proposals reduce: --preview-token and --request-ref go with --submit; a preview mints the token")
+	}
+	if len(tokens) > 0 {
+		if fs.NArg() > 0 || set["percent"] || set["con-id"] || set["include-hedges"] || set["adaptive-priority"] {
+			return fail(env, "proposals reduce: the token carries the holding, size and algorithm; drop SYMBOL, --percent, --con-id, --include-hedges and --adaptive-priority")
+		}
+		if !*portfolio && len(tokens) > 1 {
+			return fail(env, "proposals reduce: one holding takes one --preview-token; --portfolio takes one per leg")
+		}
+	} else if *percent <= 0 || *percent > 100 {
 		return fail(env, "proposals reduce: --percent must be between 1 and 100 (the app offers 25/50/75/100)")
 	}
 	if *portfolio {
-		includeHedgesSet := false
-		fs.Visit(func(f *flag.Flag) {
-			if f.Name == "include-hedges" {
-				includeHedgesSet = true
-			}
-		})
-		if includeHedgesSet {
+		if set["include-hedges"] {
 			return fail(env, "proposals reduce --portfolio excludes hedges structurally (opposite-sign-to-net positions are never selected); --include-hedges has no effect here, drop it")
 		}
 		if fs.NArg() > 0 || *conID > 0 {
 			return fail(env, "proposals reduce --portfolio sweeps the whole book; do not pass SYMBOL or --con-id")
 		}
-		pparams := rpc.TradeProposalReducePortfolioParams{Percent: *percent, TimeoutMs: int(timeout.Milliseconds())}
+		pparams := rpc.TradeProposalReducePortfolioParams{Percent: *percent, AdaptivePriority: *adaptive, TimeoutMs: int(timeout.Milliseconds())}
 		method := rpc.MethodTradeProposalsReducePortfolioPreview
 		if *submit {
 			method = rpc.MethodTradeProposalsReducePortfolioSubmit
 			pparams.Origin = env.Origin
+			pparams.PreviewTokens = tokens
+			pparams.RequestRef = strings.TrimSpace(*requestRef)
 		}
 		var pres rpc.TradeProposalReducePortfolioResult
 		if err := env.Conn.Call(ctx, method, pparams, &pres); err != nil {
@@ -255,22 +284,27 @@ func runProposalsReduce(ctx context.Context, env *Env, args []string) int {
 	case 1:
 		symbol = strings.TrimSpace(fs.Arg(0))
 	default:
-		return fail(env, "proposals reduce: usage is `canary proposals reduce [SYMBOL] --percent N [--con-id ID] [--include-hedges] [--submit]`")
+		return fail(env, "proposals reduce: usage is `canary proposals reduce [SYMBOL] --percent N [--con-id ID] [--include-hedges] [--adaptive-priority P] [--submit [--preview-token TOKEN] [--request-ref REF]]`")
 	}
-	if *conID <= 0 && symbol == "" {
+	if *conID <= 0 && symbol == "" && len(tokens) == 0 {
 		return fail(env, "proposals reduce: provide a SYMBOL or --con-id (or --portfolio for the whole book)")
 	}
 	params := rpc.TradeProposalReduceParams{
-		ConID:         *conID,
-		Symbol:        symbol,
-		Percent:       *percent,
-		IncludeHedges: *includeHedges,
-		TimeoutMs:     int(timeout.Milliseconds()),
+		ConID:            *conID,
+		Symbol:           symbol,
+		Percent:          *percent,
+		IncludeHedges:    *includeHedges,
+		AdaptivePriority: *adaptive,
+		TimeoutMs:        int(timeout.Milliseconds()),
 	}
 	method := rpc.MethodTradeProposalsReducePreview
 	if *submit {
 		method = rpc.MethodTradeProposalsReduceSubmit
 		params.Origin = env.Origin
+		params.RequestRef = strings.TrimSpace(*requestRef)
+		if len(tokens) == 1 {
+			params.PreviewToken = tokens[0]
+		}
 	}
 	var res rpc.TradeProposalReduceResult
 	if err := env.Conn.Call(ctx, method, params, &res); err != nil {
@@ -381,6 +415,10 @@ func renderProposalReduceText(env *Env, res *rpc.TradeProposalReduceResult, subm
 		statusRow(env, out, "Hedge", "holding is a protective short")
 	}
 	statusRow(env, out, "Token ID", res.PreviewTokenID)
+	if res.PreviewToken != "" {
+		literalStatusRow(env, out, "Token", res.PreviewToken)
+	}
+	renderReduceTerms(env, out, "", res.Terms)
 	renderProposalOrderPreview(env, out, res.Preview)
 	if submitted && res.Place != nil {
 		statusRow(env, out, "Order ref", res.OrderRef)
@@ -389,12 +427,69 @@ func renderProposalReduceText(env *Env, res *rpc.TradeProposalReduceResult, subm
 		if res.Place.Status != "" {
 			statusRow(env, out, "Status", res.Place.Status)
 		}
+		if res.Place.OCAGroup != "" {
+			statusRow(env, out, "OCA group", fmt.Sprintf("%s (type %d)", res.Place.OCAGroup, res.Place.OCAType))
+		}
+	}
+	if res.RequestRef != "" {
+		statusRow(env, out, "Request ref", res.RequestRef)
+	}
+	if res.Replayed {
+		statusRow(env, out, "Replayed", "true (idempotent retry; nothing placed)")
 	}
 	if res.Message != "" {
 		statusRow(env, out, "Message", res.Message)
 	}
 	printTradingBlockers(out, "  ", res.Blockers)
 	fmt.Fprintln(out)
+}
+
+// renderReduceTerms prints the exact terms a reduce token binds: the order
+// as the broker will receive it, the algorithm, the market bound the submit
+// holds it to, and when the token expires.
+func renderReduceTerms(env *Env, out io.Writer, indent string, terms *rpc.TradeProposalReduceTerms) {
+	if terms == nil {
+		return
+	}
+	statusRow(env, out, indent+"Terms", formatReduceTerms(terms))
+	b := terms.PriceBound
+	if b.ReferenceMid > 0 {
+		statusRow(env, out, indent+"Price bound", fmt.Sprintf("mid %s ±%.2f%% (%s to %s)", formatReducePrice(b.ReferenceMid), b.MaxMovePct, formatReducePrice(b.Low), formatReducePrice(b.High)))
+	}
+	if !terms.ExpiresAt.IsZero() {
+		statusRow(env, out, indent+"Expires", terms.ExpiresAt.Format(time.RFC3339))
+	}
+}
+
+// formatReduceTerms is one line of the order as reviewed: side, quantity,
+// contract, type, limit, time in force and algorithm.
+func formatReduceTerms(terms *rpc.TradeProposalReduceTerms) string {
+	if terms == nil {
+		return ""
+	}
+	c := terms.Contract
+	name := c.Symbol
+	if strings.EqualFold(c.SecType, "OPT") {
+		name = fmt.Sprintf("%s %s %s%s", c.Symbol, c.Expiry, formatReducePrice(c.Strike), strings.ToUpper(c.Right))
+	}
+	algo := "plain limit"
+	switch {
+	case terms.Algo != "":
+		algo = fmt.Sprintf("%s %s", terms.Algo, terms.AdaptivePriority)
+	case terms.AlgoNote != "":
+		algo += " (" + terms.AlgoNote + ")"
+	}
+	return fmt.Sprintf("%s %d %s %s %s %s · %s", terms.Action, terms.Quantity, name, terms.OrderType, formatReducePrice(terms.LimitPrice), terms.TIF, algo)
+}
+
+// formatReducePrice prints a price with two decimals, or four only when the
+// value has more than two.
+func formatReducePrice(v float64) string {
+	s := strconv.FormatFloat(v, 'f', -1, 64)
+	if dot := strings.IndexByte(s, '.'); dot >= 0 && len(s)-dot-1 > 2 {
+		return fmt.Sprintf("%.4f", v)
+	}
+	return fmt.Sprintf("%.2f", v)
 }
 
 func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePortfolioResult, submitted bool) {
@@ -430,6 +525,9 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 		}
 		statusRow(env, out, "Total notional", total)
 	}
+	if res.RequestRef != "" {
+		statusRow(env, out, "Request ref", res.RequestRef)
+	}
 	if res.Replayed {
 		statusRow(env, out, "Replayed", "true (idempotent retry; nothing placed)")
 	}
@@ -450,8 +548,15 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 		if leg.Notional != 0 {
 			statusRow(env, out, "  notional", formatProposalMoney(leg.Notional, leg.NotionalCurrency))
 		}
+		if leg.PreviewToken != "" {
+			literalStatusRow(env, out, "  token", leg.PreviewToken)
+		}
+		renderReduceTerms(env, out, "  ", leg.Terms)
 		if leg.OrderRef != "" {
 			statusRow(env, out, "  order ref", leg.OrderRef)
+		}
+		if leg.Place != nil && leg.Place.OCAGroup != "" {
+			statusRow(env, out, "  OCA group", fmt.Sprintf("%s (type %d)", leg.Place.OCAGroup, leg.Place.OCAType))
 		}
 		printTradingBlockers(out, "      ", leg.Blockers)
 	}

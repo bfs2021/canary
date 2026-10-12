@@ -76,3 +76,27 @@ is working on the contract (owner decision 2026-10-12 19:55 CEST;
 risk-policy.md, "Order limits", item 10). The short re-read that refused it
 under this contract until then is gone; `allow_stock_short` and
 `allow_option_sell_to_open` judge only an order that opens or flips a short.
+
+## Reduce handoff (served since 2026-10-12)
+
+Desk's per-position Reduce menu and its Reduce book basket ride on
+`trade_proposals.reduce_preview` and `reduce_portfolio_preview`, which
+return a signed preview token per order with `terms`: the exact contract,
+side, quantity, order type, limit, TIF and algorithm, the expiry, and the
+`price_bound` the submit holds the market to. The owner confirms those
+terms; `reduce_submit` with `preview_token` and `reduce_portfolio_submit`
+with `preview_tokens` place them verbatim, each basket leg on its own. The
+daemon never re-sizes or re-prices a tokened reduction: it refuses with
+`token_expired`, `token_invalid`, `token_consumed`, `position_changed`
+(the reviewed quantity exceeds the confirmed position, or the side changed),
+`price_moved` (the current mid is outside the reviewed mid ±0.5%, the
+disclosed default pending the owner's own figure), or the order gate's own
+reason, and the place path's admission is unchanged: Canary's own stop on
+the line is joined or shrunk first. `request_ref` names one submission;
+a retry with the same reference replays the recorded result (90 s) and
+nothing is sent twice. Reductions default to IBKR Adaptive `Normal` on a
+limit at the mid where the broker layer sends Adaptive (a US stock or ETF
+routed SMART); elsewhere the terms say "Adaptive not supported for this
+contract" and the order is a plain limit. The un-tokened `--submit`, which
+previews at the live book and places in one call, remains the hand path
+and the paired app's portfolio sweep.
