@@ -158,6 +158,9 @@ type Server struct {
 	lastConnectError string
 	gatewayLog       logepisode.State
 	gatewaySchedule  gatewaySchedule
+	// farmTransitions writes each data-farm transition once across the
+	// primary and bulk lanes, which both receive every TWS farm notice.
+	farmTransitions ibkrlib.FarmTransitionLog
 	// lastEndpointResolvedSig avoids repeating unchanged endpoint diagnostics.
 	lastEndpointResolvedSig string
 	// lastHandshakeFailedPort is the discovered port whose listener accepted
@@ -264,6 +267,9 @@ type Server struct {
 	// gammaGrids persists the last successful classed expiry/strike grid
 	// signal for the session (observed 2026-06-09, IBKR code 2157).
 	gammaGrids *expiryGridStore
+	// gammaStreaks holds one failure streak per gamma log key (string to
+	// *logepisode.State); see gammaServerLog.
+	gammaStreaks sync.Map
 	// gammaStarted guards the boot-time prewarm so it only fires once
 	gammaStarted sync.Once
 	// gammaRefreshStarted guards the active-session refresh loop. The loop
@@ -759,7 +765,7 @@ func (s *Server) installGammaZeroCache() {
 		s.logger.Warnf("gamma cache: resolve dir: %v (persistence disabled)", err)
 		return
 	}
-	s.zeroGamma = newGammaZeroCacheWithStore(newGammaZeroStore(dir), time.Now(), s.logger)
+	s.zeroGamma = newGammaZeroCacheWithStore(newGammaZeroStore(dir), time.Now(), gammaServerLog{s})
 	if diagPath, diagErr := gammaSkewDiagDefaultPath(); diagErr == nil {
 		s.zeroGamma.skewDiag = &gammaSkewDiagJournal{path: diagPath}
 	} else {
@@ -1692,6 +1698,7 @@ func (s *Server) newConnector(ep discover.Endpoint) *ibkrlib.Connector {
 	}
 	connector := ibkrlib.NewConnector(cc)
 	connector.SetBackendMaintenanceWindows(s.maintenanceWindows)
+	connector.SetFarmTransitionLog(&s.farmTransitions)
 	connector.SetBackendSessionOpen(func(at time.Time) bool { return s.gatewaySchedule.view.Load().required(at, at) })
 	if s.cfg != nil && s.cfg.Daemon.LogCalendarMode == "scheduled" {
 		connector.SetBackendLogRequired(s.gatewayLogRequired)

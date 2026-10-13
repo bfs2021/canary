@@ -662,22 +662,31 @@ func (c *gammaZeroCache) spawnJob(parent context.Context, scope, key string, now
 			}
 		}()
 		res, err := compute(bgCtx, &job.progress)
+		// One failure streak per scope; see gammaServerLog.
+		streak := "gamma compute scope=" + scope
 		if err != nil {
 			job.err = err
 			job.result = hydrateGammaDiagnosticResult(res, time.Now())
-			failed := gammaLogf{inner: c.log}.Warnf
 			if parent.Err() != nil {
 				// Daemon shutdown: the compute was abandoned, not failed.
-				failed = gammaLogf{inner: c.log}.Infof
+				gammaLogf{inner: c.log}.Infof("gamma compute: scope=%s failed: %v", scope, err)
+				return
 			}
-			failed("gamma compute: scope=%s failed: %v", scope, err)
+			if bgCtx.Err() != nil {
+				// A superseded job was cancelled, not a gateway failure:
+				// it neither opens nor extends the streak.
+				gammaLogf{inner: c.log}.Warnf("gamma compute: scope=%s failed: %v", scope, err)
+				return
+			}
+			gammaLogf{inner: c.log}.failuref(streak, "gamma compute: scope=%s failed: %v", scope, err)
 			return
 		}
 		if err := validateGammaComputed(res); err != nil {
 			job.err = err
-			gammaLogf{inner: c.log}.Warnf("gamma compute: scope=%s failed: %v", scope, err)
+			gammaLogf{inner: c.log}.failuref(streak, "gamma compute: scope=%s failed: %v", scope, err)
 			return
 		}
+		gammaLogf{inner: c.log}.recovered(streak)
 		job.result = hydrateGammaComputed(res)
 		// Persist to disk on success. Failed computes do not persist
 		// shutdown, force() supersede) must not overwrite the last

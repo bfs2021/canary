@@ -74,7 +74,7 @@ func (s *Server) acquireRegimeSnapshot(ctx context.Context) (*rpc.RegimeSnapshot
 		return nil, false, nil, s.gatewayUnavailableError()
 	}
 
-	deps := productionRegimeDeps(c, s.logger.Warnf, s.regimeSeries, s.regimeHistory)
+	deps := productionRegimeDeps(c, s.regimeDependencyWarnf, s.regimeSeries, s.regimeHistory)
 	outcome := runRegimeFanoutOutcome(
 		ctx,
 		func(c context.Context) rpc.RegimeVIXTerm { return fetchRegimeVIXTerm(c, deps) },
@@ -1480,6 +1480,22 @@ func warnDeps(d *regimeDeps, format string, args ...any) {
 		return
 	}
 	d.logWarnf(format, args...)
+}
+
+// regimeDependencyWarnf is the production logWarnf. A regime input that fails
+// while the gateway outage owner holds an incident (transport loss, pending
+// dial, backend-link loss and its restore settle) is that outage's symptom:
+// it logs at debug through logGatewayDependency and warns otherwise. On
+// 2026-10-12, 3 of 4 regime dependency warnings landed within 10 s of a
+// backend-link loss the connector had already announced.
+//
+// Owner instruction (Oliver, in chat, 2026-10-13 09:04 CEST): dependents of
+// an owned outage log through the owner.
+func (s *Server) regimeDependencyWarnf(format string, args ...any) {
+	if s.logGatewayDependency(fmt.Sprintf(format, args...)) || s.logger == nil {
+		return
+	}
+	s.logger.Warnf(format, args...)
 }
 
 // firmTickQuality builds a Quality for a value that came directly from

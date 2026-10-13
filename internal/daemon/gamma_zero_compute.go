@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/osauer/canary/v2/internal/logepisode"
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
@@ -199,6 +200,101 @@ func (g gammaLogf) Warnf(format string, args ...any) {
 	if g.inner != nil {
 		g.inner.Warnf(format, args...)
 	}
+}
+
+// Debugf reaches the inner logger's debug level when it has one.
+func (g gammaLogf) Debugf(format string, args ...any) {
+	if d, ok := g.inner.(interface{ Debugf(string, ...any) }); ok {
+		d.Debugf(format, args...)
+	}
+}
+
+// gammaStreakSink is the optional failure-streak surface of a gammaLogger.
+// The daemon's gammaServerLog implements it; a plain logger warns on every
+// failure, as before.
+type gammaStreakSink interface {
+	gammaFailuref(key, format string, args ...any)
+	gammaRecovered(key string)
+}
+
+// failuref reports one failure of the streak named by key.
+func (g gammaLogf) failuref(key, format string, args ...any) {
+	if sink, ok := g.inner.(gammaStreakSink); ok {
+		sink.gammaFailuref(key, format, args...)
+		return
+	}
+	g.Warnf(format, args...)
+}
+
+// recovered ends the streak named by key, if one is open.
+func (g gammaLogf) recovered(key string) {
+	if sink, ok := g.inner.(gammaStreakSink); ok {
+		sink.gammaRecovered(key)
+	}
+}
+
+// gammaServerLog is the daemon's gamma logger. The gamma refresh retries a
+// failed compute every gammaErrorRetryTTL (escalating), and each attempt
+// repeated its whole block of prewarm, combine and abort warnings: on
+// 2026-10-12, 42 prewarm lines were 7 runs of 6 expiries. A failure streak
+// now warns once, on its first failure (one prewarm line per class, the
+// expiry count folded in, with the error that names the cause); repeats log
+// at debug, and the first success writes one WARN that pairs the opening
+// line. A failure during an incident the gateway outage owner holds is that
+// outage's symptom: it logs at debug through logGatewayDependency and opens
+// no streak.
+//
+// Owner instruction (Oliver, in chat, 2026-10-13 09:04 CEST): dependents of
+// an owned outage log through the owner.
+type gammaServerLog struct{ s *Server }
+
+func (g gammaServerLog) Infof(format string, args ...any) {
+	if g.s.logger != nil {
+		g.s.logger.Infof(format, args...)
+	}
+}
+
+func (g gammaServerLog) Warnf(format string, args ...any) {
+	if g.s.logger != nil {
+		g.s.logger.Warnf(format, args...)
+	}
+}
+
+func (g gammaServerLog) Debugf(format string, args ...any) {
+	if g.s.logger != nil {
+		g.s.logger.Debugf(format, args...)
+	}
+}
+
+func (g gammaServerLog) gammaFailuref(key, format string, args ...any) {
+	s := g.s
+	if s.logGatewayDependency(fmt.Sprintf(format, args...)) {
+		return
+	}
+	v, _ := s.gammaStreaks.LoadOrStore(key, &logepisode.State{})
+	// Observe's fifteen-minute reminder is not used: a streak warns once.
+	_, count, _ := v.(*logepisode.State).Observe(s.gatewayLogClock())
+	if s.logger == nil {
+		return
+	}
+	if count == 1 {
+		s.logger.Warnf(format+" (repeats stay in debug logs until %s recovers)", append(args, key)...)
+		return
+	}
+	s.logger.Debugf(format+" (failure %d of this streak)", append(args, count)...)
+}
+
+func (g gammaServerLog) gammaRecovered(key string) {
+	s := g.s
+	v, ok := s.gammaStreaks.Load(key)
+	if !ok {
+		return
+	}
+	count, age := v.(*logepisode.State).Recover(s.gatewayLogClock())
+	if count == 0 || s.logger == nil {
+		return
+	}
+	s.logger.Warnf("%s recovered after %d failed attempts over %s", key, count, age.Round(time.Second))
 }
 
 // legFetcher abstracts the per-leg subscribe-collect-unsubscribe so
@@ -707,7 +803,7 @@ func computeGammaZeroFor(
 
 	// Coverage gate. A compute whose successful-leg fraction falls
 	if err := checkLegCoverage(len(legs), len(jobs), stats.throttled); err != nil {
-		log.Warnf("gamma.abort reason=low_coverage landed=%d/%d elapsed=%s err=%v",
+		log.failuref(gammaAbortKey(sym), "gamma.abort reason=low_coverage landed=%d/%d elapsed=%s err=%v",
 			len(legs), len(jobs), time.Since(startWall).Round(time.Millisecond), err)
 		return nil, err
 	}
@@ -833,6 +929,7 @@ func computeGammaZeroFor(
 	if zg != nil {
 		zeroGammaStr = fmt.Sprintf("%.2f", *zg)
 	}
+	log.recovered(gammaAbortKey(sym))
 	log.Infof("gamma.done gex_legs=%d priced_legs=%d/%d model_tick_iv=%d derived_mid_iv=%d derived_close_iv=%d derived_iv=%d spot=%.2f zero_gamma=%s sign=%s elapsed=%s",
 		len(gexLegs), len(legs), len(jobs), res.ModelTickLegs, res.DerivedLiveMidLegs, res.DerivedPrevCloseLegs, derivedCount, spot, zeroGammaStr, gammaSign,
 		time.Since(startWall).Round(time.Millisecond))
@@ -849,6 +946,22 @@ func computeGammaZeroFor(
 		}
 	}
 	return hydrateGammaComputed(res), nil
+}
+
+// gammaAbortKey names an underlying's compute-abort failure streak.
+func gammaAbortKey(sym string) string { return "gamma.abort underlying=" + sym }
+
+// logGammaPrewarmOutcome writes one class's prewarm verdict: a failure of the
+// class's streak with every failed expiry folded into one line, or the end
+// of that streak.
+func logGammaPrewarmOutcome(log gammaLogf, class string, failedExpiries []string, total int, firstErr error) {
+	streak := "gamma.prewarm class=" + class
+	if len(failedExpiries) == 0 {
+		log.recovered(streak)
+		return
+	}
+	log.failuref(streak, "gamma.prewarm class=%s failed=%d/%d expiries=%s err=%v",
+		class, len(failedExpiries), total, strings.Join(failedExpiries, ","), firstErr)
 }
 
 // prewarmGammaContracts bulk-prewarms option contracts for the picked
@@ -891,25 +1004,38 @@ func prewarmGammaContracts(
 	prewarmBlocksFallback := make(map[string]bool, len(picked))
 	for class, ymds := range expsByClass {
 		prewarmResults := c.PrewarmOptionChain(ctx, sym, ymds, class, 30*time.Second)
+		// Failed expiries fold into one line per class; each keeps its own
+		// detail at debug.
+		var failedExpiries []string
+		var firstErr error
 		for _, r := range prewarmResults {
 			key := gammaPrewarmKey(class, r.Expiry)
 			prewarmComplete[key] = r.Err == nil && r.Dropped == 0
 			prewarmBlocksFallback[key] = r.Dropped > 0 || gammaPrewarmFailureBlocksFallback(r.Err)
 			collection.notePrewarm(class, r.Expiry, r.Listed, r.Dropped, r.Err)
 			if r.Err != nil {
-				log.Warnf("gamma.prewarm class=%s expiry=%s listed=%d cached=%d dropped=%d elapsed=%s err=%v",
+				log.Debugf("gamma.prewarm class=%s expiry=%s listed=%d cached=%d dropped=%d elapsed=%s err=%v",
 					class, r.Expiry, r.Listed, r.Cached, r.Dropped, r.Elapsed.Round(time.Millisecond), r.Err)
+				failedExpiries = append(failedExpiries, r.Expiry)
+				if firstErr == nil {
+					firstErr = r.Err
+				}
 				continue
 			}
 			if r.Dropped > 0 {
-				log.Warnf("gamma.prewarm class=%s expiry=%s listed=%d cached=%d dropped=%d elapsed=%s err=contract details truncated",
+				log.Debugf("gamma.prewarm class=%s expiry=%s listed=%d cached=%d dropped=%d elapsed=%s err=contract details truncated",
 					class, r.Expiry, r.Listed, r.Cached, r.Dropped, r.Elapsed.Round(time.Millisecond))
+				failedExpiries = append(failedExpiries, r.Expiry)
+				if firstErr == nil {
+					firstErr = errors.New("contract details truncated")
+				}
 				continue
 			}
 			log.Infof("gamma.prewarm class=%s expiry=%s listed=%d cached=%d dropped=%d elapsed=%s",
 				class, r.Expiry, r.Listed, r.Cached, r.Dropped, r.Elapsed.Round(time.Millisecond))
 			prewarmTotal += r.Listed
 		}
+		logGammaPrewarmOutcome(log, class, failedExpiries, len(prewarmResults), firstErr)
 	}
 	log.Infof("gamma.prewarm.done total_listed=%d wall_clock=%s",
 		prewarmTotal, time.Since(prewarmStart).Round(time.Millisecond))
@@ -1112,25 +1238,25 @@ func (f *gammaLegFanout) run(ctx context.Context, jobs []gammaLegSpec) ([]legDat
 	if backendAbort.Load() {
 		// Legs landed before the loss are a partial, pre-outage slice; the
 		// next scheduler tick after the restore recomputes from scratch.
-		f.log.Warnf("gamma.abort reason=backend_link_down landed=%d/%d done=%d elapsed=%s",
+		f.log.failuref(gammaAbortKey(f.sym), "gamma.abort reason=backend_link_down landed=%d/%d done=%d elapsed=%s",
 			len(legs), len(jobs), done.Load(), fanoutElapsed)
 		return nil, nil, stats, errGammaBackendLinkDown
 	}
 	if len(legs) == 0 {
 		switch {
 		case earlyAbort.Load():
-			f.log.Warnf("gamma.abort reason=early_abort landed=%d/%d elapsed=%s no_contract=%d",
+			f.log.failuref(gammaAbortKey(f.sym), "gamma.abort reason=early_abort landed=%d/%d elapsed=%s no_contract=%d",
 				len(legs), len(jobs), fanoutElapsed, noContract.Load())
 			// Both the model-tick path AND the BS-IV fallback failed
 			return nil, nil, stats, fmt.Errorf("zero-gamma: no option data landed in first %ds (neither model ticks nor prior-session prices for BS-IV fallback). Check gateway entitlement and farm-connection notices in the daemon log",
 				int(earlyAbortAfter.Seconds()))
 		case throttledAbort.Load():
-			f.log.Warnf("gamma.abort reason=throttled landed=%d/%d elapsed=%s no_contract=%d",
+			f.log.failuref(gammaAbortKey(f.sym), "gamma.abort reason=throttled landed=%d/%d elapsed=%s no_contract=%d",
 				len(legs), len(jobs), fanoutElapsed, noContract.Load())
 			return nil, nil, stats, fmt.Errorf("zero-gamma: gateway throttled (%d of %d first-wave legs failed contract resolution); aborted to avoid compounding rate-limit pressure",
 				noContract.Load(), done.Load())
 		default:
-			f.log.Warnf("gamma.abort reason=no_legs landed=%d/%d elapsed=%s",
+			f.log.failuref(gammaAbortKey(f.sym), "gamma.abort reason=no_legs landed=%d/%d elapsed=%s",
 				len(legs), len(jobs), fanoutElapsed)
 			return nil, nil, stats, fmt.Errorf("zero-gamma: all %d legs failed to return usable IV/pricing", len(jobs))
 		}

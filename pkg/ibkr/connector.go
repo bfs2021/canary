@@ -251,6 +251,8 @@ type Connector struct {
 	dataFarmMu     sync.RWMutex
 	dataFarms      map[string]DataFarmStatus
 	farmRecoveryAt time.Time
+	// farmLog dedupes farm transition lines with the daemon's other lanes.
+	farmLog atomic.Pointer[FarmTransitionLog]
 
 	// historicalStall notices a Gateway that holds history requests unanswered.
 	historicalStall historicalStall
@@ -632,9 +634,19 @@ func (c *Connector) backendLinkBroken() bool {
 	return false
 }
 
+// backendLinkUnsettled is true while the link is broken and for
+// BackendRestoreSettle after its 1101/1102 restore.
+func (c *Connector) backendLinkUnsettled() bool {
+	if c.backendLinkBroken() {
+		return true
+	}
+	down, at := c.backendConnectivityDown()
+	return !down && !at.IsZero() && c.absenceClock().Sub(at) < BackendRestoreSettle
+}
+
 // noticeLogContext is the connector's view for wire-notice severity.
 func (c *Connector) noticeLogContext() noticeLogContext {
-	return noticeLogContext{backendLinkDown: c.backendLinkBroken, knownEntitlementGap: c.knownEntitlementGap}
+	return noticeLogContext{backendLinkDown: c.backendLinkBroken, backendLinkUnsettled: c.backendLinkUnsettled, knownEntitlementGap: c.knownEntitlementGap}
 }
 
 // MarketDataMemory is the connector-independent part of the entitlement
@@ -919,6 +931,11 @@ func (c *Connector) clearContractResolutionMiss(symbol string) {
 // farmRecoverySettleWindow keeps the impairment verdict standing after a
 // farm reports OK. TWS flushes answers to requests queued during an outage
 const farmRecoverySettleWindow = time.Minute
+
+// BackendRestoreSettle is how long after a backend-link restore the answers
+// TWS flushes for requests the loss cut still count as the outage's echoes.
+// It reuses the farm recovery settle: the same flush, the same bound.
+const BackendRestoreSettle = farmRecoverySettleWindow
 
 func farmStatusImpaired(status string) bool {
 	return status == "disconnected" || status == "broken"
@@ -1839,6 +1856,66 @@ func (c *Connector) recordDataFarmNotice(code int, message string, asOf time.Tim
 	c.warnLongDataFarmBreaks(asOf)
 }
 
+// FarmTransitionLog lets the connectors one process holds against the same
+// TWS (the daemon's primary and bulk lanes, and each lane's successor after
+// a reconnect) report a farm transition once. Every lane receives the same
+// TWS-wide farm notices, so each line was written once per lane: two lanes
+// doubled every break and recovery line on 2026-10-12. Each connector keeps
+// its own farm rows; only the log line is shared. The zero value is ready.
+//
+// Owner instruction (Oliver, in chat, 2026-10-13 09:04 CEST): dependents of
+// an owned outage log through the owner.
+type FarmTransitionLog struct {
+	mu   sync.Mutex
+	last map[string]string
+}
+
+const (
+	farmEventBreak   = "break"
+	farmEventLong    = "long"
+	farmEventRecover = "recover"
+)
+
+// claim reports whether this connector is the first to report event for the
+// farm key since its last transition. A break is already told while the farm
+// is reported broken or long-broken. A nil log claims everything.
+func (l *FarmTransitionLog) claim(key, event string) bool {
+	if l == nil {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	last := l.last[key]
+	if last == event || event == farmEventBreak && last == farmEventLong {
+		return false
+	}
+	if l.last == nil {
+		l.last = make(map[string]string)
+	}
+	l.last[key] = event
+	return true
+}
+
+// observeOK closes a reported break that recovered without a recovery line:
+// a connectivity row cleared by 1101/1102, or a connector that first met the
+// farm healthy. The next break is a new transition.
+func (l *FarmTransitionLog) observeOK(key string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if last := l.last[key]; last == farmEventBreak || last == farmEventLong {
+		delete(l.last, key)
+	}
+}
+
+// SetFarmTransitionLog shares farm transition lines with the process's other
+// connectors to the same TWS. Call before Start; nil logs every transition.
+func (c *Connector) SetFarmTransitionLog(l *FarmTransitionLog) {
+	c.farmLog.Store(l)
+}
+
 // warnLongDataFarmBreaks gives each break that has outlived
 // dataFarmBreakAttention its one WARN. Farm notices arrive on every flap of
 // any farm and the scheduled-mode worker calls it each minute, so a lone
@@ -1864,6 +1941,9 @@ func (c *Connector) warnLongDataFarmBreaks(now time.Time) {
 	}
 	c.dataFarmMu.Unlock()
 	for _, farm := range long {
+		if !c.farmLog.Load().claim(dataFarmKey(farm.Type, farm.Name), farmEventLong) {
+			continue
+		}
 		since := farm.impairedSince
 		if since.IsZero() {
 			since = farm.AsOf
@@ -1889,19 +1969,30 @@ func dataFarmLabel(farm DataFarmStatus) string {
 // windows therefore leave no WARN; a farm that stops answering still leaves
 // one WARN while broken (warnLongDataFarmBreaks) and one with the duration
 // when it recovers. 1100/1101/1102 warn through the backend link tracker;
-// 2110 is the one connectivity break that did not.
+// 2110 is the one connectivity break that did not. A shared
+// FarmTransitionLog writes each transition once across the process's lanes.
 func (c *Connector) logDataFarmTransition(prev DataFarmStatus, had bool, farm DataFarmStatus) {
 	wasImpaired := had && farmStatusImpaired(prev.Status)
 	label := dataFarmLabel(farm)
 	cid := c.preferredClientID()
+	shared := c.farmLog.Load()
+	key := dataFarmKey(farm.Type, farm.Name)
 	switch {
 	case farm.Type == "connectivity":
-		if farm.Code == 2110 && !wasImpaired {
+		if farm.Code == 2110 && !wasImpaired && shared.claim(key, farmEventBreak) {
 			c.logWarn("[cid=%d] TWS reports its connection to IBKR broken (code 2110)", cid)
+		} else if !farmStatusImpaired(farm.Status) {
+			shared.observeOK(key)
 		}
 	case farmStatusImpaired(farm.Status) && !wasImpaired:
+		if !shared.claim(key, farmEventBreak) {
+			return
+		}
 		c.logInfo("[cid=%d] IBKR %s is %s (code %d); requests it serves wait until it recovers", cid, label, farm.Status, farm.Code)
 	case wasImpaired && !farmStatusImpaired(farm.Status):
+		if !shared.claim(key, farmEventRecover) {
+			return
+		}
 		since := prev.impairedSince
 		if since.IsZero() {
 			since = prev.AsOf
@@ -1912,6 +2003,8 @@ func (c *Connector) logDataFarmTransition(prev DataFarmStatus, had bool, farm Da
 		} else {
 			c.logInfo("[cid=%d] IBKR %s recovered (%s, code %d) after %s", cid, label, farm.Status, farm.Code, outage.Round(time.Second))
 		}
+	case !farmStatusImpaired(farm.Status):
+		shared.observeOK(key)
 	}
 }
 
@@ -2153,6 +2246,9 @@ func (c *Connector) recordBackendConnectivity(down bool, at time.Time, restoreCo
 	if c.conn != nil {
 		if n := c.conn.takeSuppressedCancelEchoes(); n > 0 {
 			echoes = fmt.Sprintf("; %d cancel echoes (code 300) kept in debug logs", n)
+		}
+		if n := c.conn.takeSuppressedDefinitionMisses(); n > 0 {
+			echoes += fmt.Sprintf("; %d definition misses (code 200) kept in debug logs", n)
 		}
 	}
 	switch {

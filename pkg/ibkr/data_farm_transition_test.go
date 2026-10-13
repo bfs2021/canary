@@ -112,3 +112,51 @@ func TestConnectivityBreakWarnsOnlyForCode2110(t *testing.T) {
 		t.Fatalf("connectivity break took the farm path: %q", lines)
 	}
 }
+
+// Two lanes on one TWS receive every farm notice; with a shared transition
+// log the break, its lasting-break WARN and its recovery are written once,
+// and the next break of the same farm is a new transition.
+// Owner instruction (Oliver, in chat, 2026-10-13 09:04 CEST): dependents of
+// an owned outage log through the owner.
+func TestDataFarmTransitionsLogOncePerTWS(t *testing.T) {
+	buf := captureConnectorLogs(t)
+	shared := &FarmTransitionLog{}
+	primary := &Connector{config: &ConnectorConfig{PreferredClientID: 15}}
+	bulk := &Connector{config: &ConnectorConfig{PreferredClientID: 16}}
+	primary.SetFarmTransitionLog(shared)
+	bulk.SetFarmTransitionLog(shared)
+	t0 := time.Date(2026, 10, 12, 4, 26, 0, 0, time.UTC)
+	both := func(code int, msg string, at time.Time) {
+		primary.recordDataFarmNotice(code, msg, at)
+		bulk.recordDataFarmNotice(code, msg, at)
+	}
+
+	both(2104, "Market data farm connection is OK:synfarm", t0)
+	both(2103, "Market data farm connection is broken:synfarm", t0.Add(time.Minute))
+	if lines := logLines(buf, "synfarm is disconnected"); len(lines) != 1 {
+		t.Fatalf("break lines = %q, want one", lines)
+	}
+	both(2103, "Market data farm connection is broken:synfarm", t0.Add(7*time.Minute))
+	if lines := warnLines(buf, "synfarm has been disconnected for"); len(lines) != 1 {
+		t.Fatalf("lasting break warnings = %q, want one", lines)
+	}
+	both(2104, "Market data farm connection is OK:synfarm", t0.Add(9*time.Minute))
+	if lines := warnLines(buf, "synfarm recovered"); len(lines) != 1 {
+		t.Fatalf("recovery warnings = %q, want one", lines)
+	}
+
+	both(2103, "Market data farm connection is broken:synfarm", t0.Add(20*time.Minute))
+	if lines := logLines(buf, "synfarm is disconnected"); len(lines) != 2 {
+		t.Fatalf("a new break after the recovery = %q, want a second line", lines)
+	}
+
+	// A connectivity break clears through 1102 without a recovery line; the
+	// next 2110 is a new break.
+	const broken2110 = "Connectivity between Trader Workstation and server is broken. It will be restored automatically."
+	both(2110, broken2110, t0.Add(30*time.Minute))
+	both(1102, "Connectivity between IB and Trader Workstation has been restored - data maintained.", t0.Add(31*time.Minute))
+	both(2110, broken2110, t0.Add(32*time.Minute))
+	if lines := warnLines(buf, "connection to IBKR broken (code 2110)"); len(lines) != 2 {
+		t.Fatalf("2110 warnings = %q, want one per break", lines)
+	}
+}

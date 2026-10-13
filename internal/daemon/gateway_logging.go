@@ -1,6 +1,10 @@
 package daemon
 
-import "time"
+import (
+	"time"
+
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
+)
 
 // logGatewayUnavailable is the single warning owner for failed connection
 // attempts and their unavailable-dependent reads. Detailed current evidence
@@ -52,8 +56,13 @@ func (s *Server) gatewayLogClock() time.Time {
 // each daemon start warned "IBKR connection unavailable" in the instant
 // before the first connect (24 lines over seven restarts on 2026-10-05). The
 // ended session covers the reads cut by the loss before anything redials:
-// two history warnings 51 ms after TWS's restart on 2026-10-07. It never
-// infers an outage from arbitrary text.
+// two history warnings 51 ms after TWS's restart on 2026-10-07. The backend
+// link counts for ibkrlib.BackendRestoreSettle after its restore, the flush
+// in which TWS answers the requests the loss cut. It never infers an outage
+// from arbitrary text.
+//
+// Owner instruction (Oliver, in chat, 2026-10-13 09:04 CEST): dependents of
+// an owned outage log through the owner.
 func (s *Server) logGatewayDependency(detail string) bool {
 	switch {
 	case s.gatewayLog.Join():
@@ -68,7 +77,7 @@ func (s *Server) logGatewayDependency(detail string) bool {
 		if s.logger != nil && s.logger.debugEnabled() {
 			s.logger.Debugf("Gateway dependency awaiting redial: %s", detail)
 		}
-	case s.backendLinkDown():
+	case s.backendLinkUnsettled():
 		if s.logger != nil && s.logger.debugEnabled() {
 			s.logger.Debugf("Backend link dependency unavailable: %s", detail)
 		}
@@ -117,14 +126,21 @@ func (s *Server) historicalBarFarmOutage() bool {
 	return c.HistoricalBarFarmOutageAnnounced()
 }
 
-// backendLinkDown reads the current connector's backend-link latch without
-// the reconnect side effect of gatewayConnector.
-func (s *Server) backendLinkDown() bool {
+// backendLinkUnsettled reads the current connector's backend-link latch
+// without the reconnect side effect of gatewayConnector: down, or restored
+// less than ibkrlib.BackendRestoreSettle ago.
+func (s *Server) backendLinkUnsettled() bool {
+	var link ibkrlib.BackendLinkReport
 	if s.backendLink != nil {
-		return s.backendLink().Down
+		link = s.backendLink()
+	} else {
+		s.mu.Lock()
+		c := s.connector
+		s.mu.Unlock()
+		link = c.BackendLink()
 	}
-	s.mu.Lock()
-	c := s.connector
-	s.mu.Unlock()
-	return c != nil && c.BackendLink().Down
+	if link.Down {
+		return true
+	}
+	return !link.ChangedAt.IsZero() && s.gatewayLogClock().Sub(link.ChangedAt) < ibkrlib.BackendRestoreSettle
 }

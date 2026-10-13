@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"slices"
@@ -80,5 +81,43 @@ func TestHYGSpotMissWarnsOnlyDuringRTH(t *testing.T) {
 	}
 	if !spotMissWarn(warns) {
 		t.Fatalf("RTH spot miss did not warn: %q", warns)
+	}
+}
+
+// The regime's dependency warnings go through the gateway outage owner: the
+// RTH spot miss during a backend-link loss, or in the settle after its
+// restore, logs at debug; once the link has settled it warns again.
+// Owner instruction (Oliver, in chat, 2026-10-13 09:04 CEST): dependents of
+// an owned outage log through the owner.
+func TestRegimeDependencyWarningJoinsTheOwnedOutage(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatalf("load NY location: %v", err)
+	}
+	rth := time.Date(2026, 8, 11, 15, 0, 0, 0, ny)
+	var buf bytes.Buffer
+	now := rth
+	link := ibkrlib.BackendLinkReport{Down: true, ChangedAt: rth.Add(-5 * time.Second)}
+	s := &Server{logger: NewLogger(&buf, "debug"), now: func() time.Time { return now }}
+	s.backendLink = func() ibkrlib.BackendLinkReport { return link }
+	deps := hygSpotMissDeps(rth, new([]string))
+	deps.logWarnf = s.regimeDependencyWarnf
+
+	fetchRegimeHYGSPY(context.Background(), deps)
+	link = ibkrlib.BackendLinkReport{ChangedAt: rth}
+	now = rth.Add(ibkrlib.BackendRestoreSettle / 2)
+	fetchRegimeHYGSPY(context.Background(), deps)
+	if strings.Contains(buf.String(), "level=WARN") {
+		t.Fatalf("regime dependency warned inside the owned outage:\n%s", buf.String())
+	}
+	if got := strings.Count(buf.String(), "Backend link dependency unavailable: regime: HYG spot subscribe delivered no tick"); got != 2 {
+		t.Fatalf("debug diagnostics=%d want 2:\n%s", got, buf.String())
+	}
+
+	buf.Reset()
+	now = rth.Add(2 * ibkrlib.BackendRestoreSettle)
+	fetchRegimeHYGSPY(context.Background(), deps)
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "delivered no tick") {
+		t.Fatalf("regime dependency warning hidden outside an outage:\n%s", buf.String())
 	}
 }

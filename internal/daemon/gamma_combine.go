@@ -264,12 +264,15 @@ func computeGammaCombined(
 		if bgCtx.Err() != nil || errors.Is(err, errGammaBackendLinkDown) {
 			return nil, fmt.Errorf("zero-gamma: SPY phase: %w", err)
 		}
-		if s != nil && s.logger != nil {
-			s.logger.Warnf("gamma.combine.spy_unavailable err=%v (trying SPX-only)", err)
+		if s != nil {
+			gammaServerLog{s}.gammaFailuref("gamma.combine.spy_unavailable", "gamma.combine.spy_unavailable err=%v (trying SPX-only)", err)
 		}
 		spxRes, spxErr := runGammaUnderlyingPhase(bgCtx, s, c, "SPX", params, prog, 50)
 		if spxErr != nil {
 			return nil, fmt.Errorf("zero-gamma: SPY phase: %w; SPX phase: %w", err, spxErr)
+		}
+		if s != nil {
+			gammaServerLog{s}.gammaRecovered("gamma.combine.spx_unavailable")
 		}
 		if ok, reason := gammaOneSidedFallbackUsableForCombined(spxRes, time.Now()); !ok {
 			return spxRes, fmt.Errorf("zero-gamma: SPY phase: %w; SPX fallback not usable: %s", err, reason)
@@ -278,13 +281,16 @@ func computeGammaCombined(
 		return hydrateGammaComputed(spxRes), nil
 	}
 
+	if s != nil {
+		gammaServerLog{s}.gammaRecovered("gamma.combine.spy_unavailable")
+	}
 	spxRes, spxErr := runGammaUnderlyingPhase(bgCtx, s, c, "SPX", params, prog, 50)
 	if spxErr != nil {
 		if bgCtx.Err() != nil {
 			return nil, fmt.Errorf("zero-gamma: SPX phase: %w", spxErr)
 		}
-		if s != nil && s.logger != nil {
-			s.logger.Warnf("gamma.combine.spx_unavailable err=%v (degrading to SPY-only)", spxErr)
+		if s != nil {
+			gammaServerLog{s}.gammaFailuref("gamma.combine.spx_unavailable", "gamma.combine.spx_unavailable err=%v (degrading to SPY-only)", spxErr)
 		}
 		if ok, reason := gammaOneSidedFallbackUsableForCombined(spyRes, time.Now()); !ok {
 			return spyRes, fmt.Errorf("zero-gamma: SPX phase: %w; SPY fallback not usable: %s", spxErr, reason)
@@ -293,6 +299,9 @@ func computeGammaCombined(
 		return hydrateGammaComputed(spyRes), nil
 	}
 
+	if s != nil {
+		gammaServerLog{s}.gammaRecovered("gamma.combine.spx_unavailable")
+	}
 	combined := combineGammaResults(spyRes, spxRes)
 	if combined == nil {
 		return nil, fmt.Errorf("zero-gamma: combine produced nil result")
@@ -550,7 +559,7 @@ func runUnderlyingPhaseOnce(
 	var logger gammaLogger
 	var stopping func() bool
 	if s != nil {
-		logger = s.logger
+		logger = gammaServerLog{s}
 		s.mu.Lock()
 		serverCtx := s.serverCtx
 		s.mu.Unlock()

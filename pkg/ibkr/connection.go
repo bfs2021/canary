@@ -370,6 +370,9 @@ type Connection struct {
 	// the backend link was broken; the Connector reports the count once when
 	// the link restores.
 	suppressedCancelEchoes atomic.Uint64
+	// suppressedDefinitionMisses counts code-200 notices kept at debug while
+	// the backend link was broken, reported on the same restore bookend.
+	suppressedDefinitionMisses atomic.Uint64
 
 	// Competing live session detection (error 10197)
 	competingMu          sync.RWMutex
@@ -592,6 +595,12 @@ type noticeLogContext struct {
 	// in debug logs while the break holds (1,681 WARN lines in 80 minutes on
 	// 2026-10-02).
 	backendLinkDown func() bool
+	// backendLinkUnsettled reports a broken link or one restored less than
+	// BackendRestoreSettle ago. TWS answers the requests a loss cut with code
+	// 200 "no security definition" for every contract (IND, FUT and BILL
+	// lookups included), during the break and in the burst it flushes after
+	// the restore, so those misses are the outage's echo, not a verdict.
+	backendLinkUnsettled func() bool
 	// knownEntitlementGap reports whether a 354 repeats an entitlement gap the
 	// connector already warned about for this request's subscription key.
 	knownEntitlementGap func(reqID int, alias reqAliasEntry) bool
@@ -613,6 +622,12 @@ func (c *Connection) noticeLogContextSnapshot() noticeLogContext {
 // kept at debug during a backend-link break.
 func (c *Connection) takeSuppressedCancelEchoes() uint64 {
 	return c.suppressedCancelEchoes.Swap(0)
+}
+
+// takeSuppressedDefinitionMisses returns and resets the count of code-200
+// notices kept at debug during a backend-link break.
+func (c *Connection) takeSuppressedDefinitionMisses() uint64 {
+	return c.suppressedDefinitionMisses.Swap(0)
 }
 
 // SetSystemNoticeHandlerAtEpochWithPostAction installs the Connector-owned
@@ -3649,6 +3664,17 @@ func (c *Connection) handleSystemNotificationAtEpoch(fields []string, epoch uint
 		// the break; echoes outside one stay in debug uncounted.
 		c.suppressedCancelEchoes.Add(1)
 	}
+	// A code 200 inside a backend-link outage, or within its restore settle,
+	// is a dependent of the outage the connector announced once (1100/2110):
+	// a dozen IND, FUT and BILL misses warned within 5 s of each loss on
+	// 2026-10-12. Outside an outage a code 200 for a known conID keeps its
+	// warning: that is a stale identity, not an echo.
+	// Owner instruction (Oliver, in chat, 2026-10-13 09:04 CEST): dependents
+	// of an owned outage log through the owner.
+	outageMiss := note.code == 200 && noticeCtx.backendLinkUnsettled != nil && noticeCtx.backendLinkUnsettled()
+	if outageMiss && noticeCtx.backendLinkDown != nil && noticeCtx.backendLinkDown() {
+		c.suppressedDefinitionMisses.Add(1)
+	}
 	queryCancelled := note.code == 162 && strings.Contains(upperMsg, "QUERY CANCELLED")
 	noDataVerdict := note.code == 162 && strings.Contains(upperMsg, "NO DATA")
 	// Repeat probes of an entitlement gap the connector has warned about
@@ -3674,7 +3700,7 @@ func (c *Connection) handleSystemNotificationAtEpoch(fields []string, epoch uint
 		switch {
 		case parserMisalign:
 			ibkrLogger.Errorf(format, args...)
-		case definitionProbe, indicativeDisclaimer, cancelEcho, queryCancelled:
+		case definitionProbe, indicativeDisclaimer, cancelEcho, queryCancelled, outageMiss:
 			ibkrLogger.Debugf(format, args...)
 		case repeatGap:
 			ibkrLogger.Infof(format+" (known entitlement gap; repeat probe)", args...)
@@ -3697,7 +3723,7 @@ func (c *Connection) handleSystemNotificationAtEpoch(fields []string, epoch uint
 	switch {
 	case parserMisalign:
 		ibkrLogger.Errorf(format, args...)
-	case definitionProbe, cancelEcho, queryCancelled:
+	case definitionProbe, cancelEcho, queryCancelled, outageMiss:
 		ibkrLogger.Debugf(format, args...)
 	case repeatGap:
 		ibkrLogger.Infof(format+" (known entitlement gap; repeat probe)", args...)

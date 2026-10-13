@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // syntheticSystemNoticeText is syntheticSystemNotice with the broker text
@@ -104,4 +105,63 @@ func TestCashNoticeNamesThePair(t *testing.T) {
 	conn.registerReqAlias(context.Background(), 51, Contract{Symbol: "EUR", SecType: "CASH", Exchange: "IDEALPRO", Currency: "USD"})
 	conn.processSystemNoticeMessageAtEpoch(syntheticSystemNoticeText(51, 354, "Requested market data is not subscribed."), epoch)
 	singleNoticeLine(t, buf, "reqID=51 (EUR.USD CASH)")
+}
+
+// A code 200 inside a backend-link outage, or within the restore settle, is
+// the outage's echo whatever the security type: debug, counted on the
+// restore bookend. After the settle an index miss warns again, and a
+// cached-conID miss keeps its stale-identity warning.
+// Owner instruction (Oliver, in chat, 2026-10-13 09:04 CEST): dependents of
+// an owned outage log through the owner.
+func TestDefinitionMissDuringBackendOutageStaysInDebug(t *testing.T) {
+	buf := captureConnectorLogs(t)
+	c := NewConnector(&ConnectorConfig{})
+	c.conn.rateLimiter.Stop()
+	conn, _ := newReadyWireTestConnection(t)
+	c.conn = conn
+	conn.setNoticeLogContext(c.noticeLogContext())
+	t0 := time.Date(2026, 10, 12, 4, 10, 0, 0, time.UTC)
+	now := t0
+	c.absenceNow = func() time.Time { return now }
+	epoch := conn.BrokerSessionEpoch()
+	const noDefinition = "No security definition has been found for the request"
+	ctx := context.Background()
+	conn.registerReqAlias(ctx, 71, Contract{Symbol: "SYNIDX", SecType: "IND", Exchange: "CBOE", Currency: "USD"})
+	conn.registerReqAlias(ctx, 72, Contract{Symbol: "SYNFUT", SecType: "FUT", Exchange: "CME", Currency: "USD"})
+	conn.registerReqAlias(ctx, 73, Contract{Symbol: "SYNBILL", SecType: "BILL", Exchange: "SMART", Currency: "EUR"})
+	conn.registerReqAlias(ctx, 74, Contract{Symbol: "SYNSTK", SecType: "STK", Exchange: "SMART", Currency: "USD", ConID: 990001})
+	miss := func(id int) {
+		conn.processSystemNoticeMessageAtEpoch(syntheticSystemNoticeText(id, 200, noDefinition), epoch)
+	}
+
+	c.setBackendConnectivityDown(true, t0)
+	for _, id := range []int{71, 72, 73, 74} {
+		miss(id)
+	}
+	if lines := logLines(buf, "code=200"); len(lines) != 0 {
+		t.Fatalf("definition misses escaped debug during the outage: %v", lines)
+	}
+	now = t0.Add(20 * time.Second)
+	c.recordBackendConnectivity(false, now, 1102)
+	restored := logLines(buf, "TWS restored connectivity")
+	if len(restored) != 1 || !strings.Contains(restored[0], "4 definition misses (code 200) kept in debug logs") {
+		t.Fatalf("restore bookend did not account for the misses: %v", restored)
+	}
+
+	// The flush right after the restore is still the outage's echo.
+	now = now.Add(BackendRestoreSettle / 2)
+	miss(71)
+	if lines := logLines(buf, "code=200"); len(lines) != 0 {
+		t.Fatalf("definition miss inside the restore settle escaped debug: %v", lines)
+	}
+
+	now = now.Add(BackendRestoreSettle)
+	miss(71)
+	if line := singleNoticeLine(t, buf, "(SYNIDX IND)"); !strings.Contains(line, "level=WARN") {
+		t.Fatalf("index miss after the settle lost its warning: %s", line)
+	}
+	miss(74)
+	if line := singleNoticeLine(t, buf, "(SYNSTK STK)"); !strings.Contains(line, "level=WARN") {
+		t.Fatalf("stale conID miss outside an outage lost its warning: %s", line)
+	}
 }
