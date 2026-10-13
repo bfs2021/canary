@@ -18,15 +18,20 @@ func defaultAppLog(home, goos string) string {
 	return filepath.Join(home, ".local", "state", "ibkr", "ibkr-app.log")
 }
 
-func applyCoverage(result *logReport, scanned scannedLog, now time.Time, staleAfter time.Duration) {
+// applyCoverage reports a log that could not be fully read as a coverage
+// family. Each family carries across runs like any other: the first run that
+// finds an app log stale needs the owner; the same stale log the next day is
+// carried, not new, and a states-file declaration ("app:log_coverage_stale")
+// records that the app was stopped on purpose.
+func applyCoverage(a *analysis, scanned scannedLog, now time.Time, staleAfter time.Duration) {
 	if scanned.state == "missing" {
-		addSignal(result, "WARN", "log_coverage", "expected log is missing; service health is unverified", 0)
+		a.addItem("WARN", "log_coverage", "log_coverage_missing", "expected log is missing; service health is unverified", 1)
 	}
 	if scanned.coverage != "" {
-		addSignal(result, "WARN", "log_coverage", scanned.coverage, 0)
+		a.addItem("WARN", "log_coverage", "log_coverage_rotation", scanned.coverage, 1)
 	}
 	if scanned.state != "missing" && staleAfter > 0 && now.Sub(scanned.modified) > staleAfter {
-		addSignal(result, "WARN", "log_coverage", "log is inactive beyond the configured coverage interval; service health is unverified", 0)
+		a.addItem("WARN", "log_coverage", "log_coverage_stale", "log is inactive beyond the configured coverage interval; service health is unverified", 1)
 	}
 }
 
@@ -43,11 +48,11 @@ type mirrorReport struct {
 	LastSuccess time.Time `json:"last_success,omitzero"`
 }
 
-func applyMirrorCoverage(result *logReport, path string, now time.Time, staleAfter time.Duration) {
+func applyMirrorCoverage(a *analysis, path string, now time.Time, staleAfter time.Duration) {
 	report, message := readMirror(path, now, staleAfter)
-	result.Mirror = &report
+	a.report.Mirror = &report
 	if message != "" {
-		addSignal(result, "WARN", "log_coverage", message, 0)
+		a.addItem("WARN", "log_coverage", "log_coverage_mirror", message, 1)
 	}
 }
 
@@ -72,17 +77,15 @@ func readMirror(path string, now time.Time, staleAfter time.Duration) (mirrorRep
 	return report, ""
 }
 
-type familyTrend struct {
-	Family      string `json:"family"`
-	Days        int    `json:"days"`
-	Occurrences int    `json:"occurrences"`
-	FirstDay    string `json:"first_day"`
-	LastDay     string `json:"last_day"`
-}
+// maxFamiliesPerDay bounds the recurrence history a cursor retains.
+const maxFamiliesPerDay = 200
 
-// Retain 28 UTC date buckets of closed-family counts, not raw log content.
-// These are recurrence evidence, never a claim that a broker failure recovered.
-func trackFamilies(result *logReport, scanned *scannedLog, now time.Time) {
+// trackFamilies keeps 28 UTC date buckets of family counts — the closed
+// broker notice families and every WARN/ERROR family the scan classified —
+// never raw log content. It returns the history as it stood before this scan,
+// which tells a new family from one seen before and a standing condition from
+// one whose rate changed. Short restart windows also span scans here.
+func trackFamilies(a *analysis, scanned *scannedLog, now time.Time) history {
 	if scanned.cursor.Days == nil {
 		scanned.cursor.Days = map[string]map[string]int{}
 	}
@@ -101,6 +104,34 @@ func trackFamilies(result *logReport, scanned *scannedLog, now time.Time) {
 			}
 		}
 	}
+	prior := history{}
+	for day, counts := range scanned.cursor.Days {
+		if day < cutoff || day > today {
+			continue
+		}
+		for family, n := range counts {
+			if prior[family] == nil {
+				prior[family] = map[string]int{}
+			}
+			prior[family][day] = n
+		}
+	}
+	count := func(ts time.Time, family string) {
+		day := ts.UTC().Format("2006-01-02")
+		if day < cutoff {
+			return
+		}
+		bucket := scanned.cursor.Days[day]
+		if bucket == nil {
+			bucket = map[string]int{}
+			scanned.cursor.Days[day] = bucket
+		}
+		if _, ok := bucket[family]; !ok && len(bucket) >= maxFamiliesPerDay {
+			return
+		}
+		bucket[family]++
+		changed[day+"\x00"+family] = true
+	}
 	for _, line := range scanned.lines {
 		ts, ok := logTime(line)
 		if !ok || ts.After(now) {
@@ -109,69 +140,34 @@ func trackFamilies(result *logReport, scanned *scannedLog, now time.Time) {
 		if (isDaemonStart(line) || isAppStart(line)) && ts.After(now.Add(-restartLoopWindow)) {
 			starts = append(starts, ts)
 		}
-		family := daemonNoticeFamily(line)
-		day := ts.UTC().Format("2006-01-02")
-		if family == "" || day < cutoff {
-			continue
+		if family := daemonNoticeFamily(line); family != "" {
+			count(ts, family)
 		}
-		if scanned.cursor.Days[day] == nil {
-			scanned.cursor.Days[day] = map[string]int{}
-		}
-		scanned.cursor.Days[day][family]++
-		changed[day+"\x00"+family] = true
 	}
-	trends := map[string]familyTrend{}
+	for _, e := range a.entries {
+		if e.timed && !e.ts.After(now) && e.kind != "broker_read_notice" {
+			count(e.ts, e.family)
+		}
+	}
 	for day, counts := range scanned.cursor.Days {
 		if day < cutoff || day > today {
 			delete(scanned.cursor.Days, day)
 			continue
 		}
-		for family, count := range counts {
-			trend := trends[family]
-			trend.Family = family
-			trend.Days++
-			trend.Occurrences += count
-			if trend.FirstDay == "" || day < trend.FirstDay {
-				trend.FirstDay = day
-			}
-			if day > trend.LastDay {
-				trend.LastDay = day
-			}
-			trends[family] = trend
-			if family == "broker_code_2129_indicative" && changed[day+"\x00"+family] && count > 150 {
-				addSignal(result, "WARN", "noise_loop", fmt.Sprintf("indicative-data notices exceeded 150 occurrences on %s", day), count)
-			}
+		if n := counts["broker_code_2129_indicative"]; changed[day+"\x00broker_code_2129_indicative"] && n > 150 {
+			a.addItem("WARN", "noise_loop", "noise_loop", fmt.Sprintf("indicative-data notices exceeded 150 occurrences on %s", day), n)
 		}
 	}
-	for _, trend := range trends {
-		if trend.Days > 1 {
-			result.Recurring = append(result.Recurring, trend)
-		}
-	}
-	slices.SortFunc(result.Recurring, func(a, b familyTrend) int {
-		if a.Family < b.Family {
-			return -1
-		}
-		if a.Family > b.Family {
-			return 1
-		}
-		return 0
-	})
 	starts = slices.DeleteFunc(starts, func(ts time.Time) bool { return ts.Before(now.Add(-restartLoopWindow)) || ts.After(now) })
 	slices.SortFunc(starts, func(a, b time.Time) int { return a.Compare(b) })
 	if len(scanned.lines) > 0 && restartLoopCount(starts) > restartLoopStarts {
-		found := false
-		for _, s := range result.Signals {
-			if s.Kind == "restart_loop" {
-				found = true
-			}
-		}
-		if !found {
-			addSignal(result, "WARN", "restart_loop", "service started repeatedly across scan windows within "+restartLoopWindow.String(), len(starts))
+		if _, found := a.items.byFamily["restart_loop"]; !found {
+			a.addItem("WARN", "restart_loop", "restart_loop", "service started repeatedly across scan windows within "+restartLoopWindow.String(), len(starts))
 		}
 	}
 	if len(starts) > 128 {
 		starts = starts[len(starts)-128:]
 	}
 	scanned.cursor.Starts = starts
+	return prior
 }

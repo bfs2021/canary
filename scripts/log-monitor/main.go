@@ -1,5 +1,6 @@
-// Command log-monitor incrementally classifies Canary daemon and app logs.
-// It emits bounded, redacted JSON so scheduled agents never ingest raw logs.
+// Command log-monitor incrementally reads Canary daemon and app logs and
+// reports incidents, not line shapes. It emits bounded, redacted JSON so
+// scheduled agents never ingest raw logs.
 package main
 
 import (
@@ -17,7 +18,7 @@ import (
 )
 
 const (
-	reportVersion      = 3
+	reportVersion      = 4
 	defaultMaxSignals  = 10
 	maxScannerCapacity = 1024 * 1024
 
@@ -38,24 +39,40 @@ type options struct {
 	daemonCrashOffset string
 	daemonOffset      string
 	appOffset         string
-	daemonMirror      string
-	holdingsStore     string
-	holdingsCache     string
-	maxSignals        int
-	commit            bool
-	staleAfter        time.Duration
-	mirrorStaleAfter  time.Duration
+	// openItems persists what was open at the end of a run; empty derives
+	// <daemonOffset>.open.json.
+	openItems        string
+	states           string
+	daemonMirror     string
+	holdingsStore    string
+	holdingsCache    string
+	maxSignals       int
+	commit           bool
+	staleAfter       time.Duration
+	mirrorStaleAfter time.Duration
+	// engine is the incident configuration; the zero value means defaults.
+	engine engineConfig
 }
 
 type report struct {
-	Version        int       `json:"version"`
-	GeneratedAt    time.Time `json:"generated_at"`
-	NeedsAttention bool      `json:"needs_attention"`
+	Version     int       `json:"version"`
+	GeneratedAt time.Time `json:"generated_at"`
+	// NeedsAttention is true exactly when Attention is non-empty.
+	NeedsAttention bool `json:"needs_attention"`
+	// Attention names each item that needs the owner and why: error,
+	// new_family, long_incident, open_incident, grew or coverage. Everything
+	// else in the report is informational.
+	Attention        []attentionItem `json:"attention,omitempty"`
+	AttentionOmitted int             `json:"attention_omitted,omitempty"`
 	// Holdings says where the current-holdings list that masks names came
 	// from: store, cache, or unavailable (contract names withheld).
-	Holdings string    `json:"holdings"`
-	Daemon   logReport `json:"daemon"`
-	App      logReport `json:"app"`
+	Holdings     string             `json:"holdings"`
+	Declarations declarationsReport `json:"declarations"`
+	// CarryState says whether the previous run's open items were read:
+	// loaded, missing (first run) or reset (unreadable, started afresh).
+	CarryState string    `json:"carry_state"`
+	Daemon     logReport `json:"daemon"`
+	App        logReport `json:"app"`
 	// CrashLog names process stderr, which may contain allocator diagnostics
 	// as well as fatal output. Counts describe lines, never crash events.
 	CrashLog  string           `json:"crash_log,omitempty"`
@@ -75,7 +92,6 @@ type crashScanReport struct {
 type logReport struct {
 	Path          string         `json:"path"`
 	ModifiedAt    time.Time      `json:"modified_at,omitzero"`
-	Recurring     []familyTrend  `json:"recurring,omitempty"`
 	State         string         `json:"state"`
 	NewLines      int            `json:"new_lines"`
 	KnownBenign   int            `json:"known_benign"`
@@ -85,16 +101,25 @@ type logReport struct {
 	// Builds lists, in order, the daemon builds whose start marker falls in
 	// the window, so a line can be told apart from a build already replaced.
 	Builds []string `json:"builds,omitempty"`
-	// Signals holds the max-signals highest-ranked distinct signals —
-	// severity first, then occurrence count — never arrival order, so an
-	// escalating loop outranks a one-off stale quote no matter which the
-	// scan met first.
+	// Incidents are connectivity episodes, daemon restarts and failure runs,
+	// each with the families attributed to it.
+	Incidents        []incident `json:"incidents,omitempty"`
+	IncidentsOmitted int        `json:"incidents_omitted,omitempty"`
+	// Signals holds the max-signals highest-ranked standalone families —
+	// those no incident explains — attention first, then severity, then
+	// count.
 	Signals []signal `json:"signals,omitempty"`
-	// Suppressed summarizes every signal the cap cut, one row per
-	// severity/kind pair, so nothing material drops without a trace. The
-	// row count is bounded by the closed kind set.
+	// Suppressed summarizes every family the cap cut, one row per family.
 	Suppressed        []suppressedSummary `json:"suppressed,omitempty"`
 	SuppressedSignals int                 `json:"suppressed_signals,omitempty"`
+	// Standing families recur on many prior days at an unchanged rate.
+	Standing []standingItem `json:"standing,omitempty"`
+	// Declared items match the owner's states file and never need attention.
+	Declared []declaredItem `json:"declared,omitempty"`
+	// Resolved items were open at the previous run and are absent now; each
+	// is reported once.
+	Resolved     []resolvedItem `json:"resolved,omitempty"`
+	ListsOmitted int            `json:"lists_omitted,omitempty"`
 	// Mirror is present when the input is a copy kept by a log mirror.
 	Mirror *mirrorReport `json:"mirror,omitempty"`
 }
@@ -102,24 +127,31 @@ type logReport struct {
 type signal struct {
 	Severity string `json:"severity"`
 	Kind     string `json:"kind"`
-	Message  string `json:"message"`
-	Count    int    `json:"count,omitempty"`
+	Family   string `json:"family"`
+	// Message is the family's most frequent redacted sample; OtherSamples
+	// are up to three more, and Distinct counts every distinct sample.
+	Message      string   `json:"message"`
+	OtherSamples []string `json:"other_samples,omitempty"`
+	Count        int      `json:"count"`
+	Distinct     int      `json:"distinct"`
+	// Status is new (never in recurrence history), returning (in history,
+	// not open at the previous run) or carried (open at the previous run).
+	Status    string    `json:"status"`
+	FirstSeen time.Time `json:"first_seen,omitzero"`
+	DaysSeen  int       `json:"days_seen,omitempty"`
+	First     time.Time `json:"first,omitzero"`
+	Last      time.Time `json:"last,omitzero"`
+	Attention string    `json:"attention,omitempty"`
 }
 
 type suppressedSummary struct {
+	Family   string `json:"family"`
 	Severity string `json:"severity"`
 	Kind     string `json:"kind"`
-	// Count is every occurrence the cap cut for the pair, across all of its
-	// distinct messages; it is not how often Sample occurred.
-	Count int `json:"count"`
-	// Sample is the highest-ranked suppressed message of the pair, already
-	// redacted by safeMessage.
+	Count    int    `json:"count"`
+	Status   string `json:"status"`
+	// Sample is the family's most frequent message, already redacted.
 	Sample string `json:"sample,omitempty"`
-	// SampleCount is how often Sample itself occurred, and Distinct how many
-	// distinct messages the row holds, so the row never reads as Count
-	// repeats of its sample.
-	SampleCount int `json:"sample_count"`
-	Distinct    int `json:"distinct"`
 }
 
 type scannedLog struct {
@@ -177,20 +209,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "log-monitor: resolve home: %v\n", err)
 		os.Exit(2)
 	}
-	opts := options{}
+	opts := options{engine: defaultEngineConfig()}
 	flag.StringVar(&opts.daemonLog, "daemon-log", filepath.Join(home, ".local", "state", "ibkr", "ibkr-daemon.log"), "daemon log path")
 	flag.StringVar(&opts.appLog, "app-log", defaultAppLog(home, runtime.GOOS), "app log path (macOS launchd stderr by default)")
 	flag.StringVar(&opts.daemonCrashLog, "daemon-crash-log", "", "daemon crash output path (default: the daemon log's name with a .crash.log suffix, beside it)")
 	flag.StringVar(&opts.daemonCrashOffset, "daemon-crash-offset", "", "crash output private cursor path (default: -daemon-offset with a .crash suffix)")
 	flag.StringVar(&opts.daemonOffset, "daemon-offset", filepath.Join(home, ".claude", "scheduled-tasks", "ibkr-daemon-log-check.offset"), "daemon private cursor path (legacy line offsets are migrated)")
 	flag.StringVar(&opts.appOffset, "app-offset", filepath.Join(home, ".claude", "scheduled-tasks", "ibkr-daemon-log-check.app.offset"), "app private cursor path (legacy line offsets are migrated)")
-	flag.IntVar(&opts.maxSignals, "max-signals", defaultMaxSignals, "maximum signal samples per log")
-	flag.BoolVar(&opts.commit, "commit", true, "persist offsets after a successful scan")
+	flag.StringVar(&opts.openItems, "open-items", "", "private record of items open at the end of a run (default: -daemon-offset with a .open.json suffix)")
+	flag.StringVar(&opts.states, "states", filepath.Join(xdgDir("XDG_CONFIG_HOME", home, ".config"), "ibkr", "log-monitor-states.json"), "owner-declared states file, read only; a missing file declares nothing")
+	flag.IntVar(&opts.maxSignals, "max-signals", defaultMaxSignals, "maximum standalone family signals per log, applied after incident grouping")
+	flag.BoolVar(&opts.commit, "commit", true, "persist offsets and open items after a successful scan")
 	flag.DurationVar(&opts.staleAfter, "stale-after", 24*time.Hour, "flag log coverage unverified after this inactivity; zero disables")
 	flag.StringVar(&opts.daemonMirror, "daemon-mirror-status", "", "sync record of the mirror that copies -daemon-log from another machine; empty for a local log")
 	flag.DurationVar(&opts.mirrorStaleAfter, "mirror-stale-after", 20*time.Minute, "flag mirrored log coverage unverified when the last completed sync is older; zero disables")
 	flag.StringVar(&opts.holdingsStore, "holdings-store", filepath.Join(xdgDir("XDG_STATE_HOME", home, ".local", "state"), "ibkr", "daemon.db"), "daemon store read (read-only) for the current holdings a report must not name")
 	flag.StringVar(&opts.holdingsCache, "holdings-cache", filepath.Join(xdgDir("XDG_CACHE_HOME", home, ".cache"), "ibkr", "holdings-denylist"), "the account-data gate's private holdings cache, used when the store cannot be read")
+	flag.DurationVar(&opts.engine.before, "incident-before", opts.engine.before, "attribute lines this long before an incident's first anchor to it")
+	flag.DurationVar(&opts.engine.after, "incident-after", opts.engine.after, "attribute lines this long after an incident's last anchor to it")
+	flag.DurationVar(&opts.engine.restartEdge, "restart-edge", opts.engine.restartEdge, "attribute lines this soon after a daemon start to the restart")
+	flag.DurationVar(&opts.engine.gap, "incident-gap", opts.engine.gap, "chain anchors (and a subsystem's failures) this close together into one incident")
+	flag.DurationVar(&opts.engine.longIncident, "incident-attention", opts.engine.longIncident, "an incident at least this long needs attention")
+	flag.IntVar(&opts.engine.standingDays, "standing-days", opts.engine.standingDays, "prior days a family must recur at an unchanged rate to read as standing")
 	flag.Parse()
 	held = loadHoldings(opts.holdingsStore, opts.holdingsCache)
 
@@ -211,6 +251,13 @@ func run(opts options, now time.Time) (report, error) {
 	if opts.maxSignals < 1 || opts.maxSignals > 100 {
 		return report{}, fmt.Errorf("max-signals must be between 1 and 100")
 	}
+	cfg := opts.engine
+	if cfg == (engineConfig{}) {
+		cfg = defaultEngineConfig()
+	}
+	if cfg.gap <= 0 || cfg.before < 0 || cfg.after < 0 || cfg.restartEdge < 0 || cfg.longIncident <= 0 {
+		return report{}, fmt.Errorf("incident windows must be positive")
+	}
 	daemon, err := scanIncremental(opts.daemonLog, opts.daemonOffset)
 	if err != nil {
 		return report{}, fmt.Errorf("scan daemon log: %w", err)
@@ -224,13 +271,18 @@ func run(opts options, now time.Time) (report, error) {
 	if err != nil {
 		return report{}, fmt.Errorf("scan daemon crash log: %w", err)
 	}
+	openPath := opts.openItemsPath()
+	prior, carryState := readOpenItems(openPath)
+	decls := loadDeclarations(opts.states)
 
+	d := classifyDaemon(daemon, cfg, seedCluster(prior), prior.LastBuild)
+	ap := classifyApp(app)
 	result := report{
-		Version:     reportVersion,
-		GeneratedAt: now,
-		Holdings:    held.source,
-		Daemon:      classifyDaemon(daemon, int(^uint(0)>>1)),
-		App:         classifyApp(app, int(^uint(0)>>1)),
+		Version:      reportVersion,
+		GeneratedAt:  now,
+		Holdings:     held.source,
+		Declarations: decls.report,
+		CarryState:   carryState,
 	}
 	if crash.state != "missing" {
 		result.CrashLog = crash.path
@@ -253,20 +305,27 @@ func run(opts options, now time.Time) (report, error) {
 			}
 		}
 		if lines > 0 {
-			addSignal(&result.Daemon, "ERROR", "crash_output", "daemon process stderr (undated lines, not a crash count): "+first, lines)
+			d.addItem("ERROR", "crash_output", "crash_output", "daemon process stderr (undated lines, not a crash count): "+first, lines)
 		}
 	}
-	applyCoverage(&result.Daemon, daemon, now, opts.staleAfter)
-	applyCoverage(&result.App, app, now, opts.staleAfter)
+	applyCoverage(d, daemon, now, opts.staleAfter)
+	applyCoverage(ap, app, now, opts.staleAfter)
 	if opts.daemonMirror != "" {
-		applyMirrorCoverage(&result.Daemon, opts.daemonMirror, now, opts.mirrorStaleAfter)
+		applyMirrorCoverage(d, opts.daemonMirror, now, opts.mirrorStaleAfter)
 	}
-	trackFamilies(&result.Daemon, &daemon, now)
-	trackFamilies(&result.App, &app, now)
-	finalizeSignals(&result.Daemon, opts.maxSignals)
-	finalizeSignals(&result.App, opts.maxSignals)
-	result.NeedsAttention = len(result.Daemon.Signals) != 0 || len(result.App.Signals) != 0 ||
-		result.Daemon.SuppressedSignals != 0 || result.App.SuppressedSignals != 0
+	dHistory := trackFamilies(d, &daemon, now)
+	aHistory := trackFamilies(ap, &app, now)
+
+	f := &finalizer{cfg: cfg, now: now, maxSignals: opts.maxSignals, decls: decls, prior: prior,
+		next: openItemsFile{Version: openItemsVersion, LastBuild: d.lastBuild, Items: map[string]openItem{}}}
+	result.Daemon = f.finalize("daemon", d, dHistory)
+	result.App = f.finalize("app", ap, aHistory)
+	result.Attention = f.attention
+	if len(result.Attention) > maxAttention {
+		result.AttentionOmitted = len(result.Attention) - maxAttention
+		result.Attention = result.Attention[:maxAttention:maxAttention]
+	}
+	result.NeedsAttention = len(result.Attention) > 0
 
 	if opts.commit {
 		if daemon.state != "missing" {
@@ -284,13 +343,20 @@ func run(opts options, now time.Time) (report, error) {
 				return report{}, fmt.Errorf("write crash offset: %w", err)
 			}
 		}
+		if err := writeOpenItems(openPath, f.next); err != nil {
+			return report{}, fmt.Errorf("write open items: %w", err)
+		}
 	}
 	return result, nil
 }
 
-// crashPaths resolves the crash log and its cursor, deriving them from the
-// daemon log and cursor when not given: the daemon writes
-// <daemon-log-name>.crash.log beside its log.
+func (o options) openItemsPath() string {
+	if o.openItems != "" {
+		return o.openItems
+	}
+	return o.daemonOffset + ".open.json"
+}
+
 func (o options) crashPaths() (logPath, offsetPath string) {
 	logPath, offsetPath = o.daemonCrashLog, o.daemonCrashOffset
 	if logPath == "" {
@@ -301,133 +367,6 @@ func (o options) crashPaths() (logPath, offsetPath string) {
 		offsetPath = o.daemonOffset + ".crash"
 	}
 	return logPath, offsetPath
-}
-
-func classifyDaemon(scanned scannedLog, maxSignals int) logReport {
-	result := newLogReport(scanned)
-	if len(scanned.lines) == 0 {
-		return result
-	}
-	restarts := lifecycleTimes(scanned.lines, isDaemonLifecycle)
-	for _, line := range scanned.lines {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case trimmed == "":
-			result.Informational++
-		case isPanicLine(trimmed):
-			addSignal(&result, "ERROR", "panic", "daemon panic detected", 0)
-		case severity(trimmed) == "FATAL":
-			addSignal(&result, "FATAL", "log_level", safeMessage(trimmed), 0)
-		case isStackContinuation(line):
-			result.Informational++
-		case isDaemonLifecycle(trimmed):
-			result.Families["lifecycle"]++
-			result.Informational++
-			if build := daemonBuild(trimmed); build != "" && !slices.Contains(result.Builds, build) {
-				result.Builds = append(result.Builds, build)
-			}
-		case daemonNoticeFamily(trimmed) != "":
-			family := daemonNoticeFamily(trimmed)
-			result.Families[family]++
-			if level := severity(trimmed); level != "WARN" && level != "ERROR" {
-				// The daemon already judged this notice routine (a known
-				// entitlement gap, a verdict its requester records).
-				result.Informational++
-			} else if family == "broker_code_2129_indicative" && severity(trimmed) != "ERROR" {
-				result.KnownBenign++
-			} else {
-				level := "WARN"
-				if severity(trimmed) == "ERROR" {
-					level = "ERROR"
-				}
-				message := "broker read notice requires outcome assessment: " + family
-				if family == "broker_code_200_no_definition" || family == "broker_code_354" {
-					// A definition failure or a refused market-data line is
-					// about one contract; name it so a recurring miss can be
-					// traced without the raw log. Owner instruction (Oliver,
-					// 2026-10-12 06:40 CEST): code 354 names its contract too.
-					message += " (" + noticeContractLabel(trimmed) + ")"
-				}
-				addSignal(&result, level, "broker_read_notice", message, 0)
-			}
-		case strings.Contains(trimmed, "code=2108"):
-			result.Families["market_data_farm_disconnect"]++
-			result.KnownBenign++
-		case isRateLimiterWarning(trimmed) && nearRestart(trimmed, restarts):
-			result.Families["shutdown_rate_limiter"]++
-			result.KnownBenign++
-		case severity(trimmed) == "WARN" || severity(trimmed) == "ERROR":
-			addSignal(&result, severity(trimmed), "log_level", safeMessage(trimmed), 0)
-		default:
-			result.Informational++
-		}
-	}
-	if count := result.Families["market_data_farm_disconnect"]; count > 2 {
-		addSignal(&result, "WARN", "repeated_farm_disconnect", "market-data farm disconnected repeatedly", count)
-	}
-	if count := restartLoopCount(lifecycleTimes(scanned.lines, isDaemonStart)); count > restartLoopStarts {
-		addSignal(&result, "WARN", "restart_loop", "daemon connected repeatedly within "+restartLoopWindow.String(), count)
-	}
-	finalizeSignals(&result, maxSignals)
-	return result
-}
-
-func classifyApp(scanned scannedLog, maxSignals int) logReport {
-	result := newLogReport(scanned)
-	panicActive := false
-	for _, line := range scanned.lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			result.Informational++
-			continue
-		}
-		if isPanicLine(trimmed) {
-			panicActive = true
-			addSignal(&result, "ERROR", "panic", "app panic detected", 0)
-			continue
-		}
-		if panicActive && isStackContinuation(line) {
-			result.Informational++
-			continue
-		}
-		panicActive = false
-
-		level := severity(trimmed)
-		if level == "FATAL" {
-			addSignal(&result, level, "log_level", safeMessage(trimmed), 0)
-			continue
-		}
-		if isRequestCompleted(trimmed) {
-			status := httpStatus(trimmed)
-			if status >= 500 {
-				addSignal(&result, "ERROR", "http_5xx", fmt.Sprintf("app request completed with status %d", status), 0)
-			} else if status >= 100 {
-				result.Families["request_completed"]++
-				result.KnownBenign++
-			} else {
-				addSignal(&result, "WARN", "malformed_access_log", "app access log omitted a valid HTTP status", 0)
-			}
-			continue
-		}
-		if isAppLifecycle(trimmed) {
-			result.Families["lifecycle"]++
-			result.Informational++
-			continue
-		}
-		switch level {
-		case "WARN", "ERROR", "FATAL":
-			addSignal(&result, level, "log_level", safeMessage(trimmed), 0)
-		case "DEBUG", "INFO":
-			result.Informational++
-		default:
-			addSignal(&result, "WARN", "missing_level", "production app line omitted an explicit severity", 0)
-		}
-	}
-	if count := restartLoopCount(lifecycleTimes(scanned.lines, isAppStart)); count > restartLoopStarts {
-		addSignal(&result, "WARN", "restart_loop", "app started repeatedly within "+restartLoopWindow.String(), count)
-	}
-	finalizeSignals(&result, maxSignals)
-	return result
 }
 
 func newLogReport(scanned scannedLog) logReport {
@@ -441,26 +380,6 @@ func newLogReport(scanned scannedLog) logReport {
 	}
 }
 
-// addSignal collects without a cap, merging repeats of the same
-// severity/kind/message into one counted signal. The max-signals bound is
-// applied by finalizeSignals after classification, once every signal's true
-// weight is known.
-func addSignal(result *logReport, severity, kind, message string, count int) {
-	for i := range result.Signals {
-		item := &result.Signals[i]
-		if item.Severity != severity || item.Kind != kind || item.Message != message {
-			continue
-		}
-		if item.Count == 0 {
-			item.Count = 2
-		} else {
-			item.Count++
-		}
-		return
-	}
-	result.Signals = append(result.Signals, signal{Severity: severity, Kind: kind, Message: message, Count: count})
-}
-
 func severityRank(severity string) int {
 	switch severity {
 	case "ERROR", "FATAL":
@@ -472,47 +391,40 @@ func severityRank(severity string) int {
 	}
 }
 
-// effectiveCount reads a signal's occurrence weight; Count 0 means the signal
-// fired once.
-func effectiveCount(s signal) int {
-	return max(s.Count, 1)
-}
-
 // finalizeSignals ranks collected signals by severity then occurrence count
 // (stable on arrival order for ties), keeps the top max, and rolls everything
-// cut into the bounded per-severity/kind suppressed summary.
+
+// finalizeSignals ranks the standalone family signals — attention first,
+// then severity, then count (stable on arrival order for ties) — keeps the
+// top max, and rolls each family the cap cut into one suppressed row.
 func finalizeSignals(result *logReport, max int) {
 	slices.SortStableFunc(result.Signals, func(a, b signal) int {
+		if d := boolRank(b.Attention != "") - boolRank(a.Attention != ""); d != 0 {
+			return d
+		}
 		if d := severityRank(b.Severity) - severityRank(a.Severity); d != 0 {
 			return d
 		}
-		return effectiveCount(b) - effectiveCount(a)
+		return b.Count - a.Count
 	})
 	if len(result.Signals) <= max {
 		return
 	}
 	dropped := result.Signals[max:]
 	result.Signals = result.Signals[:max:max]
-	index := map[string]int{}
 	for _, s := range dropped {
-		key := s.Severity + "\x00" + s.Kind
-		i, ok := index[key]
-		if !ok {
-			i = len(result.Suppressed)
-			index[key] = i
-			result.Suppressed = append(result.Suppressed, suppressedSummary{
-				Severity:    s.Severity,
-				Kind:        s.Kind,
-				Sample:      s.Message,
-				SampleCount: effectiveCount(s),
-			})
+		result.SuppressedSignals += s.Count
+		if len(result.Suppressed) < maxSuppressed {
+			result.Suppressed = append(result.Suppressed, suppressedSummary{Family: s.Family, Severity: s.Severity, Kind: s.Kind, Count: s.Count, Status: s.Status, Sample: s.Message})
 		}
-		// addSignal merged repeats, so each dropped signal of a pair is one
-		// distinct message.
-		result.Suppressed[i].Distinct++
-		result.Suppressed[i].Count += effectiveCount(s)
-		result.SuppressedSignals += effectiveCount(s)
 	}
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func daemonNoticeFamily(line string) string {
@@ -625,7 +537,8 @@ func safeMessage(line string) string {
 	if message == "" {
 		message = "log signal"
 	}
-	return redactMessage(message)
+	// Counts and ordinals vary per occurrence; a sample keeps the shape.
+	return normalizeCounts(redactMessage(message))
 }
 
 // redactMessage applies the report's redaction and normalization to free

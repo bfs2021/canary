@@ -115,7 +115,11 @@ func TestTruncationMigrationAndPartialRecords(t *testing.T) {
 	}
 }
 
-func TestRecurringBrokerFailuresCannotHideBelowNoiseThreshold(t *testing.T) {
+// A broker failure recurring every day is never benign, but it needs the
+// owner once: the first day it is new, the next days it is carried, and after
+// standing-days at an unchanged rate it is a standing condition. Doubling
+// brings it back.
+func TestRecurringBrokerFailuresAreCarriedThenStanding(t *testing.T) {
 	opts := testMonitorOptions(t)
 	start := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	var lines strings.Builder
@@ -127,25 +131,55 @@ func TestRecurringBrokerFailuresCannotHideBelowNoiseThreshold(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !got.NeedsAttention || got.Daemon.KnownBenign != 0 {
+		if got.Daemon.KnownBenign != 0 || got.Daemon.Families["broker_code_354"] != 1 {
 			t.Fatalf("access failure hidden: %+v", got.Daemon)
 		}
-		if day > 0 && (len(got.Daemon.Recurring) != 1 || got.Daemon.Recurring[0].Days != day+1 || got.Daemon.Recurring[0].Occurrences != day+1) {
-			t.Fatalf("recurrence lost: %+v", got.Daemon.Recurring)
+		switch {
+		case day == 0:
+			if !got.NeedsAttention || got.Attention[0].Reason != "new_family" || got.Daemon.Signals[0].Status != "new" {
+				t.Fatalf("day 0 = %+v", got)
+			}
+		case day < 7:
+			if got.NeedsAttention || got.Daemon.Signals[0].Status != "carried" || got.Daemon.Signals[0].DaysSeen != day+1 {
+				t.Fatalf("day %d = %+v", day, got.Daemon.Signals)
+			}
+		default:
+			if got.NeedsAttention || len(got.Daemon.Signals) != 0 || len(got.Daemon.Standing) != 1 || got.Daemon.Standing[0].Days != day {
+				t.Fatalf("day %d standing = %+v %+v", day, got.Daemon.Standing, got.Daemon.Signals)
+			}
+		}
+	}
+	// The rate quadruples: no longer standing, and grown since the last run.
+	ts := start.AddDate(0, 0, 20)
+	for range 4 {
+		lines.WriteString("time=" + ts.Format(time.RFC3339) + " level=WARN msg=denied code=354\n")
+	}
+	writeTestFile(t, opts.daemonLog, lines.String())
+	got, err := run(opts, ts)
+	if err != nil || !got.NeedsAttention || got.Attention[0].Reason != "grew" {
+		t.Fatalf("quadrupled rate = %+v %v", got, err)
+	}
+	for _, path := range []string{opts.daemonOffset, opts.openItemsPath()} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), "denied") {
+			t.Fatalf("raw message persisted in %s", path)
+		}
+		if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %v", path, info.Mode())
 		}
 	}
 	raw, err := os.ReadFile(opts.daemonOffset)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "denied") {
-		t.Fatal("raw message persisted")
-	}
 	var cursor logCursor
 	if err := json.Unmarshal(raw, &cursor); err != nil {
 		t.Fatal(err)
 	}
-	if len(cursor.Days) != 20 {
+	if len(cursor.Days) != 21 {
 		t.Fatal("days not retained")
 	}
 }
@@ -210,9 +244,9 @@ func TestRestartDoesNotHideActualPacingAndOldNoiseDaysStayQuiet(t *testing.T) {
 
 func TestFatalCannotBeHiddenByLifecycleOrSuccessfulAccessText(t *testing.T) {
 	for _, line := range []string{"level=FATAL msg=\"Connected to IB Gateway\"", "level=FATAL msg=\"canary app serving\"", "level=FATAL msg=\"Request completed\" status=200"} {
-		for _, classify := range []func(scannedLog, int) logReport{classifyDaemon, classifyApp} {
-			got := classify(scannedLog{state: "scanned", lines: []string{line}}, 10)
-			if len(got.Signals) != 1 || got.Signals[0].Severity != "FATAL" {
+		for _, daemon := range []bool{true, false} {
+			got := finalizeForTest(scannedLog{state: "scanned", lines: []string{line}}, 10, daemon)
+			if len(got.Signals) != 1 || got.Signals[0].Severity != "FATAL" || got.Signals[0].Attention != "error" {
 				t.Fatalf("fatal hidden: %+v", got)
 			}
 		}
@@ -284,27 +318,29 @@ func TestReplayAfterCursorResetDoesNotDoubleCountFamilies(t *testing.T) {
 		lines.WriteString("time=" + ts.Format(time.RFC3339) + ` level=WARN msg="System notice reqID=1 (SPY OPT) code=300 @ x: Can't find EId"` + "\n")
 	}
 	writeTestFile(t, opts.daemonLog, lines.String())
-	got, err := run(opts, now)
-	if err != nil {
+	if _, err := run(opts, now); err != nil {
 		t.Fatal(err)
 	}
-	if got.Daemon.Recurring != nil {
-		t.Fatalf("single day reported as recurring: %+v", got.Daemon.Recurring)
+	if days := cursorDays(t, opts.daemonOffset); len(days) != 1 || days["2026-10-02"]["broker_code_300"] != 5 {
+		t.Fatalf("first pass days = %v", days)
 	}
 	// Invalidate the cursor by rewriting the same lines with one more day.
 	lines.WriteString("time=2026-10-03T07:00:00Z level=WARN msg=\"System notice reqID=2 (SPY OPT) code=300 @ x: Can't find EId\"\n")
 	writeTestFile(t, opts.daemonLog, "time=2026-10-02T06:59:00Z level=INFO msg=prefix-changed\n"+lines.String())
-	got, err = run(opts, now)
+	got, err := run(opts, now)
 	if err != nil || !got.Daemon.OffsetReset {
 		t.Fatalf("replay not detected: %+v %v", got.Daemon, err)
 	}
-	var trend *familyTrend
-	for i := range got.Daemon.Recurring {
-		if got.Daemon.Recurring[i].Family == "broker_code_300" {
-			trend = &got.Daemon.Recurring[i]
-		}
+	if days := cursorDays(t, opts.daemonOffset); days["2026-10-02"]["broker_code_300"] != 5 || days["2026-10-03"]["broker_code_300"] != 1 {
+		t.Fatalf("replayed counts = %v, want 5 and 1", days)
 	}
-	if trend == nil || trend.Days != 2 || trend.Occurrences != 6 {
-		t.Fatalf("replayed counts = %+v, want 2 days / 6 occurrences", trend)
+}
+
+func cursorDays(t *testing.T, path string) map[string]map[string]int {
+	t.Helper()
+	c, err := readCursor(path)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return c.Days
 }
