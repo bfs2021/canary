@@ -268,7 +268,7 @@ nothing, when the token is stale or expired, when the position no longer
 holds the reviewed quantity on the reviewed side (a sale of at most the
 confirmed long is admitted; a smaller position refuses as `position_changed`
 rather than shrinking the order), when the current mid has left the reviewed
-bound (`price_moved`: the reviewed mid ±0.5%, stated in every preview as
+bound (`price_moved`: the reviewed mid ±0.5% for stocks and ±2% for options (owner decision 2026-10-13 06:59 CEST), stated in every preview as
 `price_bound`), when the token was already submitted (`token_consumed`), or
 when any order gate refuses, Canary's own stop on the line included (a reduce
 sale joins the stop's one-cancels-all group or waits for the stop to shrink,

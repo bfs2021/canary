@@ -89,7 +89,7 @@ with `preview_tokens` place them verbatim, each basket leg on its own. The
 daemon never re-sizes or re-prices a tokened reduction: it refuses with
 `token_expired`, `token_invalid`, `token_consumed`, `position_changed`
 (the reviewed quantity exceeds the confirmed position, or the side changed),
-`price_moved` (the current mid is outside the reviewed mid ±0.5%, the
+`price_moved` (the current mid is outside the reviewed mid ±0.5% for stocks or ±2% for options (owner 2026-10-13 06:59 CEST), the
 disclosed default pending the owner's own figure), or the order gate's own
 reason, and the place path's admission is unchanged: Canary's own stop on
 the line is joined or shrunk first. `request_ref` names one submission;

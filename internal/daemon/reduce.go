@@ -18,9 +18,21 @@ const reduceOrderSource = "manual_reduce"
 // may have moved before a tokened reduce submit refuses to send the reviewed
 // limit (price_moved). The limit itself never moves: the owner confirmed it.
 // Every preview discloses the bound it will be held to (terms.price_bound).
-// This is a disclosed default pending the owner's own figure (2026-10-12),
-// not a policy threshold.
-const reducePriceBoundPct = 0.5
+// Owner decision 2026-10-13 06:59 CEST ("0.5% stocks 2% options"): stocks,
+// ETFs and every other contract 0.5%; options 2%, because an option's mid
+// moves several tenths of a percent within seconds.
+const (
+	reducePriceBoundPct       = 0.5
+	reduceOptionPriceBoundPct = 2.0
+)
+
+// reducePriceBoundPctFor is the owner's band for the contract's security type.
+func reducePriceBoundPctFor(secType string) float64 {
+	if strings.EqualFold(strings.TrimSpace(secType), "OPT") {
+		return reduceOptionPriceBoundPct
+	}
+	return reducePriceBoundPct
+}
 
 // reduceAdaptiveNote is the terms' plain statement when a reduction asked for
 // or would default to Adaptive on a contract the broker layer does not send
@@ -322,21 +334,23 @@ func reduceQuoteMid(quote rpc.OrderQuoteSnapshot) (float64, bool) {
 	return 0, false
 }
 
-// reducePriceBound states the band the reviewed mid admits: ±reducePriceBoundPct.
-func reducePriceBound(reviewed rpc.OrderQuoteSnapshot) (rpc.TradeProposalReducePriceBound, bool) {
+// reducePriceBound states the band the reviewed mid admits for the
+// contract's security type: ±reducePriceBoundPctFor(secType).
+func reducePriceBound(reviewed rpc.OrderQuoteSnapshot, secType string) (rpc.TradeProposalReducePriceBound, bool) {
 	mid, ok := reduceQuoteMid(reviewed)
 	if !ok {
 		return rpc.TradeProposalReducePriceBound{}, false
 	}
-	span := mid * reducePriceBoundPct / 100
-	return rpc.TradeProposalReducePriceBound{ReferenceMid: mid, MaxMovePct: reducePriceBoundPct, Low: mid - span, High: mid + span}, true
+	pct := reducePriceBoundPctFor(secType)
+	span := mid * pct / 100
+	return rpc.TradeProposalReducePriceBound{ReferenceMid: mid, MaxMovePct: pct, Low: mid - span, High: mid + span}, true
 }
 
 // reducePriceBoundCheck holds the current mid to the reviewed bound. The
 // reviewed limit is never re-priced: a mid outside the band refuses the
 // submit and asks for a new preview.
-func reducePriceBoundCheck(reviewed, current rpc.OrderQuoteSnapshot) (rpc.TradeProposalReducePriceBound, []rpc.TradingBlocker) {
-	bound, ok := reducePriceBound(reviewed)
+func reducePriceBoundCheck(reviewed, current rpc.OrderQuoteSnapshot, secType string) (rpc.TradeProposalReducePriceBound, []rpc.TradingBlocker) {
+	bound, ok := reducePriceBound(reviewed, secType)
 	if !ok {
 		return bound, []rpc.TradingBlocker{{Code: "price_bound_unavailable", Message: "the reviewed quote has no mid to bound the market move by", Action: "Preview again with a live bid and ask."}}
 	}
@@ -377,7 +391,7 @@ func reduceTermsFor(draft rpc.OrderDraft, quote rpc.OrderQuoteSnapshot, tokenID 
 	if draft.AdaptivePriority != "" {
 		terms.Algo = "Adaptive"
 	}
-	terms.PriceBound, _ = reducePriceBound(quote)
+	terms.PriceBound, _ = reducePriceBound(quote, draft.Contract.SecType)
 	return terms
 }
 
@@ -579,7 +593,7 @@ func (s *Server) reduceTokenLeg(ctx context.Context, token string, pos *rpc.Posi
 		out.blockers = []rpc.TradingBlocker{{Code: "quote_unavailable", Message: err.Error(), Action: "Preview again once a live quote is available; nothing was sent."}}
 		return out
 	}
-	out.bound, blockers = reducePriceBoundCheck(payload.Quote, quote)
+	out.bound, blockers = reducePriceBoundCheck(payload.Quote, quote, payload.Draft.Contract.SecType)
 	if len(blockers) > 0 {
 		out.blockers = blockers
 		return out

@@ -130,21 +130,34 @@ func TestReducePriceBoundCheck(t *testing.T) {
 		return rpc.OrderQuoteSnapshot{Bid: &bid, Ask: &ask, Midpoint: &mid}
 	}
 	reviewed := quote(99.9, 100.1)
-	bound, blockers := reducePriceBoundCheck(reviewed, quote(100.3, 100.5))
+	bound, blockers := reducePriceBoundCheck(reviewed, quote(100.3, 100.5), "STK")
 	if len(blockers) != 0 || bound.ReferenceMid != 100 || bound.MaxMovePct != reducePriceBoundPct || math.Abs(bound.Low-99.5) > 1e-9 || math.Abs(bound.High-100.5) > 1e-9 {
 		t.Fatalf("a 0.4%% move: bound %+v blockers %+v, want admitted within 99.5 to 100.5", bound, blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(reviewed, quote(100.5, 100.7)); len(blockers) != 1 || blockers[0].Code != "price_moved" {
+	if _, blockers := reducePriceBoundCheck(reviewed, quote(100.5, 100.7), "STK"); len(blockers) != 1 || blockers[0].Code != "price_moved" {
 		t.Fatalf("a 0.6%% move: blockers %+v, want price_moved", blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(reviewed, quote(99.3, 99.5)); len(blockers) != 1 || blockers[0].Code != "price_moved" {
+	if _, blockers := reducePriceBoundCheck(reviewed, quote(99.3, 99.5), "STK"); len(blockers) != 1 || blockers[0].Code != "price_moved" {
 		t.Fatalf("a 0.6%% move down: blockers %+v, want price_moved", blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(reviewed, rpc.OrderQuoteSnapshot{}); len(blockers) != 1 || blockers[0].Code != "quote_unavailable" {
+	if _, blockers := reducePriceBoundCheck(reviewed, rpc.OrderQuoteSnapshot{}, "STK"); len(blockers) != 1 || blockers[0].Code != "quote_unavailable" {
 		t.Fatalf("no current quote: blockers %+v, want quote_unavailable", blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(rpc.OrderQuoteSnapshot{}, quote(99.9, 100.1)); len(blockers) != 1 || blockers[0].Code != "price_bound_unavailable" {
+	if _, blockers := reducePriceBoundCheck(rpc.OrderQuoteSnapshot{}, quote(99.9, 100.1), "STK"); len(blockers) != 1 || blockers[0].Code != "price_bound_unavailable" {
 		t.Fatalf("no reviewed mid: blockers %+v, want price_bound_unavailable", blockers)
+	}
+	// Options get the owner's 2% band (2026-10-13 06:59 CEST): a 1.5% move is
+	// admitted, a 2.5% move refused.
+	option := quote(4.95, 5.05)
+	bound, blockers = reducePriceBoundCheck(option, quote(5.03, 5.12), "OPT")
+	if len(blockers) != 0 || bound.MaxMovePct != reduceOptionPriceBoundPct || math.Abs(bound.Low-4.9) > 1e-9 || math.Abs(bound.High-5.1) > 1e-9 {
+		t.Fatalf("an option 1.5%% move: bound %+v blockers %+v, want admitted within 4.9 to 5.1", bound, blockers)
+	}
+	if _, blockers := reducePriceBoundCheck(option, quote(5.08, 5.17), "OPT"); len(blockers) != 1 || blockers[0].Code != "price_moved" {
+		t.Fatalf("an option 2.5%% move: blockers %+v, want price_moved", blockers)
+	}
+	if _, blockers := reducePriceBoundCheck(option, quote(5.03, 5.12), "STK"); len(blockers) != 1 || blockers[0].Code != "price_moved" {
+		t.Fatalf("a stock 1.5%% move: blockers %+v, want price_moved under the 0.5%% band", blockers)
 	}
 }
 
