@@ -45,6 +45,7 @@ their gain since purchase split into carry, rates and spread.
 
 ### Fixed
 
+- The mandate's incremental check no longer passes an option order it cannot price. An option sale whose limit gives no volatility (a limit of 0, below intrinsic value, past expiry, a trailing order) is refused with `mandate_budget`; an option buy is judged by a bound that needs no volatility (its premium at the limit on the gap, the underlying's full daily moves on the risk) and refused without a limit. Before, such an order skipped both the budget and the gap check.
 - The mandate's incremental check refuses an addition that would create or deepen a gap-cap breach, as it refuses one over the volatility budget (`mandate_budget`: "with this order a −25% gap in X would lose …, over the gap cap …"). Before, an addition inside the volatility budget passed with a one-name gap over its cap, and the forced reduction then sold it back.
 - A "market data is not subscribed" refusal (IBKR 354) now warns once per instrument per 24 hours, as decided on 2026-10-08. A refusal that arrived after a short probe had released its line, and every option line, was neither recognised as a repeat nor remembered, so each repeat warned again and the daemon kept an empty record. The daemon log check names the refused contract per signal, as it does for code 200 (owner instruction, 2026-10-12).
 

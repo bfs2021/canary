@@ -485,7 +485,9 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 	}
 	leg, ok := mandateOrderLeg(draft, &book)
 	if !ok {
-		return nil // an option whose volatility its limit cannot give: the standing verdict decides
+		// Fail closed: an order the evaluator cannot price is never passed
+		// unmeasured (core sleeve review, 2026-10-14).
+		return mandateUnpricedOrderGate(draft, result.Verdict, book, ccy, open, action)
 	}
 	with := mandate.Evaluate(mandate.WithLeg(book, leg))
 	if with.Status == mandate.StatusUnknown || with.Risk == nil {
@@ -511,6 +513,152 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 			Action:  "Size it smaller; `canary mandate` has each name's gap against its cap."}
 	}
 	return nil
+}
+
+// mandateUnpricedOrderGate judges a risk-adding order the evaluator cannot
+// price. A stock or ETF without a price is refused. An option sale is
+// refused: a short option's loss has no bound without the volatility its
+// limit did not give. An option buy is judged by a volatility-free bound
+// (mandateLongOptionBound) and refused without a limit, which gives no
+// premium to bound it. Any other security type is left as it was: this
+// check judges only what the evaluator models.
+func mandateUnpricedOrderGate(draft rpc.OrderDraft, standing *mandate.Verdict, book mandate.Input, ccy, open, action string) *rpc.TradingBlocker {
+	sym := normSym(draft.Contract.Symbol)
+	refuse := func(msg, act string) *rpc.TradingBlocker {
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + msg + open, Action: act}
+	}
+	switch strings.ToUpper(strings.TrimSpace(draft.Contract.SecType)) {
+	case "STK", "ETF":
+		return refuse("this order cannot be measured: no price for "+sym+".", action)
+	case "OPT":
+	default:
+		return nil
+	}
+	if strings.EqualFold(draft.Action, rpc.OrderActionSell) {
+		return refuse("this option sale cannot be measured: its limit gives no volatility on "+sym+"'s price, and a short option's loss has no bound without one.",
+			"Sell at a limit the volatility can be solved from (above intrinsic value, before expiry), or reduce elsewhere first; `canary mandate` has the measurement.")
+	}
+	if !(draft.LimitPrice > 0) {
+		return refuse("this option buy cannot be measured: without a limit there is no premium to bound its loss.", "Buy at a limit; `canary mandate` has the measurement.")
+	}
+	b, why := mandateLongOptionBound(draft, book, standing)
+	if why != "" {
+		return refuse("this option buy cannot be measured: "+why+".", action)
+	}
+	budget := standing.Capital.BudgetAnnualSD
+	if b.riskAnnual > budget {
+		return refuse(fmt.Sprintf("with this order the risk could reach %s a year, over the budget %s: the option's limit gives no volatility, so it is bounded by %s's full daily moves.",
+			mandateMoney(b.riskAnnual, ccy), mandateMoney(budget, ccy), sym), "Size it smaller, or buy at a limit the volatility can be solved from; `canary mandate` has the measurement.")
+	}
+	if b.gapLoss > b.gapCap || b.breached {
+		return refuse(fmt.Sprintf("with this order a gap in %s could lose %s (its premium at most on top of the book's %s), over the gap cap %s.", sym, mandateMoney(b.gapLoss, ccy), mandateMoney(b.gapLoss-b.premium, ccy), mandateMoney(b.gapCap, ccy)),
+			"Size it smaller; `canary mandate` has each name's gap against its cap.")
+	}
+	return nil
+}
+
+// mandateLongBound is a volatility-free bound on a long option the
+// evaluator cannot price.
+type mandateLongBound struct {
+	premium    float64
+	riskAnnual float64
+	gapLoss    float64
+	gapCap     float64
+	breached   bool
+}
+
+// mandateLongOptionBound bounds a long option the evaluator cannot price
+// (a limit below intrinsic value, an expiry reached, an implied volatility
+// that does not solve) without a volatility, in the evaluator's own terms.
+//
+// Risk: the leg's one-day P&L in scenario k is V(S_k)·fx_k − V(S)·fx, and
+// its spread over the scenarios is the spread of V(S_k)·fx_k: the decay is
+// the same shift in every scenario. A vanilla option's price moves at most
+// as much as its underlying (1-Lipschitz in spot) and is worth at most the
+// spot (a call) or the strike (a put), so the spread is at most
+// units × the largest rate × the root mean square of the underlying's
+// daily moves, plus that largest value × the root mean square of the
+// rate's daily relative moves. By the triangle inequality the book's
+// annualised risk grows by at most √252 times that.
+//
+// Gap: an option bought at a limit loses at most what is paid for it, its
+// premium at the limit, so the underlying's gap loss grows by at most that
+// premium.
+//
+// Coarse, and only ever above the truth.
+func mandateLongOptionBound(draft rpc.OrderDraft, book mandate.Input, standing *mandate.Verdict) (mandateLongBound, string) {
+	var b mandateLongBound
+	if standing == nil || standing.Risk == nil || standing.Stresses == nil {
+		return b, "the standing verdict carries no risk to add the bound to"
+	}
+	sym := normSym(draft.Contract.Symbol)
+	ccy := normCcy(draft.Contract.Currency)
+	spot := 0.0
+	for _, l := range book.Legs {
+		if l.Underlying == sym && l.Spot > 0 {
+			spot = l.Spot
+			if ccy == "" {
+				ccy = normCcy(l.Currency)
+			}
+		}
+	}
+	returnsKey := mandate.ReturnsSeries(sym, ccy)
+	series, ok := book.Series[returnsKey]
+	if !ok || len(series.Closes) < mandate.Closes {
+		return b, "no decision-grade daily history for " + sym
+	}
+	if spot <= 0 && returnsKey == sym {
+		spot = series.Closes[len(series.Closes)-1]
+	}
+	if spot <= 0 {
+		return b, "no price for " + sym
+	}
+	// rms of the relative daily moves over the last mandate.Scenarios
+	// returns, and the largest factor a move reached.
+	moves := func(closes []float64) (rms, maxFactor float64) {
+		closes = closes[len(closes)-mandate.Closes:]
+		maxFactor, ss := 1.0, 0.0
+		for i := 1; i < len(closes); i++ {
+			r := closes[i]/closes[i-1] - 1
+			ss += r * r
+			maxFactor = math.Max(maxFactor, 1+r)
+		}
+		return math.Sqrt(ss / float64(len(closes)-1)), maxFactor
+	}
+	priceRMS, _ := moves(series.Closes)
+	fx, fxRMS, fxMax := 1.0, 0.0, 1.0
+	if ccy != "" && ccy != normCcy(book.BaseCurrency) {
+		rate, ok := book.FXNow[ccy]
+		fxSeries, okSeries := book.FX[ccy]
+		if !ok || !(rate > 0) || !okSeries || len(fxSeries.Closes) < mandate.Closes {
+			return b, "no " + book.BaseCurrency + "/" + ccy + " exchange rate with its history"
+		}
+		fx = rate
+		fxRMS, fxMax = moves(fxSeries.Closes)
+	}
+	mult := float64(draft.Contract.Multiplier)
+	if mult <= 0 {
+		mult = 100
+	}
+	units := float64(draft.Quantity) * mult
+	worth := spot // a call is worth at most the spot
+	if strings.EqualFold(strings.TrimSpace(draft.Contract.Right), "P") {
+		worth = draft.Contract.Strike // a put at most the strike
+	}
+	if !(worth > 0) {
+		return b, "incomplete option terms"
+	}
+	spread1D := units*fx*fxMax*spot*priceRMS + units*worth*fx*fxMax*fxRMS
+	b.premium = units * draft.LimitPrice * fx
+	b.riskAnnual = standing.Risk.SDAnnualBase + math.Sqrt(mandate.Scenarios)*spread1D
+	b.gapCap = standing.Stresses.GapCapBase
+	for _, u := range standing.Underlyings {
+		if u.Underlying == sym {
+			b.gapLoss, b.gapCap, b.breached = u.GapLossBase, u.GapCapBase, u.GapBreach
+		}
+	}
+	b.gapLoss += b.premium
+	return b, ""
 }
 
 // mandateGapBreachAdded finds the first underlying whose gap loss breaches

@@ -153,6 +153,18 @@ proposal the owner confirms by writing it into the policy file.
   that would create a gap-cap breach or deepen one (2026-10-14, the core
   sleeve's design review B1: an addition the gap caps refuse would
   otherwise be admitted and then sold back by the forced reduction). An
+  option order the evaluator cannot price (no limit, a limit below
+  intrinsic value, an expiry reached, an implied volatility that does not
+  solve) fails closed (2026-10-14, the same review): a sale is refused, as
+  a short option's loss has no bound without a volatility; a buy is judged
+  by a volatility-free bound, its premium at the limit added to the
+  underlying's gap loss, and √252 × units × (the largest rate × the root
+  mean square of the underlying's daily moves × spot, plus the call's spot
+  or the put's strike × the rate's moves) added to the book's risk (a
+  vanilla option's price moves at most as much as its underlying, and the
+  decay shifts every scenario alike), and refused when either does not
+  fit or without a limit. A held contract with its IV is priced as
+  before. An
   addition on a name or in a currency the book does not hold is measured on
   the series the history store keeps for it (spot from its last close when
   the book holds none); while none is fresh, the order is refused

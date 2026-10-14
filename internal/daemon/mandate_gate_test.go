@@ -217,10 +217,11 @@ func TestMandateGateIncrementalCheckRefusesAnAdditionOverBudget(t *testing.T) {
 	if blocker := srv.mandateBudgetGate(call, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "with this order") {
 		t.Fatalf("large call buy: %+v", blocker)
 	}
-	// An option whose volatility its limit cannot give, on a held
-	// underlying, is left to the standing verdict.
+	// An option buy whose volatility its limit cannot give is never left to
+	// the standing verdict: without a limit there is no premium to bound it
+	// (TestMandateGateFailsClosedOnUnpricedOptions).
 	unpriced := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 200, Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "OPT", Currency: "USD", Right: "C", Strike: 100, Expiry: "20270115"}}
-	if blocker := srv.mandateBudgetGate(unpriced, mandateOpen); blocker != nil {
+	if blocker := srv.mandateBudgetGate(unpriced, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "no premium to bound its loss") {
 		t.Fatalf("unpriced option: %+v", blocker)
 	}
 	// On an underlying the book does not hold, with no history, it is
@@ -801,5 +802,81 @@ func TestMandateMeasuresIBCFOnTheIndex(t *testing.T) {
 	buy.Quantity, buy.LimitPrice = 100, 0
 	if blocker := srv.mandateBudgetGate(buy, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "no price for IBCF") {
 		t.Fatalf("an IBCF buy without a limit: %+v", blocker)
+	}
+}
+
+// An option order the evaluator cannot price is never passed unmeasured
+// (core sleeve review, 2026-10-14). A sale is refused: a short option's
+// loss has no bound without a volatility (the reviewer's probe: 20 puts at
+// a limit of 0). A buy is judged by a volatility-free bound: its premium
+// at the limit for the gap, the underlying's full daily moves for the
+// risk; admitted when both fit, refused on whichever does not. A held
+// contract with its IV and a closing order are unaffected.
+func TestMandateGateFailsClosedOnUnpricedOptions(t *testing.T) {
+	srv, _ := mandateTestServer(t, testMandateConstitution())
+	seedMandateHistory(t, srv, 0)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
+	if res := srv.evaluateMandate(t.Context(), false); res.Verdict.Status != mandate.StatusWithin {
+		t.Fatalf("book: %s %v", res.Verdict.Status, res.Verdict.Reasons)
+	}
+	option := func(action, right string, qty int, strike, limit float64) rpc.OrderDraft {
+		return rpc.OrderDraft{Action: action, Quantity: qty, LimitPrice: limit, Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "OPT", Currency: "USD", Right: right, Strike: strike, Expiry: "20270115", Multiplier: 100}}
+	}
+	for name, draft := range map[string]rpc.OrderDraft{
+		"20 puts at a limit of 0": option(rpc.OrderActionSell, "P", 20, 90, 0),
+		"calls below intrinsic":   option(rpc.OrderActionSell, "C", 20, 50, 10),
+		"puts past expiry": func() rpc.OrderDraft {
+			d := option(rpc.OrderActionSell, "P", 5, 90, 2)
+			d.Contract.Expiry = "20261009"
+			return d
+		}(),
+		"a trailing sale (no limit price)": option(rpc.OrderActionSell, "C", 3, 120, 0),
+	} {
+		blocker := srv.mandateBudgetGate(draft, mandateOpen)
+		if blocker == nil || blocker.Code != mandateBudgetCode || !strings.Contains(blocker.Message, "option sale cannot be measured") || !strings.Contains(blocker.Message, "stay open") {
+			t.Fatalf("%s: %+v", name, blocker)
+		}
+	}
+	// A buy below intrinsic (strike 50 with SYNA at 100, limit 40): the IV
+	// does not solve, so the bound judges it.
+	if _, ok := mandateOrderLeg(option(rpc.OrderActionBuy, "C", 1, 50, 40), func() *mandate.Input { _, in, _, _ := srv.mandateVerdicts.current(); return in }()); ok {
+		t.Fatal("fixture: the evaluator priced a call bought below intrinsic")
+	}
+	if blocker := srv.mandateBudgetGate(option(rpc.OrderActionBuy, "C", 1, 50, 40), mandateOpen); blocker != nil {
+		t.Fatalf("one contract inside both bounds: %+v", blocker)
+	}
+	// Seven contracts: the risk bound fits, the premium does not fit the
+	// gap cap on top of SYNA's own gap loss.
+	if blocker := srv.mandateBudgetGate(option(rpc.OrderActionBuy, "C", 7, 50, 40), mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "a gap in SYNA could lose") {
+		t.Fatalf("seven contracts: %+v", blocker)
+	}
+	// Twelve: the risk bound is over the budget.
+	if blocker := srv.mandateBudgetGate(option(rpc.OrderActionBuy, "C", 12, 50, 40), mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "the risk could reach") {
+		t.Fatalf("twelve contracts: %+v", blocker)
+	}
+	// The bound is above the evaluator's own figure where both apply: a
+	// call the IV solves for, measured both ways.
+	_, kept, _, _ := srv.mandateVerdicts.current()
+	priced := option(rpc.OrderActionBuy, "C", 5, 100, 8)
+	book, _ := srv.mandateOrderBook(priced, kept, mandateTestNow)
+	leg, ok := mandateOrderLeg(priced, &book)
+	if !ok {
+		t.Fatal("fixture: a solvable call was not priced")
+	}
+	with := mandate.Evaluate(mandate.WithLeg(book, leg))
+	res, _, _, _ := srv.mandateVerdicts.current()
+	b, why := mandateLongOptionBound(priced, book, res.Verdict)
+	if why != "" || b.riskAnnual < with.Risk.SDAnnualBase {
+		t.Fatalf("the bound %.0f (%s) is below the evaluator's %.0f", b.riskAnnual, why, with.Risk.SDAnnualBase)
+	}
+	// A held contract with its IV is priced from the position, whatever
+	// the limit; a closing order never reaches the check.
+	held := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 1, Contract: rpc.ContractParams{ConID: 9004, Symbol: "SYNA", SecType: "OPT", Currency: "USD", Right: "C", Strike: 110, Expiry: "20270115", Multiplier: 100}}
+	if blocker := srv.mandateBudgetGate(held, mandateOpen); blocker != nil {
+		t.Fatalf("a held contract with its IV: %+v", blocker)
+	}
+	closing := option(rpc.OrderActionSell, "P", 20, 90, 0)
+	if blocker := srv.mandateBudgetGate(closing, rpc.OrderPositionImpact{Before: 20, After: 0, Effect: rpc.OrderPositionEffectClose}); blocker != nil {
+		t.Fatalf("a closing sale: %+v", blocker)
 	}
 }
