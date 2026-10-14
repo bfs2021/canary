@@ -1633,6 +1633,8 @@ func alertShadowAutomaticObservation(scope alertShadowBrokerScope, notice automa
 // applies only once the freeze is lifted), then the freeze deferral.
 func alertProtectionAutomaticPresentationCode(notice automaticNoticeKey) rpc.AlertPresentationCode {
 	switch {
+	case notice.Hold == automaticNoticeHoldMandate:
+		return rpc.AlertPresentationProtectionAutoHeldMandate
 	case notice.Hold == automaticNoticeHoldUnverified:
 		return rpc.AlertPresentationProtectionAutoHeldUnverified
 	case notice.Hold != "":
@@ -1659,6 +1661,9 @@ func alertProtectionAutomaticPresentationCode(notice automaticNoticeKey) rpc.Ale
 	case preAuthorisedBucketCashSweep:
 		// NeverSkipVeto: the latched brake never places a sweep row now.
 		return rpc.AlertPresentationProtectionAutoCashSweep
+	case preAuthorisedBucketMandateReduction:
+		// NeverSkipVeto as well: a reduction to budget always waits.
+		return rpc.AlertPresentationProtectionAutoMandateReduction
 	default:
 		if notice.Latched {
 			return rpc.AlertPresentationProtectionAutoTrailingStopNow

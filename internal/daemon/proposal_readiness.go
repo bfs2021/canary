@@ -47,11 +47,12 @@ var readinessQueueBuckets = []string{rpc.TradeProposalBucketBudgetReduction, rpc
 // readinessStressOpenBuckets are the discretionary-scale rows a stress open
 // holds for 30 minutes, with their queued or pre-authorised sends: governor,
 // theta and issuer-trim reductions and the cash sweep (reviewer decision
-// 2026-09-30 13:18 CEST). Every other row, loss exits, expiry closes and
+// 2026-09-30 13:18 CEST), and the mandate's forced reduction, a reduction to
+// budget like the governor's. Every other row, loss exits, expiry closes and
 // trailing stops among them, keeps the 15-minute options offset: a stop is a
 // stop.
 var readinessStressOpenBuckets = []string{rpc.TradeProposalBucketBudgetReduction, rpc.TradeProposalBucketThetaHygiene,
-	rpc.TradeProposalBucketRiskReduction, rpc.TradeProposalBucketCashSweep}
+	rpc.TradeProposalBucketRiskReduction, rpc.TradeProposalBucketCashSweep, rpc.TradeProposalBucketMandateReduction}
 
 // stressOpenRule says how a confirmed-stress regime bears on one row's
 // opening offset.
@@ -299,7 +300,8 @@ func readinessOpensAt(s marketcal.Session, now time.Time) *time.Time {
 
 // decorateReadiness classifies every row of a served snapshot. Rows read the
 // snapshot's own blockers and trading status and the live freeze and broker
-// link; the persisted snapshot never carries readiness.
+// link, and a held mandate row its hold; the persisted snapshot never carries
+// readiness.
 func (e *proposalEngine) decorateReadiness(snap *rpc.TradeProposalSnapshot) {
 	if e == nil || snap == nil || len(snap.Proposals) == 0 {
 		return
@@ -308,7 +310,7 @@ func (e *proposalEngine) decorateReadiness(snap *rpc.TradeProposalSnapshot) {
 	shared := slices.Concat(snap.Blockers, snap.Trading.Blockers)
 	for i := range snap.Proposals {
 		prop := &snap.Proposals[i]
-		prop.Readiness = e.classifyReadiness(*prop, slices.Concat(prop.Blockers, shared), true, sessions)
+		prop.Readiness = e.classifyReadiness(*prop, slices.Concat(prop.Blockers, mandateHeldBlockers(*prop), shared), true, sessions)
 	}
 }
 

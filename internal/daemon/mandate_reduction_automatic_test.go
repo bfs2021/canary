@@ -1,0 +1,284 @@
+package daemon
+
+import (
+	"context"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/osauer/canary/v2/internal/mandate"
+	"github.com/osauer/canary/v2/internal/rpc"
+)
+
+const automaticMandateAuthority = `pre_authorised = ["mandate_reduction"]`
+
+// mandateProposal is a mandate_reduction row on one stock line, built with
+// the engine's own row constructor and flags.
+func (r *automaticTestRig) mandateProposal(row rpc.PositionView, qty, rank, batch int) rpc.TradeProposal {
+	r.t.Helper()
+	policy, status := r.server.protectionPolicies.Active()
+	effect := rpc.OrderPositionEffectReduce
+	if float64(qty) == row.Quantity {
+		effect = rpc.OrderPositionEffectClose
+	}
+	p := baseProposal(policy, status, rpc.TradeProposalSourceFingerprints{}, r.now, rpc.TradeProposalBucketMandateReduction, row, rpc.OrderActionSell, qty, effect,
+		"mandate risk is over the budget; the largest risk contributor left")
+	p.NeverSkipVeto = true
+	p.Mandate = &rpc.TradeProposalMandate{Rank: rank, BatchRows: batch, Phase: rpc.MandatePhaseRisk, Units: qty,
+		VerdictStatus: mandate.StatusOver, VerdictAt: r.now, VerdictFingerprint: "synthetic"}
+	return p
+}
+
+func automaticTestStockRowB() rpc.PositionView {
+	row := automaticTestStockRow()
+	row.ConID, row.Symbol = 102, "SYO"
+	return row
+}
+
+// Not listed under [authority].pre_authorised, the batch waits for the
+// owner's hand: no record, no attempt, however long it stands.
+func TestMandateReductionWaitsForTheHandWhenNotPreAuthorised(t *testing.T) {
+	t.Parallel()
+	rig := newAutomaticTestRig(t, automaticTrailingStopAuthority)
+	prop := rig.mandateProposal(automaticTestStockRow(), 40, 1, 1)
+	revision := rig.install(prop)
+	for range 3 {
+		rig.cycle()
+		rig.advance(20 * time.Minute)
+	}
+	rig.noRecord(prop.Key, revision)
+	if rig.revalidations != 0 {
+		t.Fatalf("the scheduler tried a row the owner did not pre-authorise: %d attempts", rig.revalidations)
+	}
+	served := rig.engine.Snapshot(false).Proposals[0]
+	if a := served.Automatic; a == nil || a.PreAuthorised || a.Bucket != preAuthorisedBucketMandateReduction || a.State != "" {
+		t.Fatalf("served automatic = %+v", a)
+	}
+	if !served.AutomaticEligible() || len(mandateHeldBlockers(served)) != 0 {
+		t.Fatalf("an unheld row is not open to the owner's hand: %+v", served)
+	}
+}
+
+// Pre-authorised, every row waits the full veto window even under a latched
+// drawdown brake: the latch never skips it for a mandate reduction.
+func TestMandateReductionLatchedBrakeKeepsTheVeto(t *testing.T) {
+	t.Parallel()
+	rig := newAutomaticTestRig(t, automaticMandateAuthority)
+	rig.latched = true
+	prop := rig.mandateProposal(automaticTestStockRow(), 40, 1, 1)
+	revision := rig.install(prop)
+	rig.cycle()
+	rec := rig.record(prop.Key, revision)
+	if rec.Bucket != preAuthorisedBucketMandateReduction || rec.State != rpc.TradeProposalAutomaticPending || rec.LatchSkippedWindow || !rec.SubmitAt.Equal(rig.now.Add(30*time.Minute)) {
+		t.Fatalf("record under the latch = %+v", rec)
+	}
+	rig.notice(rec)
+	rig.advance(29 * time.Minute)
+	rig.cycle()
+	if rig.revalidations != 0 {
+		t.Fatalf("attempted inside the window under the latch: %d", rig.revalidations)
+	}
+	notices := rig.engine.automaticPendingNotices(rig.scope)
+	if len(notices) != 1 || notices[0].Latched || alertProtectionAutomaticPresentationCode(notices[0]) != rpc.AlertPresentationProtectionAutoMandateReduction {
+		t.Fatalf("notices = %+v", notices)
+	}
+	rig.advance(2 * time.Minute)
+	rig.cycle()
+	if rig.revalidations != 1 {
+		t.Fatalf("attempts after the window = %d, want 1", rig.revalidations)
+	}
+}
+
+// A held row (no verdict confirms its sizing) is never attempted when its
+// window closes: the record waits on its original window with the hold and
+// its notice says so; once a fresh verdict confirms the row, it is attempted
+// without a new window.
+func TestMandateReductionHeldRowHoldsItsRecord(t *testing.T) {
+	t.Parallel()
+	rig := newAutomaticTestRig(t, automaticMandateAuthority)
+	prop := rig.mandateProposal(automaticTestStockRow(), 40, 1, 1)
+	held := prop
+	held.Mandate = rpc.CloneProposalMandate(prop.Mandate)
+	held.Mandate.Held, held.Mandate.HoldReason = true, "the mandate risk cannot be measured: daily history for SYN is stale"
+	revision := rig.install(held)
+	rig.cycle()
+	rec := rig.record(prop.Key, revision)
+	rig.notice(rec)
+	due := rec.SubmitAt
+	rig.advance(31 * time.Minute)
+	rig.cycle()
+	rig.cycle()
+	rec = rig.record(prop.Key, revision)
+	if rig.revalidations != 0 || rec.State != rpc.TradeProposalAutomaticPending || rec.HeldAt.IsZero() || rec.HoldReason != automaticHoldMandateVerdict || !rec.SubmitAt.Equal(due) {
+		t.Fatalf("held row: attempts %d record %+v", rig.revalidations, rec)
+	}
+	if n := rig.eventCount(prop.Key, revision, automaticEventHeld); n != 1 {
+		t.Fatalf("held events = %d, want 1", n)
+	}
+	notices := rig.engine.automaticPendingNotices(rig.scope)
+	if len(notices) != 1 || notices[0].Hold != automaticNoticeHoldMandate || alertProtectionAutomaticPresentationCode(notices[0]) != rpc.AlertPresentationProtectionAutoHeldMandate {
+		t.Fatalf("held notice = %+v", notices)
+	}
+	served := rig.engine.Snapshot(false).Proposals[0]
+	if served.Readiness == nil || served.Readiness.Code != rpc.ReadinessNotExecutable || !strings.Contains(served.Readiness.Message, "cannot be confirmed") {
+		t.Fatalf("held readiness = %+v", served.Readiness)
+	}
+	if again := rig.install(prop); again != revision {
+		t.Fatalf("confirming the row changed its revision: %s → %s", revision, again)
+	}
+	rig.cycle()
+	if rig.revalidations != 1 {
+		t.Fatalf("confirmed row attempts = %d, want 1", rig.revalidations)
+	}
+}
+
+// Back within budget the batch leaves the set: a waiting record is
+// superseded and never sent, a submitted one stays as it was, and nothing is
+// cancelled at the broker.
+func TestMandateReductionWithinSupersedesTheUnsentOnly(t *testing.T) {
+	t.Parallel()
+	rig := newAutomaticTestRig(t, automaticMandateAuthority)
+	rig.server.orderCancelBroker = func(context.Context, int) error {
+		t.Error("a mandate release cancelled an order at the broker")
+		return nil
+	}
+	sent := rig.mandateProposal(automaticTestStockRow(), 40, 1, 2)
+	unsent := rig.mandateProposal(automaticTestStockRowB(), 40, 2, 2)
+	revision := rig.install(sent, unsent)
+	rig.cycle()
+	if err := rig.engine.automatic.update(context.Background(), func(records map[string]*automaticSubmissionRecord) []automaticSubmissionEvent {
+		r := records[automaticRecordKey(sent.Key, revision)]
+		r.State, r.SubmittedAt, r.ResolvedAt, r.OrderRef = rpc.TradeProposalAutomaticSubmitted, rig.now, rig.now, "canary-synthetic-1"
+		return []automaticSubmissionEvent{{At: rig.now, Type: automaticEventSubmitted, Key: r.Key, Revision: r.Revision, Bucket: r.Bucket, State: r.State}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rig.install()
+	rig.cycle()
+	if rec := rig.record(unsent.Key, revision); rec.State != rpc.TradeProposalAutomaticSuperseded || !strings.Contains(rec.Reason, "disappeared") {
+		t.Fatalf("unsent record = %+v", rec)
+	}
+	if rec := rig.record(sent.Key, revision); rec.State != rpc.TradeProposalAutomaticSubmitted || rec.OrderRef != "canary-synthetic-1" {
+		t.Fatalf("sent record = %+v", rec)
+	}
+	rig.advance(time.Hour)
+	rig.cycle()
+	if rig.revalidations != 0 {
+		t.Fatalf("a withdrawn row was attempted: %d", rig.revalidations)
+	}
+}
+
+// The batch goes out in rank order within one cycle, whatever the keys'
+// order, and one row's refusal never holds the next.
+func TestMandateReductionDispatchesInRankOrder(t *testing.T) {
+	t.Parallel()
+	for _, firstRanked := range []int{101, 102} {
+		rig := newAutomaticTestRig(t, automaticMandateAuthority)
+		var order []string
+		revalidate := rig.engine.revalidateForTest
+		rig.engine.revalidateForTest = func(ctx context.Context, key, revision string) (rpc.TradeProposal, []rpc.TradingBlocker, error) {
+			order = append(order, key)
+			return revalidate(ctx, key, revision)
+		}
+		rankOf := func(conID int) int {
+			if conID == firstRanked {
+				return 1
+			}
+			return 2
+		}
+		a := rig.mandateProposal(automaticTestStockRow(), 40, rankOf(101), 2)
+		b := rig.mandateProposal(automaticTestStockRowB(), 40, rankOf(102), 2)
+		revision := rig.install(a, b)
+		rig.cycle()
+		rig.notice(rig.record(a.Key, revision))
+		rig.notice(rig.record(b.Key, revision))
+		rig.advance(31 * time.Minute)
+		rig.cycle()
+		want := []string{a.Key, b.Key}
+		if firstRanked == 102 {
+			want = []string{b.Key, a.Key}
+		}
+		// The default build refuses both at the write gate; the second is
+		// still attempted after the first's refusal.
+		if !slices.Equal(order, want) {
+			t.Fatalf("rank 1 = %d: dispatch order %v, want %v", firstRanked, order, want)
+		}
+		for _, key := range want {
+			if rec := rig.record(key, revision); !rec.terminal() {
+				t.Fatalf("record %s not resolved: %+v", key, rec)
+			}
+		}
+	}
+}
+
+// One proposal per contract and side: where the budget governor also wants
+// to sell the line, one row stands, sized by the larger need, never the sum.
+// A held mandate row stands for nothing, so the governor's row stays live.
+func TestMandateReductionOneRowPerContractWithTheGovernor(t *testing.T) {
+	t.Parallel()
+	leg := budgetOptionLeg("AAA", 601, "C", 6, 2000, -1000)
+	policy := budgetTestPolicy(rpc.BudgetReductionModeActive, 20, 15)
+	row := func(bucket string, qty int) rpc.TradeProposal {
+		p := baseProposal(policy, rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, optionExitTestTime(), bucket, leg, rpc.OrderActionSell, qty, rpc.OrderPositionEffectReduce, bucket+" reason")
+		p.NeverSkipVeto = true
+		if bucket == rpc.TradeProposalBucketMandateReduction {
+			p.Mandate = &rpc.TradeProposalMandate{Rank: 1, BatchRows: 1, Phase: rpc.MandatePhaseRisk, Units: qty}
+		}
+		return p
+	}
+	for _, tc := range []struct{ mandateQty, budgetQty int }{{5, 3}, {2, 4}} {
+		props := []rpc.TradeProposal{row(rpc.TradeProposalBucketBudgetReduction, tc.budgetQty), row(rpc.TradeProposalBucketMandateReduction, tc.mandateQty)}
+		mergeSameContractProposals(props, nil)
+		var live []rpc.TradeProposal
+		for _, p := range props {
+			if p.State == rpc.TradeProposalStateGenerated && len(p.Blockers) == 0 {
+				live = append(live, p)
+			}
+		}
+		want := max(tc.mandateQty, tc.budgetQty)
+		if len(live) != 1 || live[0].Quantity != want || len(live[0].Covers) != 1 {
+			t.Fatalf("mandate %d / budget %d: live %+v", tc.mandateQty, tc.budgetQty, live)
+		}
+		for _, p := range props {
+			if p.Key != live[0].Key && (p.CoveredBy != live[0].Key || p.Blockers[0].Code != coveredByProposalCode) {
+				t.Fatalf("covered row %+v", p)
+			}
+		}
+	}
+	held := row(rpc.TradeProposalBucketMandateReduction, 5)
+	held.Mandate.Held = true
+	props := []rpc.TradeProposal{row(rpc.TradeProposalBucketBudgetReduction, 3), held}
+	mergeSameContractProposals(props, nil)
+	for _, p := range props {
+		if len(p.Blockers) != 0 || p.CoveredBy != "" || len(p.Covers) != 0 {
+			t.Fatalf("a held mandate row took part in the merge: %+v", p)
+		}
+	}
+	if sameContractRule(held) != "the mandate reduction" || !proposalIsReduction(held) {
+		t.Fatalf("rule %q reduction %v", sameContractRule(held), proposalIsReduction(held))
+	}
+}
+
+// The vocabulary: mandate_reduction is pre-authorisable, absent from the
+// embedded default, and the scheduler names it for a mandate row only.
+func TestMandateReductionIsAClosedPreAuthorisableBucket(t *testing.T) {
+	t.Parallel()
+	if !validPreAuthorisedBucket(preAuthorisedBucketMandateReduction) || validPreAuthorisedBucket("mandate_reductions") {
+		t.Fatal("vocabulary")
+	}
+	if defaultProtectionPolicy().preAuthorised(preAuthorisedBucketMandateReduction) {
+		t.Fatal("the embedded default pre-authorises the mandate reduction")
+	}
+	m := writePreAuthPolicy(t, preAuthPolicyTOML(automaticMandateAuthority, 1))
+	read, err := m.loadPolicy()
+	if err != nil || !read.policy.preAuthorised(preAuthorisedBucketMandateReduction) || read.policy.preAuthorised(preAuthorisedBucketBudgetReduction) {
+		t.Fatalf("parsed %+v err %v", read.policy.Authority, err)
+	}
+	if got := automaticBucketFor(rpc.TradeProposal{Bucket: rpc.TradeProposalBucketMandateReduction}); got != preAuthorisedBucketMandateReduction {
+		t.Fatalf("automatic bucket %q", got)
+	}
+	if _, err := writePreAuthPolicy(t, preAuthPolicyTOML(`pre_authorised = ["mandate"]`, 1)).loadPolicy(); err == nil || !strings.Contains(err.Error(), "mandate_reduction") {
+		t.Fatalf("an unknown bucket was accepted: %v", err)
+	}
+}

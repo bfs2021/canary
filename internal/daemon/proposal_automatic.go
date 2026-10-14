@@ -382,6 +382,10 @@ func automaticBucketFor(p rpc.TradeProposal) string {
 		return ""
 	case preAuthorisedBucketBudgetReduction:
 		return preAuthorisedBucketBudgetReduction
+	case rpc.TradeProposalBucketMandateReduction:
+		// Every mandate row is NeverSkipVeto: the full window even under the
+		// latched brake, each order held to the caps in force.
+		return preAuthorisedBucketMandateReduction
 	case rpc.TradeProposalBucketCashSweep:
 		// Every sweep row is NeverSkipVeto: the full window even under the
 		// latched brake, and max_order_notional bounds each order.
@@ -567,8 +571,9 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 				SettlingBaseline: slices.Clone(baseline), SettlingBaselineKnown: baselineKnown,
 			}
 			// A reduction to budget is a discretionary-scale action, not a
-			// stop: the governor marks its rows NeverSkipVeto and they wait the
-			// full window even under the latched brake.
+			// stop: the governor and the mandate's forced reduction mark their
+			// rows NeverSkipVeto and they wait the full window even under the
+			// latched brake.
 			if latched && !prop.NeverSkipVeto {
 				rec.LatchSkippedWindow = true
 				rec.SubmitAt = now
@@ -661,6 +666,9 @@ type automaticNoticeKey struct {
 const (
 	automaticNoticeHoldHandOrder  = "hand_order"
 	automaticNoticeHoldUnverified = "unverified"
+	// automaticNoticeHoldMandate: a mandate reduction waits for a verdict
+	// that confirms its sizing (automaticHoldMandateVerdict).
+	automaticNoticeHoldMandate = "mandate_verdict"
 )
 
 // automaticPendingNotices lists the waiting records in scope for the
@@ -681,9 +689,13 @@ func (e *proposalEngine) automaticPendingNotices(scope brokerStateScope) []autom
 		}
 		notice := automaticNoticeKey{Key: rec.Key, Revision: rec.Revision, Bucket: rec.Bucket, SubmitAt: rec.SubmitAt, Latched: rec.LatchSkippedWindow, Deferred: rec.deferred()}
 		if !rec.HeldAt.IsZero() {
-			notice.Hold = automaticNoticeHoldHandOrder
-			if rec.HoldReason == automaticHoldUnavailable {
+			switch rec.HoldReason {
+			case automaticHoldUnavailable:
 				notice.Hold = automaticNoticeHoldUnverified
+			case automaticHoldMandateVerdict:
+				notice.Hold = automaticNoticeHoldMandate
+			default:
+				notice.Hold = automaticNoticeHoldHandOrder
 			}
 		}
 		out = append(out, notice)
@@ -697,7 +709,9 @@ func (e *proposalEngine) automaticPendingNotices(scope brokerStateScope) []autom
 // rule holds a due record of the current scope while a hand order placed
 // after the record was created, or modified since, is still working at the
 // broker; the record fires as soon as that order fills or is cancelled, on
-// its original window.
+// its original window. A held mandate row (no verdict confirms its sizing)
+// holds its record the same way. The mandate batch goes in rank order; a
+// refusal of one row never holds the others.
 func (e *proposalEngine) submitDueAutomatic(ctx context.Context) {
 	now := e.clock()
 	frozen := e.server != nil && e.server.tradingFrozen()
@@ -708,7 +722,9 @@ func (e *proposalEngine) submitDueAutomatic(ctx context.Context) {
 	var cached, fresh *automaticSettlingBook
 	var served map[string]rpc.TradeProposal
 	records := e.automatic.list()
-	prioritizeCashSweepRecords(records, e.Snapshot(false).Proposals)
+	ordered := e.Snapshot(false).Proposals
+	prioritizeCashSweepRecords(records, ordered)
+	prioritizeMandateRecords(records, ordered)
 	for _, rec := range records {
 		if !rec.due(now, frozen) {
 			continue
@@ -725,6 +741,10 @@ func (e *proposalEngine) submitDueAutomatic(ctx context.Context) {
 			}
 		}
 		if prop, ok := served[automaticRecordKey(rec.Key, rec.Revision)]; ok {
+			if len(mandateHeldBlockers(prop)) > 0 {
+				e.holdAutomatic(ctx, rec, automaticHoldMandateVerdict)
+				continue
+			}
 			if at := e.automaticSessionDue(prop, now); at.After(now) {
 				e.rescheduleAutomatic(ctx, rec, at)
 				continue
@@ -1036,7 +1056,7 @@ func (e *proposalEngine) submitAutomatic(ctx context.Context, rec automaticSubmi
 		return nil
 	}})
 	finish := e.clock()
-	deferred := false
+	deferred, held := false, false
 	outcomeErr := e.automatic.update(ctx, func(records map[string]*automaticSubmissionRecord) []automaticSubmissionEvent {
 		r, ok := records[automaticRecordKey(rec.Key, rec.Revision)]
 		if !ok || r.terminal() {
@@ -1051,6 +1071,16 @@ func (e *proposalEngine) submitAutomatic(ctx context.Context, rec automaticSubmi
 			r.OrderRef = res.OrderRef
 			r.Reason = "placed by the daemon under the pre-authorised protection policy"
 			return []automaticSubmissionEvent{{At: finish, Type: automaticEventSubmitted, Key: r.Key, Revision: r.Revision, Bucket: r.Bucket, State: r.State, AccountID: r.AccountID, AccountMode: r.AccountMode, OrderRef: r.OrderRef, Origin: rpc.OrderOriginDaemonPreAuthorised}}
+		case err == nil && !staged && mandateHeldRefusal(res.Blockers):
+			// The revalidated mandate row is held (its verdict cannot be
+			// confirmed): nothing was sent, and the record keeps waiting on
+			// its original window, as under the settling rule.
+			held = true
+			r.HeldAt, r.HoldReason = finish, automaticHoldMandateVerdict
+			if !rec.HeldAt.IsZero() && rec.HoldReason == automaticHoldMandateVerdict {
+				r.HeldAt = rec.HeldAt
+			}
+			return []automaticSubmissionEvent{{At: finish, Type: automaticEventHeld, Key: r.Key, Revision: r.Revision, Bucket: r.Bucket, State: r.State, AccountID: r.AccountID, AccountMode: r.AccountMode, SubmitAt: r.SubmitAt, Reason: r.HoldReason}}
 		case !staged && automaticBlockersSupersede(res.Blockers):
 			r.ResolvedAt = finish
 			r.State = rpc.TradeProposalAutomaticSuperseded
@@ -1088,6 +1118,8 @@ func (e *proposalEngine) submitAutomatic(ctx context.Context, rec automaticSubmi
 		s.infof("pre-authorised protection: submitted %s bucket %s after %s", rec.Key, rec.Bucket, finish.Sub(now).Round(time.Millisecond))
 	case deferred:
 		s.infof("pre-authorised protection: %s bucket %s deferred by trading.freeze; resubmits once it is lifted", rec.Key, rec.Bucket)
+	case held:
+		s.infof("pre-authorised protection: %s bucket %s held until a fresh mandate verdict confirms its sizing", rec.Key, rec.Bucket)
 	default:
 		s.warnf("pre-authorised protection: %s bucket %s not submitted: %s", rec.Key, rec.Bucket, automaticOutcomeReason(res, err))
 	}

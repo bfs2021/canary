@@ -104,10 +104,14 @@ func sameContractSecFamily(secType string) string {
 }
 
 // sameContractMergeable reports a row that takes part in the merge: an
-// unblocked, non-shadow, single-contract order. Reviews, multi-leg units and
-// blocked rows stay as they are.
+// unblocked, non-shadow, single-contract order. Reviews, multi-leg units,
+// blocked rows and a held mandate row (nobody may send it until a verdict
+// confirms it, so it must not stand for another row) stay as they are.
 func sameContractMergeable(p rpc.TradeProposal) bool {
 	if p.State != rpc.TradeProposalStateGenerated || len(p.Blockers) > 0 || p.Shadow || p.Unit != nil || p.Quantity <= 0 {
+		return false
+	}
+	if p.Mandate != nil && p.Mandate.Held {
 		return false
 	}
 	if p.Bucket == rpc.TradeProposalBucketOptionExitReview || p.Bucket == rpc.TradeProposalBucketStrategyExit ||
@@ -127,7 +131,8 @@ func sameContractStanding(p rpc.TradeProposal) bool {
 // Their orders are then identical, a DAY patient limit for the same
 // quantity. The Rulebook's exits lead because they carry the exact-contract
 // quote requirement and re-check their economics at preview; the issuer trim,
-// the budget governor and theta hygiene follow.
+// the budget governor, the mandate's forced reduction and theta hygiene
+// follow.
 func sameContractPrecedence(p rpc.TradeProposal) int {
 	switch p.Bucket {
 	case rpc.TradeProposalBucketOptionLossExit:
@@ -140,10 +145,12 @@ func sameContractPrecedence(p rpc.TradeProposal) int {
 		return 3
 	case rpc.TradeProposalBucketBudgetReduction:
 		return 4
-	case rpc.TradeProposalBucketThetaHygiene:
+	case rpc.TradeProposalBucketMandateReduction:
 		return 5
-	default:
+	case rpc.TradeProposalBucketThetaHygiene:
 		return 6
+	default:
+		return 7
 	}
 }
 
@@ -291,6 +298,8 @@ func sameContractRule(p rpc.TradeProposal) string {
 		return "the issuer trim"
 	case rpc.TradeProposalBucketBudgetReduction:
 		return "the budget governor"
+	case rpc.TradeProposalBucketMandateReduction:
+		return "the mandate reduction"
 	case rpc.TradeProposalBucketThetaHygiene:
 		return "theta hygiene"
 	default:
@@ -360,11 +369,13 @@ func (e *proposalEngine) kickIfCoverageStale(proposals []rpc.TradeProposal) {
 	}
 }
 
-// proposalIsReduction reports the rows that sell now without an exit's own
-// netting: theta hygiene, the issuer trim and the budget governor.
+// proposalIsReduction reports the rows that sell (or buy back) now without an
+// exit's own netting: theta hygiene, the issuer trim, the budget governor and
+// the mandate's forced reduction.
 func proposalIsReduction(p rpc.TradeProposal) bool {
 	switch p.Bucket {
-	case rpc.TradeProposalBucketThetaHygiene, rpc.TradeProposalBucketRiskReduction, rpc.TradeProposalBucketBudgetReduction:
+	case rpc.TradeProposalBucketThetaHygiene, rpc.TradeProposalBucketRiskReduction, rpc.TradeProposalBucketBudgetReduction,
+		rpc.TradeProposalBucketMandateReduction:
 		return p.Unit == nil
 	default:
 		return false

@@ -139,14 +139,21 @@ const (
 	// AlertPresentationProtectionAutoCashSweep has no Now variant: a sweep
 	// row always waits the full veto window.
 	AlertPresentationProtectionAutoCashSweep AlertPresentationCode = "protection_auto_cash_sweep"
+	// AlertPresentationProtectionAutoMandateReduction is the mandate's forced
+	// reduction back to its risk budget; no Now variant either, every row
+	// waits the full window.
+	AlertPresentationProtectionAutoMandateReduction AlertPresentationCode = "protection_auto_mandate_reduction"
 	// AlertPresentationProtectionAutoDeferred and the two held codes keep a
 	// pre-authorised submission's notice open while it still waits: deferred
 	// by trading.freeze, or held by the settling rule behind a working hand
 	// order (or an open-order inventory that cannot rule one out). A waiting
 	// record is never presented as recovered.
-	AlertPresentationProtectionAutoDeferred           AlertPresentationCode = "protection_auto_deferred"
-	AlertPresentationProtectionAutoHeld               AlertPresentationCode = "protection_auto_held"
-	AlertPresentationProtectionAutoHeldUnverified     AlertPresentationCode = "protection_auto_held_unverified"
+	AlertPresentationProtectionAutoDeferred       AlertPresentationCode = "protection_auto_deferred"
+	AlertPresentationProtectionAutoHeld           AlertPresentationCode = "protection_auto_held"
+	AlertPresentationProtectionAutoHeldUnverified AlertPresentationCode = "protection_auto_held_unverified"
+	// AlertPresentationProtectionAutoHeldMandate keeps a mandate reduction's
+	// notice open while no fresh verdict confirms its sizing.
+	AlertPresentationProtectionAutoHeldMandate        AlertPresentationCode = "protection_auto_held_mandate"
 	AlertPresentationProtectionReconciliationRequired AlertPresentationCode = "protection_reconciliation_required"
 	AlertPresentationOrderIntegrityMismatch           AlertPresentationCode = "order_integrity_mismatch"
 	AlertPresentationDataHealthGateway                AlertPresentationCode = "data_health_gateway"
@@ -862,8 +869,9 @@ func validAlertPresentationCode(source AlertSource, value AlertPresentationCode)
 			AlertPresentationProtectionAutoOptionLossExit, AlertPresentationProtectionAutoOptionLossExitNow,
 			AlertPresentationProtectionAutoOptionProfitTrail, AlertPresentationProtectionAutoOptionProfitTrailNow,
 			AlertPresentationProtectionAutoBudgetReduction, AlertPresentationProtectionAutoBudgetReductionNow,
-			AlertPresentationProtectionAutoCashSweep,
-			AlertPresentationProtectionAutoDeferred, AlertPresentationProtectionAutoHeld, AlertPresentationProtectionAutoHeldUnverified:
+			AlertPresentationProtectionAutoCashSweep, AlertPresentationProtectionAutoMandateReduction,
+			AlertPresentationProtectionAutoDeferred, AlertPresentationProtectionAutoHeld, AlertPresentationProtectionAutoHeldUnverified,
+			AlertPresentationProtectionAutoHeldMandate:
 			return true
 		}
 	case AlertSourceOrderIntegrity:
