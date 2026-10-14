@@ -302,7 +302,8 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   gap cap are zero, so every name is in breach and the batch acts on one
   reading: it reduces the book to what it may not cut (hedge-listed puts,
   protection, multi-leg units, ignored rows). At the maximum loss the
-  mandate reduces the book to its hedges; owner decision pending. The
+  mandate reduces the book to its hedges (owner, 2026-10-14 ~16:10 CEST, in
+  chat: "Yes, flatten to hedges"; the 30-minute veto still applies). The
   verdict's ratio to a zero budget is unbounded and encodes as
   `ratio_to_budget: null` (read back as unbounded), so the verdict keeps
   serving instead of failing to encode.
