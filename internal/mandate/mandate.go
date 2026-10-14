@@ -1,0 +1,610 @@
+// Package mandate evaluates the owner's mandate risk budget: ex-ante
+// portfolio volatility by historical simulation with full revaluation of
+// every leg, named gap and index stresses, and the budget verdict
+// (internal-docs/design/mandate-risk-budget.md).
+//
+// Only the daemon evaluates: it gathers positions, equity and its
+// decision-grade daily closes, calls Evaluate and serves the result as
+// MethodMandateRisk. Readers fetch the daemon's verdict and never compute
+// one, so a reader built at an older version cannot disagree with the
+// installed daemon. The package holds no runtime state and performs no I/O.
+package mandate
+
+import (
+	"fmt"
+	"math"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+)
+
+// Scenarios is the number of daily log-returns the simulation runs, and
+// Closes the number of shared daily closes it needs.
+const (
+	Scenarios = 252
+	Closes    = Scenarios + 1
+	// ESLevel is the expected-shortfall confidence.
+	ESLevel = 0.99
+	// IndexShockPct is the index stress, applied through each name's beta.
+	IndexShockPct = 10.0
+	// ReduceFactor is the multiple of the budget at which the verdict reads
+	// reduce rather than over.
+	ReduceFactor = 1.25
+	// DecayDays is the time decay applied to every option in a scenario.
+	DecayDays = 1.0
+	// IndexSymbol is the index proxy every name's beta is measured to.
+	IndexSymbol = "SPY"
+)
+
+// Verdict statuses.
+const (
+	StatusWithin  = "within"
+	StatusOver    = "over"
+	StatusReduce  = "reduce"
+	StatusUnknown = "unknown"
+)
+
+// Leg kinds.
+const (
+	KindStock  = "stock"
+	KindOption = "option"
+)
+
+// Leg is one held line as the simulation prices it.
+type Leg struct {
+	// ID identifies the exact contract (the broker con_id); two legs of one
+	// contract are summed.
+	ID string `json:"id"`
+	// Symbol is the line as the owner knows it; Underlying keys the daily
+	// series (the stock's own symbol, or the option's underlying).
+	Symbol     string `json:"symbol"`
+	Underlying string `json:"underlying"`
+	Kind       string `json:"kind"`
+	// Quantity is signed units: shares, or contracts; Multiplier is 1 for a
+	// stock and the contract multiplier for an option.
+	Quantity   float64 `json:"quantity"`
+	Multiplier float64 `json:"multiplier"`
+	Currency   string  `json:"currency"`
+	// Spot is the underlying's current price in the leg currency.
+	Spot float64 `json:"spot"`
+	// Option terms. IV is the leg's current implied volatility as a
+	// decimal; nil means unknown, and the leg is not priced.
+	Right             string   `json:"right,omitempty"`
+	Strike            float64  `json:"strike,omitempty"`
+	TimeToExpiryYears float64  `json:"time_to_expiry_years,omitempty"`
+	IV                *float64 `json:"iv,omitempty"`
+}
+
+// Series is one decision-grade daily close series, ascending by date.
+type Series struct {
+	Key    string    `json:"key"`
+	Dates  []string  `json:"dates"`
+	Closes []float64 `json:"closes"`
+	// AsOf is the source time of the last read; Stale is the daemon's
+	// freshness judgement, which makes the verdict unknown.
+	AsOf  time.Time `json:"as_of,omitzero"`
+	Stale bool      `json:"stale,omitempty"`
+}
+
+// Input is everything Evaluate reads.
+type Input struct {
+	Now          time.Time
+	BaseCurrency string
+	Policy       Policy
+	Capital      Capital
+	Legs         []Leg
+	// Series holds the underlyings' closes by symbol, including the index.
+	Series map[string]Series
+	// FX holds, per non-base currency, the base units one unit of it buys,
+	// as a daily series; FXNow is the rate the positions were valued at.
+	FX    map[string]Series
+	FXNow map[string]float64
+	// NotModelled names held lines the daemon left out (bills, bonds,
+	// conversions) so the verdict says so.
+	NotModelled []string
+	// Reasons are the daemon's own grounds for an unknown verdict (a stale
+	// positions read, an unproven base currency); any makes it unknown.
+	Reasons []string
+}
+
+// Risk is the simulated portfolio risk in base currency.
+type Risk struct {
+	SD1DBase     float64 `json:"sd_1d_base"`
+	SDAnnualBase float64 `json:"sd_annual_base"`
+	// ES99Base is the mean loss of the worst 1% of scenarios, positive.
+	ES99Base float64 `json:"es99_base"`
+	// RatioToBudget is annualised sd over the budget; +Inf when the budget
+	// is zero and risk is not.
+	RatioToBudget float64 `json:"ratio_to_budget"`
+	// FXContributionPct is the Euler share of the currency part of every
+	// leg's base P&L; the local-currency part carries the rest.
+	FXContributionPct float64 `json:"fx_contribution_pct"`
+}
+
+// LegReport is one leg's place in the risk.
+type LegReport struct {
+	ID              string  `json:"id"`
+	Symbol          string  `json:"symbol"`
+	Underlying      string  `json:"underlying"`
+	Kind            string  `json:"kind"`
+	Quantity        float64 `json:"quantity"`
+	ValueBase       float64 `json:"value_base"`
+	ContributionPct float64 `json:"contribution_pct"`
+	// Unknown names why the leg could not be priced; empty when it was.
+	Unknown string `json:"unknown,omitempty"`
+}
+
+// UnderlyingReport is one underlying's contribution and its stresses.
+type UnderlyingReport struct {
+	Underlying      string  `json:"underlying"`
+	ValueBase       float64 `json:"value_base"`
+	ContributionPct float64 `json:"contribution_pct"`
+	Beta            float64 `json:"beta"`
+	// GapDownLossBase is the loss at −gap_shock_pct; GapUpLossBase is the
+	// loss at +gap_shock_pct where a short call or short stock loses on the
+	// upside, else nil. GapLossBase is the worse of the two.
+	GapDownLossBase float64  `json:"gap_down_loss_base"`
+	GapUpLossBase   *float64 `json:"gap_up_loss_base,omitempty"`
+	GapLossBase     float64  `json:"gap_loss_base"`
+	GapCapBase      float64  `json:"gap_cap_base"`
+	GapBreach       bool     `json:"gap_breach,omitempty"`
+}
+
+// Stresses is the named stress set.
+type Stresses struct {
+	GapShockPct   float64 `json:"gap_shock_pct"`
+	GapCapBase    float64 `json:"gap_cap_base"`
+	IndexShockPct float64 `json:"index_shock_pct"`
+	// IndexLossBase is the loss when the index falls IndexShockPct and every
+	// name follows with its beta.
+	IndexLossBase float64 `json:"index_loss_base"`
+	// GapBreaches names the underlyings whose gap loss exceeds the cap.
+	GapBreaches []string `json:"gap_breaches,omitempty"`
+}
+
+// Verdict is the daemon-owned result.
+type Verdict struct {
+	Status       string    `json:"status"`
+	Reasons      []string  `json:"reasons,omitempty"`
+	AsOf         time.Time `json:"as_of"`
+	BaseCurrency string    `json:"base_currency,omitempty"`
+	Capital      Capital   `json:"capital"`
+	// Risk and Stresses are nil while the status is unknown.
+	Risk     *Risk     `json:"risk,omitempty"`
+	Stresses *Stresses `json:"stresses,omitempty"`
+	// Scenarios is the number of aligned daily returns the simulation ran,
+	// over the dates ScenariosFrom..ScenariosTo.
+	Scenarios     int                `json:"scenarios,omitempty"`
+	ScenariosFrom string             `json:"scenarios_from,omitempty"`
+	ScenariosTo   string             `json:"scenarios_to,omitempty"`
+	Legs          []LegReport        `json:"legs,omitempty"`
+	Underlyings   []UnderlyingReport `json:"underlyings,omitempty"`
+	NotModelled   []string           `json:"not_modelled,omitempty"`
+}
+
+// Evaluate runs the historical simulation and judges the book against the
+// budget. Anything the measurement lacks reads unknown, never within.
+func Evaluate(in Input) Verdict {
+	v := Verdict{Status: StatusUnknown, AsOf: in.Now, BaseCurrency: in.BaseCurrency, Capital: in.Capital, NotModelled: slices.Clone(in.NotModelled)}
+	v.Reasons = append(v.Reasons, in.Reasons...)
+	if !in.Capital.Known {
+		v.Reasons = append(v.Reasons, in.Capital.Reasons...)
+	}
+	legs := mergeLegs(in.Legs)
+	// Which series the book needs: every underlying, the index and every
+	// non-base currency.
+	needed := map[string]bool{IndexSymbol: true}
+	currencies := map[string]bool{}
+	for _, l := range legs {
+		if l.Underlying != "" {
+			needed[l.Underlying] = true
+		}
+		if ccy := strings.ToUpper(l.Currency); ccy != "" && ccy != strings.ToUpper(in.BaseCurrency) {
+			currencies[ccy] = true
+		}
+	}
+	series := map[string]Series{}
+	for key := range needed {
+		s, ok := in.Series[key]
+		switch {
+		case !ok || len(s.Closes) == 0:
+			v.Reasons = append(v.Reasons, fmt.Sprintf("no decision-grade daily history for %s", key))
+		case s.Stale:
+			v.Reasons = append(v.Reasons, fmt.Sprintf("daily history for %s is stale (last read %s)", key, s.AsOf.UTC().Format(time.DateTime)))
+		case len(s.Closes) < Closes || len(s.Dates) != len(s.Closes):
+			v.Reasons = append(v.Reasons, fmt.Sprintf("daily history for %s holds %d closes; %d are needed", key, len(s.Closes), Closes))
+		default:
+			series["u:"+key] = s
+		}
+	}
+	for ccy := range currencies {
+		s, ok := in.FX[ccy]
+		switch {
+		case !ok || len(s.Closes) == 0:
+			v.Reasons = append(v.Reasons, fmt.Sprintf("no decision-grade daily history for the %s/%s exchange rate", in.BaseCurrency, ccy))
+		case s.Stale:
+			v.Reasons = append(v.Reasons, fmt.Sprintf("daily history for the %s/%s exchange rate is stale (last read %s)", in.BaseCurrency, ccy, s.AsOf.UTC().Format(time.DateTime)))
+		case len(s.Closes) < Closes || len(s.Dates) != len(s.Closes):
+			v.Reasons = append(v.Reasons, fmt.Sprintf("daily history for the %s/%s exchange rate holds %d closes; %d are needed", in.BaseCurrency, ccy, len(s.Closes), Closes))
+		default:
+			series["fx:"+ccy] = s
+		}
+		if rate, ok := in.FXNow[ccy]; !ok || !(rate > 0) || math.IsInf(rate, 0) {
+			v.Reasons = append(v.Reasons, fmt.Sprintf("no current %s/%s exchange rate on the positions", in.BaseCurrency, ccy))
+		}
+	}
+	// Leg-level evidence: an option without IV or any leg without a spot
+	// cannot be priced; the verdict says which.
+	for _, l := range legs {
+		if why := legUnknown(l); why != "" {
+			v.Reasons = append(v.Reasons, fmt.Sprintf("%s: %s", l.Symbol, why))
+		}
+	}
+	var returns map[string][]float64
+	var from, to string
+	if len(v.Reasons) == 0 {
+		var err error
+		returns, from, to, err = alignedReturns(series)
+		if err != nil {
+			v.Reasons = append(v.Reasons, err.Error())
+		}
+	}
+	// Reports with contributions unknown still list the legs.
+	if len(v.Reasons) > 0 {
+		for _, l := range legs {
+			v.Legs = append(v.Legs, LegReport{ID: l.ID, Symbol: l.Symbol, Underlying: l.Underlying, Kind: l.Kind, Quantity: l.Quantity, Unknown: firstNonEmpty(legUnknown(l), "not simulated")})
+		}
+		return v
+	}
+	v.Scenarios, v.ScenariosFrom, v.ScenariosTo = Scenarios, from, to
+	sim := simulate(in, legs, returns)
+	v.Risk, v.Legs, v.Underlyings, v.Stresses = sim.risk, sim.legs, sim.underlyings, sim.stresses
+	budget := in.Capital.BudgetAnnualSD
+	if sim.risk.SDAnnualBase > 0 && budget <= 0 {
+		v.Risk.RatioToBudget = math.Inf(1)
+	} else if budget > 0 {
+		v.Risk.RatioToBudget = sim.risk.SDAnnualBase / budget
+	}
+	switch {
+	case len(sim.stresses.GapBreaches) > 0 || sim.risk.SDAnnualBase > ReduceFactor*budget:
+		v.Status = StatusReduce
+	case sim.risk.SDAnnualBase > budget:
+		v.Status = StatusOver
+	default:
+		v.Status = StatusWithin
+	}
+	return v
+}
+
+// WithLeg returns the input with one more leg (an order's addition), summed
+// into the same contract when held, for the incremental pre-trade check.
+func WithLeg(in Input, add Leg) Input {
+	out := in
+	out.Legs = append(slices.Clone(in.Legs), add)
+	return out
+}
+
+func legUnknown(l Leg) string {
+	switch l.Kind {
+	case KindStock:
+		if !(l.Spot > 0) {
+			return "no price"
+		}
+	case KindOption:
+		if !(l.Spot > 0) {
+			return "no underlying price"
+		}
+		if l.IV == nil || !(*l.IV > 0) || math.IsInf(*l.IV, 0) {
+			return "no implied volatility on the position row"
+		}
+		if !(l.Strike > 0) || (l.Right != "C" && l.Right != "P") {
+			return "incomplete option terms"
+		}
+	default:
+		return fmt.Sprintf("security type %q is not modelled", l.Kind)
+	}
+	if l.Multiplier <= 0 {
+		return "no contract multiplier"
+	}
+	return ""
+}
+
+func mergeLegs(in []Leg) []Leg {
+	index := map[string]int{}
+	var out []Leg
+	for _, l := range in {
+		l.Right = strings.ToUpper(strings.TrimSpace(l.Right))
+		l.Currency = strings.ToUpper(strings.TrimSpace(l.Currency))
+		l.Underlying = strings.ToUpper(strings.TrimSpace(l.Underlying))
+		if i, ok := index[l.ID]; ok && l.ID != "" {
+			out[i].Quantity += l.Quantity
+			continue
+		}
+		index[l.ID] = len(out)
+		out = append(out, l)
+	}
+	return out
+}
+
+// alignedReturns intersects the series' dates, keeps the last Closes shared
+// dates and returns each series' log-returns over them.
+func alignedReturns(series map[string]Series) (map[string][]float64, string, string, error) {
+	if len(series) == 0 {
+		return nil, "", "", fmt.Errorf("no series to align")
+	}
+	var shared map[string]bool
+	for _, s := range series {
+		dates := map[string]bool{}
+		for i, d := range s.Dates {
+			if s.Closes[i] > 0 && !math.IsInf(s.Closes[i], 0) {
+				dates[d] = true
+			}
+		}
+		if shared == nil {
+			shared = dates
+			continue
+		}
+		for d := range shared {
+			if !dates[d] {
+				delete(shared, d)
+			}
+		}
+	}
+	dates := make([]string, 0, len(shared))
+	for d := range shared {
+		dates = append(dates, d)
+	}
+	sort.Strings(dates)
+	if len(dates) < Closes {
+		return nil, "", "", fmt.Errorf("only %d daily closes are shared by every needed series; %d are needed", len(dates), Closes)
+	}
+	dates = dates[len(dates)-Closes:]
+	out := make(map[string][]float64, len(series))
+	for key, s := range series {
+		byDate := make(map[string]float64, len(s.Dates))
+		for i, d := range s.Dates {
+			byDate[d] = s.Closes[i]
+		}
+		r := make([]float64, Scenarios)
+		for i := 1; i < len(dates); i++ {
+			r[i-1] = math.Log(byDate[dates[i]] / byDate[dates[i-1]])
+		}
+		out[key] = r
+	}
+	return out, dates[0], dates[len(dates)-1], nil
+}
+
+type simulation struct {
+	risk        *Risk
+	legs        []LegReport
+	underlyings []UnderlyingReport
+	stresses    *Stresses
+}
+
+// legValue prices one leg in its own currency at spot and the given time to
+// expiry (options), per unit times quantity and multiplier.
+func legValue(l Leg, spot, t float64) float64 {
+	switch l.Kind {
+	case KindOption:
+		return l.Quantity * l.Multiplier * OptionPrice(l.Right == "C", spot, l.Strike, t, *l.IV)
+	default:
+		return l.Quantity * l.Multiplier * spot
+	}
+}
+
+func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
+	base := strings.ToUpper(in.BaseCurrency)
+	fxNow := func(l Leg) float64 {
+		if l.Currency == "" || l.Currency == base {
+			return 1
+		}
+		return in.FXNow[l.Currency]
+	}
+	n := Scenarios
+	total := make([]float64, n)
+	fxPart := make([]float64, n)
+	legPnL := make([][]float64, len(legs))
+	values := make([]float64, len(legs))
+	for i, l := range legs {
+		r := returns["u:"+l.Underlying]
+		var rfx []float64
+		if l.Currency != "" && l.Currency != base {
+			rfx = returns["fx:"+l.Currency]
+		}
+		fx := fxNow(l)
+		now := legValue(l, l.Spot, l.TimeToExpiryYears)
+		values[i] = now * fx
+		pnl := make([]float64, n)
+		for k := range n {
+			next := legValue(l, l.Spot*math.Exp(r[k]), l.TimeToExpiryYears-DecayDays/365)
+			local := (next - now) * fx
+			fxk := fx
+			if rfx != nil {
+				fxk = fx * math.Exp(rfx[k])
+			}
+			pnl[k] = next*fxk - now*fx
+			fxPart[k] += pnl[k] - local
+			total[k] += pnl[k]
+		}
+		legPnL[i] = pnl
+	}
+	mean, variance := meanVar(total)
+	sd := math.Sqrt(variance)
+	risk := &Risk{SD1DBase: sd, SDAnnualBase: sd * math.Sqrt(Scenarios), ES99Base: expectedShortfall(total)}
+	if variance > 0 {
+		risk.FXContributionPct = covariance(fxPart, total, mean) / variance * 100
+	}
+	// Euler contributions: cov(leg, total) / var(total), summing to 100%.
+	legReports := make([]LegReport, len(legs))
+	byUnderlying := map[string]*UnderlyingReport{}
+	var order []string
+	for i, l := range legs {
+		rep := LegReport{ID: l.ID, Symbol: l.Symbol, Underlying: l.Underlying, Kind: l.Kind, Quantity: l.Quantity, ValueBase: values[i]}
+		if variance > 0 {
+			rep.ContributionPct = covariance(legPnL[i], total, mean) / variance * 100
+		}
+		legReports[i] = rep
+		u, ok := byUnderlying[l.Underlying]
+		if !ok {
+			u = &UnderlyingReport{Underlying: l.Underlying}
+			byUnderlying[l.Underlying] = u
+			order = append(order, l.Underlying)
+		}
+		u.ValueBase += rep.ValueBase
+		u.ContributionPct += rep.ContributionPct
+	}
+	// Betas to the index over the same returns.
+	indexReturns := returns["u:"+IndexSymbol]
+	indexMean, indexVar := meanVar(indexReturns)
+	gap := in.Policy.GapShockPct / 100
+	cap := GapCapBase(in.Policy, in.Capital)
+	stresses := &Stresses{GapShockPct: in.Policy.GapShockPct, GapCapBase: cap, IndexShockPct: IndexShockPct}
+	betas := map[string]float64{}
+	for _, name := range order {
+		u := byUnderlying[name]
+		if name == IndexSymbol {
+			u.Beta = 1
+		} else if indexVar > 0 {
+			u.Beta = covariance(returns["u:"+name], indexReturns, indexMean) / indexVar
+		}
+		betas[name] = u.Beta
+		u.GapDownLossBase = shockLoss(legs, fxNow, func(l Leg) float64 {
+			if l.Underlying == name {
+				return 1 - gap
+			}
+			return 1
+		})
+		if upsideLoser(legs, name) {
+			up := shockLoss(legs, fxNow, func(l Leg) float64 {
+				if l.Underlying == name {
+					return 1 + gap
+				}
+				return 1
+			})
+			u.GapUpLossBase = &up
+		}
+		u.GapLossBase = u.GapDownLossBase
+		if u.GapUpLossBase != nil && *u.GapUpLossBase > u.GapLossBase {
+			u.GapLossBase = *u.GapUpLossBase
+		}
+		u.GapCapBase = cap
+		if u.GapLossBase > cap {
+			u.GapBreach = true
+			stresses.GapBreaches = append(stresses.GapBreaches, name)
+		}
+	}
+	stresses.IndexLossBase = shockLoss(legs, fxNow, func(l Leg) float64 {
+		return 1 - IndexShockPct/100*betas[l.Underlying]
+	})
+	underlyings := make([]UnderlyingReport, 0, len(order))
+	for _, name := range order {
+		underlyings = append(underlyings, *byUnderlying[name])
+	}
+	slices.SortStableFunc(underlyings, func(a, b UnderlyingReport) int {
+		if a.ContributionPct != b.ContributionPct {
+			if a.ContributionPct > b.ContributionPct {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Underlying, b.Underlying)
+	})
+	slices.SortStableFunc(legReports, func(a, b LegReport) int {
+		if a.ContributionPct != b.ContributionPct {
+			if a.ContributionPct > b.ContributionPct {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Symbol, b.Symbol)
+	})
+	return simulation{risk: risk, legs: legReports, underlyings: underlyings, stresses: stresses}
+}
+
+// shockLoss revalues every leg at its underlying's spot times factor(leg)
+// (an instant gap: no time decay, the currency unchanged) and returns the
+// loss in base currency, positive when the book loses.
+func shockLoss(legs []Leg, fxNow func(Leg) float64, factor func(Leg) float64) float64 {
+	loss := 0.0
+	for _, l := range legs {
+		f := factor(l)
+		if f <= 0 {
+			f = 0
+		}
+		now := legValue(l, l.Spot, l.TimeToExpiryYears)
+		next := legValue(l, l.Spot*f, l.TimeToExpiryYears)
+		loss -= (next - now) * fxNow(l)
+	}
+	return loss
+}
+
+// upsideLoser reports whether an underlying carries a leg that loses when
+// its price gaps up: short stock or a short call.
+func upsideLoser(legs []Leg, underlying string) bool {
+	for _, l := range legs {
+		if l.Underlying != underlying || l.Quantity >= 0 {
+			continue
+		}
+		if l.Kind == KindStock || l.Kind == KindOption && l.Right == "C" {
+			return true
+		}
+	}
+	return false
+}
+
+func meanVar(x []float64) (mean, variance float64) {
+	if len(x) < 2 {
+		return 0, 0
+	}
+	for _, v := range x {
+		mean += v
+	}
+	mean /= float64(len(x))
+	for _, v := range x {
+		variance += (v - mean) * (v - mean)
+	}
+	return mean, variance / float64(len(x)-1)
+}
+
+func covariance(a, total []float64, totalMean float64) float64 {
+	if len(a) != len(total) || len(a) < 2 {
+		return 0
+	}
+	aMean := 0.0
+	for _, v := range a {
+		aMean += v
+	}
+	aMean /= float64(len(a))
+	sum := 0.0
+	for i := range a {
+		sum += (a[i] - aMean) * (total[i] - totalMean)
+	}
+	return sum / float64(len(a)-1)
+}
+
+// expectedShortfall is the mean loss of the worst ⌈(1 − ESLevel) × n⌉
+// scenarios, positive.
+func expectedShortfall(pnl []float64) float64 {
+	if len(pnl) == 0 {
+		return 0
+	}
+	sorted := slices.Clone(pnl)
+	sort.Float64s(sorted)
+	m := int(math.Ceil((1 - ESLevel) * float64(len(sorted))))
+	m = max(1, min(m, len(sorted)))
+	sum := 0.0
+	for _, v := range sorted[:m] {
+		sum += v
+	}
+	return -sum / float64(m)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
