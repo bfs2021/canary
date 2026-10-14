@@ -268,27 +268,43 @@ func (s *Server) saveMandateSeries(ctx context.Context, series *mandateHistorySe
 // mandateLastSessions returns the dates of the last completed US equity
 // session and the one before it.
 func mandateLastSessions(now time.Time) (last, previous string, ok bool) {
-	session, _, found := lastCompletedMarketSessionWindow(now, marketcal.MarketUSEquity)
+	return mandateLastSessionsIn(now, marketcal.MarketUSEquity)
+}
+
+// mandateLastSessionsIn returns the dates of the last completed session of
+// a market and the one before it.
+func mandateLastSessionsIn(now time.Time, market marketcal.Market) (last, previous string, ok bool) {
+	session, _, found := lastCompletedMarketSessionWindow(now, market)
 	if !found {
 		return "", "", false
 	}
-	before, _, foundBefore := lastCompletedMarketSessionWindow(session.Close.Add(-time.Minute), marketcal.MarketUSEquity)
+	before, _, foundBefore := lastCompletedMarketSessionWindow(session.Close.Add(-time.Minute), market)
 	if !foundBefore {
 		return session.Date, "", false
 	}
 	return session.Date, before.Date, true
 }
 
+// mandateSeriesMarket is the calendar a series' freshness is judged on:
+// the core sleeve's own series (core_target.go) on Xetra's, every series
+// the book reads on the US one.
+func mandateSeriesMarket(key string) marketcal.Market {
+	if strings.HasPrefix(key, coreSeriesKeyPrefix) {
+		return marketcal.MarketDEXetra
+	}
+	return marketcal.MarketUSEquity
+}
+
 // mandateSeriesStale reports whether a series lags more than one completed
-// US session, so the evening after a close is current until the refresh
-// lands and the next morning is not. The US calendar stands in for every
-// venue (a European daily bar dates its own session, one holiday apart at
-// most).
+// session, so the evening after a close is current until the refresh
+// lands and the next morning is not. For the book the US calendar stands
+// in for every venue (a European daily bar dates its own session, one
+// holiday apart at most); the core's series is judged on Xetra's.
 func mandateSeriesStale(series *mandateHistorySeries, now time.Time) bool {
 	if series == nil || len(series.Dates) == 0 {
 		return true
 	}
-	last, previous, ok := mandateLastSessions(now)
+	last, previous, ok := mandateLastSessionsIn(now, mandateSeriesMarket(series.Key))
 	if !ok {
 		return true
 	}
@@ -302,7 +318,7 @@ func mandateSeriesDue(series *mandateHistorySeries, now time.Time) bool {
 	if series == nil || len(series.Dates) == 0 {
 		return true
 	}
-	last, _, ok := mandateLastSessions(now)
+	last, _, ok := mandateLastSessionsIn(now, mandateSeriesMarket(series.Key))
 	return ok && series.Dates[len(series.Dates)-1] < last
 }
 
@@ -331,6 +347,7 @@ func (s *Server) startMandateHistoryRefresh(ctx context.Context) {
 			}
 			s.refreshMandateHistoryOnce(ctx)
 			s.refreshMandateVerdict(ctx)
+			s.refreshCoreTarget(ctx)
 		}
 	})
 }
@@ -354,7 +371,11 @@ func (s *Server) refreshMandateHistoryOnce(ctx context.Context) {
 	if pos.Portfolio != nil {
 		base = pos.Portfolio.BaseCurrency
 	}
-	for _, need := range s.mandateHistoryNeedsWithRequests(pos, base, s.nowUTC()) {
+	needs := s.mandateHistoryNeedsWithRequests(pos, base, s.nowUTC())
+	if need, ok := coreHistoryNeed(s.riskPolicies.snapshot().policy); ok {
+		needs = append(needs, need)
+	}
+	for _, need := range needs {
 		if ctx.Err() != nil {
 			return
 		}

@@ -1342,6 +1342,23 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # owner_vol_pct = 0.0
 # core_vol_pct = 0.0
 # overlay_vol_pct = 0.0
+# Optional core sleeve (design internal-docs/design/core-sleeve.md). Absent,
+# the core is inactive. Written, the daemon decides the core's target each
+# month under the compiled rule and shows it in canary core; in this
+# release it proposes nothing and places no order. Its volatility share is
+# core_vol_pct above. Every key is yours; a missing one holds the core and
+# is named there. con_id is IBKR's contract id for the ISIN on IBIS. The
+# numbers are the design's proposals.
+# [mandate.core]
+# rule = "core-ibcf-v1"
+# isin = "IE00B3ZW0K18"
+# con_id = 0
+# exchange = "IBIS"
+# currency = "EUR"
+# scale_pct = 25.0
+# band_pct = 10.0
+# min_order_base = 2500.0
+# max_value_pct = 40.0
 `)
 	return []byte(b.String())
 }

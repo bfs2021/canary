@@ -1,0 +1,12 @@
+# canary core · COLUMNS=80 · colour off
+Core  INACTIVE
+the risk constitution carries no [mandate.core] table; the core sleeve is
+inactive
+Next · write [mandate.core] into risk-policy.toml with a higher
+  policy_version; canary policy default constitution shows the keys
+# canary core · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mCore\x1b[0m  \x1b[2mINACTIVE\x1b[0m
+the risk constitution carries no [mandate.core] table; the core sleeve is
+inactive
+Next · write [mandate.core] into risk-policy.toml with a higher
+  policy_version; canary policy default constitution shows the keys

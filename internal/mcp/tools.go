@@ -464,6 +464,26 @@ var Tools = []Tool{
 		},
 	},
 	{
+		Name: "canary_core", Title: "Canary Core Sleeve Target",
+		Description: "Read the daemon's core sleeve target: the mandate's rule-based share in one broad index fund (rule `core-ibcf-v1`, IBCF on Xetra), a beta allocation the owner chose with a drawdown filter, not an edge claim. `decision` is the month's reading at the last Xetra session of the month: the close against its 10-month average (`trend_on`), the EWMA, 252-day and floor volatilities and which one binds, frozen at its first evaluation (`frozen_at`; `drift` when the same window's closes later read differently). `sizing` is the target in shares and money, frozen at the decision and lowered to today's capital, and `holdable` the largest holding the mandate's headroom admits (the book at most at 95% of the budget and the core's gap at most at 95% of its cap). `holding` is the pinned contract's confirmed shares; `action` is what the rule would do at the next window (buy, sell, sell_all, wait, none or hold) with its reason, the band test and the minimum order. `status` is ready, hold (with `reasons`: a missing, stale or suspect series, unwritten keys, an unknown mandate verdict) or inactive while the constitution carries no [mandate.core]. Use it for 'what is the core doing', 'why did the core not buy' or 'what will the core trade at month-end'; use canary_mandate for the whole book's risk budget and canary_proposals for orders waiting for approval. Read-only: `read_only` is true, the core proposes nothing and places no order in this phase; refresh=true measures the mandate again first.",
+		JSONSchema: schemaObject(map[string]json.RawMessage{
+			"refresh": json.RawMessage(`{"type":"boolean","description":"when true, the daemon reads the account and positions and measures the mandate again before deciding; false (the default) uses a mandate verdict younger than thirty seconds"}`),
+		}, nil), ReadOnlyHint: new(true), RPCMethods: []string{rpc.MethodCoreTarget},
+		Handler: func(ctx context.Context, conn *dial.Conn, args json.RawMessage) (json.RawMessage, error) {
+			var in struct {
+				Refresh bool `json:"refresh"`
+			}
+			if err := unmarshalArgs(args, &in); err != nil {
+				return nil, err
+			}
+			res, err := rpc.FetchCoreTarget(ctx, conn, in.Refresh)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(res)
+		},
+	},
+	{
 		Name:         "canary_brief",
 		Title:        "Canary Daily Brief",
 		Description:  "Start here for the daemon's current desk summary: regime stage and verdict, portfolio-stress summary, breadth coverage, modeled gamma response and expiry horizons, and observed 25-delta option skew. Preserve freshness, rankability, source warnings and unavailable values. Take severity order from Canary: `attention_order` lists what needs attention (drawdown tier, latch, rules at act, then other attention rows) and `ready.ranked` orders every Ready row; never re-sort them. Gamma models potential amplification or damping; open interest does not prove bullish/bearish intent or dealer inventory, and put-call skew is relative option pricing, not a forecast. Use canary_regime for all market indicators and confirmation details, canary_stress for full portfolio-risk evidence, canary_status to diagnose degraded sources and canary_edge for retrospective decision outcomes; drill into canary_positions or canary_account only when the brief points there. Read-only; never acknowledges the brief or writes to the journal.",

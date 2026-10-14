@@ -435,6 +435,9 @@ type Server struct {
 	// mandate_verdict.go).
 	mandateHistory  mandateHistoryStore
 	mandateVerdicts mandateVerdictCache
+	// coreTargets keeps the core sleeve's frozen monthly decisions
+	// (core_target.go).
+	coreTargets coreTargetStore
 	// mandateHistoryFetchForTest replaces the broker history read and
 	// mandatePositionsForTest the positions read behind the mandate.
 	mandateHistoryFetchForTest func(context.Context, rpc.MarketHistoryParams, int, time.Time) (*rpc.MarketHistoryResult, error)
@@ -2859,6 +2862,8 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleScorecardRead(ctx, req) })
 	case rpc.MethodMandateRisk:
 		s.unary(req, enc, func() (any, error) { return s.handleMandateRisk(ctx, req) })
+	case rpc.MethodCoreTarget:
+		s.unary(req, enc, func() (any, error) { return s.handleCoreTarget(ctx, req) })
 	case rpc.MethodAlertCandidates:
 		s.unary(req, enc, func() (any, error) { return s.handleAlertCandidates(ctx, req) })
 	case rpc.MethodAlertStatus:

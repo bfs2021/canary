@@ -46,6 +46,119 @@ type ConstitutionMandate struct {
 	// Sleeves records the owner's volatility shares per sleeve; recorded,
 	// not enforced in this increment.
 	Sleeves *ConstitutionMandateSleeves `toml:"sleeves" json:"sleeves,omitempty"`
+	// Core is the core sleeve's rule and numbers
+	// (internal-docs/design/core-sleeve.md). Optional: absent, the core is
+	// inactive and every fingerprint is kept.
+	Core *ConstitutionMandateCore `toml:"core" json:"core,omitempty"`
+}
+
+// ConstitutionMandateCore is [mandate.core]: which compiled rule the core
+// sleeve runs, the instrument it is pinned to and the owner's numbers
+// (owner decisions 2026-10-14; internal-docs/design/core-sleeve.md). Its
+// volatility share is [mandate.sleeves] core_vol_pct. The rule's own
+// parameters (ten months, span 63, 252 days, the 15% floor) are compiled
+// with the rule version, never keys here. Every key is the owner's; a
+// missing one holds the core and is named by CoreUnapprovedKeys, and never
+// reaches the constitution's own approval list: a half-written table
+// changes nothing outside the core. In this increment the core is
+// read-only: it serves its target (core.target) and sends nothing.
+type ConstitutionMandateCore struct {
+	// Rule names the compiled rule, for example "core-ibcf-v1"; the daemon
+	// holds the core on a rule it does not carry.
+	Rule string `toml:"rule" json:"rule,omitempty"`
+	// ISIN, ConID, Exchange and Currency pin the instrument: the IBKR
+	// contract id written after resolving the ISIN, on its listing venue.
+	ISIN     string `toml:"isin" json:"isin,omitempty"`
+	ConID    *int   `toml:"con_id" json:"con_id,omitempty"`
+	Exchange string `toml:"exchange" json:"exchange,omitempty"`
+	Currency string `toml:"currency" json:"currency,omitempty"`
+	// ScalePct is the commissioning ramp (25, then 50, then 100); 0
+	// suspends the core.
+	ScalePct *float64 `toml:"scale_pct" json:"scale_pct,omitempty"`
+	// BandPct is the no-trade band in percent of the target shares.
+	BandPct *float64 `toml:"band_pct" json:"band_pct,omitempty"`
+	// MinOrderBase is the smallest order in base currency; a sale to zero
+	// is never held by it.
+	MinOrderBase *float64 `toml:"min_order_base" json:"min_order_base,omitempty"`
+	// MaxValuePct caps the core's value at this share of the budget base ×
+	// room.
+	MaxValuePct *float64 `toml:"max_value_pct" json:"max_value_pct,omitempty"`
+}
+
+// CoreUnapprovedKeys lists the [mandate.core] keys the owner has not
+// written, and the sleeve share the core reads.
+func (m *ConstitutionMandate) CoreUnapprovedKeys() []string {
+	if m == nil || m.Core == nil {
+		return nil
+	}
+	c := m.Core
+	var out []string
+	for _, k := range []struct {
+		key     string
+		missing bool
+	}{
+		{"mandate.core.rule", strings.TrimSpace(c.Rule) == ""},
+		{"mandate.core.isin", strings.TrimSpace(c.ISIN) == ""},
+		{"mandate.core.con_id", c.ConID == nil},
+		{"mandate.core.exchange", strings.TrimSpace(c.Exchange) == ""},
+		{"mandate.core.currency", strings.TrimSpace(c.Currency) == ""},
+		{"mandate.core.scale_pct", c.ScalePct == nil},
+		{"mandate.core.band_pct", c.BandPct == nil},
+		{"mandate.core.min_order_base", c.MinOrderBase == nil},
+		{"mandate.core.max_value_pct", c.MaxValuePct == nil},
+		{"mandate.sleeves.core_vol_pct", m.Sleeves == nil || m.Sleeves.CoreVolPct == nil},
+	} {
+		if k.missing {
+			out = append(out, k.key)
+		}
+	}
+	return out
+}
+
+func (c *ConstitutionMandateCore) validate() error {
+	if c == nil {
+		return nil
+	}
+	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+	if v := c.ScalePct; v != nil && (!finite(*v) || *v < 0 || *v > 100) {
+		return fmt.Errorf("mandate.core.scale_pct must be in [0, 100]")
+	}
+	if v := c.BandPct; v != nil && (!finite(*v) || *v <= 0 || *v >= 100) {
+		return fmt.Errorf("mandate.core.band_pct must be in (0, 100)")
+	}
+	if v := c.MinOrderBase; v != nil && (!finite(*v) || *v < 0) {
+		return fmt.Errorf("mandate.core.min_order_base must not be negative")
+	}
+	if v := c.MaxValuePct; v != nil && (!finite(*v) || *v <= 0 || *v > 100) {
+		return fmt.Errorf("mandate.core.max_value_pct must be in (0, 100]")
+	}
+	if v := c.ConID; v != nil && *v <= 0 {
+		return fmt.Errorf("mandate.core.con_id must be a positive IBKR contract id")
+	}
+	if s := c.ISIN; s != "" && !isinShape(s) {
+		return fmt.Errorf("mandate.core.isin %q must be twelve upper-case letters and digits", s)
+	}
+	for _, k := range []struct{ key, v string }{{"exchange", c.Exchange}, {"currency", c.Currency}, {"rule", c.Rule}} {
+		if k.v != strings.TrimSpace(k.v) {
+			return fmt.Errorf("mandate.core.%s %q carries spaces", k.key, k.v)
+		}
+	}
+	if c.Exchange != strings.ToUpper(c.Exchange) || c.Currency != strings.ToUpper(c.Currency) {
+		return fmt.Errorf("mandate.core.exchange and mandate.core.currency are written in upper case")
+	}
+	return nil
+}
+
+func isinShape(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, r := range s {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // ConstitutionMandateSleeves is [mandate.sleeves]: annualised volatility in
@@ -93,6 +206,9 @@ func (m *ConstitutionMandate) validate(semantics ConstitutionSemantics) error {
 		if _, err := time.Parse(MandateStartLayout, s); err != nil || s != m.StartedAt {
 			return fmt.Errorf("mandate.started_at %q must be a date written as YYYY-MM-DD", m.StartedAt)
 		}
+	}
+	if err := m.Core.validate(); err != nil {
+		return err
 	}
 	if sl := m.Sleeves; sl != nil {
 		for _, k := range []struct {

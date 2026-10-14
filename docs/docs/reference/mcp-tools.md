@@ -4,7 +4,7 @@
 
 These are the tools `canary mcp` exposes to MCP clients (Claude Code, Claude Desktop, or any other MCP host). Every public tool uses the canonical `canary_*` namespace. Each entry lists the tool name an LLM picks against, the description the LLM reads to decide whether to invoke, and the parameter schema the LLM binds against.
 
-**39 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
+**40 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
 
 ## `canary_add`
 
@@ -246,6 +246,16 @@ Read the daemon's mandate risk verdict: the book's ex-ante volatility (historica
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `refresh` | boolean | no | when true, the daemon reads the account and positions again before judging; false (the default) serves a verdict younger than thirty seconds as it is |
+
+## `canary_core`
+
+Read the daemon's core sleeve target: the mandate's rule-based share in one broad index fund (rule `core-ibcf-v1`, IBCF on Xetra), a beta allocation the owner chose with a drawdown filter, not an edge claim. `decision` is the month's reading at the last Xetra session of the month: the close against its 10-month average (`trend_on`), the EWMA, 252-day and floor volatilities and which one binds, frozen at its first evaluation (`frozen_at`; `drift` when the same window's closes later read differently). `sizing` is the target in shares and money, frozen at the decision and lowered to today's capital, and `holdable` the largest holding the mandate's headroom admits (the book at most at 95% of the budget and the core's gap at most at 95% of its cap). `holding` is the pinned contract's confirmed shares; `action` is what the rule would do at the next window (buy, sell, sell_all, wait, none or hold) with its reason, the band test and the minimum order. `status` is ready, hold (with `reasons`: a missing, stale or suspect series, unwritten keys, an unknown mandate verdict) or inactive while the constitution carries no [mandate.core]. Use it for 'what is the core doing', 'why did the core not buy' or 'what will the core trade at month-end'; use canary_mandate for the whole book's risk budget and canary_proposals for orders waiting for approval. Read-only: `read_only` is true, the core proposes nothing and places no order in this phase; refresh=true measures the mandate again first.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `refresh` | boolean | no | when true, the daemon reads the account and positions and measures the mandate again before deciding; false (the default) uses a mandate verdict younger than thirty seconds |
 
 ## `canary_brief`
 

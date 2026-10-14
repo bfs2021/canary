@@ -103,6 +103,9 @@ var methodTimings = []MethodTiming{
 	// The mandate verdict reads the account (10s) and the positions (30s)
 	// before a simulation that takes milliseconds.
 	{Method: MethodMandateRisk, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
+	// The core target measures the mandate as mandate.risk does, then reads
+	// its own stores and runs a few dozen simulations for the headroom.
+	{Method: MethodCoreTarget, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	{Method: MethodOrderPlace, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
 	{Method: MethodOrderModify, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
 	{Method: MethodOrderCancel, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
