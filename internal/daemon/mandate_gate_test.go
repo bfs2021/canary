@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -350,6 +352,109 @@ func TestMandateHighWaterMarkIgnoresASingleGlitch(t *testing.T) {
 	st.Observe(325000, at.Add(16*time.Minute), c, testLiveObserveScope, true)
 	if got := mark(); got != seeded+20000 {
 		t.Fatalf("a confirmed high: mark %v, want %v (the lower of the readings)", got, seeded+20000)
+	}
+}
+
+// An equity move the book's own P&L does not explain is a suspected cash
+// flow: the room is held (the capital reads unknown, so additions stay
+// refused and the reduction sizes nothing) and the high-water mark does not
+// move, until the flow is declared or a statement covering its day is
+// reconciled. A move the P&L explains is no flow; nor is anything while the
+// broker reports no P&L.
+func TestMandateUnexplainedEquityMoveHoldsTheRoom(t *testing.T) {
+	st := newTestRiskCapitalStore(t)
+	st.now = func() time.Time { return mandateTestNow }
+	c := testMandateConstitution()
+	reconcileNow(t, st)
+	at := mandateTestNow.Add(-time.Hour)
+	session := mandateSessionDate(at)
+	observe := func(equity, pnl float64, when time.Time, sessionKey string) {
+		t.Helper()
+		st.ObserveWithPnL(equity, mandatePnLReading{DailyBase: &pnl, Session: sessionKey}, when, c, testLiveObserveScope, true)
+	}
+	capital := func() mandate.Capital {
+		t.Helper()
+		got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow)
+		return got
+	}
+	observe(300000, 0, at, session)
+	observe(300500, 500, at.Add(5*time.Minute), session)
+	// A market move the book's P&L explains: no flow.
+	observe(285500, -14500, at.Add(10*time.Minute), session)
+	if got := capital(); !got.Known {
+		t.Fatalf("a P&L-explained move held the room: %v", got.Reasons)
+	}
+	mark := capital().HWMRiskBase
+	// An undeclared withdrawal of 20,000: equity drops, the P&L does not.
+	observe(265600, -14400, at.Add(12*time.Minute), session)
+	got := capital()
+	if got.Known || len(got.Reasons) == 0 || !strings.Contains(got.Reasons[0], "a cash flow is suspected") {
+		t.Fatalf("an unexplained drop did not hold the room: %+v", got)
+	}
+	// Declared, it is explained and the room returns, the drawdown unmoved
+	// by the withdrawal.
+	if _, err := st.ApplyCapitalEventForPolicy(rpc.CapitalEventParams{Type: "withdrawal", AmountBase: 20000}, rpc.OrderOriginHumanTTY, c); err != nil {
+		t.Fatal(err)
+	}
+	observe(265700, -14300, at.Add(14*time.Minute), session)
+	// The drawdown is the market's 14,300, never the withdrawal.
+	if got := capital(); !got.Known || got.HWMRiskBase != mark || math.Abs(got.DrawdownBase-14300) > 1 {
+		t.Fatalf("after the declaration: %+v", got)
+	}
+	// An undeclared deposit: held, and the mark never rises on it.
+	observe(305700, -14300, at.Add(16*time.Minute), session)
+	observe(305800, -14200, at.Add(24*time.Minute), session)
+	if got := capital(); got.Known || got.HWMRiskBase != mark {
+		t.Fatalf("an undeclared deposit: %+v", got)
+	}
+	// A statement covering the day is reconciled: the suspicion clears.
+	st.mu.Lock()
+	st.state.StatementCoverageTo = at
+	st.mu.Unlock()
+	observe(305900, -14100, at.Add(26*time.Minute), session)
+	if got := capital(); !got.Known {
+		t.Fatalf("a statement covering the day did not clear it: %v", got.Reasons)
+	}
+	// Overnight: the next session's own P&L is the yardstick.
+	next := mandateSessionDate(at.Add(24 * time.Hour))
+	observe(285900, 100, at.Add(27*time.Minute), next)
+	if got := capital(); got.Known {
+		t.Fatal("an overnight drop the new session's P&L does not explain was not held")
+	}
+	// No broker P&L: nothing to judge by, so nothing is suspected.
+	st2 := newTestRiskCapitalStore(t)
+	st2.now = st.now
+	reconcileNow(t, st2)
+	st2.Observe(300000, at, c, testLiveObserveScope, true)
+	st2.Observe(250000, at.Add(time.Minute), c, testLiveObserveScope, true)
+	if got, _ := st2.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow); !got.Known {
+		t.Fatalf("without P&L a drop was held: %v", got.Reasons)
+	}
+}
+
+// A suspected cash flow makes the verdict unknown: additions are refused and
+// the forced reduction sizes nothing until it is explained.
+func TestMandateSuspectedFlowMakesTheVerdictUnknown(t *testing.T) {
+	srv, st := mandateTestServer(t, testMandateConstitution())
+	seedMandateHistory(t, srv, 0)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(1000), nil }
+	if res := srv.evaluateMandate(t.Context(), false); res.Verdict.Status != mandate.StatusWithin {
+		t.Fatalf("baseline verdict %s %v", res.Verdict.Status, res.Verdict.Reasons)
+	}
+	c := srv.riskPolicies.active
+	session := mandateSessionDate(mandateTestNow)
+	pnl := 100.0
+	st.ObserveWithPnL(300000, mandatePnLReading{DailyBase: &pnl, Session: session}, mandateTestNow.Add(-90*time.Second), c, testLiveObserveScope, true)
+	st.ObserveWithPnL(280000, mandatePnLReading{DailyBase: &pnl, Session: session}, mandateTestNow.Add(-time.Minute), c, testLiveObserveScope, true)
+	res := srv.evaluateMandate(t.Context(), false)
+	if res.Verdict.Status != mandate.StatusUnknown || !slices.ContainsFunc(res.Verdict.Reasons, func(r string) bool { return strings.Contains(r, "a cash flow is suspected") }) {
+		t.Fatalf("verdict under a suspected flow: %s %v", res.Verdict.Status, res.Verdict.Reasons)
+	}
+	if blocker := srv.mandateBudgetGate(mandateBuy(10), mandateOpen); blocker == nil || blocker.Code != mandateBudgetCode {
+		t.Fatalf("an addition passed under a suspected flow: %+v", blocker)
+	}
+	if _, err := json.Marshal(res); err != nil {
+		t.Fatal(err)
 	}
 }
 

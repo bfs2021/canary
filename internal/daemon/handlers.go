@@ -240,7 +240,8 @@ func (s *Server) buildAccountSummaryWithAuthority(ctx context.Context, observe b
 		if pol != nil && pol.Capital.BaseCurrency != "" && res.BaseCurrency != "" &&
 			strings.EqualFold(pol.Capital.BaseCurrency, res.BaseCurrency) && c.SessionCurrent(healthBinding) && sameBrokerScope(scope, s.currentBrokerStateScope()) {
 			capitalScope := scope
-			if firstDailyObservation := s.riskCapital.Observe(res.NetLiquidation, res.AsOf, pol, capitalScope, recoveryAllowed); firstDailyObservation {
+			pnl := mandatePnLReading{DailyBase: cloneFloat64Ptr(res.DailyPnL), Session: pnlSessionKey}
+			if firstDailyObservation := s.riskCapital.ObserveWithPnL(res.NetLiquidation, pnl, res.AsOf, pol, capitalScope, recoveryAllowed); firstDailyObservation {
 				// Re-evaluate when today's first runtime account observation arrives.
 				s.evaluateRiskPolicyV3Reconciliation()
 			}
