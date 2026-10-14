@@ -1,6 +1,6 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-14 09:24 CEST
+Updated: 2026-10-14 10:17 CEST
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
 gate); increment 2 implemented 2026-10-14 (forced reduction, below). The
 feature is inactive until the owner writes `[mandate]` into
@@ -62,10 +62,11 @@ proposal the owner confirms by writing it into the policy file.
   high-water mark of the cash-flow-adjusted risk base since
   `mandate.started_at`, translated into today's capital terms:
   `budget_base = HWM(equity − flows_since_start) − tax_reserve +
-  flows_since_start`. It rises with every new high and moves one-for-one
-  with declared or statement flows after the start, so a withdrawal lowers
-  the budget and a deposit raises it, while neither creates a drawdown or
-  a false high. The tax reserve shifts both the high-water mark and the
+  flows_since_start`. It rises with every new high, once a second reading
+  at least five minutes later confirms it (at the lower of the two), and
+  moves one-for-one with declared or statement flows after the start, so a
+  withdrawal lowers the budget and a deposit raises it, while neither
+  creates a drawdown or a false high. The tax reserve shifts both the high-water mark and the
   current risk base by the same amount, so changing it never changes the
   drawdown, only the base. Changing `started_at` starts the series again
   (a fresh high-water mark seeded from the next observation).
@@ -154,71 +155,114 @@ Owner decisions, recorded verbatim:
 - The bucket ships absent from the embedded default and inactive; the owner
   arms it by listing it under `[authority].pre_authorised`.
 
+Revised 2026-10-14 10:17 CEST after the independent safety review of the
+first build (coverage, a batch that never shrank, the veto clock, the
+prepared path, netting and the debounce).
+
 What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
 `mandate_reduction`):
 
 - **Trigger.** While `[mandate]` is written, the proposal engine reads the
-  kept verdict for the policy in force on every refresh. Rows appear when the
-  verdict reads `reduce`, or `over` on two consecutive verdicts (the verdict
-  cache counts the streak: each reading at most five minutes after the one
-  before, under the same constitution fingerprint; `within`, `unknown`, a
-  longer gap or a new policy resets it). One `over` reading reports
-  `watching` and proposes nothing. `unknown` never sizes anything.
+  kept verdict for the policy in force on every refresh. The verdict cache
+  counts a streak of scheduled verdicts (the background cadence, every two
+  minutes, which a read's own evaluation never moves) reading over or
+  reduce, each counted reading at least five minutes after the last one
+  and at most fifteen; a read's evaluation never counts, and any reading,
+  scheduled or not, that is neither over nor reduce resets it, as does a new
+  policy. A batch starts on two counted readings, whether over or reduce, so
+  polling cannot build it in seconds and one bad reading cannot start it.
+  Exception: a gap-cap breach starts it on one counted reading. One reading
+  reports `watching` and proposes nothing. `unknown` never sizes anything.
+- **Episode.** The first batch opens a breach episode (`episode` on the
+  status and on every row); it lasts until a verdict reads `within`.
 - **Target and hysteresis.** The batch is sized to risk ≤ 0.95 × budget with
   every gap cap met, so the next verdict reads `within` rather than `over`
   by a hair; release is at `within` (risk ≤ budget, no gap breach). The 5%
   band is compiled (`mandateReductionTargetFactor`), not a policy key.
-- **Sizing.** Greedy, with the daemon's own evaluator on the book the
-  verdict measured. (1) Expiry first: a long option in the money within
-  three US option sessions of expiry, whose exercise as delivered stock would
-  leave the book over budget and riskier than holding the option, is cut
-  before anything else, to the fewest contracts whose delivered shares keep
-  the book inside the target, or closed. (2) Then cut by cut, the book
-  re-evaluated after each: a name over its gap cap has its largest gap loser
-  cut until the name's gap loss is under the cap; with no breach left, the
-  largest Euler contributor is cut by the smallest whole step that reaches
-  the target or, when no step on that line does, by the step that takes the
-  most risk off (risk is convex in one line's size, so that is the minimum,
-  never more), and the next contributor follows only when needed. Steps are
-  contracts for options and share lots for stocks (1 below 100 shares, 10 to
-  999, 100 from 1,000). Legs never cut: a long put on a Rulebook hedge
-  symbol, a leg of a multi-leg unit (the strategy workflow reduces it), a
-  row the owner ignored; the status names them under `left_out`.
+- **Sizing, afresh at every verdict.** Greedy, with the daemon's own
+  evaluator on the book the verdict measured; a standing batch is never
+  carried forward as it was. Cut by cut, the book re-evaluated after each: a
+  name over its gap cap has its largest gap loser cut until the name's gap
+  loss is under the cap (a gap cut never leaves the book riskier); with no
+  breach left, the largest Euler contributor is cut by the smallest whole
+  step that reaches the target or, when no step on that line does, by the
+  step that takes the most risk off, and the next contributor follows only
+  when needed. Steps are contracts for options and share lots for stocks (1
+  below 100 shares, 10 to 999, 100 from 1,000). Damping: a line whose
+  position has not moved keeps the last generation's cut when the fresh cut
+  is smaller by at most one step, so a steady risk does not re-size a row
+  every verdict; a larger ease shrinks it, a rise grows it.
+- **Coverage.** A stock and the short options of its own underlying it
+  covers (short calls over long shares, short puts over a short sale) are
+  one unit: the shares are never cut below what the remaining short options
+  need, so an assignment can never flip the line. Cutting further buys the
+  options back first, deepest in the money first, ranked ahead of the
+  shares; and the share sale waits, this cycle, for the shares the
+  buyback has freed (`plan[].waits`), so it never goes out while the calls
+  it covers are still short. A cover deficit the book already carries is
+  never deepened. A long option that protects its own stock, a hedge-listed
+  put and any leg the option policy derives as protection (the budget
+  governor's test, `budgetLegIsProtection`) are never sold: the status
+  names them under `left_out`. A share cut that leaves such a put without
+  its shares is made only where it lowers the book's risk, which the
+  evaluator measures with the put still held.
+- **Expiry.** An in-the-money long option within three US option sessions
+  of expiry is cut ahead of the batch only where its exercise, as delivered
+  stock, would by itself push the planned book over budget (and add risk),
+  by the fewest contracts that keep the exercised book inside the target;
+  the batch is then sized again around that cut. An option whose exercise
+  changes little is left to the variance.
+- **Working orders.** A line a working stop or trail holds leaves the plan
+  (netting would hold its row as long as the stop works), the next
+  contributor is cut instead, and the line is named under `left_out`. A line
+  with an immediate order in flight (a sale partly filled, the rest
+  working) stays in the plan, since that cut is on its way; its row waits
+  behind the working order (netting) until it fills or is cancelled.
 - **Every row** is reduce-only (a sale of a long line, a buy-back of a short
   one, never past zero), a DAY limit at the mark like the budget governor's
   rows, `never_skip_veto`, and carries the verdict it was sized on
-  (`mandate.verdict_status`, `verdict_at`, `verdict_fingerprint`), its rank,
-  phase (`expiry`, `gap`, `risk`), the line's share of the risk, the risk
-  the cut takes off and the risk after the batch.
+  (`mandate.verdict_status`, `verdict_at`, `verdict_fingerprint`), its
+  episode, rank, phase (`expiry`, `gap`, `risk`), the line's share of the
+  risk, the risk the cut takes off and the risk after the batch.
 - **Order caps.** One order is held to the lower of
   `[buckets.risk_reduction].max_order_notional` and the `[order_limits]` cap
   in force, at the row's mark; `mandate.units` keeps the whole cut and the
   status `plan` both numbers. After the fill the next verdict measures the
-  book as it then is and sizes the remainder (carry-over, as the governor).
-- **A standing batch** is kept while the verdict stays over budget: a row
-  whose line is still held at the quantity it was sized on keeps its cut,
-  order, rank and the verdict it was sized on (`confirmed_at` names the
-  verdict that kept it), so its revision and veto window stand; the batch
-  is extended only if the new verdict needs more.
+  book as it then is and sizes the remainder. As in the governor, an order
+  is never held below one unit: one contract or share above a cap is the
+  order gate's to judge, and it passes only as a delta-reducing exit.
+- **Veto clock within an episode.** A row re-sized within its episode
+  (growing or shrinking, so its revision changes) keeps the veto clock of
+  the record it replaces, which never reached the broker: the new record is
+  due when the first one was, and its notice is the same alert episode (one
+  per line and episode). Chosen over a second row for the growth because
+  one row per contract and side is a standing rule (the merge, netting)
+  and a batch that grows at every verdict in a steady sell-off would
+  otherwise restart its 30-minute window forever and never go out. The
+  owner's veto covers the episode's direction: a vetoed line gets no
+  automatic record again in that episode, whatever its size. A sent,
+  failed or otherwise ended record passes no clock on: the next revision
+  gets a full window. Each order stays held to the caps.
 - **Hold.** A verdict that is `unknown`, older than five minutes, or
   measured on another book than the one held (a fill, a hand trade:
   `book_changed`) sizes nothing. Standing rows are served held
-  (`mandate.held`, `hold_reason`): preview and submit refuse them
+  (`mandate.held`, `hold_reason`): preview, submit, the device-confirmed
+  prepared submit and the owner's order queue refuse them
   (`mandate_sizing_held`), the scheduler holds a due record on its original
   window (`automaticHoldMandateVerdict`) and the notice reads "Reduction
   held" (`protection_auto_held_mandate`). A held row whose own line moved is
   dropped.
-- **Release.** A verdict reading `within` withdraws every standing row; a
-  waiting automatic record is superseded and never sent. Nothing is
-  cancelled at the broker: an order already working stays.
+- **Release.** A verdict reading `within` ends the episode and withdraws
+  every standing row; a waiting automatic record is superseded and never
+  sent. Nothing is cancelled at the broker: an order already working stays.
 - **One row per contract and side.** Where another bucket (the budget
   governor, the issuer trim, theta hygiene) also wants to sell the line, the
   same-contract merge keeps one row sized by the largest need, never the sum
   (precedence on a tie: after the governor, before theta hygiene). A held
-  mandate row takes no part in the merge, so it never stands for a row that
-  can be sent. Working-order netting applies as to every reduction: any
-  same-side order working for the contract, a protective trailing stop
-  included, blocks the row until it fills or is cancelled.
+  mandate row takes no part in the merge. While the drawdown brake is
+  latched, a pre-authorised stock trailing stop is placed at once and a
+  mandate sale waits its full window, so the sale never covers the stop
+  then: the stop goes first, and netting holds the sale behind it.
 - **Submission.** Only the existing scheduler and `submitAutomatic`: one
   durable record per key and revision, the notice, the full veto window even
   under a latched drawdown brake, one grant under `brokerWriteMu`, origin
@@ -227,6 +271,21 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   Not pre-authorised, the rows are ordinary proposals that wait for the
   owner's hand. They are not queueable for the open. At a stress open they
   wait 30 minutes after the options open, like the governor's rows.
+- **The maximum loss.** At a drawdown of D the room, the budget and every
+  gap cap are zero, so every name is in breach and the batch acts on one
+  reading: it reduces the book to what it may not cut (hedge-listed puts,
+  protection, multi-leg units, ignored rows). At the maximum loss the
+  mandate reduces the book to its hedges; owner decision pending. The
+  verdict's ratio to a zero budget is unbounded and encodes as
+  `ratio_to_budget: null` (read back as unbounded), so the verdict keeps
+  serving instead of failing to encode.
+- **A glitchy equity reading.** A new high-water mark counts once a second
+  reading at least five minutes later confirms it, at the lower of the two
+  (`mandate_capital.go`): one spike never raises the mark, which would read
+  as a drawdown from then on. A single low print that collapses the room
+  breaches every gap cap and so opens an episode at once; the next
+  scheduled verdict, two minutes later, reads within and withdraws it,
+  long before the 30-minute window could close.
 - **Surfaces.** `canary proposals` (and `--details`, JSON, MCP
   `canary_proposals`) lists the rows with bucket, rank, share of the risk
   and the verdict in plain words under a Mandate header; `canary mandate`
@@ -235,27 +294,35 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   variant). The scorecard counts the fills as `rule`
   (`proposal:mandate_reduction`), never the owner's.
 - **Residual risk accepted.** The sizing inherits the measurement's limits
-  (one year of history, today's IV, no rates or dividends). A line carrying
-  a working order (a stop among them) is blocked by netting and the batch
-  does not re-plan around it in the same cycle; the status says the target
-  is not reached once nothing else reduces. Two verdicts can be read 30
-  seconds apart (a read refreshes a verdict older than that), so the
-  two-reading rule is a debounce, not a time filter. After any fill the
-  batch waits for the next verdict (at most two minutes).
+  (one year of history, today's IV, no rates or dividends). Buying covered
+  calls back first raises the book's risk until the share sale that follows
+  fills (the alternative, selling first, can leave calls naked). A line a
+  stop holds is not reduced while the stop works. Within an episode a grown
+  row goes out on the first notice's clock: the owner sees the current size
+  on the Protection row, not in the push. A low equity print that collapses
+  the room raises one notice that the next verdict withdraws. After any
+  fill the batch waits for the next verdict (at most two minutes).
 - **Verification** (synthetic books; `internal/daemon/mandate_reduction_test.go`,
-  `mandate_reduction_automatic_test.go`, `mandate_reduction_trading_test.go`,
-  `scorecard_authority_test.go`, `internal/app/alerts/presentation_test.go`,
+  `mandate_reduction_review_test.go`, `mandate_reduction_automatic_test.go`,
+  `mandate_reduction_trading_test.go`, `scorecard_authority_test.go`,
+  `internal/mandate/mandate_test.go`, `internal/app/alerts/presentation_test.go`,
   CLI goldens `proposals_list_mandate*`, `mandate_reduce`): the dominant
   name first and sized to the target by its smallest lot, the second name
-  only when needed; an in-the-money call two sessions before expiry first;
-  one `over` watches and two reduce, one `reduce` reduces; the streak
-  resets; `unknown`, stale and changed-book verdicts size nothing and hold a
-  standing batch with its revision; `within` withdraws, a sent record stays;
-  a latched brake keeps the veto; not pre-authorised waits for the hand;
-  pre-authorised places one order after the veto with origin
-  `daemon-preauthorised`; rank order and no hold-up after a refusal;
-  reduce-only on long and short lines; order-cap carry-over; a gap breach
-  cut to its cap; one row per contract with the governor; absent
+  only when needed; the expiry cut only by its own need; one reading
+  watches, two (or one gap breach) act, reads never count; a standing
+  batch shrinks, grows and damps one lot; a covered call bought back before
+  the shares, the shares waiting; a protective put never sold and no cut
+  making the book riskier; a stop-held line out of the plan, a partly
+  filled sale in it; the maximum loss reduces to the hedges and encodes; a
+  glitch never raises the mark; the merge under the latch and with
+  automatic channels; the veto clock kept within an episode, renewed in a
+  new one, a veto holding the line; `unknown`, stale and changed-book
+  verdicts hold a standing batch with its revision; `within` withdraws, a
+  sent record stays; a latched brake keeps the veto; not pre-authorised
+  waits for the hand; pre-authorised places one order after the veto with
+  origin `daemon-preauthorised`; the prepared submit refuses a held row;
+  rank order and no hold-up after a refusal; reduce-only on long and short
+  lines; order-cap carry-over; a gap breach cut to its cap; absent
   `[mandate]` changes nothing.
 
 ## Decision-grade history
