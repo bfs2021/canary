@@ -977,7 +977,8 @@ auto_submit = false
 # Automatic submission is yours to decide, so Canary writes no value. List the
 # protection buckets the daemon may place itself after a notice and a veto
 # window, then raise policy_version. Choices: trailing_stop, option_loss_exit,
-# option_profit_trail, budget_reduction. The cash sweep is pre-authorised in
+# option_profit_trail, budget_reduction, mandate_reduction (the reduction back
+# to the risk-policy [mandate] budget). The cash sweep is pre-authorised in
 # [cash] below; the veto window here serves both.
 # pre_authorised = []   # for example ["trailing_stop"]
 # veto_window = "30m"

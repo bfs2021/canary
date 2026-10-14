@@ -42,6 +42,54 @@ type MandateRiskResult struct {
 	Evidence *MandateEvidence `json:"evidence,omitempty"`
 	// Gate says how the additions gate reads the verdict right now.
 	Gate *MandateGateView `json:"gate,omitempty"`
+	// Reduction is the forced reduction as the proposal engine last served
+	// it: the batch waiting, held or withdrawn. Nil while inactive or before
+	// the engine has generated.
+	Reduction *MandateReductionView `json:"reduction,omitempty"`
+}
+
+// MandateReductionView is the forced reduction in brief for the mandate
+// surface: how many rows wait, until when the veto runs, whether the owner
+// pre-authorised the bucket, and a hold or a withdrawal.
+type MandateReductionView struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	// Rows is the batch; Pending the rows the daemon will place after their
+	// window (pre-authorised, with a record waiting); VetoUntil the latest
+	// window end among them.
+	Rows          int       `json:"rows"`
+	Pending       int       `json:"pending,omitempty"`
+	VetoUntil     time.Time `json:"veto_until,omitzero"`
+	PreAuthorised bool      `json:"pre_authorised"`
+	Held          bool      `json:"held,omitempty"`
+	HoldReason    string    `json:"hold_reason,omitempty"`
+	Withdrawn     int       `json:"withdrawn,omitempty"`
+	// Orders is the batch in dispatch order.
+	Orders []MandateReductionOrder `json:"orders,omitempty"`
+}
+
+// MandateReductionOrder is one row of the forced reduction as the mandate
+// surface lists it: what it sells or buys back, why, and when the daemon
+// places it unless vetoed.
+type MandateReductionOrder struct {
+	Rank     int            `json:"rank"`
+	Key      string         `json:"key"`
+	Contract ContractParams `json:"contract"`
+	Action   string         `json:"action"`
+	Quantity int            `json:"quantity"`
+	// Phase is expiry, gap or risk (MandatePhase*); ContributionPct the
+	// leg's share of the variance on the verdict it was sized on.
+	Phase           string  `json:"phase"`
+	ContributionPct float64 `json:"contribution_pct"`
+	// Automatic is the row's automatic-submission state (pending, deferred,
+	// submitting, submitted, vetoed, superseded or failed), empty when no
+	// record exists; SubmitAt is when its veto window ends.
+	Automatic string    `json:"automatic,omitempty"`
+	SubmitAt  time.Time `json:"submit_at,omitzero"`
+	// Held says the row waits for a fresh verdict; Blocked names the first
+	// blocker when the row cannot be sent right now.
+	Held    bool   `json:"held,omitempty"`
+	Blocked string `json:"blocked,omitempty"`
 }
 
 // MandatePolicyView is the [mandate] table as the daemon read it.

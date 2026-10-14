@@ -72,7 +72,9 @@ type protectionPolicyAuthority struct {
 	// PreAuthorised lists the protection buckets whose unblocked proposals
 	// the daemon places itself after recording an alert and the veto window
 	// (owner decision D3, 2026-09-21). Closed vocabulary: trailing_stop,
-	// option_loss_exit, option_profit_trail, budget_reduction. The cash
+	// option_loss_exit, option_profit_trail, budget_reduction,
+	// mandate_reduction (the mandate's forced reduction back to its risk
+	// budget, owner decision 2026-10-14 06:26 CEST). The cash
 	// sweep's pre-authorisation lives in [cash] pre_authorised; a file
 	// written before cash management moved there may still list cash_sweep
 	// here, which is read as the [cash] entry. Empty by default, so nothing
@@ -80,7 +82,7 @@ type protectionPolicyAuthority struct {
 	PreAuthorised []string `toml:"pre_authorised" json:"pre_authorised,omitempty"`
 	// VetoWindow is how long a pre-authorised proposal waits between its
 	// notice and its submission; default 30m, minimum 5m. A latched
-	// drawdown brake skips the wait except for budget reductions; the daemon
+	// drawdown brake skips the wait except for budget and mandate reductions; the daemon
 	// records alert publication, not proof of app or phone delivery.
 	VetoWindow string `toml:"veto_window" json:"veto_window,omitempty"`
 }
@@ -96,6 +98,11 @@ const (
 	// generates it (reductions back to budget while the brake is latched);
 	// listing it before that bucket exists authorises nothing.
 	preAuthorisedBucketBudgetReduction = "budget_reduction"
+	// preAuthorisedBucketMandateReduction names the mandate's forced
+	// reduction (internal-docs/design/mandate-risk-budget.md, "Forced
+	// reduction"): absent from the embedded default, so the batch waits for
+	// the owner's hand until the owner lists it. Every row is NeverSkipVeto.
+	preAuthorisedBucketMandateReduction = "mandate_reduction"
 	// preAuthorisedBucketCashSweep names the cash sweep's rows (bill buys
 	// and redemptions) in [cash] pre_authorised; each is NeverSkipVeto and
 	// held to the sweep's order cap in force.
@@ -108,7 +115,8 @@ const (
 func validPreAuthorisedBucket(name string) bool {
 	switch name {
 	case preAuthorisedBucketTrailingStop, preAuthorisedBucketOptionLossExit,
-		preAuthorisedBucketOptionProfitTrail, preAuthorisedBucketBudgetReduction:
+		preAuthorisedBucketOptionProfitTrail, preAuthorisedBucketBudgetReduction,
+		preAuthorisedBucketMandateReduction:
 		return true
 	default:
 		return false
@@ -764,7 +772,7 @@ func validateProtectionPolicy(p protectionPolicy) error {
 	}
 	for i, bucket := range p.Authority.PreAuthorised {
 		if !validPreAuthorisedBucket(bucket) {
-			return fmt.Errorf("protection policy authority.pre_authorised[%d] %q is not a pre-authorisable bucket; use trailing_stop, option_loss_exit, option_profit_trail or budget_reduction (the cash sweep is pre-authorised in [cash])", i, bucket)
+			return fmt.Errorf("protection policy authority.pre_authorised[%d] %q is not a pre-authorisable bucket; use trailing_stop, option_loss_exit, option_profit_trail, budget_reduction or mandate_reduction (the cash sweep is pre-authorised in [cash])", i, bucket)
 		}
 		if slices.Contains(p.Authority.PreAuthorised[:i], bucket) {
 			return fmt.Errorf("protection policy authority.pre_authorised lists %q twice", bucket)

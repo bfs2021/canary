@@ -65,7 +65,7 @@ import (
 // basket of up to 25 orders; a queued authorisation was signed per order by
 // the owner ahead of time; a bucket listed in the protection policy's
 // [authority] pre_authorised (trailing_stop, option_loss_exit,
-// option_profit_trail, budget_reduction) is sent by the daemon after a notice
+// option_profit_trail, budget_reduction, mandate_reduction) is sent by the daemon after a notice
 // and the veto window with no per-order approval, and the owner decided
 // (2026-10-07 12:28 CEST, "Yes, pass") that such a bucket's option exit
 // passes the caps in one order, unattended, when it meets every exit
