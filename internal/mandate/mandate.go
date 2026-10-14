@@ -11,6 +11,7 @@
 package mandate
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -120,6 +121,43 @@ type Risk struct {
 	// FXContributionPct is the Euler share of the currency part of every
 	// leg's base P&L; the local-currency part carries the rest.
 	FXContributionPct float64 `json:"fx_contribution_pct"`
+}
+
+// MarshalJSON writes a non-finite ratio (a budget of zero, at the maximum
+// loss) as null: JSON has no infinity, and an encoding failure would leave
+// readers on an older verdict.
+func (r Risk) MarshalJSON() ([]byte, error) {
+	type plain Risk
+	wire := struct {
+		plain
+		RatioToBudget *float64 `json:"ratio_to_budget"`
+	}{plain: plain(r)}
+	if !math.IsInf(r.RatioToBudget, 0) && !math.IsNaN(r.RatioToBudget) {
+		wire.RatioToBudget = &r.RatioToBudget
+	}
+	return json.Marshal(wire)
+}
+
+// UnmarshalJSON reads a null ratio back as unbounded while risk is
+// measured, the value the evaluator set.
+func (r *Risk) UnmarshalJSON(raw []byte) error {
+	type plain Risk
+	wire := struct {
+		*plain
+		RatioToBudget *float64 `json:"ratio_to_budget"`
+	}{plain: (*plain)(r)}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	switch {
+	case wire.RatioToBudget != nil:
+		r.RatioToBudget = *wire.RatioToBudget
+	case r.SDAnnualBase > 0:
+		r.RatioToBudget = math.Inf(1)
+	default:
+		r.RatioToBudget = 0
+	}
+	return nil
 }
 
 // LegReport is one leg's place in the risk.

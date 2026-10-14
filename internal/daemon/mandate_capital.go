@@ -21,6 +21,11 @@ const (
 	// mandateDailySampleKeep bounds the daily adjusted-equity samples the
 	// policy check's realised figures read.
 	mandateDailySampleKeep = 400 * 24 * time.Hour
+	// mandateHighConfirm is how far apart two readings above the high-water
+	// mark must be before the mark moves up: one glitchy equity print never
+	// raises it, which would read as a drawdown from then on and, with the
+	// forced reduction armed, sell the book back to a budget it never lost.
+	mandateHighConfirm = 5 * time.Minute
 )
 
 // mandateCapitalStateV1 is the mandate's part of riskCapitalStateFileV1.
@@ -34,6 +39,12 @@ type mandateCapitalStateV1 struct {
 	// start; HWMAsOf is the observation that set it.
 	HWMAdjustedEquity float64   `json:"hwm_adjusted_equity_base"`
 	HWMAsOf           time.Time `json:"hwm_as_of,omitzero"`
+	// PendingHigh is the lowest reading above the mark since PendingHighAt,
+	// the first of them; a reading at least mandateHighConfirm later that is
+	// still above the mark moves it to the lower of the two. Any reading at
+	// or under the mark clears it.
+	PendingHigh   float64   `json:"pending_high_adjusted_base,omitempty"`
+	PendingHighAt time.Time `json:"pending_high_at,omitzero"`
 	// FlowsAtStart is the capital store's effective cumulative flow when the
 	// series was seeded; flows since the start are measured against it.
 	FlowsAtStart float64 `json:"flows_at_start_base"`
@@ -65,17 +76,38 @@ func (st *riskCapitalStore) observeMandateLocked(c *risk.Constitution, equityBas
 		force = true
 	}
 	adjusted := equityBase - (flows - m.FlowsAtStart)
-	if !m.Seeded || adjusted > m.HWMAdjustedEquity {
+	advance := func(to float64) {
 		st.appendRiskPolicyJournal(map[string]any{
 			"version": 1, "at": now.UTC(), "kind": "mandate_hwm_advanced",
-			"from_base": m.HWMAdjustedEquity, "to_base": adjusted, "seed": !m.Seeded,
+			"from_base": m.HWMAdjustedEquity, "to_base": to, "seed": !m.Seeded,
 			"equity_base": equityBase, "equity_as_of": asOf.UTC(),
 			"policy_fingerprint": constitutionFingerprint(c),
 		})
 		m.Seeded = true
-		m.HWMAdjustedEquity = adjusted
+		m.HWMAdjustedEquity = to
 		m.HWMAsOf = asOf
 		force = true
+	}
+	switch {
+	case !m.Seeded:
+		advance(adjusted)
+	case adjusted <= m.HWMAdjustedEquity:
+		// The high did not hold: a pending reading above the mark was a
+		// glitch or a moment.
+		m.PendingHigh, m.PendingHighAt = 0, time.Time{}
+	case m.PendingHighAt.IsZero():
+		m.PendingHigh, m.PendingHighAt = adjusted, asOf
+	case asOf.Sub(m.PendingHighAt) < mandateHighConfirm:
+		m.PendingHigh = math.Min(m.PendingHigh, adjusted)
+	default:
+		// Confirmed by a reading far enough apart: the mark moves to the
+		// lower of the two, and a higher reading waits for its own.
+		to := math.Min(m.PendingHigh, adjusted)
+		advance(to)
+		m.PendingHigh, m.PendingHighAt = 0, time.Time{}
+		if adjusted > to {
+			m.PendingHigh, m.PendingHighAt = adjusted, asOf
+		}
 	}
 	if m.Daily == nil {
 		m.Daily = map[string]float64{}

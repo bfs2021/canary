@@ -285,7 +285,10 @@ func TestMandateCapitalStateHighWaterMarkAndFlows(t *testing.T) {
 		t.Fatal("an observation before the start seeded the mandate")
 	}
 	st.Observe(300000, mandateTestNow.Add(-3*24*time.Hour), c, testLiveObserveScope, true)
-	st.Observe(310000, mandateTestNow.Add(-2*24*time.Hour), c, testLiveObserveScope, true)
+	// A new high counts once a reading at least five minutes later
+	// confirms it, at the lower of the two.
+	st.Observe(312000, mandateTestNow.Add(-2*24*time.Hour), c, testLiveObserveScope, true)
+	st.Observe(310000, mandateTestNow.Add(-2*24*time.Hour+10*time.Minute), c, testLiveObserveScope, true)
 	st.Observe(295000, mandateTestNow.Add(-time.Minute), c, testLiveObserveScope, true)
 	capital, realised := st.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow)
 	if !capital.Known || capital.HWMRiskBase != 240000 || capital.RiskBase != 225000 || capital.DrawdownBase != 15000 || math.Abs(capital.DrawdownPct-6.25) > 1e-9 {
@@ -315,6 +318,38 @@ func TestMandateCapitalStateHighWaterMarkAndFlows(t *testing.T) {
 	later := mandateTestNow.Add(time.Duration(*c.Capital.MaxEquityAgeMinutes+2) * time.Minute)
 	if capital, _ = st.MandateCapitalForScope(c, brokerStateScope{}, later); capital.Known || !capital.EquityStale {
 		t.Fatalf("stale equity %+v", capital)
+	}
+}
+
+// One glitchy equity print never raises the high-water mark: a new high
+// counts once a reading at least five minutes later confirms it, at the
+// lower of the two, so a spike can never read as a drawdown from then on.
+func TestMandateHighWaterMarkIgnoresASingleGlitch(t *testing.T) {
+	st := newTestRiskCapitalStore(t)
+	st.now = func() time.Time { return mandateTestNow }
+	c := testMandateConstitution()
+	reconcileNow(t, st)
+	at := mandateTestNow.Add(-time.Hour)
+	st.Observe(300000, at, c, testLiveObserveScope, true)
+	mark := func() float64 {
+		t.Helper()
+		capital, _ := st.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow)
+		return capital.HWMRiskBase
+	}
+	seeded := mark()
+	st.Observe(600000, at.Add(time.Minute), c, testLiveObserveScope, true) // the glitch
+	st.Observe(300000, at.Add(7*time.Minute), c, testLiveObserveScope, true)
+	if got := mark(); got != seeded {
+		t.Fatalf("a single spike moved the mark: %v → %v", seeded, got)
+	}
+	st.Observe(320000, at.Add(10*time.Minute), c, testLiveObserveScope, true)
+	st.Observe(330000, at.Add(12*time.Minute), c, testLiveObserveScope, true)
+	if got := mark(); got != seeded {
+		t.Fatalf("a high confirmed too soon: %v", got)
+	}
+	st.Observe(325000, at.Add(16*time.Minute), c, testLiveObserveScope, true)
+	if got := mark(); got != seeded+20000 {
+		t.Fatalf("a confirmed high: mark %v, want %v (the lower of the readings)", got, seeded+20000)
 	}
 }
 
