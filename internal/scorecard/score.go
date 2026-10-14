@@ -119,10 +119,12 @@ func yearsToExpiry(expiry string, day time.Time) float64 {
 
 // exposure is the pre-decision regression of daily underlying log returns on
 // the market, over at most LookbackSessions sessions ending the session
-// before entry.
+// before entry. totalVol is the underlying's own daily volatility over the
+// same sessions; fitted is false when the market did not move across them.
 type exposure struct {
-	beta, idioVol float64
-	sessions      int
+	beta, idioVol, totalVol, rSquared float64
+	fitted                            bool
+	sessions                          int
 }
 
 func estimateExposure(underlying, market series, entryIdx int) (exposure, string) {
@@ -144,11 +146,23 @@ func estimateExposure(underlying, market series, entryIdx int) (exposure, string
 	if len(x) < MinLookbackSessions {
 		return exposure{}, ReasonMarketHistoryUnavailable
 	}
-	beta, sd, ok := ols(x, y)
-	if !ok || sd <= 0 {
-		return exposure{}, ReasonIdioVolZero
+	f := ols(x, y)
+	return exposure{beta: f.beta, idioVol: f.residualSD, totalVol: f.totalSD, rSquared: f.rSquared, fitted: f.ok, sessions: f.n}, ""
+}
+
+// indexBasis classifies a decision's underlying before any score: list when
+// it is on the fixed index list, r_squared when its pre-entry regression on
+// the market fits at or above IndexRSquared, empty for a single name. Only
+// pre-entry sessions enter, so the class never looks ahead.
+func indexBasis(d Decision, exp exposure, estimated bool) string {
+	switch {
+	case IndexUnderlying(d.Underlying):
+		return rpc.ScorecardIndexBasisList
+	case estimated && exp.fitted && exp.totalVol > 0 && exp.rSquared >= IndexRSquared:
+		return rpc.ScorecardIndexBasisRSquared
+	default:
+		return ""
 	}
-	return exposure{beta: beta, idioVol: sd, sessions: len(x)}, ""
 }
 
 // scoreContext is what every horizon score of one decision shares.
@@ -159,9 +173,15 @@ type scoreContext struct {
 	entryOK    bool
 	underlying series
 	market     series
-	marks      []edge.ContractMark
-	events     []edge.ContractEvent
-	exits      []exitFill
+	// exposure is estimated once per decision from pre-entry sessions;
+	// exposureReason says why it could not be. index scores z on the
+	// underlying's total volatility.
+	exposure       exposure
+	exposureReason string
+	index          bool
+	marks          []edge.ContractMark
+	events         []edge.ContractEvent
+	exits          []exitFill
 }
 
 // exitFill is a later fill on the same contract that left it flat.
@@ -199,14 +219,37 @@ func scoreHorizon(c scoreContext, h int) rpc.ScorecardHorizonScore {
 	}
 	rm := math.Log(c.market.bars[mHorizon].Close / c.market.bars[mEntry].Close)
 	out.MarketReturn = &rm
-	exp, reason := estimateExposure(c.underlying, c.market, c.entryIdx)
-	if reason != "" {
-		out.Reason = reason
+	if c.exposureReason != "" {
+		out.Reason = c.exposureReason
 		return out
 	}
-	beta, idio := exp.beta, exp.idioVol
-	out.Beta, out.IdioVolDaily = &beta, &idio
-	z := float64(c.decision.Sign) * (ru - beta*rm) / (idio * math.Sqrt(float64(h)))
+	exp := c.exposure
+	if exp.fitted {
+		beta := exp.beta
+		out.Beta = &beta
+	}
+	var z float64
+	if c.index {
+		// The index is the market, or near enough: its decisions time the
+		// market or hedge it, so z is its whole move over its whole noise.
+		if exp.totalVol <= 0 {
+			out.Reason = ReasonTotalVolZero
+			return out
+		}
+		total := exp.totalVol
+		out.TotalVolDaily = &total
+		z = float64(c.decision.Sign) * ru / (total * math.Sqrt(float64(h)))
+	} else {
+		// A single name left with no residual noise has a flat series or a
+		// flat market across the window; a perfect fit was routed to index.
+		if !exp.fitted || exp.idioVol <= 0 {
+			out.Reason = ReasonIdioVolZero
+			return out
+		}
+		idio := exp.idioVol
+		out.IdioVolDaily = &idio
+		z = float64(c.decision.Sign) * (ru - exp.beta*rm) / (idio * math.Sqrt(float64(h)))
+	}
 	out.Z = &z
 	if c.decision.Instrument != InstrumentOption {
 		out.RVIReason, out.WrapperReason = ReasonNotOption, ReasonNotOption

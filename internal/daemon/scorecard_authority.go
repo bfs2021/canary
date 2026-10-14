@@ -27,7 +27,9 @@ const (
 	scorecardBarsStateKind        = "scorecard_bars"
 	scorecardPublicationStateKind = "scorecard_publication"
 	scorecardBarsVersion          = 1
-	scorecardPublicationVersion   = 1
+	// scorecardPublicationVersion 2 separates the index streams; a version 1
+	// publication scored index decisions as single names and is not served.
+	scorecardPublicationVersion = 2
 
 	// scorecardMaxFetchesPerPass bounds the IBKR history requests one pass
 	// books on the background lane (60 per 10 minutes shared with every
