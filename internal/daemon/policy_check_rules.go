@@ -93,6 +93,8 @@ var policyCheckCatalogue = []policyCheckRule{
 		summary: "A bucket is active or pre-authorised while [trading].mode disables order entry, so its orders can never be placed.", run: checkOrderEntryOff},
 	{id: "settlement_route_expired", severity: rpc.PolicyCheckError, category: rpc.PolicyCheckCategoryContradiction,
 		summary: "A sweep currency's settlement_valid_through has passed, so every bill order in it holds.", run: checkSettlementRouteExpired},
+	{id: "mandate_keys_inconsistent", severity: rpc.PolicyCheckError, category: rpc.PolicyCheckCategoryContradiction,
+		summary: "The constitution's [mandate] keys contradict each other: a volatility target above the maximum loss, a sleeve above the target, or a start date in the future.", run: checkMandateKeys},
 	{id: "base_currency_mismatch", severity: rpc.PolicyCheckError, category: rpc.PolicyCheckCategoryBook, needsBook: true,
 		summary: "The constitution's base_currency differs from the account's, so capital math refuses every observation.", run: checkBaseCurrencyMismatch},
 	{id: "lot_above_trading_max", severity: rpc.PolicyCheckError, category: rpc.PolicyCheckCategoryBook, needsBook: true,
@@ -111,6 +113,10 @@ var policyCheckCatalogue = []policyCheckRule{
 		summary: "The protected floor leaves less than the declared risk capital above it, or sits at or above equity.", run: checkProtectedFloor},
 	{id: "declared_risk_vs_nlv", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryBook, needsBook: true,
 		summary: "Declared risk capital is above NLV or under 2% of it.", run: checkDeclaredRisk},
+	{id: "mandate_realised_drawdown", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryBook, needsBook: true,
+		summary: "The risk base has lost half or more of the mandate's maximum loss from its high-water mark, or its capital state cannot be measured.", run: checkMandateRealisedDrawdown},
+	{id: "mandate_realised_volatility", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryBook, needsBook: true,
+		summary: "The risk base's realised volatility over the last 20 or 60 days is above 1.25 times the mandate's volatility target.", run: checkMandateRealisedVolatility},
 	{id: "sweep_buys_while_borrowed", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryBook, needsBook: true,
 		summary: "no_buy_while_borrowed is false while a currency's cash is negative, so the sweep may buy bills while the account pays margin interest.", run: checkSweepBuysWhileBorrowed},
 	{id: "leveling_debit_inside_band", severity: rpc.PolicyCheckWarn, category: rpc.PolicyCheckCategoryBook, needsBook: true,
@@ -1254,4 +1260,94 @@ func checkLevelingDebitInsideBand(c *policyCheckContext) []policyCheckHit {
 			suggestion: fmt.Sprintf("Convert it yourself, lower trigger_base below %s, or set deliberate_carry = true for %s if you keep it borrowed on purpose.", policyCheckMoney(policyCheckRoundDown(debit), c.base()), ccy)})
 	}
 	return out
+}
+
+// checkMandateKeys reads the [mandate] table against itself.
+func checkMandateKeys(c *policyCheckContext) []policyCheckHit {
+	k := c.constitution
+	if k == nil || k.Mandate == nil {
+		return nil
+	}
+	m := k.Mandate
+	var hits []policyCheckHit
+	if m.MaxLossPct != nil && m.VolTargetPct != nil && *m.VolTargetPct > *m.MaxLossPct {
+		hits = append(hits, policyCheckHit{keys: []rpc.PolicyCheckKey{c.constitutionKey("mandate", "vol_target_pct", policyCheckPct(*m.VolTargetPct/100)), c.constitutionKey("mandate", "max_loss_pct", policyCheckPct(*m.MaxLossPct/100))},
+			message:    fmt.Sprintf("The volatility target %s a year is above the maximum loss %s: one ordinary year of the budgeted volatility can lose more than the mandate tolerates.", policyCheckPct(*m.VolTargetPct/100), policyCheckPct(*m.MaxLossPct/100)),
+			suggestion: fmt.Sprintf("Set vol_target_pct to %s (half the maximum loss, the owner's rule of 2026-10-14).", policyCheckPct(*m.MaxLossPct/200))})
+	}
+	if m.Sleeves != nil && m.VolTargetPct != nil {
+		for _, sl := range []struct {
+			key string
+			v   *float64
+		}{{"owner_vol_pct", m.Sleeves.OwnerVolPct}, {"core_vol_pct", m.Sleeves.CoreVolPct}, {"overlay_vol_pct", m.Sleeves.OverlayVolPct}} {
+			if sl.v != nil && *sl.v > *m.VolTargetPct {
+				hits = append(hits, policyCheckHit{keys: []rpc.PolicyCheckKey{c.constitutionKey("mandate.sleeves", sl.key, policyCheckPct(*sl.v/100)), c.constitutionKey("mandate", "vol_target_pct", policyCheckPct(*m.VolTargetPct/100))},
+					message:    fmt.Sprintf("The sleeve share %s = %s is above the whole book's volatility target %s, so that sleeve alone could use more than the budget.", sl.key, policyCheckPct(*sl.v/100), policyCheckPct(*m.VolTargetPct/100)),
+					suggestion: "Set the sleeve at or below vol_target_pct."})
+			}
+		}
+	}
+	if start, ok := m.MandateStart(); ok && start.After(c.now) {
+		hits = append(hits, policyCheckHit{keys: []rpc.PolicyCheckKey{c.constitutionKey("mandate", "started_at", m.StartedAt)},
+			message:    fmt.Sprintf("The mandate starts on %s, after today: no observation seeds the high-water mark until then, so the verdict reads unknown and every risk-adding order is refused.", m.StartedAt),
+			suggestion: "Set started_at to today or an earlier date."})
+	}
+	return hits
+}
+
+// checkMandateRealisedDrawdown reads the risk base's drawdown from its
+// high-water mark against the maximum loss.
+func checkMandateRealisedDrawdown(c *policyCheckContext) []policyCheckHit {
+	k := c.constitution
+	if k == nil || k.Mandate == nil || k.Mandate.MaxLossPct == nil || c.mandate == nil {
+		return nil
+	}
+	maxLoss := *k.Mandate.MaxLossPct
+	keys := []rpc.PolicyCheckKey{c.constitutionKey("mandate", "max_loss_pct", policyCheckPct(maxLoss/100))}
+	if !c.mandate.Known {
+		return []policyCheckHit{{keys: keys,
+			message:    "The mandate's capital state cannot be measured: " + nonEmptyString(c.mandate.Reason, "no reason given") + ". While it cannot, the verdict reads unknown and every risk-adding order is refused.",
+			suggestion: "Read `canary mandate` for the missing evidence; a fresh account reading or the written keys usually settle it."}}
+	}
+	if c.mandate.DrawdownPct < maxLoss/2 {
+		return nil
+	}
+	keys = append(keys, rpc.PolicyCheckKey{File: "daemon state", Key: "mandate drawdown", Value: policyCheckPct(c.mandate.DrawdownPct / 100)})
+	return []policyCheckHit{{keys: keys,
+		message: fmt.Sprintf("The risk base is %s below its high-water mark, %s of the mandate's maximum loss %s: the room left is %s, so the volatility budget is %s of its full size.",
+			policyCheckPct(c.mandate.DrawdownPct/100), policyCheckPct(c.mandate.DrawdownPct/maxLoss), policyCheckPct(maxLoss/100), policyCheckPct(c.mandate.Room), policyCheckPct(c.mandate.Room)),
+		suggestion: "No key to change: the budget shrinks with the room by design. Reduce exposure, or decide a new start if the loss has been accepted."}}
+}
+
+// checkMandateRealisedVolatility reads the risk base's realised volatility
+// against the target: above 1.25 times the target the verdict would read
+// reduce on the realised figure alone.
+func checkMandateRealisedVolatility(c *policyCheckContext) []policyCheckHit {
+	k := c.constitution
+	if k == nil || k.Mandate == nil || k.Mandate.VolTargetPct == nil || c.mandate == nil {
+		return nil
+	}
+	target := *k.Mandate.VolTargetPct
+	limit := target * 1.25
+	var over []string
+	var keys []rpc.PolicyCheckKey
+	for _, w := range []struct {
+		days int
+		v    *float64
+	}{{20, c.mandate.Vol20Pct}, {60, c.mandate.Vol60Pct}} {
+		if w.v == nil {
+			continue
+		}
+		keys = append(keys, rpc.PolicyCheckKey{File: "daemon state", Key: fmt.Sprintf("realised volatility (%d days)", w.days), Value: policyCheckPct(*w.v / 100)})
+		if *w.v > limit {
+			over = append(over, fmt.Sprintf("%s over %d days", policyCheckPct(*w.v/100), w.days))
+		}
+	}
+	if len(over) == 0 {
+		return nil
+	}
+	keys = append(keys, c.constitutionKey("mandate", "vol_target_pct", policyCheckPct(target/100)))
+	return []policyCheckHit{{keys: keys,
+		message:    fmt.Sprintf("The risk base's realised volatility (%s, annualised) is above 1.25 times the target %s: the book has been moving more than the budget allows for, whatever the ex-ante measure says.", strings.Join(over, ", "), policyCheckPct(target/100)),
+		suggestion: "Reduce exposure until the realised figure is inside the target, or revise the target with a higher policy_version."}}
 }
