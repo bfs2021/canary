@@ -6,13 +6,24 @@ import (
 	"sort"
 )
 
-// ols regresses y on x with an intercept and returns the slope and the
-// residual standard deviation (n−2 degrees of freedom). ok is false below
-// three pairs or with a degenerate regressor.
-func ols(x, y []float64) (beta, residualSD float64, ok bool) {
+// fit is an OLS regression of y on x with an intercept. ok is false below
+// three pairs or when x has no variance; totalSD and the sample size stand
+// regardless.
+type fit struct {
+	beta float64
+	// residualSD is the residual standard deviation (n−2 degrees of
+	// freedom); totalSD is y's own sample standard deviation (n−1).
+	residualSD, totalSD float64
+	// rSquared is 1 − SSE/SST; 0 when y has no variance.
+	rSquared float64
+	n        int
+	ok       bool
+}
+
+func ols(x, y []float64) fit {
 	n := len(x)
-	if n < 3 || len(y) != n {
-		return 0, 0, false
+	if len(y) != n || n < 2 {
+		return fit{n: n}
 	}
 	var sumX, sumY float64
 	for i := range n {
@@ -20,24 +31,30 @@ func ols(x, y []float64) (beta, residualSD float64, ok bool) {
 		sumY += y[i]
 	}
 	meanX, meanY := sumX/float64(n), sumY/float64(n)
-	var sxx, sxy float64
+	var sxx, sxy, syy float64
 	for i := range n {
-		dx := x[i] - meanX
+		dx, dy := x[i]-meanX, y[i]-meanY
 		sxx += dx * dx
-		sxy += dx * (y[i] - meanY)
+		sxy += dx * dy
+		syy += dy * dy
 	}
-	if sxx <= 0 {
-		return 0, 0, false
+	out := fit{n: n, totalSD: math.Sqrt(syy / float64(n-1))}
+	if n < 3 || sxx <= 0 {
+		return out
 	}
-	beta = sxy / sxx
-	alpha := meanY - beta*meanX
+	out.beta = sxy / sxx
+	alpha := meanY - out.beta*meanX
 	var sse float64
 	for i := range n {
-		e := y[i] - alpha - beta*x[i]
+		e := y[i] - alpha - out.beta*x[i]
 		sse += e * e
 	}
-	residualSD = math.Sqrt(sse / float64(n-2))
-	return beta, residualSD, true
+	out.residualSD = math.Sqrt(sse / float64(n-2))
+	if syy > 0 {
+		out.rSquared = max(0, 1-sse/syy)
+	}
+	out.ok = true
+	return out
 }
 
 func mean(values []float64) float64 {

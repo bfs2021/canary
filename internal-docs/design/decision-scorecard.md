@@ -60,6 +60,42 @@ exit) is reported per sleeve with the same statistics and never gates. A
 flip (long to short in one fill) is Edge's exit part plus its open part, each
 in its own stream.
 
+### Index streams
+
+Added 2026-10-14 09:45 CEST (branch `scorecard-index`). A decision on an
+underlying that is the market proxy, or effectively the market, is market
+timing or a hedge: a different skill from single-name selection. Regressed on
+SPY such an underlying leaves no idiosyncratic noise (SPY on itself fits
+exactly), so the single-name z was undefined (`idio_vol_zero`) or, for a near
+fit such as SPX, a ratio over residual noise close to zero. A decision's
+underlying is an index when either holds:
+
+- its symbol is on the fixed list of broad index products: SPY, SPX, SPXW,
+  XSP, QQQ, NDX, IWM, RUT, DIA (`scorecard.IndexUnderlying`);
+- its pre-entry regression on SPY (the window and the at-least-60-sessions
+  rule of the direction score below) has R² ≥ 0.90 (`IndexRSquared`), which
+  catches the broad-market ETFs off the list.
+
+An index decision is scored as z = sign × r_u / (σ_total·√h), where σ_total
+is the sample standard deviation of the underlying's own daily log returns
+over the same pre-entry window as β; nothing after entry enters σ_total, R²
+or the class. It is published in `index_entries` (open, add) or `index_exits`
+(trim, exit) of its sleeve, reported with the same statistics as exits and
+never gated, so the gated single-name `entries` stream holds selection
+decisions only. The split mirrors entries and exits: whether the index moved
+the way an opened hedge or market bet positioned for is a different question
+from whether it moved against a position after it was cut, and many index
+exits are hedge rolls and expiry closes that would dilute the entry timing
+read. `index_entries` also reports the realised-vs-implied median of its bought
+puts (`long_put_realised_vs_implied`): did the hedges realise the move they
+paid for?
+
+The class needs history (R²), so it is derived at evaluation time like the
+other entry facts: the ledger row keeps its action stream, the published
+decision carries the index stream with `entry.index_basis` (`list` or
+`r_squared`) and `entry.market_r_squared`. A name off the list reads as a
+single name until its pre-entry history is cached.
+
 ### The rule sleeve
 
 Fills that Canary's own rules or the broker's lifecycle produced are the
@@ -122,16 +158,23 @@ Horizons h ∈ {5, 10, 21} sessions after the execution session; the primary
 horizon is 10. A decision matures at a horizon once the cache holds the close
 h sessions after entry.
 
-- Direction: z = sign × (r_u − β·r_SPY) / (σ_idio·√h), where r_u and r_SPY
+- Direction: z = sign × (r_u − β·r_SPY) / (σ_idio·√h) for a single name and
+  z = sign × r_u / (σ_total·√h) for an index (above), where r_u and r_SPY
   are log returns from the execution-session close to the close h sessions
-  later, and β and σ_idio come from an OLS of daily log returns on SPY over
-  the 252 sessions ending the session before the decision. Nothing after the
-  entry enters β or σ. At least 60 overlapping sessions are required. Entry
+  later, and β, σ_idio, σ_total and R² come from an OLS of daily log returns
+  on SPY over the 252 sessions ending the session before the decision.
+  Nothing after the entry enters β or σ. At least 60 overlapping sessions are
+  required. Entry
   is measured from the close of the execution session, not from the fill:
   the intraday move after the fill is excluded, which is conservative (a
   fill that was right within the day earns nothing for it) and avoids any
   intraday look-ahead, since the daemon holds no intraday history for the
   fill's session.
+- Degenerate volatility: a perfect fit is now an index, so `idio_vol_zero`
+  remains only for a single name whose closes did not move across the
+  window (a halted or stale series, where R² is undefined) or, as a guard,
+  when SPY itself did not move; `total_vol_zero` is an index whose own closes
+  did not move.
 - Realised-vs-implied (options): |r_u| / (IV·√(h/252)).
 - Wrapper (options): option P&L over the horizon, or to exit when earlier,
   minus the P&L of a static delta-equivalent stock position (delta at entry ×
@@ -152,8 +195,9 @@ h sessions after entry.
 
 At the primary horizon, the decisions of one sleeve and stream are grouped
 into clusters by ISO week of entry and each cluster contributes its mean z
-once. The entries stream carries the gates below; the exits stream reports
-the same figures with no gate. With n clusters and running sum S_n:
+once. The entries stream carries the gates below; the exits, index_entries
+and index_exits streams report the same figures with no gate. With n
+clusters and running sum S_n:
 
 - Posterior on IC with prior N(0, 0.1²) and unit variance per cluster mean:
   mean S_n/(100+n), variance 1/(100+n); P(IC > 0.05) and P(IC > 0.1).
@@ -164,7 +208,8 @@ the same figures with no gate. With n clusters and running sum S_n:
   clusters (the sign of SPY's mean horizon return within the cluster);
   `futile` when n ≥ 60 and P(IC > 0.1) < 0.05; otherwise `accruing`.
 - Also the wrapper mean with a 95% bootstrap interval (1,000 resamples,
-  seeded) and the realised-vs-implied median.
+  seeded) and the realised-vs-implied median; index_entries adds the median
+  over its bought puts.
 - Holm correction across sleeves' entries streams when more than one sleeve
   is live (`scorecard.Holm`); only `owner` exists today, so it is a
   pass-through. The rule sleeve is never a live sleeve.
@@ -183,13 +228,17 @@ compute a score. `canary scorecard [--sleeve S] [--horizon 5|10|21] [--json]`
 and the MCP tool `canary_scorecard` fetch it through `scorecard.Fetch`. The
 CLI says in plain words what the numbers mean and how large the sample is; a
 sleeve is never called skilled before `established`, and `accruing` reads as
-"not enough evidence yet".
+"not enough evidence yet". It shows each sleeve's entries, then exits, then
+its index streams once the sleeve has an index decision, each with a
+one-line meaning ("market timing and hedges: did the index move the way the
+decision positioned for?").
 
 The worker runs after start, every two hours, and when Edge's statement
-evidence changes. The publication (`scorecard_publication`, version 1) carries the
+evidence changes. The publication (`scorecard_publication`, version 2 since
+the index streams; a version 1 publication is not served) carries the
 evidence per sleeve and stream, the decisions with their scores and the
-coverage counts (entries, exits, rule-originated by origin, unknown by
-reason).
+coverage counts (entries, exits, index entries, index exits, rule-originated
+by origin, unknown by reason).
 
 ## Tests
 
@@ -201,7 +250,12 @@ IC 0.3 is established at the closed-form cluster count and in a seeded
 simulation; β and σ use only pre-decision sessions (a look-ahead sentinel in
 later bars changes nothing); Black-Scholes IV round-trips; direction sign for
 long and short puts and calls; a week counts once however many decisions it
-holds; missing history is unknown, not zero. `internal/edge`: position changes
+holds; missing history is unknown, not zero; a SPY option is scored on total
+volatility in index_entries with the bought-put median; a broad ETF off the
+list with R² ≥ 0.90 is routed to the index streams while a list member is
+routed whatever its fit; a single name keeps the market-adjusted z exactly;
+post-entry bars change neither σ_total, R² nor the class; only flat series
+leave `idio_vol_zero` and `total_vol_zero`. `internal/edge`: position changes
 match Edge's own classification. `internal/daemon`: the ledger appends a
 decision once and reloads it; the resolver tags proposal buckets and daemon
 origins as rule and leaves hand and TWS fills to the owner. `internal/cli`: golden render. `internal/stress`:

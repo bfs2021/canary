@@ -68,16 +68,39 @@ func Evaluate(in Input) rpc.ScorecardResult {
 		if d.Stream == "" {
 			d.Stream = StreamOf(d.Action)
 		}
-		if d.Sleeve == rpc.ScorecardSleeveRule {
-			out.Coverage.RuleOriginated[firstNonEmpty(d.Origin, "rule")]++
-		} else if d.Stream == rpc.ScorecardStreamEntries {
-			out.Coverage.Entries++
-		} else {
-			out.Coverage.Exits++
-		}
 		underlying := seriesFor(d.UnderlyingConID)
 		entry, entryIdx, entryOK := entryFacts(d, underlying)
-		c := scoreContext{decision: d, entry: entry, entryIdx: entryIdx, entryOK: entryOK, underlying: underlying, market: market, marks: in.Marks[d.ConID], events: in.Events[d.ConID], exits: exits[d.ConID]}
+		var exp exposure
+		expReason, estimated := "", false
+		if entryOK {
+			exp, expReason = estimateExposure(underlying, market, entryIdx)
+			estimated = expReason == ""
+			if estimated && exp.fitted && exp.totalVol > 0 {
+				r2 := exp.rSquared
+				entry.MarketRSquared = &r2
+			}
+		}
+		// The stream is decided at evaluation, from pre-entry history: the
+		// ledger row keeps its action stream, an index decision is published
+		// in the index counterpart.
+		entry.IndexBasis = indexBasis(d, exp, estimated)
+		if entry.IndexBasis != "" {
+			d.Stream = indexStream(d.Stream)
+		}
+		switch {
+		case d.Sleeve == rpc.ScorecardSleeveRule:
+			out.Coverage.RuleOriginated[firstNonEmpty(d.Origin, "rule")]++
+		case d.Stream == rpc.ScorecardStreamEntries:
+			out.Coverage.Entries++
+		case d.Stream == rpc.ScorecardStreamExits:
+			out.Coverage.Exits++
+		case d.Stream == rpc.ScorecardStreamIndexEntries:
+			out.Coverage.IndexEntries++
+		default:
+			out.Coverage.IndexExits++
+		}
+		c := scoreContext{decision: d, entry: entry, entryIdx: entryIdx, entryOK: entryOK, underlying: underlying, market: market,
+			exposure: exp, exposureReason: expReason, index: entry.IndexBasis != "", marks: in.Marks[d.ConID], events: in.Events[d.ConID], exits: exits[d.ConID]}
 		scores := make([]rpc.ScorecardHorizonScore, 0, len(Horizons))
 		for _, h := range Horizons {
 			score := scoreHorizon(c, h)
@@ -106,7 +129,7 @@ func Evaluate(in Input) rpc.ScorecardResult {
 	sort.Strings(names)
 	for _, h := range Horizons {
 		for _, name := range names {
-			for _, stream := range []string{rpc.ScorecardStreamEntries, rpc.ScorecardStreamExits} {
+			for _, stream := range scorecardStreams {
 				var decisions []Decision
 				var scores []rpc.ScorecardHorizonScore
 				for _, row := range rows {
@@ -134,6 +157,10 @@ func Evaluate(in Input) rpc.ScorecardResult {
 	out.DecisionsTotal = len(out.Decisions)
 	return out
 }
+
+// scorecardStreams is the publication order of a sleeve's streams: the
+// single-name entries and exits, then the index entries and exits.
+var scorecardStreams = [...]string{rpc.ScorecardStreamEntries, rpc.ScorecardStreamExits, rpc.ScorecardStreamIndexEntries, rpc.ScorecardStreamIndexExits}
 
 func horizonIndex(h int) int {
 	for i, value := range Horizons {
@@ -169,7 +196,8 @@ type cluster struct {
 
 // sleeveEvidence accumulates one sleeve stream's evidence at one horizon:
 // each sleeve × entry-week cluster counts once, through the mean z of its
-// decisions. Only the entries stream is gated.
+// decisions. Only the entries stream is gated; the index entries stream also
+// reports the realised-vs-implied median of its bought puts.
 func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []rpc.ScorecardHorizonScore) rpc.ScorecardSleeve {
 	gated := stream == rpc.ScorecardStreamEntries
 	out := rpc.ScorecardSleeve{Sleeve: name, Stream: stream, Horizon: h, Gated: gated, Decisions: len(decisions), Unknown: map[string]int{}}
@@ -177,7 +205,7 @@ func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []r
 		out.Gate = rpc.ScorecardGateAccruing
 	}
 	byKey := map[string]*cluster{}
-	var wrappers, rvis []float64
+	var wrappers, rvis, longPutRVIs []float64
 	for i, score := range scores {
 		if score.Z == nil {
 			if score.Reason != "" {
@@ -202,6 +230,9 @@ func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []r
 		}
 		if score.RealisedVsImplied != nil {
 			rvis = append(rvis, *score.RealisedVsImplied)
+			if stream == rpc.ScorecardStreamIndexEntries && longPut(decisions[i]) {
+				longPutRVIs = append(longPutRVIs, *score.RealisedVsImplied)
+			}
 		}
 	}
 	clusters := make([]*cluster, 0, len(byKey))
@@ -229,6 +260,9 @@ func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []r
 	}
 	if len(rvis) > 0 {
 		out.RealisedVsImplied = &rpc.ScorecardRealisedVsImplied{Count: len(rvis), Median: median(rvis)}
+	}
+	if len(longPutRVIs) > 0 {
+		out.LongPutRealisedVsImplied = &rpc.ScorecardRealisedVsImplied{Count: len(longPutRVIs), Median: median(longPutRVIs)}
 	}
 	if n == 0 {
 		out.EValueAgainst = true
@@ -271,6 +305,12 @@ func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []r
 		out.Gate = rpc.ScorecardGateAccruing
 	}
 	return out
+}
+
+// longPut reports whether a decision buys a put: in the index entries
+// stream, a hedge that pays when the market falls.
+func longPut(d Decision) bool {
+	return d.Instrument == InstrumentOption && d.Option != nil && d.Option.Right == RightPut && d.Side == SideBuy
 }
 
 func sameSign(a, b float64) bool {
@@ -318,9 +358,10 @@ func publicDecision(d Decision, entry rpc.ScorecardEntry, scores []rpc.Scorecard
 
 func defaultMethod() rpc.ScorecardMethod {
 	return rpc.ScorecardMethod{
-		Direction:           "z = sign × (r_u − β·r_SPY) / (σ_idio·√h): log returns from the execution-session close to the close h sessions later, so the intraday move after the fill is excluded; sign is +1 for long exposure and −1 for short (a long put or short call is −1).",
-		Lookback:            "β and σ_idio from an OLS of daily log returns on SPY over the 252 sessions ending the session before entry; at least 60 sessions; nothing after entry enters.",
-		Streams:             "Entries (open, add) ask whether the name moves with the decision and carry the gates and the Holm correction; exits (trim, exit) ask whether it moves against the position afterwards and are reported with the same statistics, never gated. Fills Canary's rules or the broker's lifecycle produced are the rule sleeve and count for no owner stream.",
+		Direction:           "Single names: z = sign × (r_u − β·r_SPY) / (σ_idio·√h); index underlyings: z = sign × r_u / (σ_total·√h). Log returns run from the execution-session close to the close h sessions later, so the intraday move after the fill is excluded; sign is +1 for long exposure and −1 for short (a long put or short call is −1).",
+		Index:               "An underlying is an index when it is SPY, SPX, SPXW, XSP, QQQ, NDX, IWM, RUT or DIA, or when its pre-entry regression on SPY has R² ≥ 0.90: it is the market, or near enough, so its decisions are market timing and hedges and a market-adjusted residual is noise. σ_total is the standard deviation of its own daily log returns over the same pre-entry window.",
+		Lookback:            "β, σ_idio, σ_total and R² from an OLS of daily log returns on SPY over the 252 sessions ending the session before entry; at least 60 sessions; nothing after entry enters.",
+		Streams:             "Entries (open, add) ask whether the name moves with the decision and carry the gates and the Holm correction; exits (trim, exit) ask whether it moves against the position afterwards and are reported with the same statistics, never gated. Decisions on an index underlying form index_entries and index_exits (did the index move the way the decision positioned for?), reported with the same statistics plus the realised-vs-implied median of bought puts, never gated. Fills Canary's rules or the broker's lifecycle produced are the rule sleeve and count for no owner stream.",
 		Clusters:            "Decisions in one sleeve, stream and ISO entry week form one cluster that counts once through its mean z.",
 		Posterior:           "Posterior on IC with prior N(0, 0.1²) and unit variance per cluster mean: P(IC > 0.05) and P(IC > 0.10).",
 		EValue:              "Mixture-SPRT e-value E_n = (1+nτ²)^(−1/2)·exp(τ²S_n²/(2(1+nτ²))), τ = 0.2, reported only while S_n > 0, else 0 (against).",

@@ -69,7 +69,8 @@ func renderScorecard(env *Env, res rpc.ScorecardResult, horizon int) {
 
 	shown := 0
 	for _, sleeve := range res.Sleeves {
-		if sleeve.Horizon != horizon {
+		// An index stream appears once the sleeve has an index decision.
+		if sleeve.Horizon != horizon || (scorecardIndexStream(sleeve.Stream) && sleeve.Decisions == 0) {
 			continue
 		}
 		shown++
@@ -83,7 +84,8 @@ func renderScorecard(env *Env, res rpc.ScorecardResult, horizon int) {
 	renderScorecardDecisions(env, res, horizon)
 	fmt.Fprintln(out)
 	riskReadLine(env, "Coverage", fmt.Sprintf("%d decisions in the ledger", res.Coverage.Ledger), fmt.Sprintf("%d stock", res.Coverage.Stocks), fmt.Sprintf("%d option", res.Coverage.Options),
-		fmt.Sprintf("%d entries", res.Coverage.Entries), fmt.Sprintf("%d exits", res.Coverage.Exits), scorecardCounts("rule-originated, in no owner stream", res.Coverage.RuleOriginated),
+		fmt.Sprintf("%d entries", res.Coverage.Entries), fmt.Sprintf("%d exits", res.Coverage.Exits),
+		fmt.Sprintf("%d index entries", res.Coverage.IndexEntries), fmt.Sprintf("%d index exits", res.Coverage.IndexExits), scorecardCounts("rule-originated, in no owner stream", res.Coverage.RuleOriginated),
 		scorecardCounts("skipped", res.Coverage.Skipped), scorecardCounts("unknown", res.Coverage.UnknownByReason))
 	history := fmt.Sprintf("%d names", res.History.Names)
 	if res.History.Missing > 0 || res.History.Pending > 0 {
@@ -91,7 +93,7 @@ func renderScorecard(env *Env, res rpc.ScorecardResult, horizon int) {
 	}
 	riskReadLine(env, "History", history, fmt.Sprintf("%s %d sessions", res.History.MarketSymbol, res.History.MarketBars))
 	fmt.Fprintln(out)
-	riskReadLine(env, "Reading", "z is the underlying's move from the close of the fill's session, net of its market exposure, in units of its own daily noise; positive means the move went the decision's way. Entries (opens and adds) carry the gates; exits (trims and exits) are reported, never gated. Each entry week counts once. The e-value is the weight of evidence for information in the decisions (100 is the bar); the posterior gives the chance the true mean z per week exceeds 0.05 and 0.10.")
+	riskReadLine(env, "Reading", "z is the underlying's move from the close of the fill's session, net of its market exposure, in units of its own daily noise; positive means the move went the decision's way. On an index (SPY, SPX, QQQ and the like, or a name that moves with SPY at R² 0.90 or more) z is the index's whole move in units of its whole daily noise. Entries (opens and adds) carry the gates; exits (trims and exits) and the index streams are reported, never gated. Each entry week counts once. The e-value is the weight of evidence for information in the decisions (100 is the bar); the posterior gives the chance the true mean z per week exceeds 0.05 and 0.10.")
 	riskReadLine(env, "", "A sleeve is established only when every gate on its entries passes; until then nothing here says whether the decisions carry information. Fills made by Canary's rules or the broker's lifecycle are the rule sleeve and count for no one. Read-only review of past fills; it places no orders.")
 }
 
@@ -123,10 +125,21 @@ func scorecardOtherHorizons(res rpc.ScorecardResult, horizon int) string {
 	return strings.Join(others, ", ")
 }
 
+// scorecardReportedStreams names each ungated stream and says in one line
+// what it asks.
+var scorecardReportedStreams = map[string]struct{ title, meaning string }{
+	rpc.ScorecardStreamExits:        {"exits", "Trims and exits: did the name move against the position afterwards? Exit timing is a different skill from entry selection and never gates the sleeve."},
+	rpc.ScorecardStreamIndexEntries: {"index entries", "Market timing and hedges: did the index move the way the decision positioned for? A different skill from single-name selection; never gates the sleeve."},
+	rpc.ScorecardStreamIndexExits:   {"index exits", "Index trims and exits: did the index move against the position afterwards? Never gates the sleeve."},
+}
+
 func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
 	if !s.Gated {
-		riskDisplayLine(env, env.bold("Sleeve "+s.Sleeve+" · exits")+"  ", "REPORTED, NOT GATED", func(t string) string { return env.dim(env.bold(t)) })
-		riskDisplayLine(env, "  ", "Trims and exits: did the name move against the position afterwards? Exit timing is a different skill from entry selection and never gates the sleeve.", nil)
+		stream := scorecardReportedStreams[s.Stream]
+		riskDisplayLine(env, env.bold("Sleeve "+s.Sleeve+" · "+firstNonEmptyCLI(stream.title, strings.ReplaceAll(s.Stream, "_", " ")))+"  ", "REPORTED, NOT GATED", func(t string) string { return env.dim(env.bold(t)) })
+		if stream.meaning != "" {
+			riskDisplayLine(env, "  ", stream.meaning, nil)
+		}
 	} else {
 		gate := strings.ToUpper(s.Gate)
 		tone := ""
@@ -155,13 +168,16 @@ func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
 	halves := "halves " + scorecardSigned(s.Gates.FirstHalfMeanZ, 2) + " / " + scorecardSigned(s.Gates.SecondHalfMeanZ, 2)
 	markets := fmt.Sprintf("up markets %s (%d) / down %s (%d)", scorecardSigned(s.Gates.UpMarketMeanZ, 2), s.Gates.UpClusters, scorecardSigned(s.Gates.DownMarketMeanZ, 2), s.Gates.DownClusters)
 	riskReadLine(env, "  Consistency", halves, markets)
-	if s.Wrapper != nil || s.RealisedVsImplied != nil {
+	if s.Wrapper != nil || s.RealisedVsImplied != nil || s.LongPutRealisedVsImplied != nil {
 		values := []string{}
 		if w := s.Wrapper; w != nil {
 			values = append(values, fmt.Sprintf("wrapper mean %s (95%% %s to %s) over %d", formatMoneyCcyForPnL(w.MeanBase, base), formatMoneyCcyForPnL(w.CILow, base), formatMoneyCcyForPnL(w.CIHigh, base), w.Count))
 		}
 		if r := s.RealisedVsImplied; r != nil {
 			values = append(values, fmt.Sprintf("realised/implied median %.2f over %d", r.Median, r.Count))
+		}
+		if r := s.LongPutRealisedVsImplied; r != nil {
+			values = append(values, fmt.Sprintf("bought puts realised/implied median %.2f over %d", r.Median, r.Count))
 		}
 		riskReadLine(env, "  Options", values...)
 	}
@@ -171,6 +187,10 @@ func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
 	if unknown := scorecardCounts("", s.Unknown); unknown != "" {
 		riskReadLine(env, "  Unknown", unknown)
 	}
+}
+
+func scorecardIndexStream(stream string) bool {
+	return stream == rpc.ScorecardStreamIndexEntries || stream == rpc.ScorecardStreamIndexExits
 }
 
 func scorecardGateWords(s rpc.ScorecardSleeve) string {
@@ -257,6 +277,9 @@ func scorecardDecisionNote(d rpc.ScorecardDecision, score *rpc.ScorecardHorizonS
 	parts := []string{}
 	if d.Sleeve == rpc.ScorecardSleeveRule {
 		parts = append(parts, "rule "+strings.ReplaceAll(strings.ReplaceAll(d.Origin, "proposal:", ""), "_", " ")+", counts for no one")
+	}
+	if scorecardIndexStream(d.Stream) {
+		parts = append(parts, "index")
 	}
 	if score.Z == nil {
 		if score.Reason != "" {

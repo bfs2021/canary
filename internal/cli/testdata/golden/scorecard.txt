@@ -24,26 +24,41 @@ Sleeve owner · exits  REPORTED, NOT GATED
   Consistency · halves -0.30 / +0.06 · up markets -0.20 (2) / down +0.04 (2)
   Unknown · immature 2
 
-Latest decisions · 4 of 24
+Sleeve owner · index entries  REPORTED, NOT GATED
+  Market timing and hedges: did the index move the way the decision positioned
+  for? A different skill from single-name selection; never gates the sleeve.
+  Sample · 4 decisions · 3 scored · 3 entry weeks (each counts once)
+  Mean z per week · +0.42 · running sum +1.3
+  Evidence · e-value 1.0 of 100 · P(IC > 0.05) 0.35 · P(IC > 0.10) 0.18
+  Consistency · halves +0.90 / +0.18 · up markets -0.35 (2) / down +1.19 (1)
+  Options · wrapper mean -€ 220.00 (95% -€ 610.00 to € 140.00) over 3 ·
+    realised/implied median 0.71 over 3 · bought puts realised/implied median
+    0.63 over 2
+  Unknown · immature 1
+
+Latest decisions · 5 of 28
   DATE       NAME     ACT   SIDE      QTY      z  NOTE
+  2026-08-27 SPY P    open  buy         2  -0.48  index, wrapper -€ 310.40, moved 0.5x implied
   2026-08-26 SYND     exit  sell       25  +0.90  rule trailing stop, counts for no one
   2026-08-24 SYNA C   open  buy         3  +1.12  wrapper -€ 96.30, moved 0.6x implied
   2026-08-21 SYNB     trim  sell       40  -0.62
   2026-08-14 SYNC     open  buy        15      —  history unavailable
 
-Coverage · 24 decisions in the ledger · 15 stock · 9 option · 14 entries · 7
-  exits · rule-originated, in no owner stream: lifecycle 1, proposal:trailing
-  stop 2 · skipped: unsupported asset 2 · unknown: history unavailable 6,
-  immature 14
+Coverage · 28 decisions in the ledger · 15 stock · 13 option · 14 entries · 7
+  exits · 4 index entries · 0 index exits · rule-originated, in no owner stream:
+  lifecycle 1, proposal:trailing stop 2 · skipped: unsupported asset 2 ·
+  unknown: history unavailable 6, immature 16
 History · 11 names, 1 without history, 0 still to fetch · SPY 530 sessions
 
 Reading · z is the underlying's move from the close of the fill's session, net
   of its market exposure, in units of its own daily noise; positive means the
-  move went the decision's way. Entries (opens and adds) carry the gates; exits
-  (trims and exits) are reported, never gated. Each entry week counts once. The
-  e-value is the weight of evidence for information in the decisions (100 is the
-  bar); the posterior gives the chance the true mean z per week exceeds 0.05 and
-  0.10.
+  move went the decision's way. On an index (SPY, SPX, QQQ and the like, or a
+  name that moves with SPY at R² 0.90 or more) z is the index's whole move in
+  units of its whole daily noise. Entries (opens and adds) carry the gates;
+  exits (trims and exits) and the index streams are reported, never gated. Each
+  entry week counts once. The e-value is the weight of evidence for information
+  in the decisions (100 is the bar); the posterior gives the chance the true
+  mean z per week exceeds 0.05 and 0.10.
 A sleeve is established only when every gate on its entries passes; until then
   nothing here says whether the decisions carry information. Fills made by
   Canary's rules or the broker's lifecycle are the rule sleeve and count for no
@@ -74,26 +89,41 @@ Horizon · 10 sessions after entry · primary 10 · others 5, 21
   Consistency · halves -0.30 / +0.06 · up markets -0.20 (2) / down +0.04 (2)
   Unknown · immature 2
 
-\x1b[1mLatest decisions · 4 of 24\x1b[0m
+\x1b[1mSleeve owner · index entries\x1b[0m  \x1b[2m\x1b[1mREPORTED, NOT GATED\x1b[0m\x1b[0m
+  Market timing and hedges: did the index move the way the decision positioned
+  for? A different skill from single-name selection; never gates the sleeve.
+  Sample · 4 decisions · 3 scored · 3 entry weeks (each counts once)
+  Mean z per week · +0.42 · running sum +1.3
+  Evidence · e-value 1.0 of 100 · P(IC > 0.05) 0.35 · P(IC > 0.10) 0.18
+  Consistency · halves +0.90 / +0.18 · up markets -0.35 (2) / down +1.19 (1)
+  Options · wrapper mean -€ 220.00 (95% -€ 610.00 to € 140.00) over 3 ·
+    realised/implied median 0.71 over 3 · bought puts realised/implied median
+    0.63 over 2
+  Unknown · immature 1
+
+\x1b[1mLatest decisions · 5 of 28\x1b[0m
   DATE       NAME     ACT   SIDE      QTY      z  NOTE
+  2026-08-27 SPY P    open  buy         2  -0.48  \x1b[2mindex, wrapper -€ 310.40, moved 0.5x implied\x1b[0m
   2026-08-26 SYND     exit  sell       25  +0.90  \x1b[2mrule trailing stop, counts for no one\x1b[0m
   2026-08-24 SYNA C   open  buy         3  +1.12  \x1b[2mwrapper -€ 96.30, moved 0.6x implied\x1b[0m
   2026-08-21 SYNB     trim  sell       40  -0.62
   2026-08-14 SYNC     open  buy        15      —  \x1b[2mhistory unavailable\x1b[0m
 
-Coverage · 24 decisions in the ledger · 15 stock · 9 option · 14 entries · 7
-  exits · rule-originated, in no owner stream: lifecycle 1, proposal:trailing
-  stop 2 · skipped: unsupported asset 2 · unknown: history unavailable 6,
-  immature 14
+Coverage · 28 decisions in the ledger · 15 stock · 13 option · 14 entries · 7
+  exits · 4 index entries · 0 index exits · rule-originated, in no owner stream:
+  lifecycle 1, proposal:trailing stop 2 · skipped: unsupported asset 2 ·
+  unknown: history unavailable 6, immature 16
 History · 11 names, 1 without history, 0 still to fetch · SPY 530 sessions
 
 Reading · z is the underlying's move from the close of the fill's session, net
   of its market exposure, in units of its own daily noise; positive means the
-  move went the decision's way. Entries (opens and adds) carry the gates; exits
-  (trims and exits) are reported, never gated. Each entry week counts once. The
-  e-value is the weight of evidence for information in the decisions (100 is the
-  bar); the posterior gives the chance the true mean z per week exceeds 0.05 and
-  0.10.
+  move went the decision's way. On an index (SPY, SPX, QQQ and the like, or a
+  name that moves with SPY at R² 0.90 or more) z is the index's whole move in
+  units of its whole daily noise. Entries (opens and adds) carry the gates;
+  exits (trims and exits) and the index streams are reported, never gated. Each
+  entry week counts once. The e-value is the weight of evidence for information
+  in the decisions (100 is the bar); the posterior gives the chance the true
+  mean z per week exceeds 0.05 and 0.10.
 A sleeve is established only when every gate on its entries passes; until then
   nothing here says whether the decisions carry information. Fills made by
   Canary's rules or the broker's lifecycle are the rule sleeve and count for no

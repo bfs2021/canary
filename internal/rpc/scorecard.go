@@ -27,6 +27,19 @@ const (
 	// position afterwards and are reported, never gated.
 	ScorecardStreamEntries = "entries"
 	ScorecardStreamExits   = "exits"
+	// ScorecardStreamIndexEntries and ScorecardStreamIndexExits hold the
+	// decisions on a broad index underlying: market timing and hedges, a
+	// different skill from single-name selection. Scored on the index's own
+	// total volatility, reported, never gated.
+	ScorecardStreamIndexEntries = "index_entries"
+	ScorecardStreamIndexExits   = "index_exits"
+
+	// ScorecardIndexBasisList and ScorecardIndexBasisRSquared say why a
+	// decision's underlying counts as an index: it is on the fixed list of
+	// broad index products, or its pre-entry regression on the market proxy
+	// fits with R² at or above the index threshold.
+	ScorecardIndexBasisList     = "list"
+	ScorecardIndexBasisRSquared = "r_squared"
 
 	// ScorecardSleeveRule is the sleeve of fills Canary's own rules or the
 	// broker's lifecycle produced; they never count for an owner stream.
@@ -91,8 +104,8 @@ type ScorecardSleeve struct {
 	Sleeve  string `json:"sleeve"`
 	Stream  string `json:"stream"`
 	Horizon int    `json:"horizon"`
-	// Gated is true for the entries stream only; an exits stream reports the
-	// same statistics with no gate.
+	// Gated is true for the entries stream only; the exits and index streams
+	// report the same statistics with no gate.
 	Gated     bool `json:"gated"`
 	Decisions int  `json:"decisions"`
 	Scored    int  `json:"scored"`
@@ -117,6 +130,10 @@ type ScorecardSleeve struct {
 	ClustersToEstablish *int                        `json:"clusters_to_establish,omitempty"`
 	Wrapper             *ScorecardWrapperSummary    `json:"wrapper,omitempty"`
 	RealisedVsImplied   *ScorecardRealisedVsImplied `json:"realised_vs_implied,omitempty"`
+	// LongPutRealisedVsImplied is the realised-vs-implied median of the
+	// bought puts in an index entries stream: did the hedges realise the move
+	// they paid for? Nil elsewhere.
+	LongPutRealisedVsImplied *ScorecardRealisedVsImplied `json:"long_put_realised_vs_implied,omitempty"`
 	// HolmAdjustedP is the Holm-corrected p-value (1/E bound) across live
 	// sleeves; nil when one sleeve is live.
 	HolmAdjustedP *float64       `json:"holm_adjusted_p,omitempty"`
@@ -158,8 +175,9 @@ type ScorecardRealisedVsImplied struct {
 type ScorecardDecision struct {
 	ID     string `json:"id"`
 	Sleeve string `json:"sleeve"`
-	// Stream is entries or exits; Origin names the rule or lifecycle source
-	// of a rule-sleeve fill.
+	// Stream is entries or exits, or index_entries or index_exits when the
+	// underlying is a broad index (Entry.IndexBasis says why); Origin names
+	// the rule or lifecycle source of a rule-sleeve fill.
 	Stream      string                   `json:"stream"`
 	Origin      string                   `json:"origin,omitempty"`
 	StrategyRef string                   `json:"strategy_ref,omitempty"`
@@ -191,18 +209,27 @@ type ScorecardOptionContract struct {
 }
 
 // ScorecardEntry carries the entry facts derived from history: the
-// underlying close of the execution session and, for options, the implied
-// volatility inverted from the fill and the delta at entry.
+// underlying close of the execution session, the fit of the pre-entry
+// regression on the market proxy, the index classification and, for
+// options, the implied volatility inverted from the fill and the delta at
+// entry.
 type ScorecardEntry struct {
 	SessionDay      *time.Time `json:"session_day,omitempty"`
 	UnderlyingClose *float64   `json:"underlying_close,omitempty"`
-	ImpliedVol      *float64   `json:"implied_vol,omitempty"`
-	Delta           *float64   `json:"delta,omitempty"`
-	Reason          string     `json:"reason,omitempty"`
+	// MarketRSquared is the R² of the pre-entry regression of the
+	// underlying's daily log returns on the market proxy's.
+	MarketRSquared *float64 `json:"market_r_squared,omitempty"`
+	// IndexBasis is list or r_squared when the underlying is scored as an
+	// index; empty for a single name.
+	IndexBasis string   `json:"index_basis,omitempty"`
+	ImpliedVol *float64 `json:"implied_vol,omitempty"`
+	Delta      *float64 `json:"delta,omitempty"`
+	Reason     string   `json:"reason,omitempty"`
 }
 
 // ScorecardHorizonScore is one decision's score at one horizon, or the
-// reason it is unknown.
+// reason it is unknown. A single-name z is scaled by IdioVolDaily, an index
+// z by TotalVolDaily, the underlying's own pre-entry daily volatility.
 type ScorecardHorizonScore struct {
 	Sessions          int        `json:"sessions"`
 	Matured           bool       `json:"matured"`
@@ -213,6 +240,7 @@ type ScorecardHorizonScore struct {
 	MarketReturn      *float64   `json:"market_return,omitempty"`
 	Beta              *float64   `json:"beta,omitempty"`
 	IdioVolDaily      *float64   `json:"idio_vol_daily,omitempty"`
+	TotalVolDaily     *float64   `json:"total_vol_daily,omitempty"`
 	Z                 *float64   `json:"z,omitempty"`
 	RealisedVsImplied *float64   `json:"realised_vs_implied,omitempty"`
 	RVIReason         string     `json:"realised_vs_implied_reason,omitempty"`
@@ -229,6 +257,10 @@ type ScorecardCoverage struct {
 	Options int `json:"options"`
 	Entries int `json:"entries"`
 	Exits   int `json:"exits"`
+	// IndexEntries and IndexExits count the owner-stream decisions on a
+	// broad index underlying; they are not in Entries or Exits.
+	IndexEntries int `json:"index_entries"`
+	IndexExits   int `json:"index_exits"`
 	// RuleOriginated counts the ledger rows Canary's rules or the broker's
 	// lifecycle produced, by origin; they are in no owner stream.
 	RuleOriginated  map[string]int `json:"rule_originated"`
@@ -253,6 +285,7 @@ type ScorecardHistory struct {
 // ScorecardMethod travels with every result.
 type ScorecardMethod struct {
 	Direction           string  `json:"direction"`
+	Index               string  `json:"index"`
 	Streams             string  `json:"streams"`
 	Lookback            string  `json:"lookback"`
 	Clusters            string  `json:"clusters"`

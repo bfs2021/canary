@@ -421,3 +421,263 @@ func TestRuleOriginatedFillsNeverCountForOwner(t *testing.T) {
 		t.Fatalf("decisions = %+v", res.Decisions)
 	}
 }
+
+// derivedBars follows the market's daily log returns with a loading and adds
+// seeded noise: loading 1 with little noise is an ETF that is effectively the
+// market, a small loading with large noise a single name.
+func derivedBars(conid int64, market []edge.DailyBar, loading, noise float64, seed uint64) []edge.DailyBar {
+	rng := rand.New(rand.NewPCG(seed, seed+1))
+	out := make([]edge.DailyBar, len(market))
+	close := 50.0
+	for i, bar := range market {
+		if i > 0 {
+			close *= math.Exp(loading*math.Log(bar.Close/market[i-1].Close) + noise*rng.NormFloat64())
+		}
+		out[i] = edge.DailyBar{ConID: conid, Day: bar.Day, Close: close}
+	}
+	return out
+}
+
+// preEntryLogReturns are the daily log returns the estimate may use: the
+// LookbackSessions window ending the session before entry.
+func preEntryLogReturns(bars []edge.DailyBar, entryIdx int) []float64 {
+	var out []float64
+	for i := max(0, entryIdx-LookbackSessions) + 1; i < entryIdx; i++ {
+		out = append(out, math.Log(bars[i].Close/bars[i-1].Close))
+	}
+	return out
+}
+
+func sampleSD(values []float64) float64 {
+	m := mean(values)
+	sum := 0.0
+	for _, v := range values {
+		sum += (v - m) * (v - m)
+	}
+	return math.Sqrt(sum / float64(len(values)-1))
+}
+
+func scoreAt(d rpc.ScorecardDecision, h int) rpc.ScorecardHorizonScore {
+	for _, s := range d.Scores {
+		if s.Sessions == h {
+			return s
+		}
+	}
+	return rpc.ScorecardHorizonScore{}
+}
+
+func sleeveAt(res rpc.ScorecardResult, sleeve, stream string, h int) (rpc.ScorecardSleeve, bool) {
+	for _, s := range res.Sleeves {
+		if s.Sleeve == sleeve && s.Stream == stream && s.Horizon == h {
+			return s, true
+		}
+	}
+	return rpc.ScorecardSleeve{}, false
+}
+
+func decisionByID(res rpc.ScorecardResult, id string) rpc.ScorecardDecision {
+	for _, d := range res.Decisions {
+		if d.ID == id {
+			return d
+		}
+	}
+	return rpc.ScorecardDecision{}
+}
+
+func TestIndexOptionIsScoredOnTotalVol(t *testing.T) {
+	t.Parallel()
+	market := syntheticBars(0, "2025-01-01", 420, 17, 400)
+	// The market proxy as an option underlying: regressed on itself it leaves
+	// no residual noise, so the single-name z is undefined.
+	spy := make([]edge.DailyBar, len(market))
+	for i, bar := range market {
+		spy[i] = edge.DailyBar{ConID: 9001, Day: bar.Day, Close: bar.Close}
+	}
+	if f := ols(preEntryLogReturns(market, 300), preEntryLogReturns(spy, 300)); !f.ok || f.residualSD != 0 || f.rSquared != 1 {
+		t.Fatalf("self-regression = %+v, want zero residual and R² 1", f)
+	}
+	entryIdx := 300
+	entryDay, spot := spy[entryIdx].Day, spy[entryIdx].Close
+	expiry := entryDay.AddDate(0, 0, 45)
+	strike := math.Round(spot * 0.95)
+	fill := Price(spot, strike, expiry.Sub(entryDay).Hours()/24/365, 0.18, RiskFreeRate, DividendYield, false)
+	d := Decision{ID: "spy-put", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "SPY", UnderlyingConID: 9001, ConID: 9002, Symbol: "SPY PUT", Instrument: InstrumentOption,
+		Option: &OptionContract{Expiry: expiry.Format(time.DateOnly), Strike: strike, Right: RightPut, Multiplier: 100}, Action: "open", Side: SideBuy, Sign: -1, Quantity: 2,
+		FillPrice: &fill, Multiplier: new(100.0), Currency: "USD", ExecutedAt: entryDay.Add(15 * time.Hour), ClusterKey: "owner:2026-W01"}
+	res := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: []Decision{d}, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{9001: spy}}})
+
+	got := res.Decisions[0]
+	if got.Stream != rpc.ScorecardStreamIndexEntries || got.Entry.IndexBasis != rpc.ScorecardIndexBasisList || got.Entry.MarketRSquared == nil || *got.Entry.MarketRSquared != 1 {
+		t.Fatalf("decision = stream %q basis %q r2 %v", got.Stream, got.Entry.IndexBasis, got.Entry.MarketRSquared)
+	}
+	sigma := sampleSD(preEntryLogReturns(spy, entryIdx))
+	for _, h := range Horizons {
+		score := scoreAt(got, h)
+		if score.Z == nil || score.TotalVolDaily == nil || score.IdioVolDaily != nil {
+			t.Fatalf("horizon %d score = %+v", h, score)
+		}
+		want := -math.Log(spy[entryIdx+h].Close/spot) / (sigma * math.Sqrt(float64(h)))
+		if math.Abs(*score.TotalVolDaily-sigma) > 1e-15 || math.Abs(*score.Z-want) > 1e-12 {
+			t.Fatalf("horizon %d z = %v sigma %v, want %v and %v", h, *score.Z, *score.TotalVolDaily, want, sigma)
+		}
+	}
+	if res.Coverage.UnknownByReason[ReasonIdioVolZero] != 0 || res.Coverage.IndexEntries != 1 || res.Coverage.Entries != 0 || res.Coverage.ScoredByHorizon[PrimaryHorizon] != 1 {
+		t.Fatalf("coverage = %+v", res.Coverage)
+	}
+	index, ok := sleeveAt(res, SleeveOwner, rpc.ScorecardStreamIndexEntries, PrimaryHorizon)
+	if !ok || index.Gated || index.Gate != "" || index.Scored != 1 || index.MeanZ == nil {
+		t.Fatalf("index sleeve = %+v", index)
+	}
+	rvi := scoreAt(got, PrimaryHorizon).RealisedVsImplied
+	if rvi == nil || index.LongPutRealisedVsImplied == nil || index.LongPutRealisedVsImplied.Count != 1 || index.LongPutRealisedVsImplied.Median != *rvi {
+		t.Fatalf("long-put realised/implied = %+v, decision %v", index.LongPutRealisedVsImplied, rvi)
+	}
+	if entries, _ := sleeveAt(res, SleeveOwner, rpc.ScorecardStreamEntries, PrimaryHorizon); entries.Decisions != 0 || !entries.Gated {
+		t.Fatalf("entries sleeve took the index decision: %+v", entries)
+	}
+}
+
+func TestHighRSquaredETFIsRoutedToIndex(t *testing.T) {
+	t.Parallel()
+	market := syntheticBars(0, "2025-01-01", 420, 23, 400)
+	broad := derivedBars(201, market, 1.0, 0.002, 41) // effectively the market, off the list
+	single := derivedBars(202, market, 0.5, 0.02, 43) // a name with its own noise
+	entryIdx := 300
+	at := market[entryIdx].Day.Add(15 * time.Hour)
+	decisions := []Decision{
+		{ID: "broad", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "BRDX", UnderlyingConID: 201, ConID: 201, Symbol: "BRDX", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 10, ExecutedAt: at, ClusterKey: "owner:2026-W01"},
+		{ID: "broad-exit", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamExits, Underlying: "BRDX", UnderlyingConID: 201, ConID: 201, Symbol: "BRDX", Instrument: InstrumentStock, Action: "exit", Side: SideSell, Sign: -1, Quantity: 10, ExecutedAt: market[entryIdx+3].Day, ClusterKey: "owner:2026-W02"},
+		{ID: "single", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "SNGL", UnderlyingConID: 202, ConID: 202, Symbol: "SNGL", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 10, ExecutedAt: at, ClusterKey: "owner:2026-W01"},
+		{ID: "qqq", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "qqq", UnderlyingConID: 202, ConID: 203, Symbol: "QQQ", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 10, ExecutedAt: at, ClusterKey: "owner:2026-W01"},
+	}
+	res := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: decisions, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{201: broad, 202: single}}})
+
+	b := decisionByID(res, "broad")
+	if b.Stream != rpc.ScorecardStreamIndexEntries || b.Entry.IndexBasis != rpc.ScorecardIndexBasisRSquared || b.Entry.MarketRSquared == nil || *b.Entry.MarketRSquared < IndexRSquared {
+		t.Fatalf("broad ETF = stream %q basis %q r2 %v", b.Stream, b.Entry.IndexBasis, b.Entry.MarketRSquared)
+	}
+	score := scoreAt(b, PrimaryHorizon)
+	want := math.Log(broad[entryIdx+PrimaryHorizon].Close/broad[entryIdx].Close) / (sampleSD(preEntryLogReturns(broad, entryIdx)) * math.Sqrt(PrimaryHorizon))
+	if score.Z == nil || math.Abs(*score.Z-want) > 1e-12 || score.IdioVolDaily != nil || score.Beta == nil {
+		t.Fatalf("broad ETF score = %+v, want z %v", score, want)
+	}
+	if exit := decisionByID(res, "broad-exit"); exit.Stream != rpc.ScorecardStreamIndexExits {
+		t.Fatalf("broad ETF exit stream = %q", exit.Stream)
+	}
+	// A list member is an index whatever its fit: here it shares the
+	// single name's noisy series.
+	if q := decisionByID(res, "qqq"); q.Stream != rpc.ScorecardStreamIndexEntries || q.Entry.IndexBasis != rpc.ScorecardIndexBasisList || *q.Entry.MarketRSquared >= IndexRSquared {
+		t.Fatalf("list member = stream %q basis %q", q.Stream, q.Entry.IndexBasis)
+	}
+	if s := decisionByID(res, "single"); s.Stream != rpc.ScorecardStreamEntries || s.Entry.IndexBasis != "" || s.Entry.MarketRSquared == nil || *s.Entry.MarketRSquared >= IndexRSquared {
+		t.Fatalf("single name = stream %q basis %q r2 %v", s.Stream, s.Entry.IndexBasis, s.Entry.MarketRSquared)
+	}
+	entries, _ := sleeveAt(res, SleeveOwner, rpc.ScorecardStreamEntries, PrimaryHorizon)
+	indexEntries, _ := sleeveAt(res, SleeveOwner, rpc.ScorecardStreamIndexEntries, PrimaryHorizon)
+	indexExits, _ := sleeveAt(res, SleeveOwner, rpc.ScorecardStreamIndexExits, PrimaryHorizon)
+	if entries.Decisions != 1 || !entries.Gated || indexEntries.Decisions != 2 || indexEntries.Gated || indexEntries.Gate != "" || indexExits.Decisions != 1 || indexExits.Gated {
+		t.Fatalf("streams: entries %d, index entries %d (gated %v), index exits %d", entries.Decisions, indexEntries.Decisions, indexEntries.Gated, indexExits.Decisions)
+	}
+	if indexEntries.LongPutRealisedVsImplied != nil {
+		t.Fatalf("stock index entries reported a long-put median: %+v", indexEntries.LongPutRealisedVsImplied)
+	}
+	if res.Coverage.Entries != 1 || res.Coverage.Exits != 0 || res.Coverage.IndexEntries != 2 || res.Coverage.IndexExits != 1 {
+		t.Fatalf("coverage = %+v", res.Coverage)
+	}
+}
+
+func TestSingleNameScoreIsUnchanged(t *testing.T) {
+	t.Parallel()
+	market := syntheticBars(0, "2025-01-01", 420, 29, 400)
+	name := derivedBars(301, market, 1.3, 0.018, 47)
+	entryIdx := 310
+	d := Decision{ID: "acme", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "ACME", UnderlyingConID: 301, ConID: 301, Symbol: "ACME", Instrument: InstrumentStock, Action: "open", Side: SideSell, Sign: -1, Quantity: 10, ExecutedAt: market[entryIdx].Day, ClusterKey: "owner:2026-W01"}
+	res := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: []Decision{d}, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{301: name}}})
+	got := res.Decisions[0]
+	if got.Stream != rpc.ScorecardStreamEntries || got.Entry.IndexBasis != "" {
+		t.Fatalf("single name routed: stream %q basis %q", got.Stream, got.Entry.IndexBasis)
+	}
+	// The market-adjusted z, computed here from first principles.
+	x, y := preEntryLogReturns(market, entryIdx), preEntryLogReturns(name, entryIdx)
+	mx, my := mean(x), mean(y)
+	var sxx, sxy float64
+	for i := range x {
+		sxx += (x[i] - mx) * (x[i] - mx)
+		sxy += (x[i] - mx) * (y[i] - my)
+	}
+	beta := sxy / sxx
+	var sse float64
+	for i := range x {
+		e := y[i] - (my - beta*mx) - beta*x[i]
+		sse += e * e
+	}
+	idio := math.Sqrt(sse / float64(len(x)-2))
+	for _, h := range Horizons {
+		score := scoreAt(got, h)
+		ru := math.Log(name[entryIdx+h].Close / name[entryIdx].Close)
+		rm := math.Log(market[entryIdx+h].Close / market[entryIdx].Close)
+		want := -(ru - beta*rm) / (idio * math.Sqrt(float64(h)))
+		if score.Z == nil || score.TotalVolDaily != nil || score.IdioVolDaily == nil || math.Abs(*score.IdioVolDaily-idio) > 1e-12 || math.Abs(*score.Beta-beta) > 1e-9 || math.Abs(*score.Z-want) > 1e-9 {
+			t.Fatalf("horizon %d score = %+v, want z %v beta %v idio %v", h, score, want, beta, idio)
+		}
+	}
+}
+
+func TestIndexClassAndScaleNeverLookAhead(t *testing.T) {
+	t.Parallel()
+	market := syntheticBars(0, "2025-01-01", 420, 31, 400)
+	broad := derivedBars(401, market, 1.0, 0.002, 53)
+	single := derivedBars(402, market, 0.4, 0.02, 59)
+	entryIdx := 300
+	decisions := []Decision{
+		{ID: "broad", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "BRDX", UnderlyingConID: 401, ConID: 401, Symbol: "BRDX", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 1, ExecutedAt: market[entryIdx].Day, ClusterKey: "owner:w"},
+		{ID: "single", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "SNGL", UnderlyingConID: 402, ConID: 402, Symbol: "SNGL", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 1, ExecutedAt: market[entryIdx].Day, ClusterKey: "owner:w"},
+	}
+	base := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: decisions, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{401: broad, 402: single}}})
+	// After entry the broad ETF turns into noise and the single name into
+	// the market itself: a look-ahead would swap their classes.
+	noisy, tracking := append([]edge.DailyBar(nil), broad...), append([]edge.DailyBar(nil), single...)
+	rng := rand.New(rand.NewPCG(61, 67))
+	for i := entryIdx + 1; i < len(market); i++ {
+		noisy[i].Close = noisy[i-1].Close * math.Exp(0.05*rng.NormFloat64())
+		tracking[i].Close = tracking[i-1].Close * market[i].Close / market[i-1].Close
+	}
+	shifted := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: decisions, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{401: noisy, 402: tracking}}})
+	for _, id := range []string{"broad", "single"} {
+		a, b := decisionByID(base, id), decisionByID(shifted, id)
+		if a.Stream != b.Stream || a.Entry.IndexBasis != b.Entry.IndexBasis || *a.Entry.MarketRSquared != *b.Entry.MarketRSquared {
+			t.Fatalf("%s: post-entry bars changed the class: %q/%q r2 %v/%v", id, a.Stream, b.Stream, *a.Entry.MarketRSquared, *b.Entry.MarketRSquared)
+		}
+		sa, sb := scoreAt(a, PrimaryHorizon), scoreAt(b, PrimaryHorizon)
+		if sa.Z == nil || sb.Z == nil || *sa.Z == *sb.Z {
+			t.Fatalf("%s: z did not move with the realised path: %v / %v", id, sa.Z, sb.Z)
+		}
+		if id == "broad" && (sa.TotalVolDaily == nil || *sa.TotalVolDaily != *sb.TotalVolDaily) {
+			t.Fatalf("broad: post-entry bars changed sigma_total: %v / %v", sa.TotalVolDaily, sb.TotalVolDaily)
+		}
+	}
+	if decisionByID(base, "broad").Stream != rpc.ScorecardStreamIndexEntries || decisionByID(base, "single").Stream != rpc.ScorecardStreamEntries {
+		t.Fatal("classes are not the ones the pre-entry fit implies")
+	}
+}
+
+func TestOnlyFlatSeriesLeaveTheVolatilityUndefined(t *testing.T) {
+	t.Parallel()
+	market := syntheticBars(0, "2025-01-01", 420, 37, 400)
+	flat := make([]edge.DailyBar, len(market))
+	for i, bar := range market {
+		flat[i] = edge.DailyBar{ConID: 501, Day: bar.Day, Close: 25}
+	}
+	at := market[300].Day
+	decisions := []Decision{
+		{ID: "stale", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "STAL", UnderlyingConID: 501, ConID: 501, Symbol: "STAL", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 1, ExecutedAt: at, ClusterKey: "owner:w"},
+		{ID: "stale-index", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "SPX", UnderlyingConID: 501, ConID: 502, Symbol: "SPX", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 1, ExecutedAt: at, ClusterKey: "owner:w"},
+	}
+	res := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: decisions, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{501: flat}}})
+	if s := decisionByID(res, "stale"); s.Stream != rpc.ScorecardStreamEntries || s.Entry.MarketRSquared != nil || scoreAt(s, PrimaryHorizon).Reason != ReasonIdioVolZero {
+		t.Fatalf("flat single name = stream %q reason %q", s.Stream, scoreAt(s, PrimaryHorizon).Reason)
+	}
+	if s := decisionByID(res, "stale-index"); s.Stream != rpc.ScorecardStreamIndexEntries || scoreAt(s, PrimaryHorizon).Reason != ReasonTotalVolZero {
+		t.Fatalf("flat index = stream %q reason %q", s.Stream, scoreAt(s, PrimaryHorizon).Reason)
+	}
+}

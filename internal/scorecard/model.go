@@ -44,6 +44,12 @@ const (
 	PriorSD = 0.1
 	Tau     = 0.2
 
+	// IndexRSquared is the pre-entry R² on the market proxy at or above
+	// which an underlying off the index list is scored as an index: it is
+	// effectively the market, and its residual noise is too small to scale
+	// a selection score.
+	IndexRSquared = 0.9
+
 	EstablishedEValue    = 100.0
 	EstablishedClusters  = 100
 	EstablishedPosterior = 0.95
@@ -82,6 +88,7 @@ const (
 	ReasonNoFillQuote              = "no_fill_quote"
 	ReasonNotOption                = "not_option"
 	ReasonIdioVolZero              = "idio_vol_zero"
+	ReasonTotalVolZero             = "total_vol_zero"
 	ReasonUnsupportedAsset         = "unsupported_asset"
 	ReasonZeroQuantity             = "zero_quantity"
 
@@ -91,6 +98,20 @@ const (
 
 // Horizons is the closed set of post-entry session lenses.
 var Horizons = [...]int{5, PrimaryHorizon, MaxHorizon}
+
+// indexUnderlyings is the fixed list of broad index products whose
+// decisions are market timing and hedges, scored on the index's own total
+// volatility: the market proxy itself, the S&P 500 index and its weekly and
+// mini classes, the Nasdaq-100, Russell 2000 and Dow ETFs and indices.
+var indexUnderlyings = map[string]bool{
+	"SPY": true, "SPX": true, "SPXW": true, "XSP": true,
+	"QQQ": true, "NDX": true, "IWM": true, "RUT": true, "DIA": true,
+}
+
+// IndexUnderlying reports whether a symbol is on the fixed index list.
+func IndexUnderlying(symbol string) bool {
+	return indexUnderlyings[strings.ToUpper(strings.TrimSpace(symbol))]
+}
 
 // Decision is one persisted ledger row: the broker fill facts of one
 // position change, its sleeve and its cluster. Lineage holds broker
@@ -167,6 +188,16 @@ func StreamOf(action string) string {
 		return rpc.ScorecardStreamEntries
 	default:
 		return rpc.ScorecardStreamExits
+	}
+}
+
+// indexStream is the index counterpart of an action stream.
+func indexStream(stream string) string {
+	switch stream {
+	case rpc.ScorecardStreamEntries, rpc.ScorecardStreamIndexEntries:
+		return rpc.ScorecardStreamIndexEntries
+	default:
+		return rpc.ScorecardStreamIndexExits
 	}
 }
 
