@@ -21,18 +21,19 @@ import (
 // brake releases when risk is back in budget, not when P&L recovers.").
 //
 // While the risk constitution carries [mandate], two consecutive scheduled
-// verdicts at least five minutes apart reading over or reduce (one, on a
-// gap-cap breach) start a breach episode: every generation then sizes one
+// verdicts at least five minutes apart reading over or reduce start a
+// breach episode: every generation then sizes one
 // batch of mandate_reduction rows afresh, with the daemon's own evaluator on
 // the book the verdict measured. Cut by cut, the book re-evaluated after
 // each: the largest gap loser of a name over its gap cap, then the largest
 // Euler contributor, each by the smallest whole step (contracts, or share
 // lots) that takes the book to risk ≤ 0.95 × budget with every gap cap met,
-// or else by the step that takes the most risk off. Shares that cover short
-// options are only sold once those options are bought back; a long option
-// that protects its own stock, and every other protection leg, is never
-// sold. An in-the-money long option close to expiry is cut first only where
-// its exercise alone would push the planned book over budget. Every row is
+// or else by the step that takes the most risk off. Short options are never
+// bought back, and the shares that cover them are never sold: a covered
+// position needs the owner's hand. Shares are never cut below what the long
+// puts on them would deliver at exercise, and protection is never sold. An
+// in-the-money long option close to expiry is cut first only where its
+// exercise alone would push the planned book over budget. Every row is
 // reduce-only, NeverSkipVeto, bounded by the order caps in force, and carries
 // the verdict it was sized on and its episode, inside which a re-sized row
 // keeps its veto clock. A verdict reading within ends the episode and
@@ -50,18 +51,11 @@ const (
 	// long option is judged by its exercise.
 	mandateReductionExpirySessions = 3
 	// mandateReductionOverReadings is how many consecutive scheduled over or
-	// reduce verdicts start the batch; a gap-cap breach starts it at one.
+	// reduce verdicts, gap-cap breaches included, start the batch.
 	mandateReductionOverReadings = 2
 	// mandateReductionMaxCuts bounds the sizing loop.
 	mandateReductionMaxCuts = 64
 	mandateReductionEpsilon = 1e-6
-)
-
-// Roles of a leg in the batch.
-const (
-	mandateRoleFree    = ""        // cut on its own
-	mandateRoleStock   = "stock"   // a stock that covers short options (unit)
-	mandateRoleCovered = "covered" // a short option a stock covers: bought back first
 )
 
 // mandateSizingHeldCode is the preview and submit refusal of a held row.
@@ -201,10 +195,6 @@ type mandateCut struct {
 	row  rpc.PositionView
 	full int // the whole units held, the most the cut may reach
 	step int // the lot the cut moves in: 1 contract, or 1, 10 or 100 shares
-	// role is free, stock (it covers short options: unit) or covered (a
-	// short option a stock covers, bought back before that stock is sold).
-	role string
-	unit *mandateUnit
 	// units is the cut; rank its place in the batch (1 = first); phase why.
 	units int
 	rank  int
@@ -221,58 +211,6 @@ type mandateCut struct {
 	// line, when its position has not moved since.
 	prevUnits int
 	prevQty   int
-}
-
-// mandateUnit is a stock and the short options of its own underlying it
-// covers: short calls over long shares, short puts over a short sale. The
-// shares are never cut below what the remaining short options need, so an
-// assignment can never flip the line; cutting further buys the options back
-// first. fixedNeed is the cover owed to short options the batch may not
-// touch; slack a cover deficit the book already carries, which a cut may
-// never deepen.
-type mandateUnit struct {
-	stock     *mandateCut
-	covered   []*mandateCut
-	fixedNeed float64
-	slack     float64
-}
-
-// need is the shares the unit's short options need with the given cuts.
-func (u *mandateUnit) need(units func(*mandateCut) int) float64 {
-	need := u.fixedNeed
-	for _, o := range u.covered {
-		need += (math.Abs(o.leg.Quantity) - float64(units(o))) * o.leg.Multiplier
-	}
-	return need
-}
-
-// couple returns the cuts a stock cut of s units needs: the covered options
-// bought back, deepest in the money first, until the shares left cover what
-// remains, never below their own cut so far. ok is false when even buying
-// every one back leaves the shares short of cover.
-func (u *mandateUnit) couple(s int) (map[string]int, bool) {
-	out := map[string]int{u.stock.id: s}
-	left := math.Abs(u.stock.leg.Quantity) - float64(s) + u.slack
-	need := u.need(func(o *mandateCut) int { return o.units })
-	for _, o := range u.covered {
-		if need <= left+1e-9 {
-			break
-		}
-		k := min(o.full-o.units, int(math.Ceil((need-left)/o.leg.Multiplier-1e-9)))
-		if k <= 0 {
-			continue
-		}
-		out[o.id] = o.units + k
-		need -= float64(k) * o.leg.Multiplier
-	}
-	return out, need <= left+1e-9
-}
-
-// freeNow is how many shares may be sold this cycle with the short options
-// as they are held now: a buyback the batch asks for must fill first.
-func (u *mandateUnit) freeNow() int {
-	held := math.Abs(u.stock.row.Quantity) - u.need(func(*mandateCut) int { return 0 })
-	return max(0, int(math.Floor(held+1e-9)))
 }
 
 // mandateBatch is the sized batch.
@@ -341,8 +279,7 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	if drift := mandateBookDrift(*in.Input, pos, now); drift != "" {
 		return hold(rpc.MandateReductionBookChanged, fmt.Sprintf("the positions changed since the verdict of %s (%s); the batch waits for a verdict on the book as it is", mandateClock(v.AsOf), drift))
 	}
-	gapBreach := v.Stresses != nil && len(v.Stresses.GapBreaches) > 0
-	if in.Episode == "" && in.OverStreak < mandateReductionOverReadings && (!gapBreach || in.OverStreak < 1) {
+	if in.Episode == "" && in.OverStreak < mandateReductionOverReadings {
 		st.State = rpc.MandateReductionWatching
 		st.Reason = fmt.Sprintf("the verdict reads %s (%s of the budget %s); a confirming scheduled verdict at least %s later starts the batch",
 			v.Status, mandatePctOfBudget(v), mandateMoney(st.BudgetAnnualSD, ccy), mandateStreakSpacing)
@@ -351,7 +288,7 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	if st.Episode == "" {
 		st.Episode = "mandate-" + v.AsOf.UTC().Format("20060102T150405Z") + "-" + st.VerdictFingerprint
 	}
-	candidates, leftOut := e.mandateCandidates(policy, in, pos, now)
+	candidates, leftOut, covered := e.mandateCandidates(policy, in, pos, now)
 	batch := mandateSizeBatch(*in.Input, candidates, standing, now)
 	batch.leftOut = append(leftOut, batch.leftOut...)
 	st.LeftOut = batch.leftOut
@@ -362,6 +299,9 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 		st.Reason = fmt.Sprintf("the verdict reads %s (%s of the budget), but no held leg can be reduced", v.Status, mandatePctOfBudget(v))
 		if len(batch.leftOut) > 0 {
 			st.Reason += ": " + strings.Join(batch.leftOut, "; ")
+		}
+		if len(covered) > 0 {
+			st.Reason += "; a covered position needs your hand: " + strings.Join(covered, "; ")
 		}
 		return nil, st
 	}
@@ -390,11 +330,9 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 		st.Reason += fmt.Sprintf(", inside the %s target", mandateMoney(batch.target, ccy))
 	} else {
 		st.Reason += fmt.Sprintf("; the batch does not reach the %s target, nothing reduces further", mandateMoney(batch.target, ccy))
-	}
-	if waiting := len(batch.cuts) - len(out); waiting == 1 {
-		st.Reason += "; 1 cut waits for the orders ahead of it to fill"
-	} else if waiting > 1 {
-		st.Reason += fmt.Sprintf("; %d cuts wait for the orders ahead of them to fill", waiting)
+		if len(covered) > 0 {
+			st.Reason += "; a covered position needs your hand: " + strings.Join(covered, "; ")
+		}
 	}
 	return out, st
 }
@@ -552,21 +490,51 @@ func mandateMergedLegs(legs []mandate.Leg) []mandate.Leg {
 	return out
 }
 
-// mandateCandidates lists the legs the batch may cut and ties every stock to
-// the short options it covers. Never cut: a protection leg (a hedge-listed
-// put, a long option that protects its own stock, a leg the option policy
-// derives as protection: the budget governor's test), a leg of a multi-leg
-// unit (the strategy workflow reduces it), a row the owner ignored, and a
-// line a working stop or trail holds (netting would hold the row for as
-// long as it works). leftOut names what was left out and why.
-func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateReductionInput, pos *rpc.PositionsResult, now time.Time) (map[string]*mandateCut, []string) {
+// mandateCandidates lists the legs the batch may cut, each stock no further
+// than the shares its own options leave free. Never cut: a short option
+// (buying it back is the owner's: short options come from hand trades, and
+// unwinding one with its shares takes a combination order Canary does not
+// route), the shares short options are covered by, the shares long options
+// would deliver or take at exercise (so an exercise never flips the line), a
+// protection leg (a hedge-listed put, a long option that protects its own
+// stock, a leg the option policy derives as protection: the budget
+// governor's test), a leg of a multi-leg unit (the strategy workflow reduces
+// it), a row the owner ignored, and a line a working stop or trail holds
+// (netting would hold the row for as long as it works). leftOut names what
+// was left out and why; covered names each covered position the batch
+// leaves to the owner.
+func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateReductionInput, pos *rpc.PositionsResult, now time.Time) (map[string]*mandateCut, []string, []string) {
 	rows := mandatePositionRows(pos)
 	cfg := policy.Buckets.TrailingStop.Options
 	unitLegs, ambiguous := optionExitStrategyScope(pos, directionalOptionIntents(cfg), now)
 	pol := e.rulebookPolicy()
 	legs := mandateMergedLegs(in.Input.Legs)
+	// What each underlying's options hold of its shares, in shares.
+	type optionHold struct{ shortCalls, shortPuts, longCalls, longPuts float64 }
+	holds := map[string]*optionHold{}
+	for _, l := range legs {
+		if l.Kind != mandate.KindOption || l.Quantity == 0 {
+			continue
+		}
+		h := holds[l.Underlying]
+		if h == nil {
+			h = &optionHold{}
+			holds[l.Underlying] = h
+		}
+		shares := math.Abs(l.Quantity) * l.Multiplier
+		switch {
+		case l.Quantity < 0 && l.Right == "C":
+			h.shortCalls += shares
+		case l.Quantity < 0 && l.Right == "P":
+			h.shortPuts += shares
+		case l.Right == "C":
+			h.longCalls += shares
+		case l.Right == "P":
+			h.longPuts += shares
+		}
+	}
 	out := map[string]*mandateCut{}
-	var leftOut []string
+	var leftOut, covered []string
 	for _, leg := range legs {
 		row, held := rows[leg.ID]
 		if !held || leg.Quantity == 0 || row.Quantity == 0 || (leg.Quantity > 0) != (row.Quantity > 0) {
@@ -579,7 +547,10 @@ func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateRe
 		action := mandateAction(row)
 		option := leg.Kind == mandate.KindOption
 		switch {
-		case option && leg.Quantity > 0 && budgetLegIsProtection(cfg, row, pos, unitLegs, ambiguous, pol, now):
+		case option && leg.Quantity < 0:
+			leftOut = append(leftOut, name+" (a short option: buying it back is yours, the reduction never does)")
+			continue
+		case option && budgetLegIsProtection(cfg, row, pos, unitLegs, ambiguous, pol, now):
 			leftOut = append(leftOut, name+" (protection: the reduction never sells it)")
 			continue
 		case option && (unitLegs[row.ConID] || ambiguous[normSym(row.Symbol)]):
@@ -596,6 +567,31 @@ func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateRe
 			}
 		}
 		full := int(math.Floor(math.Min(math.Abs(leg.Quantity), math.Abs(row.Quantity)) + 1e-9))
+		if leg.Kind == mandate.KindStock {
+			if h := holds[leg.Underlying]; h != nil {
+				// A long line covers short calls and stays for the long puts'
+				// exercise; a short sale covers short puts and stays for the
+				// long calls'.
+				cover, deliver, what := h.shortCalls, h.longPuts, "calls"
+				if leg.Quantity < 0 {
+					cover, deliver, what = h.shortPuts, h.longCalls, "puts"
+				}
+				shares := math.Abs(row.Quantity)
+				if cover > 0 {
+					covered = append(covered, fmt.Sprintf("%s: %.0f shares cover short %s", name, math.Min(shares, cover), what))
+				}
+				if keep := math.Max(cover, deliver); keep > 0 {
+					full = min(full, int(math.Floor(shares-keep+1e-9)))
+					switch {
+					case full > 0:
+					case cover > 0:
+						leftOut = append(leftOut, fmt.Sprintf("%s (its shares cover short %s: a covered position needs your hand)", name, what))
+					default:
+						leftOut = append(leftOut, name+" (its shares stay for what the long options on it deliver at exercise)")
+					}
+				}
+			}
+		}
 		if full <= 0 {
 			continue
 		}
@@ -605,45 +601,7 @@ func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateRe
 		}
 		out[leg.ID] = c
 	}
-	// Tie each stock to the short options of its own underlying it covers;
-	// the ones the batch may not touch still need their cover.
-	for _, stock := range out {
-		if stock.leg.Kind != mandate.KindStock {
-			continue
-		}
-		right := "C"
-		if stock.leg.Quantity < 0 {
-			right = "P"
-		}
-		u := &mandateUnit{stock: stock}
-		for _, leg := range legs {
-			if leg.Kind != mandate.KindOption || leg.Quantity >= 0 || leg.Right != right || leg.Underlying != stock.leg.Underlying {
-				continue
-			}
-			if c, ok := out[leg.ID]; ok {
-				u.covered = append(u.covered, c)
-			} else {
-				u.fixedNeed += math.Abs(leg.Quantity) * leg.Multiplier
-			}
-		}
-		if len(u.covered) == 0 && u.fixedNeed == 0 {
-			continue
-		}
-		// Deepest in the money first: the lowest call strike, the highest
-		// put strike.
-		slices.SortStableFunc(u.covered, func(a, b *mandateCut) int {
-			if right == "C" {
-				return cmp.Compare(a.leg.Strike, b.leg.Strike)
-			}
-			return cmp.Compare(b.leg.Strike, a.leg.Strike)
-		})
-		u.slack = max(0, u.need(func(*mandateCut) int { return 0 })-math.Abs(stock.leg.Quantity))
-		stock.role, stock.unit = mandateRoleStock, u
-		for _, o := range u.covered {
-			o.role = mandateRoleCovered
-		}
-	}
-	return out, leftOut
+	return out, leftOut, covered
 }
 
 // mandateShareLot is the lot a stock cut moves in: a tenth of the line at
@@ -706,58 +664,23 @@ func (z *mandateSizer) eval(over map[string]int) mandate.Verdict {
 	return mandate.Evaluate(z.book(over))
 }
 
-// commit applies a move: each cut raised, joining the batch in the given
-// phase the first time; covered options go ahead of their stock.
-func (z *mandateSizer) commit(cuts map[string]int, phase string) {
-	var moved []*mandateCut
-	for id, units := range cuts {
-		if c := z.candidates[id]; units > c.units {
-			c.units = units
-			moved = append(moved, c)
-		}
+// commit applies one leg's cut, the leg joining the batch in the given
+// phase the first time.
+func (z *mandateSizer) commit(c *mandateCut, units int, phase string) {
+	if units <= c.units {
+		return
 	}
-	slices.SortStableFunc(moved, func(a, b *mandateCut) int {
-		if r := cmp.Compare(boolRank(a.role != mandateRoleCovered), boolRank(b.role != mandateRoleCovered)); r != 0 {
-			return r
-		}
-		return strings.Compare(a.id, b.id)
-	})
-	for _, c := range moved {
-		if !slices.Contains(z.cuts, c) {
-			c.phase = phase
-			z.cuts = append(z.cuts, c)
-		}
+	c.units = units
+	if !slices.Contains(z.cuts, c) {
+		c.phase = phase
+		z.cuts = append(z.cuts, c)
 	}
 }
 
-// move sizes one leg's next cut against f to limit: a stock that covers
-// short options moves with the buybacks it needs (scanned, the coupled f not
-// being convex); any other leg on its own grid. It returns the cuts, and
-// false when no step lowers f.
-func (z *mandateSizer) move(c *mandateCut, f func(over map[string]int) float64, limit float64) (map[string]int, bool) {
-	if c.unit == nil {
-		units, ok := mandateCutTo(c, c.units, func(u int) float64 { return f(map[string]int{c.id: u}) }, limit)
-		return map[string]int{c.id: units}, ok
-	}
-	steps := append([]int{c.units}, mandateCutSteps(c, c.units)...)
-	memo := map[int]float64{}
-	g := func(s int) float64 {
-		if v, ok := memo[s]; ok {
-			return v
-		}
-		v := math.Inf(1)
-		if cuts, ok := c.unit.couple(s); ok {
-			v = f(cuts)
-		}
-		memo[s] = v
-		return v
-	}
-	i, ok := mandateScanTo(steps, g, limit)
-	if !ok {
-		return nil, false
-	}
-	cuts, _ := c.unit.couple(steps[i])
-	return cuts, true
+// move sizes one leg's next cut against f to limit, on the leg's own grid.
+// It returns the cut, and false when no step lowers f.
+func (z *mandateSizer) move(c *mandateCut, f func(over map[string]int) float64, limit float64) (int, bool) {
+	return mandateCutTo(c, c.units, func(u int) float64 { return f(map[string]int{c.id: u}) }, limit)
 }
 
 // mandateSizeBatch sizes the batch afresh on the verdict's book: cut by cut,
@@ -792,31 +715,11 @@ func mandateSizeBatch(verdictBook mandate.Input, candidates map[string]*mandateC
 	if base.Risk != nil {
 		batch.riskBefore = base.Risk.SDAnnualBase
 	}
-	// Expiry cuts lead the batch; the rest keep the order they were cut in,
-	// a buyback always ahead of the shares it frees.
-	cuts := slices.DeleteFunc(slices.Clone(z.cuts), func(c *mandateCut) bool { return c.units <= 0 })
-	slices.SortStableFunc(cuts, func(a, b *mandateCut) int {
+	// Expiry cuts lead the batch; the rest keep the order they were cut in.
+	batch.cuts = slices.DeleteFunc(slices.Clone(z.cuts), func(c *mandateCut) bool { return c.units <= 0 })
+	slices.SortStableFunc(batch.cuts, func(a, b *mandateCut) int {
 		return cmp.Compare(boolRank(a.phase != rpc.MandatePhaseExpiry), boolRank(b.phase != rpc.MandatePhaseExpiry))
 	})
-	for _, c := range cuts {
-		if c.role == mandateRoleCovered {
-			continue
-		}
-		batch.cuts = append(batch.cuts, c)
-		if c.unit == nil {
-			continue
-		}
-		for _, o := range c.unit.covered {
-			if o.units > 0 && slices.Contains(cuts, o) && !slices.Contains(batch.cuts, o) {
-				batch.cuts = slices.Insert(batch.cuts, len(batch.cuts)-1, o)
-			}
-		}
-	}
-	for _, c := range cuts {
-		if !slices.Contains(batch.cuts, c) {
-			batch.cuts = append(batch.cuts, c)
-		}
-	}
 	before := batch.riskBefore
 	applied := map[string]int{}
 	for id := range candidates {
@@ -848,8 +751,7 @@ func boolRank(b bool) int {
 // line whose position has not moved keeps the last generation's cut when the
 // fresh one is smaller by no more than one step (never kept larger than
 // that, and never kept where the fresh batch drops the line), so a steady
-// risk does not re-size, and re-revise, a row every verdict. The buybacks a
-// kept stock cut needs are raised to match.
+// risk does not re-size, and re-revise, a row every verdict.
 func mandateKeepStanding(z *mandateSizer, standing []rpc.TradeProposal) {
 	for _, p := range standing {
 		c, ok := z.candidates[mandateLegID(rpc.PositionView{ConID: p.Contract.ConID})]
@@ -859,14 +761,6 @@ func mandateKeepStanding(z *mandateSizer, standing []rpc.TradeProposal) {
 		c.prevUnits, c.prevQty = p.Mandate.Units, p.Quantity
 		if c.units > 0 && c.units < p.Mandate.Units && p.Mandate.Units <= min(c.units+c.step, c.full) {
 			c.units = p.Mandate.Units
-		}
-	}
-	for _, c := range slices.Clone(z.cuts) {
-		if c.unit == nil || c.units <= 0 {
-			continue
-		}
-		if cuts, ok := c.unit.couple(c.units); ok {
-			z.commit(cuts, c.phase)
 		}
 	}
 }
@@ -927,12 +821,12 @@ func (z *mandateSizer) sizeMain() {
 		if top == nil {
 			return
 		}
-		cuts, ok := z.move(top, func(over map[string]int) float64 { return mandateRisk(z.eval(over)) }, z.target)
+		units, ok := z.move(top, func(over map[string]int) float64 { return mandateRisk(z.eval(over)) }, z.target)
 		if !ok {
 			exhausted[top.id] = true
 			continue
 		}
-		z.commit(cuts, rpc.MandatePhaseRisk)
+		z.commit(top, units, rpc.MandatePhaseRisk)
 	}
 }
 
@@ -967,7 +861,7 @@ func (z *mandateSizer) gapStep(v mandate.Verdict, name string) bool {
 	}
 	slices.SortStableFunc(losers, func(a, b *mandateCut) int { return cmp.Compare(losses[b.id], losses[a.id]) })
 	for _, c := range losers {
-		cuts, ok := z.move(c, func(over map[string]int) float64 {
+		units, ok := z.move(c, func(over map[string]int) float64 {
 			after := z.eval(over)
 			if mandateRisk(after) > riskNow+mandateReductionEpsilon {
 				return math.Inf(1)
@@ -978,7 +872,7 @@ func (z *mandateSizer) gapStep(v mandate.Verdict, name string) bool {
 		if !ok {
 			continue
 		}
-		z.commit(cuts, rpc.MandatePhaseGap)
+		z.commit(c, units, rpc.MandatePhaseGap)
 		c.gapLoss, c.gapCap = new(loss), new(capBase)
 		return true
 	}
@@ -999,7 +893,7 @@ func (z *mandateSizer) expiryGate(now time.Time) bool {
 	grew := false
 	for _, id := range z.ids {
 		c := z.candidates[id]
-		if c.role != mandateRoleFree || c.units >= c.full || c.leg.Kind != mandate.KindOption || c.leg.Quantity <= 0 || !mandateInTheMoney(c.leg) {
+		if c.units >= c.full || c.leg.Kind != mandate.KindOption || c.leg.Quantity <= 0 || !mandateInTheMoney(c.leg) {
 			continue
 		}
 		sessions, ok := mandateSessionsToExpiry(c.row.Expiry, now)
@@ -1144,54 +1038,6 @@ func mandateCutTo(c *mandateCut, from int, f func(int) float64, limit float64) (
 		return cuts[1+first], true
 	}
 	return cuts[best], true
-}
-
-// mandateScanTo sizes a coupled move along steps (steps[0] its start)
-// against a g that need not be convex: the first step reaching limit or
-// under, else the step at which g is least. A long grid is sampled at a
-// stride and refined around the result. ok is false when no step lowers g.
-func mandateScanTo(steps []int, g func(int) float64, limit float64) (int, bool) {
-	n := len(steps)
-	if n < 2 {
-		return 0, false
-	}
-	stride := max(1, (n-1)/64)
-	var samples []int
-	for i := 1; i < n; i += stride {
-		samples = append(samples, i)
-	}
-	if samples[len(samples)-1] != n-1 {
-		samples = append(samples, n-1)
-	}
-	start := g(steps[0])
-	best, bestV := 0, start
-	for k, i := range samples {
-		v := g(steps[i])
-		if v <= limit+mandateReductionEpsilon {
-			lo := 1
-			if k > 0 {
-				lo = samples[k-1] + 1
-			}
-			for j := lo; j < i; j++ {
-				if g(steps[j]) <= limit+mandateReductionEpsilon {
-					return j, true
-				}
-			}
-			return i, true
-		}
-		if v < bestV-mandateReductionEpsilon {
-			best, bestV = i, v
-		}
-	}
-	if best == 0 {
-		return 0, false
-	}
-	for j := max(1, best-stride+1); j < min(n, best+stride); j++ {
-		if v := g(steps[j]); v < bestV-mandateReductionEpsilon {
-			best, bestV = j, v
-		}
-	}
-	return best, bestV < start-mandateReductionEpsilon
 }
 
 // mandateExerciseAddsRisk reports an exercise that leaves the book riskier
@@ -1347,12 +1193,6 @@ func mandateOrderLimit(row rpc.PositionView, base string, maxOrderNotional, capB
 // is below the cut.
 func mandateCycleQuantity(c *mandateCut, in mandateReductionInput, base string) (int, string) {
 	qty, waits := c.units, ""
-	if c.unit != nil {
-		if free := c.unit.freeNow(); qty > free {
-			qty = free
-			waits = fmt.Sprintf("%d of these shares cover short options until the buyback ahead of them has filled", c.units-free)
-		}
-	}
 	if limit := mandateOrderLimit(c.row, base, in.MaxOrderNotional, in.OrderCapBase); limit > 0 && qty > limit {
 		qty = limit
 		waits = fmt.Sprintf("the order caps hold one order to %d, and the next cycle measures the rest", limit)
@@ -1395,8 +1235,6 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 			sessions = *c.sessions
 		}
 		why = fmt.Sprintf("in the money %d %s before expiry; exercised, the delivered shares would push the reduced book over budget, so it goes first", sessions, pluralNoun(sessions, "session"))
-	case c.role == mandateRoleCovered:
-		why = fmt.Sprintf("short options covered by the %s shares the batch sells: bought back first, so no share sale leaves one uncovered", c.leg.Underlying)
 	case c.phase == rpc.MandatePhaseGap:
 		loss, capBase := 0.0, 0.0
 		if c.gapLoss != nil {
@@ -1448,6 +1286,7 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 		RiskAnnualBase: batch.riskBefore, BudgetAnnualSD: batch.budget, TargetAnnualSD: batch.target,
 		RiskCutAnnualBase: c.riskCut, RiskAfterAnnualBase: batch.riskAfter,
 		VerdictStatus: v.Status, VerdictAt: v.AsOf, VerdictFingerprint: st.VerdictFingerprint, Episode: st.Episode, BaseCurrency: ccy,
+		Lot: c.step, Session: mandateSessionDate(v.AsOf),
 	}
 	if c.sessions != nil {
 		s := *c.sessions

@@ -154,6 +154,7 @@ func TestMandateReductionDominantFirstSizedToTargetSecondOnlyWhenNeeded(t *testi
 	}
 	rows, st := mandateReductionRun(t, in, pos)
 	assertMandateRowsReduceOnly(t, rows, pos)
+	assertMandateStepsLowerRisk(t, in, rows)
 	if st == nil || st.State != rpc.MandateReductionReducing || !st.TargetReached || st.Rows != 1 || len(rows) != 1 || len(st.Plan) != 1 {
 		t.Fatalf("status %+v rows %d", st, len(rows))
 	}
@@ -184,6 +185,7 @@ func TestMandateReductionDominantFirstSizedToTargetSecondOnlyWhenNeeded(t *testi
 	in = mandateReductionFixture(t, pos, 10, 1e7, 2)
 	rows, st = mandateReductionRun(t, in, pos)
 	assertMandateRowsReduceOnly(t, rows, pos)
+	assertMandateStepsLowerRisk(t, in, rows)
 	if len(rows) != 2 || !st.TargetReached {
 		t.Fatalf("rows %d status %+v", len(rows), st)
 	}
@@ -245,6 +247,7 @@ func TestMandateReductionExpiryOptionCutByItsOwnNeed(t *testing.T) {
 	in := mandateReductionFixture(t, pos, 1.1, 1e7, 2)
 	rows, st := mandateReductionRun(t, in, pos)
 	assertMandateRowsReduceOnly(t, rows, pos)
+	assertMandateStepsLowerRisk(t, in, rows)
 	opt, ok := mandateRowFor(rows, 9005)
 	if !ok || opt.Mandate.Rank != 1 || opt.Mandate.Phase != rpc.MandatePhaseExpiry || opt.Mandate.SessionsToExpiry == nil || *opt.Mandate.SessionsToExpiry != 2 ||
 		!strings.Contains(opt.Reason, "2 sessions before expiry") {
@@ -290,9 +293,8 @@ func TestMandateReductionExpiryOptionCutByItsOwnNeed(t *testing.T) {
 }
 
 // The batch starts on two consecutive scheduled verdicts over or reduce, at
-// least five minutes apart; one reading, even reduce, watches; a gap-cap
-// breach starts it on one scheduled reading; a running episode keeps it
-// going. The cache counts only scheduled readings, never a read's, and any
+// least five minutes apart; one reading, even reduce or a gap-cap breach,
+// watches; a running episode keeps it going. The cache counts only scheduled readings, never a read's, and any
 // reading neither over nor reduce resets it, as do a gap of more than
 // fifteen minutes and a new policy.
 func TestMandateReductionStartsOnConfirmedVerdicts(t *testing.T) {
@@ -324,14 +326,14 @@ func TestMandateReductionStartsOnConfirmedVerdicts(t *testing.T) {
 			t.Fatalf("%s: episode %q row %q", tc.name, st.Episode, rows[0].Mandate.Episode)
 		}
 	}
-	// A gap-cap breach acts on one scheduled reading, never on none.
+	// A gap-cap breach needs the confirming reading too.
 	gap := mandateReductionFixture(t, pos, 0.5, 600000, 1)
-	if rows, st := mandateReductionRun(t, gap, pos); len(rows) == 0 || st.State != rpc.MandateReductionReducing {
+	if rows, st := mandateReductionRun(t, gap, pos); len(rows) != 0 || st.State != rpc.MandateReductionWatching {
 		t.Fatalf("gap breach on one reading: rows %d status %+v", len(rows), st)
 	}
-	gap.OverStreak = 0
-	if rows, st := mandateReductionRun(t, gap, pos); len(rows) != 0 || st.State != rpc.MandateReductionWatching {
-		t.Fatalf("gap breach on a read alone: rows %d status %+v", len(rows), st)
+	gap.OverStreak = 2
+	if rows, st := mandateReductionRun(t, gap, pos); len(rows) == 0 || st.State != rpc.MandateReductionReducing {
+		t.Fatalf("gap breach on two readings: rows %d status %+v", len(rows), st)
 	}
 
 	verdict := func(status string) *rpc.MandateRiskResult {
@@ -565,6 +567,7 @@ func TestMandateReductionReduceOnlyNeverFlips(t *testing.T) {
 			t.Fatalf("ratio %g: no rows (%+v)", ratio, st)
 		}
 		assertMandateRowsReduceOnly(t, rows, pos)
+		assertMandateStepsLowerRisk(t, in, rows)
 		short, ok := mandateRowFor(rows, 9003)
 		if !ok || short.Action != rpc.OrderActionBuy || short.Mandate.Rank != 1 {
 			t.Fatalf("ratio %g: the short line (largest contributor) is not bought back first: %+v", ratio, short)
@@ -623,12 +626,13 @@ func TestMandateReductionGapBreachCutToCap(t *testing.T) {
 	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
 	// The gap cap is about a tenth of the budget base at full room; this
 	// base puts SYNA's 25% gap over it while the variance is inside target.
-	in := mandateReductionFixture(t, pos, 0.5, 600000, 1)
+	in := mandateReductionFixture(t, pos, 0.5, 600000, 2)
 	v := in.Result.Verdict
 	if v.Status != mandate.StatusReduce || v.Stresses == nil || !slices.Contains(v.Stresses.GapBreaches, "SYNA") || mandateRisk(*v) > 0.95*v.Capital.BudgetAnnualSD {
 		t.Fatalf("fixture %s breaches %+v", v.Status, v.Stresses)
 	}
 	rows, st := mandateReductionRun(t, in, pos)
+	assertMandateStepsLowerRisk(t, in, rows)
 	syna, ok := mandateRowFor(rows, 9001)
 	if !ok || syna.Mandate.Phase != rpc.MandatePhaseGap || syna.Mandate.GapLossBase == nil || syna.Mandate.GapCapBase == nil || !st.TargetReached {
 		t.Fatalf("gap row %+v status %+v", syna.Mandate, st)

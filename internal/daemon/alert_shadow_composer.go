@@ -1596,11 +1596,12 @@ func alertShadowAutomaticEpisodeKey(scope alertShadowBrokerScope, notice automat
 }
 
 // alertShadowAutomaticRevision is what a notice is one per: the proposal
-// revision, or a mandate reduction's breach episode, so a batch re-sized
-// every verdict raises one notice per line, not one per size.
+// revision, or, for a mandate reduction, its breach episode and veto clock
+// (when it started, for what size): a row re-sized within one lot keeps its
+// notice, a material growth or a new session raises a new one.
 func alertShadowAutomaticRevision(notice automaticNoticeKey) string {
 	if notice.Episode != "" {
-		return "episode:" + notice.Episode
+		return fmt.Sprintf("episode:%s:clock:%d:qty:%d", notice.Episode, notice.ClockStart.Unix(), notice.ClockQuantity)
 	}
 	return notice.Revision
 }

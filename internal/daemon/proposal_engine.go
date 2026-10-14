@@ -3752,6 +3752,12 @@ func proposalRevisionTerms(p rpc.TradeProposal) []string {
 		raw, _ := json.Marshal(binding)
 		terms = append(terms, "cash-sweep-material-v1:"+string(raw))
 	}
+	if p.Bucket == rpc.TradeProposalBucketMandateReduction && p.Mandate != nil && p.Mandate.Session != "" {
+		// A mandate row is one session's order: the next session's row is a
+		// new revision, so a DAY order that expired unfilled (its record
+		// terminal) never strands the batch.
+		terms = append(terms, "mandate-session:"+p.Mandate.Session)
+	}
 	if p.OptionExit != nil {
 		// Receipt times/values refresh at preview; scope and resulting role
 		// are semantic revision inputs. Never churn solely on receipt time.

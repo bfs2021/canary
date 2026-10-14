@@ -82,9 +82,15 @@ const (
 	automaticQueuedReason = "a queued authorisation the owner armed is live for this contract and side; Canary sends that order instead"
 	// automaticEpisodeResizedReason supersedes a mandate record whose row was
 	// re-sized within its breach episode: the new revision's record carries
-	// the veto clock on (the owner's veto covers the episode's direction), so
-	// a batch growing or shrinking every verdict is never starved.
-	automaticEpisodeResizedReason = "the reduction was re-sized within its breach; the new revision keeps this veto clock"
+	// the veto clock on while its size stays within one lot above the size
+	// the clock was started for, so a batch re-sized every verdict is never
+	// starved; a larger growth starts a fresh notice and a full window.
+	automaticEpisodeResizedReason = "the reduction was re-sized within its breach; the new revision keeps this veto clock unless it grew by more than one lot"
+	// automaticNewSessionReason restarts a mandate record whose veto clock
+	// began before the session it would be sent in: a fresh notice and a
+	// full window in the session, never a send at the open on a clock the
+	// owner may have slept through.
+	automaticNewSessionReason = "a new session: the reduction gets a fresh notice and a full veto window before it is placed"
 )
 
 // automaticSubmissionRecord is one durable automatic-submission intent, keyed
@@ -135,9 +141,19 @@ type automaticSubmissionRecord struct {
 	SettlingBaseline      []string `json:"settling_baseline,omitempty"`
 	SettlingBaselineKnown bool     `json:"settling_baseline_known,omitempty"`
 	// Episode is a mandate reduction's breach episode: a row re-sized
-	// within it keeps its veto clock across revisions, and an owner's veto
-	// holds its line for the rest of it.
-	Episode string `json:"episode,omitempty"`
+	// within it by at most one lot above ClockQuantity, the size its notice
+	// carried when its veto clock started (CreatedAt), keeps that clock
+	// across revisions; an owner's veto holds its line for the rest of it.
+	Episode       string `json:"episode,omitempty"`
+	ClockQuantity int    `json:"clock_quantity,omitempty"`
+}
+
+// clockQuantity is the size a record's veto clock was started for.
+func (r automaticSubmissionRecord) clockQuantity() int {
+	if r.ClockQuantity > 0 {
+		return r.ClockQuantity
+	}
+	return r.Quantity
 }
 
 func (r automaticSubmissionRecord) pending() bool {
@@ -608,17 +624,22 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 				rec.SubmitAt = now
 			}
 			// A mandate row re-sized within its breach keeps the veto clock of
-			// the record it replaces, which never reached the broker; a line
-			// the owner vetoed in this breach gets no record again in it.
+			// the record it replaces, which never reached the broker, while
+			// its size stays within one lot above the size that clock (and its
+			// notice) was started for; a larger growth gets a fresh notice and
+			// a full window, re-noticed once per such growth, not per verdict.
+			// A line the owner vetoed in this breach gets no record again in it.
 			if prop.Mandate != nil && prop.Mandate.Episode != "" {
-				rec.Episode = prop.Mandate.Episode
+				rec.Episode, rec.ClockQuantity = prop.Mandate.Episode, prop.Quantity
 				if prior := automaticEpisodePrior(records, prop.Key, rec.Episode); prior != nil {
 					if prior.State == rpc.TradeProposalAutomaticVetoed {
 						continue
 					}
-					if prior.State == rpc.TradeProposalAutomaticSuperseded && prior.Reason == automaticEpisodeResizedReason {
+					if prior.State == rpc.TradeProposalAutomaticSuperseded && prior.Reason == automaticEpisodeResizedReason &&
+						prop.Quantity <= prior.clockQuantity()+max(1, prop.Mandate.Lot) {
 						rec.CreatedAt, rec.SubmitAt, rec.NoticedAt = prior.CreatedAt, prior.SubmitAt, prior.NoticedAt
 						rec.SettlingBaseline, rec.SettlingBaselineKnown = slices.Clone(prior.SettlingBaseline), prior.SettlingBaselineKnown
+						rec.ClockQuantity = prior.clockQuantity()
 					}
 				}
 			}
@@ -714,13 +735,16 @@ type automaticNoticeKey struct {
 	Key      string
 	Revision string
 	// Episode is a mandate reduction's breach episode: its notice is one per
-	// line and episode, however often the row is re-sized.
-	Episode  string
-	Bucket   string
-	SubmitAt time.Time
-	Latched  bool
-	Deferred bool
-	Hold     string
+	// line, episode and veto clock (ClockStart, ClockQuantity), however often
+	// the row is re-sized within one lot of that clock's size.
+	Episode       string
+	ClockStart    time.Time
+	ClockQuantity int
+	Bucket        string
+	SubmitAt      time.Time
+	Latched       bool
+	Deferred      bool
+	Hold          string
 }
 
 // Settling-rule hold classes carried to the alert producer. They name the
@@ -749,7 +773,8 @@ func (e *proposalEngine) automaticPendingNotices(scope brokerStateScope) []autom
 		if !rec.waiting() || !sameBrokerScope(brokerStateScope{Account: rec.AccountID, Mode: rec.AccountMode}, scope) {
 			continue
 		}
-		notice := automaticNoticeKey{Key: rec.Key, Revision: rec.Revision, Episode: rec.Episode, Bucket: rec.Bucket, SubmitAt: rec.SubmitAt, Latched: rec.LatchSkippedWindow, Deferred: rec.deferred()}
+		notice := automaticNoticeKey{Key: rec.Key, Revision: rec.Revision, Episode: rec.Episode, ClockStart: rec.CreatedAt, ClockQuantity: rec.clockQuantity(),
+			Bucket: rec.Bucket, SubmitAt: rec.SubmitAt, Latched: rec.LatchSkippedWindow, Deferred: rec.deferred()}
 		if !rec.HeldAt.IsZero() {
 			switch rec.HoldReason {
 			case automaticHoldUnavailable:
@@ -809,6 +834,10 @@ func (e *proposalEngine) submitDueAutomatic(ctx context.Context) {
 			}
 			if at := e.automaticSessionDue(prop, now); at.After(now) {
 				e.rescheduleAutomatic(ctx, rec, at)
+				continue
+			}
+			if rec.Episode != "" && e.automaticClockBeforeSession(prop, rec, now) {
+				e.restartAutomaticClock(ctx, prop, rec, automaticNewSessionReason)
 				continue
 			}
 		}
@@ -1033,6 +1062,41 @@ func (e *proposalEngine) rescheduleAutomatic(ctx context.Context, rec automaticS
 	})
 	if err != nil && e.server != nil {
 		e.server.warnf("pre-authorised protection: reschedule %s for the session: %v", rec.Key, err)
+	}
+}
+
+// automaticClockBeforeSession reports a record whose veto clock started
+// before the regular session it would now be sent in opened.
+func (e *proposalEngine) automaticClockBeforeSession(prop rpc.TradeProposal, rec automaticSubmissionRecord, now time.Time) bool {
+	if e == nil || e.server == nil || !proposalHasContract(prop) {
+		return false
+	}
+	_, session, hasMarket, ok := e.proposalSessionAt(prop, now, nil)
+	return hasMarket && ok && session.IsOpen && !session.Open.IsZero() && rec.CreatedAt.Before(session.Open)
+}
+
+// restartAutomaticClock starts a waiting record's veto clock again: a new
+// notice is needed (the notice key carries the clock) and the full window
+// runs from it, no earlier than the session allows.
+func (e *proposalEngine) restartAutomaticClock(ctx context.Context, prop rpc.TradeProposal, rec automaticSubmissionRecord, reason string) {
+	now := e.clock()
+	window, err := time.ParseDuration(rec.VetoWindow)
+	if err != nil || window <= 0 {
+		window = defaultVetoWindow
+	}
+	due := e.automaticSessionDue(prop, now.Add(window))
+	err = e.automatic.update(ctx, func(records map[string]*automaticSubmissionRecord) []automaticSubmissionEvent {
+		r, ok := records[automaticRecordKey(rec.Key, rec.Revision)]
+		if !ok || !r.waiting() {
+			return nil
+		}
+		r.CreatedAt, r.SubmitAt, r.NoticedAt = now, due, time.Time{}
+		r.HeldAt, r.HoldReason = time.Time{}, ""
+		r.ClockQuantity = r.Quantity
+		return []automaticSubmissionEvent{{At: now, Type: automaticEventRescheduled, Key: r.Key, Revision: r.Revision, Bucket: r.Bucket, State: r.State, AccountID: r.AccountID, AccountMode: r.AccountMode, SubmitAt: r.SubmitAt, Reason: reason}}
+	})
+	if err != nil && e.server != nil {
+		e.server.warnf("pre-authorised protection: restart the veto clock of %s: %v", rec.Key, err)
 	}
 }
 

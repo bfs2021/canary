@@ -793,8 +793,10 @@ type TradeProposalMandate struct {
 	SessionsToExpiry *int     `json:"sessions_to_expiry,omitempty"`
 	// Units is the plan's whole cut for this leg; the row's quantity is at
 	// most that, held to the order caps, and the next cycle measures the
-	// remainder from the position as it then is.
+	// remainder from the position as it then is. Lot is the step the cut
+	// moves in (one contract, or 1, 10 or 100 shares).
 	Units int `json:"units"`
+	Lot   int `json:"lot,omitempty"`
 	// RiskAnnualBase and BudgetAnnualSD are the verdict's figures;
 	// TargetAnnualSD what the batch sizes to; RiskCutAnnualBase the risk this
 	// cut removes in its place in the batch; RiskAfterAnnualBase the risk once
@@ -811,8 +813,12 @@ type TradeProposalMandate struct {
 	VerdictFingerprint string    `json:"verdict_fingerprint"`
 	// Episode names the breach the row belongs to, from the batch's first
 	// verdict until a verdict reads within: a row re-sized inside one episode
-	// keeps its veto clock (proposal_automatic.go).
+	// by at most one lot above the size its notice carried keeps its veto
+	// clock (proposal_automatic.go). Session is the trading date (New York)
+	// of the verdict it was sized on: part of the row's revision, so a DAY
+	// order that expired unfilled is proposed afresh the next session.
 	Episode string `json:"episode,omitempty"`
+	Session string `json:"session,omitempty"`
 	// Held says the row waits: the verdict cannot be measured right now, so
 	// the sizing cannot be confirmed; HoldReason says why. A held row is not
 	// sent, by the scheduler or by hand, and keeps its veto window.
