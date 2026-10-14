@@ -8,6 +8,7 @@ Stock protection
 Rulebook       true (write/config)
 Earnings overrides
                1 symbol(s)
+Chain recorder false (write/runtime) · SPX, SPY, QQQ + held option underlyings
 Trading freeze false (write/runtime)
 TWS order control
                false (write/runtime)
@@ -41,6 +42,7 @@ Canary Settings  \x1b[2m\x1b[1mDATA UNKNOWN\x1b[0m\x1b[0m
 \x1b[2mRulebook      \x1b[0m true (write/config)
 \x1b[2mEarnings overrides\x1b[0m
 \x1b[2m              \x1b[0m 1 symbol(s)
+\x1b[2mChain recorder\x1b[0m false (write/runtime) · SPX, SPY, QQQ + held option underlyings
 \x1b[2mTrading freeze\x1b[0m false (write/runtime)
 \x1b[2mTWS order control\x1b[0m
 \x1b[2m              \x1b[0m false (write/runtime)

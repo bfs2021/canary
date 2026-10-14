@@ -174,6 +174,14 @@ or pending, a patch cannot set it, and the live account stays off until it
 exists. A version-4 document that carries the block is refused by the strict
 decoder, so a rollback never reads the newer preference as an old one.
 
+`chains.recorder.enabled` and `chains.recorder.symbols` (document version 6,
+2026-10-14) are the option-chain recorder's switch, off by default, and its
+explicit underlyings; `null` on the list restores SPX, SPY, QQQ and `[]` keeps
+held option underlyings only ([option-chain-recorder.md](option-chain-recorder.md)).
+They govern market-data reads, never a broker write, so any origin may change
+them and neither touches the trading-control generation. A version-5 document
+that carries the block is refused by the strict decoder.
+
 `regime.journal.enabled` retains its public name but controls forward
 collection of typed regime-decision events in `daemon.db`. It does not enable
 a JSONL writer.

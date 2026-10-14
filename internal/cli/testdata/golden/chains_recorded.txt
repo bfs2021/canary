@@ -1,0 +1,54 @@
+# canary chains recorded · COLUMNS=80 · colour off
+
+Option-chain recorder  ON
+
+Symbols        SPX, SPY, QQQ (default) + held option underlyings, at most 12
+Plan           two nearest standard monthlies and the nearest weekly; strikes
+               within ±20% of spot, at most 40 per expiry, calls and puts; 30
+               min before the close
+Lines          at most 4 at once; 20 kept free for the live display and orders
+Next run       2026-10-15 15:30 ET
+Store          option-chains.db · 2 runs · 642 rows · 141 KB
+
+2026-10-14 · run 2 · partial (pacing)
+  Started 15:30 ET · finished 15:38 ET · close 16:00 ET
+  Quoted 389 of 480 (81%) · two-sided 380 · IV 395 · greeks 395 · OI 371
+  SPY · explicit · spot 662.41 · 3 expiries · 236 of 240 quoted
+  SYNA · held · spot 101.50 · 3 expiries · 153 of 240 quoted
+  SYNB · held · chain unavailable: security definition farm unavailable
+  Not quoted: no quote 8 · not attempted 78 · pacing 5
+2026-10-13 · run 1 · interrupted
+  Started 15:30 ET · close 16:00 ET
+  Quoted 160 of 240 (66%) · two-sided 158 · IV 161 · greeks 161 · OI 150
+  SPY · explicit · spot 659.02 · 3 expiries · 160 of 240 quoted
+  Not quoted: no quote 2 · never reached 78
+
+Market-data reads only; nothing here is an order. --csv exports the rows; empty
+cells were not observed.
+# canary chains recorded · COLUMNS=80 · colour on, ESC written as \x1b
+
+Option-chain recorder  \x1b[32m\x1b[1mON\x1b[0m\x1b[0m
+
+\x1b[2mSymbols       \x1b[0m SPX, SPY, QQQ (default) + held option underlyings, at most 12
+\x1b[2mPlan          \x1b[0m two nearest standard monthlies and the nearest weekly; strikes
+               within ±20% of spot, at most 40 per expiry, calls and puts; 30
+               min before the close
+\x1b[2mLines         \x1b[0m at most 4 at once; 20 kept free for the live display and orders
+\x1b[2mNext run      \x1b[0m 2026-10-15 15:30 ET
+\x1b[2mStore         \x1b[0m option-chains.db · 2 runs · 642 rows · 141 KB
+
+\x1b[1m2026-10-14 · run 2 · \x1b[33mpartial\x1b[0m (pacing)\x1b[0m
+  \x1b[2mStarted 15:30 ET · finished 15:38 ET · close 16:00 ET\x1b[0m
+  Quoted 389 of 480 (81%) · two-sided 380 · IV 395 · greeks 395 · OI 371
+  SPY · explicit · spot 662.41 · 3 expiries · 236 of 240 quoted
+  SYNA · held · spot 101.50 · 3 expiries · 153 of 240 quoted
+  \x1b[33mSYNB · held · chain unavailable: security definition farm unavailable\x1b[0m
+  \x1b[2mNot quoted: no quote 8 · not attempted 78 · pacing 5\x1b[0m
+\x1b[1m2026-10-13 · run 1 · \x1b[33minterrupted\x1b[0m\x1b[0m
+  \x1b[2mStarted 15:30 ET · close 16:00 ET\x1b[0m
+  Quoted 160 of 240 (66%) · two-sided 158 · IV 161 · greeks 161 · OI 150
+  SPY · explicit · spot 659.02 · 3 expiries · 160 of 240 quoted
+  \x1b[2mNot quoted: no quote 2 · never reached 78\x1b[0m
+
+\x1b[2mMarket-data reads only; nothing here is an order. --csv exports the rows; empty\x1b[0m
+\x1b[2mcells were not observed.\x1b[0m

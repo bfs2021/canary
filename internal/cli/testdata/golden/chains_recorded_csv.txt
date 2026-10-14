@@ -1,0 +1,10 @@
+# canary chains recorded --date 2026-10-14 --csv · COLUMNS=80 · colour off
+run_id,session_date,symbol,trading_class,expiry,expiry_slot,strike,right,status,detail,con_id,bid,ask,last,bid_size,ask_size,volume,open_interest,iv,delta,gamma,vega,theta,underlying_price,model_source,feed,requested_at,observed_at,quote_received_at,last_trade_at
+2,2026-10-14,SPY,SPY,2026-11-20,monthly_2,660,C,quoted,,900001,14.2,14.27,14.25,41,18,3120,25410,0.1564,0.5312,0.0091,0.8811,-0.1622,662.38,live,live,2026-10-14T19:35:00.000Z,2026-10-14T19:35:00.900Z,2026-10-14T19:35:00.450Z,2026-10-14T19:33:00.000Z
+2,2026-10-14,SPY,SPY,2026-11-20,monthly_2,530,P,model_only,,,,,,,,,,0.3102,-0.0211,0.0004,0.0912,-0.0187,,live,live,2026-10-14T19:35:00.000Z,2026-10-14T19:35:03.000Z,,
+2,2026-10-14,SPY,SPY,2026-10-23,weekly,700,C,not_attempted,pacing,,,,,,,,,,,,,,,,,,,,
+# canary chains recorded --date 2026-10-14 --csv · COLUMNS=80 · colour on, ESC written as \x1b
+run_id,session_date,symbol,trading_class,expiry,expiry_slot,strike,right,status,detail,con_id,bid,ask,last,bid_size,ask_size,volume,open_interest,iv,delta,gamma,vega,theta,underlying_price,model_source,feed,requested_at,observed_at,quote_received_at,last_trade_at
+2,2026-10-14,SPY,SPY,2026-11-20,monthly_2,660,C,quoted,,900001,14.2,14.27,14.25,41,18,3120,25410,0.1564,0.5312,0.0091,0.8811,-0.1622,662.38,live,live,2026-10-14T19:35:00.000Z,2026-10-14T19:35:00.900Z,2026-10-14T19:35:00.450Z,2026-10-14T19:33:00.000Z
+2,2026-10-14,SPY,SPY,2026-11-20,monthly_2,530,P,model_only,,,,,,,,,,0.3102,-0.0211,0.0004,0.0912,-0.0187,,live,live,2026-10-14T19:35:00.000Z,2026-10-14T19:35:03.000Z,,
+2,2026-10-14,SPY,SPY,2026-10-23,weekly,700,C,not_attempted,pacing,,,,,,,,,,,,,,,,,,,,

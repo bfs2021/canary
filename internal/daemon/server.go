@@ -65,6 +65,9 @@ type Server struct {
 	deskExecutionMu         sync.Mutex
 	stockAddEvidenceForTest func(context.Context, rpc.AddParams) (stockAddEvidence, error)
 	marketTapeCollecting    atomic.Bool
+	// chainRecorder is the option-chain recorder's store and run state; it
+	// stays idle unless chains.recorder.enabled is set.
+	chainRecorder           chainRecorderRuntime
 	marketTapeArchiveFailed atomic.Bool
 
 	dataHealth    dataHealthState
@@ -1522,6 +1525,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.startLendingMarketRefresh(serverCtx)
 	s.startShortInterestRefresh(serverCtx)
 	s.startMarketTapeCollection(serverCtx)
+	s.startChainRecorder(serverCtx)
 	s.startDataHealthChecks(serverCtx)
 	go s.runCoreStoreRecoveryLoop(serverCtx)
 	go s.runAccountPnLAuthorityLoop(serverCtx)
@@ -2804,6 +2808,10 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleChainFetch(ctx, req) })
 	case rpc.MethodChainExpiries:
 		s.unary(req, enc, func() (any, error) { return s.handleChainExpiries(ctx, req) })
+	case rpc.MethodChainsRecorded:
+		s.unary(req, enc, func() (any, error) { return s.handleChainsRecorded(ctx, req) })
+	case rpc.MethodChainsRecordedRows:
+		s.unary(req, enc, func() (any, error) { return s.handleChainsRecordedRows(ctx, req) })
 	case rpc.MethodTechnical:
 		s.unary(req, enc, func() (any, error) { return s.handleTechnical(ctx, req) })
 	case rpc.MethodAddPlan:
@@ -3153,6 +3161,9 @@ func (s *Server) backgroundTasks() []rpc.BackgroundTaskStatus {
 	tasks := []rpc.BackgroundTaskStatus{}
 	if s.marketTapeCollecting.Load() {
 		tasks = append(tasks, rpc.BackgroundTaskStatus{Name: "market-tape", Status: "archiving"})
+	}
+	if s.chainRecorder.running.Load() {
+		tasks = append(tasks, rpc.BackgroundTaskStatus{Name: "chain-recorder", Status: "recording"})
 	}
 	if s.breadth != nil && s.breadth.IsBusy() {
 		tasks = append(tasks, rpc.BackgroundTaskStatus{Name: "breadth-spx", Status: "computing"})

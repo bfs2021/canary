@@ -162,6 +162,23 @@ func settingsPatchFromAssignment(raw string) (json.RawMessage, error) {
 		}
 		return marshalPatch(append(path, mapSymbol), value)
 	}
+	if spec.Kind == rpc.SettingsKindSymbolList {
+		// Symbol lists take SYM,SYM,...; [] is an empty list and null
+		// restores the default. The daemon validates each symbol.
+		switch {
+		case strings.EqualFold(valueRaw, "null"):
+			return marshalPatch(path, nil)
+		case valueRaw == "[]":
+			return marshalPatch(path, []string{})
+		}
+		symbols := []string{}
+		for part := range strings.SplitSeq(valueRaw, ",") {
+			if part = strings.ToUpper(strings.TrimSpace(part)); part != "" {
+				symbols = append(symbols, part)
+			}
+		}
+		return marshalPatch(path, symbols)
+	}
 	if spec.Kind == rpc.SettingsKindDateFormat || spec.Kind == rpc.SettingsKindCashSweepPriority {
 		if strings.EqualFold(valueRaw, "null") {
 			return marshalPatch(path, nil)
@@ -243,7 +260,8 @@ func printSettingsSetUsage(env *Env) {
 	fmt.Fprintln(env.Stdout, "Values are true, false, null, or the documented closed string set.")
 	fmt.Fprintln(env.Stdout, "Date format takes us, eu, us_weekday, or eu_weekday. Earnings overrides take")
 	fmt.Fprintln(env.Stdout, "YYYY-MM-DD (optional Tamc/Tbmo suffix), null to clear one symbol, or")
-	fmt.Fprintln(env.Stdout, "null on the bare earnings_overrides key to clear all of them.")
+	fmt.Fprintln(env.Stdout, "null on the bare earnings_overrides key to clear all of them. Symbol lists take")
+	fmt.Fprintln(env.Stdout, "SYM,SYM,... , [] for none, or null for the default list.")
 	fmt.Fprintln(env.Stdout)
 	fmt.Fprintln(env.Stdout, "The daemon still decides writability from each field's access/source metadata.")
 }
@@ -277,6 +295,7 @@ func renderSettingsText(env *Env, st *rpc.PlatformSettings) {
 	if n := len(st.Features.Rulebook.EarningsOverrides.Value); n > 0 {
 		displayRow(env, out, "Earnings overrides", fmt.Sprintf("%d symbol(s)", n))
 	}
+	displayRow(env, out, "Chain recorder", formatChainRecorderSetting(env, st.Chains.Recorder))
 	displayRow(env, out, "Trading freeze", formatSettingsBool(env, st.Trading.Freeze))
 	displayRow(env, out, "TWS order control", formatTWSOrderControlSetting(env, st.Trading.TWSOrderControl))
 	displayRow(env, out, "Trading", nonEmpty(st.Trading.Mode.Value, "disabled"))
@@ -354,6 +373,16 @@ func orderCapSettingText(f rpc.SettingsFloat) string {
 		return strings.TrimPrefix(reason, "risk-policy.toml [order_limits]: ")
 	}
 	return fmt.Sprintf("%.2f (%s)", f.Value, accessSummary(f.Access, f.Source))
+}
+
+// formatChainRecorderSetting renders the option-chain recorder's switch and
+// its explicit underlyings.
+func formatChainRecorderSetting(env *Env, rec rpc.ChainRecorderSettings) string {
+	symbols := strings.Join(rec.Symbols.Value, ", ")
+	if symbols == "" {
+		symbols = "no explicit symbols"
+	}
+	return formatSettingsBool(env, rec.Enabled) + " · " + symbols + " + held option underlyings"
 }
 
 // formatTWSOrderControlSetting renders the TWS order-control switch with its

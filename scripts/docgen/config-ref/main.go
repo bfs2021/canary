@@ -599,6 +599,8 @@ func render(tables [][]tomlField, envs []envVar) string {
 			grammar = "usd_first/balanced/eur_first/null"
 		case rpc.SettingsKindDateFormat:
 			grammar = "us/eu/us_weekday/eu_weekday/null"
+		case rpc.SettingsKindSymbolList:
+			grammar = "SYM,SYM,.../[]/null"
 		}
 		fmt.Fprintf(out, "| `%s` | `%s` | %s | %s |\n", key, grammar, spec.Class, escapeTable(spec.Doc))
 	}

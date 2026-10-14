@@ -810,6 +810,7 @@ func sanitizeOrderStatusForMCP(res *rpc.OrderStatusResult) {
 var ExcludedCLI = map[string]string{
 	"watchlist": "owner-managed local preferences; typed read-only client and owner CLI, no model mutation tool",
 	"setups":    "owner-configured entry observations ship through CLI and the typed host client first; no model tool or automatic playbook activation",
+	"chains":    "research panel of recorded option chains: bulk CSV export and run coverage for the owner, not a decision input; read-only CLI and RPC only",
 	"version":   "info-only CLI verb; not useful as a tool call",
 	"mcp":       "transport server mode; the MCP host starts this process, no LLM should call it as a tool",
 	"daemon":    "local background service mode; autospawned by CLI/MCP clients and not an agent operation",

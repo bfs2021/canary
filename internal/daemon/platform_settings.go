@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/osauer/canary/v2/internal/chainrec"
 	"github.com/osauer/canary/v2/internal/config"
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
 	"github.com/osauer/canary/v2/internal/risk"
@@ -32,7 +33,8 @@ type platformSettingsStore struct {
 
 // Persisted shape versions of the platform-settings state document. Version 1
 const (
-	platformSettingsDocVersion          = 5
+	platformSettingsDocVersion          = 6
+	platformSettingsDocVersionTWS       = 5
 	platformSettingsDocVersionCashSweep = 4
 	platformSettingsDocVersionDisplay   = 3
 	platformSettingsDocVersionStress    = 2
@@ -49,6 +51,21 @@ type platformSettingsData struct {
 	Regime                   platformRegimeSettingsData    `json:"regime"`
 	Stress                   platformStressSettingsData    `json:"stress"`
 	History                  platformHistorySettingsData   `json:"history"`
+	// Chains is the v6 option-chain recorder block.
+	Chains platformChainsSettingsData `json:"chains"`
+}
+
+// platformChainsSettingsData holds the option-chain recorder's preferences
+// (internal-docs/design/option-chain-recorder.md). Enabled nil or false is
+// off; Symbols nil is the default explicit list, an empty list records held
+// option underlyings only.
+type platformChainsSettingsData struct {
+	Recorder platformChainRecorderSettingsData `json:"recorder"`
+}
+
+type platformChainRecorderSettingsData struct {
+	Enabled *bool     `json:"enabled,omitempty"`
+	Symbols *[]string `json:"symbols,omitempty"`
 }
 
 // platformSettingsDocument is the decode shape of a persisted settings
@@ -109,6 +126,20 @@ type platformSettingsDocumentV4 struct {
 	History                  platformHistorySettingsData   `json:"history"`
 }
 
+// platformSettingsDocumentV5 is the complete persisted version-5 shape, before
+// the option-chain recorder block.
+type platformSettingsDocumentV5 struct {
+	Version                  int                           `json:"version"`
+	TradingControlGeneration uint64                        `json:"trading_control_generation"`
+	Display                  platformDisplaySettingsData   `json:"display"`
+	CashSweep                platformCashSweepSettingsData `json:"cash_sweep"`
+	Features                 platformFeatureSettingsData   `json:"features"`
+	Trading                  platformTradingSettingsData   `json:"trading"`
+	Regime                   platformRegimeSettingsData    `json:"regime"`
+	Stress                   platformStressSettingsData    `json:"stress"`
+	History                  platformHistorySettingsData   `json:"history"`
+}
+
 type platformCashSweepSettingsData struct {
 	CurrencyPriority *string `json:"currency_priority,omitempty"`
 }
@@ -138,7 +169,7 @@ func (d platformSettingsDocument) upgrade() (platformSettingsData, error) {
 		}
 		data.Version = platformSettingsDocVersionStress
 		fallthrough
-	case platformSettingsDocVersionStress, platformSettingsDocVersionDisplay, platformSettingsDocVersionCashSweep:
+	case platformSettingsDocVersionStress, platformSettingsDocVersionDisplay, platformSettingsDocVersionCashSweep, platformSettingsDocVersionTWS:
 		data.Version = platformSettingsDocVersion
 	case platformSettingsDocVersion:
 	default:
@@ -219,6 +250,17 @@ func decodePlatformSettingsDocument(raw []byte) (platformSettingsDocument, error
 		return platformSettingsDocument{Version: prior.Version, TradingControlGeneration: prior.TradingControlGeneration,
 			Display: prior.Display, CashSweep: prior.CashSweep, Features: prior.Features, Trading: prior.Trading.upgrade(),
 			Regime: prior.Regime, Stress: prior.Stress, History: prior.History}, nil
+	case platformSettingsDocVersionTWS:
+		var prior platformSettingsDocumentV5
+		if err := decodeStrictPlatformSettingsJSON(raw, &prior); err != nil {
+			return platformSettingsDocument{}, err
+		}
+		if prior.Version != platformSettingsDocVersionTWS {
+			return platformSettingsDocument{}, fmt.Errorf("unsupported version %d", prior.Version)
+		}
+		return platformSettingsDocument{Version: prior.Version,
+			TradingControlGeneration: prior.TradingControlGeneration, Display: prior.Display, CashSweep: prior.CashSweep,
+			Features: prior.Features, Trading: prior.Trading, Regime: prior.Regime, Stress: prior.Stress, History: prior.History}, nil
 	case platformSettingsDocVersion:
 		var current platformSettingsData
 		if err := decodeStrictPlatformSettingsJSON(raw, &current); err != nil {
@@ -603,6 +645,10 @@ func canonicalPlatformSettingValue(data platformSettingsData, key string) (json.
 		value = data.Regime.Journal.Enabled
 	case "stress.journal.enabled":
 		value = data.Stress.Journal.Enabled
+	case "chains.recorder.enabled":
+		value = data.Chains.Recorder.Enabled
+	case "chains.recorder.symbols":
+		value = data.Chains.Recorder.Symbols
 	default:
 		return nil, errBadRequest("unknown settings field " + key)
 	}
@@ -845,6 +891,15 @@ func applySettingsKey(next *platformSettingsData, key string, raw json.RawMessag
 		return boolField(&next.Regime.Journal.Enabled)
 	case "stress.journal.enabled":
 		return boolField(&next.Stress.Journal.Enabled)
+	case "chains.recorder.enabled":
+		return boolField(&next.Chains.Recorder.Enabled)
+	case "chains.recorder.symbols":
+		v, err := nullableSymbolList(raw)
+		if err != nil {
+			return errBadRequest("chains.recorder.symbols " + err.Error())
+		}
+		next.Chains.Recorder.Symbols = v
+		return nil
 	default:
 		return errBadRequest("unknown settings field " + key)
 	}
@@ -902,6 +957,23 @@ func nullableBool(raw json.RawMessage) (*bool, error) {
 		return nil, err
 	}
 	return &v, nil
+}
+
+// nullableSymbolList decodes a list of underlying symbols or null. The list
+// is validated, upper-cased and de-duplicated; an empty list is kept.
+func nullableSymbolList(raw json.RawMessage) (*[]string, error) {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return nil, nil
+	}
+	var v []string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, errors.New("must be a list of symbols or null")
+	}
+	out, err := chainrec.NormalizeSymbols(v)
+	if err != nil {
+		return nil, errors.New("must be a list of symbols or null: " + err.Error())
+	}
+	return &out, nil
 }
 
 func nullableString(raw json.RawMessage) (*string, error) {
@@ -987,6 +1059,7 @@ func (s *Server) platformSettingsSnapshot(observed *platformSettingsObserved) rp
 				Enabled: settingsBool(stressJournalEnabledFrom(data), rpc.SettingsAccessWrite, rpc.SettingsSourceRuntime, "forward portfolio-stress decision-event collection in daemon.db (calibration corpus); safe to disable"),
 			},
 		},
+		Chains: chainRecorderPlatformSettings(data),
 		History: rpc.PlatformHistorySettings{
 			Rotation: rpc.HistoryRotationSettings{
 				Enabled:       settingsBool(false, rpc.SettingsAccessRead, rpc.SettingsSourceBuild, "retired: daemon.db stores decision events directly and has no journal-rotation layer"),

@@ -40,6 +40,7 @@ Prices, signals and market calendars
   watchlist       View and edit your saved watchlist
   setups          Review volume signals, find call options and check prices
                   after entry
+  chains          Recorded daily option chains and their coverage
   calendar        Exchange hours, holidays and early closes
   macro           Economic calendar and official releases
   regime          Market conditions across eight indicators
@@ -105,6 +106,7 @@ Start: canary status — check the broker connection
   \x1b[36mwatchlist       \x1b[0mView and edit your saved watchlist
   \x1b[36msetups          \x1b[0mReview volume signals, find call options and check prices
                   after entry
+  \x1b[36mchains          \x1b[0mRecorded daily option chains and their coverage
   \x1b[36mcalendar        \x1b[0mExchange hours, holidays and early closes
   \x1b[36mmacro           \x1b[0mEconomic calendar and official releases
   \x1b[36mregime          \x1b[0mMarket conditions across eight indicators
