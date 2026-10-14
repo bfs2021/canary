@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -500,7 +501,43 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 			Message: fmt.Sprintf("Mandate budget: with this order the risk would be %s a year, over the budget %s (now %s).", mandateMoney(with.Risk.SDAnnualBase, ccy), mandateMoney(budget, ccy), mandateMoney(result.Verdict.Risk.SDAnnualBase, ccy)) + open,
 			Action:  "Size it smaller, or reduce elsewhere first; `canary mandate` has the measurement."}
 	}
+	// The gap caps bind an addition as the budget does: an order that
+	// would create a gap-cap breach, or deepen one, is refused, or the
+	// forced reduction would sell it back on the next readings
+	// (core-sleeve.md, review B1).
+	if u, ok := mandateGapBreachAdded(result.Verdict, with); ok {
+		return &rpc.TradingBlocker{Code: mandateBudgetCode,
+			Message: fmt.Sprintf("Mandate budget: with this order a %s gap in %s would lose %s, over the gap cap %s.", mandateGapPct(u.GapShockPct), u.Underlying, mandateMoney(u.GapLossBase, ccy), mandateMoney(u.GapCapBase, ccy)) + open,
+			Action:  "Size it smaller; `canary mandate` has each name's gap against its cap."}
+	}
 	return nil
+}
+
+// mandateGapBreachAdded finds the first underlying whose gap loss breaches
+// its cap with the order and did not before it, or breaches by more than it
+// did: an addition that creates or deepens a gap-cap breach.
+func mandateGapBreachAdded(before *mandate.Verdict, with mandate.Verdict) (mandate.UnderlyingReport, bool) {
+	prior := map[string]mandate.UnderlyingReport{}
+	if before != nil {
+		for _, u := range before.Underlyings {
+			prior[u.Underlying] = u
+		}
+	}
+	for _, u := range with.Underlyings {
+		if !u.GapBreach {
+			continue
+		}
+		was, held := prior[u.Underlying]
+		if !held || !was.GapBreach || u.GapLossBase > was.GapLossBase+1e-6 {
+			return u, true
+		}
+	}
+	return mandate.UnderlyingReport{}, false
+}
+
+// mandateGapPct names a gap shock in a refusal: "−25%".
+func mandateGapPct(v float64) string {
+	return "−" + strconv.FormatFloat(v, 'f', -1, 64) + "%"
 }
 
 // mandateBudgetGateError is the gate as the admission and wire-guard checks

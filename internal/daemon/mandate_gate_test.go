@@ -671,3 +671,86 @@ func TestMandateHistoryRefreshOncePerSessionAndFreshness(t *testing.T) {
 		t.Fatalf("reloaded series %+v", loaded)
 	}
 }
+
+// Within budget, an addition that would take one name's gap loss over its
+// cap is refused on its own, though the volatility budget would admit it,
+// with the gap and the cap it would breach; the same notional in a broad
+// index fund passes at the owner's index gap (D4) and is refused without
+// it. A smaller addition inside the cap passes (core-sleeve.md, review B1).
+func TestMandateGateRefusesAnAdditionThatBreachesAGapCap(t *testing.T) {
+	c := testMandateConstitution()
+	srv, _ := mandateTestServer(t, c)
+	seedMandateHistory(t, srv, 0)
+	for _, s := range []*mandateHistorySeries{mandateTestSeries("u:SYNC", 0.25, 5, 0), mandateTestSeries("u:SXR8", 0.12, 9, 0)} {
+		if err := srv.saveMandateSeries(t.Context(), s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
+	res := srv.evaluateMandate(t.Context(), false)
+	if res.Verdict.Status != mandate.StatusWithin {
+		t.Fatalf("book: %s %v", res.Verdict.Status, res.Verdict.Reasons)
+	}
+	capBase := res.Verdict.Stresses.GapCapBase // 0.30 × 230,000 × 0.333 at full room
+	buy := func(sym string, shares int) rpc.OrderDraft {
+		return rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: shares, LimitPrice: 100, Contract: rpc.ContractParams{Symbol: sym, SecType: "STK", Currency: "EUR"}}
+	}
+	// An unheld name is priced at its last decision-grade close.
+	spot := func(key string) float64 {
+		series := srv.mandateHistorySeries(t.Context(), key)
+		return series.Closes[len(series.Closes)-1]
+	}
+	inside := int(capBase / (spot("u:SYNC") * 0.25))
+	if blocker := srv.mandateBudgetGate(buy("SYNC", inside), mandateOpen); blocker != nil {
+		t.Fatalf("a buy inside the gap cap: %+v", blocker)
+	}
+	blocker := srv.mandateBudgetGate(buy("SYNC", inside+20), mandateOpen)
+	if blocker == nil || blocker.Code != mandateBudgetCode || !strings.Contains(blocker.Message, "a −25% gap in SYNC would lose") || !strings.Contains(blocker.Message, "over the gap cap") {
+		t.Fatalf("a buy over the gap cap: %+v", blocker)
+	}
+	// The volatility alone would admit it.
+	_, kept, _, _ := srv.mandateVerdicts.current()
+	book, missing := srv.mandateOrderBook(buy("SYNC", inside+20), kept, mandateTestNow)
+	leg, ok := mandateOrderLeg(buy("SYNC", inside+20), &book)
+	if len(missing) != 0 || !ok {
+		t.Fatalf("order book: %v %v", missing, ok)
+	}
+	if with := mandate.Evaluate(mandate.WithLeg(book, leg)); with.Risk == nil || with.Risk.SDAnnualBase > with.Capital.BudgetAnnualSD {
+		t.Fatalf("fixture: the volatility budget already refuses %+v", with.Risk)
+	}
+	// A broad index fund worth six times the cap: its 25% gap loses one
+	// and a half caps, refused; its 12% gap 0.72 of a cap, admitted. At
+	// 8.6 times the cap even the 12% gap breaches.
+	fund := buy("SXR8", int(6*capBase/spot("u:SXR8")))
+	if blocker := srv.mandateBudgetGate(fund, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "a −25% gap in SXR8") {
+		t.Fatalf("a broad index without index_gap_shock_pct: %+v", blocker)
+	}
+	c.Mandate.IndexGapShockPct = new(12.0)
+	if res := srv.evaluateMandate(t.Context(), false); res.Verdict.Status != mandate.StatusWithin {
+		t.Fatalf("book with the index gap: %s %v", res.Verdict.Status, res.Verdict.Reasons)
+	}
+	if blocker := srv.mandateBudgetGate(fund, mandateOpen); blocker != nil {
+		t.Fatalf("a broad index at the 12%% index gap: %+v", blocker)
+	}
+	if blocker := srv.mandateBudgetGate(buy("SXR8", int(8.6*capBase/spot("u:SXR8"))), mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "a −12% gap in SXR8") {
+		t.Fatalf("a broad index over its cap at 12%%: %+v", blocker)
+	}
+}
+
+// A breach the book already carries is never deepened by an addition, and
+// a gap-cap check never refuses an order that leaves the breach as it was.
+func TestMandateGapBreachAddedComparesWithTheStandingBook(t *testing.T) {
+	before := &mandate.Verdict{Underlyings: []mandate.UnderlyingReport{{Underlying: "SYNA", GapLossBase: 30000, GapCapBase: 20000, GapBreach: true}, {Underlying: "SYNB", GapLossBase: 1000, GapCapBase: 20000}}}
+	same := mandate.Verdict{Underlyings: []mandate.UnderlyingReport{{Underlying: "SYNA", GapLossBase: 30000, GapCapBase: 20000, GapBreach: true}, {Underlying: "SYNB", GapLossBase: 5000, GapCapBase: 20000}}}
+	if u, ok := mandateGapBreachAdded(before, same); ok {
+		t.Fatalf("an addition elsewhere refused for a standing breach: %+v", u)
+	}
+	deeper := mandate.Verdict{Underlyings: []mandate.UnderlyingReport{{Underlying: "SYNA", GapLossBase: 31000, GapCapBase: 20000, GapBreach: true}}}
+	if u, ok := mandateGapBreachAdded(before, deeper); !ok || u.Underlying != "SYNA" {
+		t.Fatal("a deeper breach passed")
+	}
+	created := mandate.Verdict{Underlyings: []mandate.UnderlyingReport{{Underlying: "SYNC", GapLossBase: 21000, GapCapBase: 20000, GapBreach: true}}}
+	if u, ok := mandateGapBreachAdded(before, created); !ok || u.Underlying != "SYNC" {
+		t.Fatal("a new breach passed")
+	}
+}

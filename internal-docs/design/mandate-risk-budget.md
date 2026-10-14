@@ -139,7 +139,10 @@ proposal the owner confirms by writing it into the policy file.
   verdict reads `within`, additions pass; there is no latch and no reset.
   The incremental pre-trade check re-evaluates the book with the proposed
   leg added and refuses an addition that would take the annualised risk
-  over the budget even while the standing verdict reads `within`. An
+  over the budget even while the standing verdict reads `within`, and one
+  that would create a gap-cap breach or deepen one (2026-10-14, the core
+  sleeve's design review B1: an addition the gap caps refuse would
+  otherwise be admitted and then sold back by the forced reduction). An
   addition on a name or in a currency the book does not hold is measured on
   the series the history store keeps for it (spot from its last close when
   the book holds none); while none is fresh, the order is refused
