@@ -179,8 +179,14 @@ type UnderlyingReport struct {
 	ValueBase       float64 `json:"value_base"`
 	ContributionPct float64 `json:"contribution_pct"`
 	Beta            float64 `json:"beta"`
-	// GapDownLossBase is the loss at −gap_shock_pct; GapUpLossBase is the
-	// loss at +gap_shock_pct where a short call or short stock loses on the
+	// BroadIndex says every leg of the underlying is on the broad index
+	// list (IsBroadIndex); GapShockPct is the gap it was stressed by: the
+	// policy's index_gap_shock_pct for a broad index when written, else
+	// gap_shock_pct.
+	BroadIndex  bool    `json:"broad_index,omitempty"`
+	GapShockPct float64 `json:"gap_shock_pct"`
+	// GapDownLossBase is the loss at −GapShockPct; GapUpLossBase is the
+	// loss at +GapShockPct where a short call or short stock loses on the
 	// upside, else nil. GapLossBase is the worse of the two.
 	GapDownLossBase float64  `json:"gap_down_loss_base"`
 	GapUpLossBase   *float64 `json:"gap_up_loss_base,omitempty"`
@@ -191,9 +197,13 @@ type UnderlyingReport struct {
 
 // Stresses is the named stress set.
 type Stresses struct {
-	GapShockPct   float64 `json:"gap_shock_pct"`
-	GapCapBase    float64 `json:"gap_cap_base"`
-	IndexShockPct float64 `json:"index_shock_pct"`
+	// GapShockPct is the one-name gap; IndexGapShockPct the gap a broad
+	// index takes instead (equal to GapShockPct while the policy carries no
+	// index_gap_shock_pct).
+	GapShockPct      float64 `json:"gap_shock_pct"`
+	IndexGapShockPct float64 `json:"index_gap_shock_pct,omitempty"`
+	GapCapBase       float64 `json:"gap_cap_base"`
+	IndexShockPct    float64 `json:"index_shock_pct"`
 	// IndexLossBase is the loss when the index falls IndexShockPct and every
 	// name follows with its beta.
 	IndexLossBase float64 `json:"index_loss_base"`
@@ -495,9 +505,8 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 	// Betas to the index over the same returns.
 	indexReturns := returns["u:"+IndexSymbol]
 	indexMean, indexVar := meanVar(indexReturns)
-	gap := in.Policy.GapShockPct / 100
 	cap := GapCapBase(in.Policy, in.Capital)
-	stresses := &Stresses{GapShockPct: in.Policy.GapShockPct, GapCapBase: cap, IndexShockPct: IndexShockPct}
+	stresses := &Stresses{GapShockPct: in.Policy.GapShockPct, IndexGapShockPct: in.Policy.GapShockPctFor(true), GapCapBase: cap, IndexShockPct: IndexShockPct}
 	betas := map[string]float64{}
 	for _, name := range order {
 		u := byUnderlying[name]
@@ -507,6 +516,9 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 			u.Beta = covariance(returns["u:"+name], indexReturns, indexMean) / indexVar
 		}
 		betas[name] = u.Beta
+		u.BroadIndex = broadIndexUnderlying(legs, name)
+		u.GapShockPct = in.Policy.GapShockPctFor(u.BroadIndex)
+		gap := u.GapShockPct / 100
 		u.GapDownLossBase = shockLoss(legs, fxNow, func(l Leg) float64 {
 			if l.Underlying == name {
 				return 1 - gap
@@ -575,6 +587,22 @@ func shockLoss(legs []Leg, fxNow func(Leg) float64, factor func(Leg) float64) fl
 		loss -= (next - now) * fxNow(l)
 	}
 	return loss
+}
+
+// broadIndexUnderlying reports whether every leg of an underlying is on
+// the broad index list: one leg that is not keeps the one-name gap.
+func broadIndexUnderlying(legs []Leg, underlying string) bool {
+	found := false
+	for _, l := range legs {
+		if l.Underlying != underlying {
+			continue
+		}
+		if !IsBroadIndex(l.Underlying, l.Currency) {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 // upsideLoser reports whether an underlying carries a leg that loses when

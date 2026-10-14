@@ -129,9 +129,13 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 	if len(v.Underlyings) > 0 {
 		fmt.Fprintln(env.Stdout, "\n"+env.bold("Contributions")+"  share of the risk · beta to "+mandate.IndexSymbol+" · one-name gap against its cap")
 		for _, u := range v.Underlyings {
-			gap := fmt.Sprintf("gap −%s %s", mandatePct(v.Stresses.GapShockPct), mandateStressPnL(u.GapDownLossBase, ccy))
+			shock := u.GapShockPct
+			if shock <= 0 {
+				shock = v.Stresses.GapShockPct
+			}
+			gap := fmt.Sprintf("gap −%s %s", mandatePct(shock), mandateStressPnL(u.GapDownLossBase, ccy))
 			if u.GapUpLossBase != nil {
-				gap += fmt.Sprintf(", +%s %s", mandatePct(v.Stresses.GapShockPct), mandateStressPnL(*u.GapUpLossBase, ccy))
+				gap += fmt.Sprintf(", +%s %s", mandatePct(shock), mandateStressPnL(*u.GapUpLossBase, ccy))
 			}
 			gap += " (cap " + mandateCap(u.GapCapBase) + ")"
 			line := briefJoin(u.Underlying, mandateShare(u.ContributionPct), fmt.Sprintf("beta %.2f", u.Beta), gap)

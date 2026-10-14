@@ -99,7 +99,10 @@ type MandatePolicyView struct {
 	TaxReserveBase float64 `json:"tax_reserve_base"`
 	StartedAt      string  `json:"started_at"`
 	GapShockPct    float64 `json:"gap_shock_pct"`
-	GapRoomPct     float64 `json:"gap_room_pct"`
+	// IndexGapShockPct is the broad index gap; nil while unwritten, when
+	// every underlying takes GapShockPct.
+	IndexGapShockPct *float64 `json:"index_gap_shock_pct,omitempty"`
+	GapRoomPct       float64  `json:"gap_room_pct"`
 	// Sleeves are the owner's recorded volatility shares; nil when unwritten.
 	Sleeves *MandateSleevesView `json:"sleeves,omitempty"`
 	// Unapproved names the material keys still unwritten.

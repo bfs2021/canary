@@ -270,7 +270,7 @@ func mandatePolicyNumbers(c *risk.Constitution) mandate.Policy {
 	}
 	m := c.Mandate
 	return mandate.Policy{MaxLossPct: policyCheckDeref(m.MaxLossPct), VolTargetPct: policyCheckDeref(m.VolTargetPct),
-		GapShockPct: policyCheckDeref(m.GapShockPct), GapRoomPct: policyCheckDeref(m.GapRoomPct)}
+		GapShockPct: policyCheckDeref(m.GapShockPct), IndexGapShockPct: policyCheckDeref(m.IndexGapShockPct), GapRoomPct: policyCheckDeref(m.GapRoomPct)}
 }
 
 // MandateCapitalForScope evaluates the mandate's capital state from the

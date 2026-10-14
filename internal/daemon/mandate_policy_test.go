@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -159,5 +160,51 @@ func TestMandateTableSurvivesMigrationUnchanged(t *testing.T) {
 		if !strings.Contains(template, key) {
 			t.Fatalf("template lacks %q", key)
 		}
+	}
+}
+
+// index_gap_shock_pct (owner decision D4, 2026-10-14) is optional: a table
+// without it keeps its fingerprint and every underlying on gap_shock_pct;
+// written, it is adopted with a higher policy_version, changes the
+// fingerprint, reaches the evaluator and is shown; out of range it is
+// refused and the last good policy stays in force.
+func TestMandateIndexGapShockKey(t *testing.T) {
+	withTable := strings.Replace(schema2ConstitutionTOML(), "policy_version = 5", "policy_version = 6", 1) + mandateTableTOML
+	m, path := newTestRiskPolicyManager(t, withTable)
+	without := m.snapshot().policy
+	if without.Mandate == nil || without.Mandate.IndexGapShockPct != nil {
+		t.Fatalf("fixture: %+v", without.Mandate)
+	}
+	if raw, _ := json.Marshal(without.Mandate); strings.Contains(string(raw), "index_gap_shock_pct") {
+		t.Fatalf("an absent key enters the fingerprint projection: %s", raw)
+	}
+	if p := mandatePolicyNumbers(without); p.IndexGapShockPct != 0 || p.GapShockPctFor(true) != 25 {
+		t.Fatalf("absent key: %+v", p)
+	}
+	written := strings.Replace(withTable, "policy_version = 6", "policy_version = 7", 1)
+	written = strings.Replace(written, "gap_room_pct = 33.3\n", "gap_room_pct = 33.3\nindex_gap_shock_pct = 12.0\n", 1)
+	writePolicyTestFile(t, path, written)
+	m.reload()
+	got := m.snapshot()
+	if got.status != rpc.RiskPolicyStatusActive || got.policy.Mandate.IndexGapShockPct == nil || *got.policy.Mandate.IndexGapShockPct != 12 {
+		t.Fatalf("written key: %s %q %+v", got.status, got.message, got.policy.Mandate)
+	}
+	if got.policy.FingerprintKey() == without.FingerprintKey() {
+		t.Fatal("writing index_gap_shock_pct left the fingerprint unchanged")
+	}
+	if p := mandatePolicyNumbers(got.policy); p.GapShockPctFor(true) != 12 || p.GapShockPctFor(false) != 25 {
+		t.Fatalf("written key: %+v", p)
+	}
+	if v := mandatePolicyView(got.policy.Mandate); v.IndexGapShockPct == nil || *v.IndexGapShockPct != 12 || len(v.Unapproved) != 0 {
+		t.Fatalf("view %+v", v)
+	}
+	good := got.policy
+	writePolicyTestFile(t, path, strings.Replace(strings.Replace(written, "policy_version = 7", "policy_version = 8", 1), "index_gap_shock_pct = 12.0", "index_gap_shock_pct = 0.0", 1))
+	m.reload()
+	if got := m.snapshot(); got.status != rpc.RiskPolicyStatusError || got.policy != good || !strings.Contains(got.message, "index_gap_shock_pct") {
+		t.Fatalf("zero index gap: %s %q", got.status, got.message)
+	}
+	if !strings.Contains(string(ConstitutionPolicyTemplate("test")), "# index_gap_shock_pct = 12.0") {
+		t.Fatal("the template lacks index_gap_shock_pct")
 	}
 }

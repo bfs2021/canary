@@ -15,6 +15,10 @@ type Policy struct {
 	VolTargetPct float64
 	// GapShockPct is the one-name gap each underlying is stressed by.
 	GapShockPct float64
+	// IndexGapShockPct is the gap a broad index (IsBroadIndex) is stressed
+	// by; zero, while the owner has not written it, stresses every
+	// underlying by GapShockPct.
+	IndexGapShockPct float64
 	// GapRoomPct is the share of the remaining loss room one name may lose
 	// in that gap.
 	GapRoomPct float64

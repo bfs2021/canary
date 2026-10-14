@@ -21,7 +21,7 @@ import (
 var mandateReductionVols = map[string]struct {
 	vol  float64
 	seed uint64
-}{"SPY": {0.16, 1}, "SYNA": {0.30, 2}, "SYNB": {0.40, 3}, "SYNC": {0.25, 5}}
+}{"SPY": {0.16, 1}, "SYNA": {0.30, 2}, "SYNB": {0.40, 3}, "SYNC": {0.25, 5}, "IBCF": {0.15, 8}}
 
 func mandateReductionStock(symbol string, conID int, shares, mark float64) rpc.PositionView {
 	return rpc.PositionView{Symbol: symbol, SecType: rpc.SecTypeStock, ConID: conID, Exchange: "SMART", Currency: "EUR",
@@ -644,6 +644,35 @@ func TestMandateReductionGapBreachCutToCap(t *testing.T) {
 	}
 	if loss := (keep + 100) * 100 * 0.25; loss <= capBase {
 		t.Fatalf("one lot less already meets the cap: %.0f <= %.0f", loss, capBase)
+	}
+}
+
+// A broad index is cut to its cap at the index gap the verdict stressed it
+// by (D4: 12%), not at the one-name gap: the reduction sells what the
+// owner's stress requires and no more.
+func TestMandateReductionBroadIndexCutAtTheIndexGap(t *testing.T) {
+	t.Parallel()
+	pos := mandateReductionBook(mandateReductionStock("IBCF", 9010, 6000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
+	fixture := mandateReductionFixture(t, pos, 0.5, 600000, 2)
+	book := *fixture.Input
+	book.Policy.IndexGapShockPct = 12
+	in := mandateReductionVerdict(book, 2)
+	v := in.Result.Verdict
+	if v.Status != mandate.StatusReduce || !slices.Equal(v.Stresses.GapBreaches, []string{"IBCF"}) {
+		t.Fatalf("fixture %s breaches %+v", v.Status, v.Stresses)
+	}
+	rows, _ := mandateReductionRun(t, in, pos)
+	row, ok := mandateRowFor(rows, 9010)
+	if !ok || row.Mandate.Phase != rpc.MandatePhaseGap || row.Mandate.GapCapBase == nil {
+		t.Fatalf("index row %+v", row.Mandate)
+	}
+	capBase := *row.Mandate.GapCapBase
+	keep := 6000 - float64(row.Mandate.Units)
+	if loss := keep * 100 * 0.12; loss > capBase+1e-6 {
+		t.Fatalf("after the cut IBCF's 12%% gap loses %.0f, over the cap %.0f", loss, capBase)
+	}
+	if loss := (keep + 100) * 100 * 0.12; loss <= capBase {
+		t.Fatalf("the cut sold more than the index gap needs: one lot less loses %.0f <= %.0f", loss, capBase)
 	}
 }
 

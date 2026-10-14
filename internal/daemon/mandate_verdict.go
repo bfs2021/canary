@@ -276,7 +276,7 @@ func mandatePolicyView(m *risk.ConstitutionMandate) *rpc.MandatePolicyView {
 		return nil
 	}
 	v := &rpc.MandatePolicyView{MaxLossPct: policyCheckDeref(m.MaxLossPct), VolTargetPct: policyCheckDeref(m.VolTargetPct), TaxReserveBase: policyCheckDeref(m.TaxReserveBase),
-		StartedAt: m.StartedAt, GapShockPct: policyCheckDeref(m.GapShockPct), GapRoomPct: policyCheckDeref(m.GapRoomPct), Unapproved: m.UnapprovedKeys()}
+		StartedAt: m.StartedAt, GapShockPct: policyCheckDeref(m.GapShockPct), IndexGapShockPct: m.IndexGapShockPct, GapRoomPct: policyCheckDeref(m.GapRoomPct), Unapproved: m.UnapprovedKeys()}
 	if m.Sleeves != nil {
 		v.Sleeves = &rpc.MandateSleevesView{OwnerVolPct: m.Sleeves.OwnerVolPct, CoreVolPct: m.Sleeves.CoreVolPct, OverlayVolPct: m.Sleeves.OverlayVolPct}
 	}

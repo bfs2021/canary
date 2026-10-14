@@ -33,6 +33,12 @@ type ConstitutionMandate struct {
 	// percent of its price (down, and up where a short call or short stock
 	// loses on the upside).
 	GapShockPct *float64 `toml:"gap_shock_pct" json:"gap_shock_pct"`
+	// IndexGapShockPct is the gap a broad index fund or index is stressed
+	// by instead (owner decision D4, 2026-10-14 CEST: "12% for broad index
+	// funds"); the instruments are the fixed list mandate.BroadIndexInstruments.
+	// Optional: absent, every underlying takes gap_shock_pct, so a file
+	// without it keeps its fingerprint and its behaviour.
+	IndexGapShockPct *float64 `toml:"index_gap_shock_pct" json:"index_gap_shock_pct,omitempty"`
 	// GapRoomPct is the share of the remaining loss room one name may lose
 	// in that gap, in percent; the gap cap per underlying is
 	// room × D × budget base × this.
@@ -75,7 +81,7 @@ func (m *ConstitutionMandate) validate(semantics ConstitutionSemantics) error {
 	for _, k := range []struct {
 		key string
 		v   *float64
-	}{{"max_loss_pct", m.MaxLossPct}, {"vol_target_pct", m.VolTargetPct}, {"gap_shock_pct", m.GapShockPct}, {"gap_room_pct", m.GapRoomPct}} {
+	}{{"max_loss_pct", m.MaxLossPct}, {"vol_target_pct", m.VolTargetPct}, {"gap_shock_pct", m.GapShockPct}, {"index_gap_shock_pct", m.IndexGapShockPct}, {"gap_room_pct", m.GapRoomPct}} {
 		if err := pct(k.key, k.v); err != nil {
 			return err
 		}

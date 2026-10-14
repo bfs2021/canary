@@ -1331,6 +1331,11 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # started_at = "2000-01-01"
 # gap_shock_pct = 25.0
 # gap_room_pct = 33.3
+# Broad index funds and indices (the fixed list in the mandate package:
+# SPY, SPX, QQQ, IWM, DIA, IBCF and the UCITS S&P 500 and world funds) take
+# this gap instead; absent, they take gap_shock_pct. 12 is your decision of
+# 2026-10-14 (D4).
+# index_gap_shock_pct = 12.0
 # Volatility shares per sleeve, recorded only; enforcement per sleeve comes
 # later.
 # [mandate.sleeves]

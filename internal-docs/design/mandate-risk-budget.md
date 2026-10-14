@@ -106,6 +106,16 @@ proposal the owner confirms by writing it into the policy file.
   over the same 252 returns (SPY itself at beta 1).
 - Gap cap per underlying: `room × D / 100 × budget_base × gap_room_pct /
   100`; a stress loss above it is a breach.
+- Broad index gap (owner decision D4, 2026-10-14, recorded in
+  `core-sleeve.md`: "12% for broad index funds"): an underlying whose
+  every leg is on the compiled list `mandate.BroadIndexInstruments` (SPY,
+  SPX, SPXW, XSP, QQQ, NDX, IWM, RUT, DIA in USD; IBCF, SXR8, CSPX, VUSA,
+  VUAA, EUNL, IWDA, SWDA, VWCE, VWRL, VGWL by ISIN-named listing; matched on
+  symbol and currency together) is stressed by `index_gap_shock_pct`
+  instead of `gap_shock_pct`; single names keep 25. The key is optional:
+  absent, every underlying takes `gap_shock_pct`, and a file without it
+  keeps its fingerprint. The forced reduction's gap cut and the additions
+  gate read the same per-underlying gap.
 - Threshold or rule, including units: `max_loss_pct` (D, percent of the
   budget base), `vol_target_pct` (percent a year of the budget base),
   `tax_reserve_base` (base currency), `started_at` (date, YYYY-MM-DD),

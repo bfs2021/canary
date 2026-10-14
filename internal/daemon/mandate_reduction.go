@@ -842,8 +842,9 @@ func (z *mandateSizer) gapStep(v mandate.Verdict, name string) bool {
 		}
 	}
 	up := report.GapUpLossBase != nil && *report.GapUpLossBase > report.GapDownLossBase
-	shock := 0.0
-	if v.Stresses != nil {
+	// The gap the name was stressed by: a broad index takes the index gap.
+	shock := report.GapShockPct
+	if shock <= 0 && v.Stresses != nil {
 		shock = v.Stresses.GapShockPct
 	}
 	riskNow := mandateRisk(v)
