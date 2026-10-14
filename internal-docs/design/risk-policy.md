@@ -412,8 +412,8 @@ was refused or had to be split, and a tighter cap made that worse. Implemented
    a queued authorisation (`daemon-owner-queued`) was signed per order by
    the owner ahead of time; a bucket listed in the protection policy's
    `[authority] pre_authorised` (`trailing_stop`, `option_loss_exit`,
-   `option_profit_trail`, `budget_reduction`) is sent by the daemon
-   (`daemon-preauthorised`) after a notice and the veto window with no
+   `option_profit_trail`, `budget_reduction`, `mandate_reduction`) is sent
+   by the daemon (`daemon-preauthorised`) after a notice and the veto window with no
    per-order approval, so for those buckets the exemption now admits an
    option exit above the caps on the standing policy alone (their stock
    stops were already exempt as protective exits); the protective stop guard

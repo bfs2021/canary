@@ -72,8 +72,8 @@ the ledger and the decision list and are counted under
   same join Edge's protection context uses), and the proposal records joined
   by order reference. A fill whose submitted proposal carries one of the
   buckets `trailing_stop`, `option_loss_exit`, `option_profit_trail`,
-  `budget_reduction`, `option_expiry_close`, `theta_hygiene`,
-  `risk_reduction`, `strategy_exit`, `option_exit_review`, `cash_sweep` or
+  `budget_reduction`, `mandate_reduction`, `option_expiry_close`,
+  `theta_hygiene`, `risk_reduction`, `strategy_exit`, `option_exit_review`, `cash_sweep` or
   `currency_leveling`, or whose journal origin is `daemon-preauthorised`,
   `daemon-protective-guard` or the daemon's internal transmit origin, is
   `rule` with origin `proposal:<bucket>` or `origin:<origin>`.

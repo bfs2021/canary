@@ -510,8 +510,12 @@ sell the line twice until the guard's next passes.
 
 The protection policy's `[authority].pre_authorised` list is empty by default.
 Only an explicit owner policy edit and version bump enable the named buckets:
-`trailing_stop`, `option_loss_exit`, `option_profit_trail` or
-`budget_reduction`. The cash sweep is pre-authorised in its own section,
+`trailing_stop`, `option_loss_exit`, `option_profit_trail`,
+`budget_reduction` or `mandate_reduction` (the reduction back to the
+risk policy's `[mandate]` budget: a reduce-only batch, largest risk
+contributor first, each row held to the order caps; see `canary mandate`).
+Budget and mandate reductions always wait the full window, even with the
+drawdown brake latched. The cash sweep is pre-authorised in its own section,
 `[cash] pre_authorised`, under the same veto window
 ([Cash management](cash.md)); currency leveling never is.
 `auto_submit` remains false; it is not the switch for this scoped scheduler.

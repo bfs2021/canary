@@ -1,9 +1,11 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-14 08:30 CEST
+Updated: 2026-10-14 09:24 CEST
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
-gate); forced reduction is a later increment. The feature is inactive until
-the owner writes `[mandate]` into `risk-policy.toml`.
+gate); increment 2 implemented 2026-10-14 (forced reduction, below). The
+feature is inactive until the owner writes `[mandate]` into
+`risk-policy.toml`; the forced reduction places nothing by itself until the
+owner lists `mandate_reduction` under `[authority].pre_authorised`.
 
 This record follows `.agents/docs/risk-policy-contract.md` and the
 daemon/CLI trading contract. It records human policy decisions; it creates
@@ -30,8 +32,8 @@ proposal the owner confirms by writing it into the policy file.
   - Protection that acts: on a budget breach, a reduce-only batch back to
     budget, largest risk contributor first, pre-authorised with the
     30-minute veto; release when risk is back in budget, not when P&L
-    recovers. Forced reduction is a later increment; this increment builds
-    the measurement and the additions gate it will use.
+    recovers. Built in increment 2 ("Forced reduction" below) on the
+    measurement and the additions gate of increment 1.
   - Sleeve volatility shares of the 15%: owner 7, core 6, overlay 4. Recorded
     here as `[mandate.sleeves]`; enforcement per sleeve comes later.
 - Departure from risk-policy.md decision 3 ("No auto-increase: deposits,
@@ -49,7 +51,9 @@ proposal the owner confirms by writing it into the policy file.
   `internal/risk/mandate.go` (schema), `internal/mandate` (the pure
   evaluator), `internal/daemon/mandate_*.go` (capital state, history store,
   verdict, gate).
-- Status: implemented (increment 1). Active only with `[mandate]` written.
+- Status: implemented (increments 1 and 2). Active only with `[mandate]`
+  written; the forced reduction is automatic only with `mandate_reduction`
+  pre-authorised.
 
 ## Meaning
 
@@ -135,6 +139,124 @@ proposal the owner confirms by writing it into the policy file.
   option leg lacks its IV or spot, a leg lacks an FX rate, the cached
   verdict is older than five minutes, or the mandate section is incomplete.
   Every reason is named on the verdict. Nil is unavailable, never zero.
+
+## Forced reduction
+
+Owner decisions, recorded verbatim:
+
+- 2026-10-14 06:26 CEST, decision 3 "Protection that acts": "on a budget
+  breach, one reduce-only batch sized back to budget, largest risk
+  contributor first, pre-authorised with the 30-minute veto. The brake
+  releases when risk is back in budget, not when P&L recovers." Owner: "yes
+  to all".
+- 2026-10-14 06:26 CEST: "The system should run by itself within risk
+  boundaries."
+- The bucket ships absent from the embedded default and inactive; the owner
+  arms it by listing it under `[authority].pre_authorised`.
+
+What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
+`mandate_reduction`):
+
+- **Trigger.** While `[mandate]` is written, the proposal engine reads the
+  kept verdict for the policy in force on every refresh. Rows appear when the
+  verdict reads `reduce`, or `over` on two consecutive verdicts (the verdict
+  cache counts the streak: each reading at most five minutes after the one
+  before, under the same constitution fingerprint; `within`, `unknown`, a
+  longer gap or a new policy resets it). One `over` reading reports
+  `watching` and proposes nothing. `unknown` never sizes anything.
+- **Target and hysteresis.** The batch is sized to risk ≤ 0.95 × budget with
+  every gap cap met, so the next verdict reads `within` rather than `over`
+  by a hair; release is at `within` (risk ≤ budget, no gap breach). The 5%
+  band is compiled (`mandateReductionTargetFactor`), not a policy key.
+- **Sizing.** Greedy, with the daemon's own evaluator on the book the
+  verdict measured. (1) Expiry first: a long option in the money within
+  three US option sessions of expiry, whose exercise as delivered stock would
+  leave the book over budget and riskier than holding the option, is cut
+  before anything else, to the fewest contracts whose delivered shares keep
+  the book inside the target, or closed. (2) Then cut by cut, the book
+  re-evaluated after each: a name over its gap cap has its largest gap loser
+  cut until the name's gap loss is under the cap; with no breach left, the
+  largest Euler contributor is cut by the smallest whole step that reaches
+  the target or, when no step on that line does, by the step that takes the
+  most risk off (risk is convex in one line's size, so that is the minimum,
+  never more), and the next contributor follows only when needed. Steps are
+  contracts for options and share lots for stocks (1 below 100 shares, 10 to
+  999, 100 from 1,000). Legs never cut: a long put on a Rulebook hedge
+  symbol, a leg of a multi-leg unit (the strategy workflow reduces it), a
+  row the owner ignored; the status names them under `left_out`.
+- **Every row** is reduce-only (a sale of a long line, a buy-back of a short
+  one, never past zero), a DAY limit at the mark like the budget governor's
+  rows, `never_skip_veto`, and carries the verdict it was sized on
+  (`mandate.verdict_status`, `verdict_at`, `verdict_fingerprint`), its rank,
+  phase (`expiry`, `gap`, `risk`), the line's share of the risk, the risk
+  the cut takes off and the risk after the batch.
+- **Order caps.** One order is held to the lower of
+  `[buckets.risk_reduction].max_order_notional` and the `[order_limits]` cap
+  in force, at the row's mark; `mandate.units` keeps the whole cut and the
+  status `plan` both numbers. After the fill the next verdict measures the
+  book as it then is and sizes the remainder (carry-over, as the governor).
+- **A standing batch** is kept while the verdict stays over budget: a row
+  whose line is still held at the quantity it was sized on keeps its cut,
+  order, rank and the verdict it was sized on (`confirmed_at` names the
+  verdict that kept it), so its revision and veto window stand; the batch
+  is extended only if the new verdict needs more.
+- **Hold.** A verdict that is `unknown`, older than five minutes, or
+  measured on another book than the one held (a fill, a hand trade:
+  `book_changed`) sizes nothing. Standing rows are served held
+  (`mandate.held`, `hold_reason`): preview and submit refuse them
+  (`mandate_sizing_held`), the scheduler holds a due record on its original
+  window (`automaticHoldMandateVerdict`) and the notice reads "Reduction
+  held" (`protection_auto_held_mandate`). A held row whose own line moved is
+  dropped.
+- **Release.** A verdict reading `within` withdraws every standing row; a
+  waiting automatic record is superseded and never sent. Nothing is
+  cancelled at the broker: an order already working stays.
+- **One row per contract and side.** Where another bucket (the budget
+  governor, the issuer trim, theta hygiene) also wants to sell the line, the
+  same-contract merge keeps one row sized by the largest need, never the sum
+  (precedence on a tie: after the governor, before theta hygiene). A held
+  mandate row takes no part in the merge, so it never stands for a row that
+  can be sent. Working-order netting applies as to every reduction: any
+  same-side order working for the contract, a protective trailing stop
+  included, blocks the row until it fills or is cancelled.
+- **Submission.** Only the existing scheduler and `submitAutomatic`: one
+  durable record per key and revision, the notice, the full veto window even
+  under a latched drawdown brake, one grant under `brokerWriteMu`, origin
+  `daemon-preauthorised`, every write gate unchanged. Records are dispatched
+  in rank order within a cycle; one row's refusal never holds the others.
+  Not pre-authorised, the rows are ordinary proposals that wait for the
+  owner's hand. They are not queueable for the open. At a stress open they
+  wait 30 minutes after the options open, like the governor's rows.
+- **Surfaces.** `canary proposals` (and `--details`, JSON, MCP
+  `canary_proposals`) lists the rows with bucket, rank, share of the risk
+  and the verdict in plain words under a Mandate header; `canary mandate`
+  (and `canary_mandate`) shows the batch, the rows pending and the veto end.
+  The pre-authorised notice is `protection_auto_mandate_reduction` (no "now"
+  variant). The scorecard counts the fills as `rule`
+  (`proposal:mandate_reduction`), never the owner's.
+- **Residual risk accepted.** The sizing inherits the measurement's limits
+  (one year of history, today's IV, no rates or dividends). A line carrying
+  a working order (a stop among them) is blocked by netting and the batch
+  does not re-plan around it in the same cycle; the status says the target
+  is not reached once nothing else reduces. Two verdicts can be read 30
+  seconds apart (a read refreshes a verdict older than that), so the
+  two-reading rule is a debounce, not a time filter. After any fill the
+  batch waits for the next verdict (at most two minutes).
+- **Verification** (synthetic books; `internal/daemon/mandate_reduction_test.go`,
+  `mandate_reduction_automatic_test.go`, `mandate_reduction_trading_test.go`,
+  `scorecard_authority_test.go`, `internal/app/alerts/presentation_test.go`,
+  CLI goldens `proposals_list_mandate*`, `mandate_reduce`): the dominant
+  name first and sized to the target by its smallest lot, the second name
+  only when needed; an in-the-money call two sessions before expiry first;
+  one `over` watches and two reduce, one `reduce` reduces; the streak
+  resets; `unknown`, stale and changed-book verdicts size nothing and hold a
+  standing batch with its revision; `within` withdraws, a sent record stays;
+  a latched brake keeps the veto; not pre-authorised waits for the hand;
+  pre-authorised places one order after the veto with origin
+  `daemon-preauthorised`; rank order and no hold-up after a refusal;
+  reduce-only on long and short lines; order-cap carry-over; a gap breach
+  cut to its cap; one row per contract with the governor; absent
+  `[mandate]` changes nothing.
 
 ## Decision-grade history
 
@@ -253,6 +375,7 @@ internal/rpc/mandate.go                mandate.risk method, result types, FetchM
 internal/daemon/mandate_capital.go     high-water mark, room, daily samples (inside the risk_capital document)
 internal/daemon/mandate_history.go     decision-grade daily closes, background refresh
 internal/daemon/mandate_verdict.go     evaluation cache, RPC handler, mandate_budget gate
+internal/daemon/mandate_reduction.go   forced reduction: sizing, hold, release, rows
 internal/cli/mandate.go                canary mandate [--json]
 internal/mcp/tools.go                  canary_mandate
 ```
