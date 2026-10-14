@@ -217,10 +217,88 @@ func TestMandateGateIncrementalCheckRefusesAnAdditionOverBudget(t *testing.T) {
 	if blocker := srv.mandateBudgetGate(call, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "with this order") {
 		t.Fatalf("large call buy: %+v", blocker)
 	}
-	// A leg the gate cannot price on its own is left to the standing verdict.
-	unpriced := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 200, Contract: rpc.ContractParams{Symbol: "SYNZ", SecType: "OPT", Currency: "USD", Right: "C", Strike: 100, Expiry: "20270115"}}
+	// An option whose volatility its limit cannot give, on a held
+	// underlying, is left to the standing verdict.
+	unpriced := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 200, Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "OPT", Currency: "USD", Right: "C", Strike: 100, Expiry: "20270115"}}
 	if blocker := srv.mandateBudgetGate(unpriced, mandateOpen); blocker != nil {
 		t.Fatalf("unpriced option: %+v", blocker)
+	}
+	// On an underlying the book does not hold, with no history, it is
+	// refused: never passed unmeasured.
+	unpriced.Contract.Symbol = "SYNZ"
+	if blocker := srv.mandateBudgetGate(unpriced, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "no daily history for SYNZ") {
+		t.Fatalf("option on an unheld name without history: %+v", blocker)
+	}
+}
+
+// A first buy of a name the book does not hold is never passed unmeasured:
+// without fresh decision-grade history it is refused and the series is
+// requested on the background lane; once it has arrived the order is
+// measured, admitted within the budget and refused over it. A currency
+// without its exchange-rate history is refused the same way. Held names are
+// measured as before and request nothing.
+func TestMandateGateMeasuresANameTheBookDoesNotHold(t *testing.T) {
+	srv, _ := mandateTestServer(t, testMandateConstitution())
+	seedMandateHistory(t, srv, 0)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
+	if res := srv.evaluateMandate(t.Context(), false); res.Verdict.Status != mandate.StatusWithin {
+		t.Fatalf("book: %s %v", res.Verdict.Status, res.Verdict.Reasons)
+	}
+	buy := func(sym, ccy string, shares int) rpc.OrderDraft {
+		return rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: shares, LimitPrice: 100, Contract: rpc.ContractParams{ConID: 9100, Symbol: sym, SecType: "STK", Currency: ccy}}
+	}
+	requested := func() []string {
+		var keys []string
+		for _, need := range srv.mandateHistoryRequests(mandateTestNow) {
+			keys = append(keys, need.Key)
+		}
+		return keys
+	}
+	if blocker := srv.mandateBudgetGate(mandateBuy(10), mandateOpen); blocker != nil || len(requested()) != 0 {
+		t.Fatalf("a held name: %+v, requested %v", blocker, requested())
+	}
+	blocker := srv.mandateBudgetGate(buy("SYNC", "EUR", 10), mandateOpen)
+	if blocker == nil || blocker.Code != mandateBudgetCode || !strings.Contains(blocker.Message, "no daily history for SYNC yet; the desk is fetching it") {
+		t.Fatalf("an unheld name without history: %+v", blocker)
+	}
+	if got := requested(); !slices.Equal(got, []string{"u:SYNC"}) {
+		t.Fatalf("requested %v", got)
+	}
+	needs := srv.mandateHistoryNeedsWithRequests(mandateTestPositions(100), "EUR", mandateTestNow)
+	if !slices.ContainsFunc(needs, func(n mandateHistoryNeed) bool {
+		return n.Key == "u:SYNC" && n.Contract.Symbol == "SYNC" && n.Contract.ConID == 9100
+	}) {
+		t.Fatalf("the background pass does not read the request: %+v", needs)
+	}
+	if err := srv.saveMandateSeries(t.Context(), mandateTestSeries("u:SYNC", 0.25, 5, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if blocker := srv.mandateBudgetGate(buy("SYNC", "EUR", 10), mandateOpen); blocker != nil {
+		t.Fatalf("an unheld name, history arrived, within budget: %+v", blocker)
+	}
+	if blocker := srv.mandateBudgetGate(buy("SYNC", "EUR", 20000), mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "with this order the risk would be") {
+		t.Fatalf("an unheld name, history arrived, over budget: %+v", blocker)
+	}
+	// A currency the book holds nothing in: the exchange rate's history too.
+	if err := srv.saveMandateSeries(t.Context(), mandateTestSeries("u:SYND", 0.25, 6, 0)); err != nil {
+		t.Fatal(err)
+	}
+	blocker = srv.mandateBudgetGate(buy("SYND", "CHF", 10), mandateOpen)
+	if blocker == nil || !strings.Contains(blocker.Message, "no daily history for the EUR/CHF exchange rate yet") || strings.Contains(blocker.Message, "SYND yet") {
+		t.Fatalf("a currency without its rate's history: %+v", blocker)
+	}
+	if got := requested(); !slices.Contains(got, "fx:CHF") {
+		t.Fatalf("requested %v", got)
+	}
+	if err := srv.saveMandateSeries(t.Context(), mandateTestSeries("fx:CHF", 0.06, 7, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if blocker := srv.mandateBudgetGate(buy("SYND", "CHF", 10), mandateOpen); blocker != nil {
+		t.Fatalf("a currency, history arrived, within budget: %+v", blocker)
+	}
+	// A request lapses after a day.
+	if got := srv.mandateHistoryRequests(mandateTestNow.Add(25 * time.Hour)); len(got) != 0 {
+		t.Fatalf("requests outlived a day: %+v", got)
 	}
 }
 

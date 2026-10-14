@@ -83,6 +83,69 @@ type mandateHistoryStore struct {
 	revisions map[string]int64
 	loaded    map[string]bool
 	attempts  map[string]mandateHistoryAttempt
+	// requested holds series an order asked for that the book does not
+	// need (a name or currency not held yet), read on the same background
+	// lane and budget until they are fresh or mandateHistoryRequestKeep
+	// passes.
+	requested map[string]mandateHistoryRequest
+}
+
+// mandateHistoryRequest is one series an order asked for, and when.
+type mandateHistoryRequest struct {
+	need mandateHistoryNeed
+	at   time.Time
+}
+
+// mandateHistoryRequestKeep bounds how long an order's request for a
+// series stands.
+const mandateHistoryRequestKeep = 24 * time.Hour
+
+// requestMandateHistory asks the background lane for series the book does
+// not need yet: the order that needed them was refused unmeasured, and a
+// retry once they are fresh is measured.
+func (s *Server) requestMandateHistory(needs ...mandateHistoryNeed) {
+	st := &s.mandateHistory
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.requested == nil {
+		st.requested = map[string]mandateHistoryRequest{}
+	}
+	now := s.nowUTC()
+	for _, need := range needs {
+		if _, ok := st.requested[need.Key]; !ok {
+			st.requested[need.Key] = mandateHistoryRequest{need: need, at: now}
+		}
+	}
+}
+
+// mandateHistoryRequests lists the standing requests, dropping the ones
+// older than mandateHistoryRequestKeep.
+func (s *Server) mandateHistoryRequests(now time.Time) []mandateHistoryNeed {
+	st := &s.mandateHistory
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var out []mandateHistoryNeed
+	for key, req := range st.requested {
+		if now.Sub(req.at) > mandateHistoryRequestKeep {
+			delete(st.requested, key)
+			continue
+		}
+		out = append(out, req.need)
+	}
+	slices.SortFunc(out, func(a, b mandateHistoryNeed) int { return strings.Compare(a.Key, b.Key) })
+	return out
+}
+
+// mandateHistoryNeedsWithRequests is what one background pass reads: the
+// book's needs, then the standing requests the book does not already need.
+func (s *Server) mandateHistoryNeedsWithRequests(pos *rpc.PositionsResult, base string, now time.Time) []mandateHistoryNeed {
+	needs := mandateHistoryNeeds(pos, base)
+	for _, req := range s.mandateHistoryRequests(now) {
+		if !slices.ContainsFunc(needs, func(n mandateHistoryNeed) bool { return n.Key == req.Key }) {
+			needs = append(needs, req)
+		}
+	}
+	return needs
 }
 
 func mandateHistoryScope(key string) string {
@@ -287,7 +350,7 @@ func (s *Server) refreshMandateHistoryOnce(ctx context.Context) {
 	if pos.Portfolio != nil {
 		base = pos.Portfolio.BaseCurrency
 	}
-	for _, need := range mandateHistoryNeeds(pos, base) {
+	for _, need := range s.mandateHistoryNeedsWithRequests(pos, base, s.nowUTC()) {
 		if ctx.Err() != nil {
 			return
 		}

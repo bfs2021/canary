@@ -129,7 +129,16 @@ proposal the owner confirms by writing it into the policy file.
   verdict reads `within`, additions pass; there is no latch and no reset.
   The incremental pre-trade check re-evaluates the book with the proposed
   leg added and refuses an addition that would take the annualised risk
-  over the budget even while the standing verdict reads `within`.
+  over the budget even while the standing verdict reads `within`. An
+  addition on a name or in a currency the book does not hold is measured on
+  the series the history store keeps for it (spot from its last close when
+  the book holds none); while none is fresh, the order is refused
+  (`mandate_budget`: "no daily history for X yet; the desk is fetching
+  it", or the base currency's exchange rate against the order's) and the
+  series is requested on the background lane under the same budget, so a
+  retry after the fetch is measured. A book that cannot be measured with
+  the order added refuses it too; nothing passes unmeasured (2026-10-14
+  16:57 CEST, from the core-sleeve design review).
 - Unknown, stale, partial, and unavailable-data posture: the verdict is
   `unknown`, and additions are refused, when the equity observation is
   missing or older than `capital.max_equity_age_minutes` (or that horizon
@@ -375,7 +384,8 @@ with the source time of every read (`fetched_at`, the broker's `source`
 label, the session that answered), and refuses to judge on a series that is
 missing or stale. A series covers every held stock and ETF, the underlying
 of every held option, SPY (the index proxy) and `EUR.<CCY>` for every held
-non-base currency. It holds the last 320 daily closes (at least 253 are
+non-base currency, and, for a day, any name or currency a refused order
+asked for. It holds the last 320 daily closes (at least 253 are
 needed) and is refreshed on the background pacing lane within the existing
 sixty-per-ten-minutes historical budget: at most one refresh per name per
 broker session, only when the series lacks the last completed session, and
@@ -469,8 +479,9 @@ binding.riskBound` was reviewed as the riskiest integration point.
 - Residual risk accepted: the measurement is historical (one year of
   returns, no regime weighting), options are revalued at today's IV (no
   volatility scenario), rates and dividends are zero in the model, and an
-  option addition whose IV cannot be derived from the preview quote is not
-  judged incrementally (the standing verdict still gates it). All stated on
+  option addition whose IV cannot be derived from its limit price, on an
+  underlying with fresh history, is not judged incrementally (the standing
+  verdict still gates it). All stated on
   the verdict and here.
 
 ## Files

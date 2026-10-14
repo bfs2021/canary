@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"math"
 	"strings"
 	"sync"
@@ -461,13 +462,37 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 	if result.Verdict.Status != mandate.StatusWithin {
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + mandateStatusSentence(result.Verdict, ccy) + "; this order adds risk." + open, Action: action}
 	}
-	leg, ok := mandateOrderLeg(draft, input)
-	if !ok {
-		return nil // the addition cannot be priced on its own; the standing verdict decides
+	// A name or currency the book does not hold yet has no decision-grade
+	// history in the verdict: the order is measured on the series the store
+	// keeps, and refused, its series requested on the background lane, while
+	// none is fresh. Never measured blind, never passed unmeasured.
+	book, missing := s.mandateOrderBook(draft, input, now)
+	if len(missing) > 0 {
+		var why []string
+		var needs []mandateHistoryNeed
+		for _, m := range missing {
+			why = append(why, m.reason)
+			if m.need.Key != "" {
+				needs = append(needs, m.need)
+			}
+		}
+		if len(needs) > 0 {
+			s.requestMandateHistory(needs...)
+		}
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: this order cannot be measured: " + strings.Join(why, "; ") + "." + open,
+			Action: "Retry once the history has arrived (the background lane reads it within minutes); `canary mandate` has the measurement."}
 	}
-	with := mandate.Evaluate(mandate.WithLeg(*input, leg))
+	leg, ok := mandateOrderLeg(draft, &book)
+	if !ok {
+		return nil // an option whose volatility its limit cannot give: the standing verdict decides
+	}
+	with := mandate.Evaluate(mandate.WithLeg(book, leg))
 	if with.Status == mandate.StatusUnknown || with.Risk == nil {
-		return nil
+		why := "no reason given"
+		if len(with.Reasons) > 0 {
+			why = with.Reasons[0]
+		}
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: with this order the book cannot be measured: " + why + "." + open, Action: action}
 	}
 	budget := with.Capital.BudgetAnnualSD
 	if with.Risk.SDAnnualBase > budget {
@@ -488,11 +513,83 @@ func (s *Server) mandateBudgetGateError(draft rpc.OrderDraft, position rpc.Order
 	return fmt.Errorf("%w: %s", ErrTradingDisabled, blocker.Message)
 }
 
+// mandateMissing is one series an order needs that the store cannot give
+// fresh, and why; need is empty when nothing can be fetched for it.
+type mandateMissing struct {
+	need   mandateHistoryNeed
+	reason string
+}
+
+// mandateOrderBook is the kept book with the decision-grade series an order
+// needs and the verdict does not carry (a name or currency the book does
+// not hold), read from the history store, or what is missing: the
+// underlying's series, the base currency's pair against the order's
+// currency, or the currency itself. A store read, never a broker read.
+func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now time.Time) (mandate.Input, []mandateMissing) {
+	book := *in
+	book.Series, book.FX, book.FXNow = maps.Clone(in.Series), maps.Clone(in.FX), maps.Clone(in.FXNow)
+	if book.Series == nil {
+		book.Series = map[string]mandate.Series{}
+	}
+	if book.FX == nil {
+		book.FX = map[string]mandate.Series{}
+	}
+	if book.FXNow == nil {
+		book.FXNow = map[string]float64{}
+	}
+	sym := normSym(draft.Contract.Symbol)
+	ccy := normCcy(draft.Contract.Currency)
+	for _, l := range in.Legs {
+		if l.Underlying == sym && ccy == "" {
+			ccy = normCcy(l.Currency)
+		}
+	}
+	if sym == "" {
+		return book, []mandateMissing{{reason: "the order names no instrument"}}
+	}
+	if ccy == "" {
+		return book, []mandateMissing{{reason: "the order names no currency for " + sym}}
+	}
+	fresh := func(key string) (*mandateHistorySeries, bool) {
+		series := s.mandateHistorySeries(context.Background(), key)
+		return series, series != nil && !mandateSeriesStale(series, now) && len(series.Closes) >= mandate.Closes
+	}
+	var missing []mandateMissing
+	if _, ok := book.Series[sym]; !ok {
+		contract := rpc.ContractParams{Symbol: sym, SecType: "STK", Currency: ccy, Exchange: "SMART"}
+		if strings.EqualFold(draft.Contract.SecType, "STK") || strings.EqualFold(draft.Contract.SecType, "ETF") {
+			contract.ConID, contract.PrimaryExch = draft.Contract.ConID, strings.ToUpper(strings.TrimSpace(draft.Contract.PrimaryExch))
+		}
+		if series, ok := fresh("u:" + sym); ok {
+			book.Series[sym] = mandateSeriesInput(series, now)
+		} else {
+			missing = append(missing, mandateMissing{need: mandateHistoryNeed{Key: "u:" + sym, Contract: contract}, reason: "no daily history for " + sym + " yet; the desk is fetching it"})
+		}
+	}
+	if base := normCcy(in.BaseCurrency); ccy != base {
+		if _, ok := book.FX[ccy]; !ok {
+			if series, ok := fresh("fx:" + ccy); ok {
+				book.FX[ccy] = mandateSeriesInput(series, now)
+			} else {
+				missing = append(missing, mandateMissing{need: mandateHistoryNeed{Key: "fx:" + ccy, Contract: rpc.ContractParams{Symbol: base, SecType: "CASH", Currency: ccy, Exchange: "IDEALPRO"}},
+					reason: "no daily history for the " + base + "/" + ccy + " exchange rate yet; the desk is fetching it"})
+			}
+		}
+		if _, ok := book.FXNow[ccy]; !ok {
+			if fx, ok := book.FX[ccy]; ok && len(fx.Closes) > 0 {
+				book.FXNow[ccy] = fx.Closes[len(fx.Closes)-1]
+			}
+		}
+	}
+	return book, missing
+}
+
 // mandateOrderLeg prices an order as a leg of the kept book: a stock at the
-// held line's spot (else the order's limit), an option at the held
-// contract's terms and IV, or, for a contract not held, at the volatility
-// its limit price implies on the underlying's held spot. False when the
-// addition cannot be priced without a guess.
+// held line's spot (else, for a name not held, its last decision-grade
+// close, else the order's limit), an option at the held contract's terms
+// and IV, or, for a contract not held, at the volatility its limit price
+// implies on the underlying's spot (held, else its last decision-grade
+// close). False when the addition cannot be priced without a guess.
 func mandateOrderLeg(draft rpc.OrderDraft, in *mandate.Input) (mandate.Leg, bool) {
 	qty := float64(draft.Quantity)
 	if strings.EqualFold(draft.Action, rpc.OrderActionSell) {
@@ -521,6 +618,12 @@ func mandateOrderLeg(draft rpc.OrderDraft, in *mandate.Input) (mandate.Leg, bool
 	if ccy != "" && ccy != strings.ToUpper(in.BaseCurrency) {
 		if _, ok := in.FXNow[ccy]; !ok {
 			return mandate.Leg{}, false
+		}
+	}
+	if underlyingSpot <= 0 {
+		// A name the book does not hold: its last decision-grade close.
+		if series, ok := in.Series[sym]; ok && len(series.Closes) > 0 {
+			underlyingSpot = series.Closes[len(series.Closes)-1]
 		}
 	}
 	switch strings.ToUpper(draft.Contract.SecType) {
