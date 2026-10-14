@@ -240,13 +240,13 @@ func Evaluate(in Input) Verdict {
 		v.Reasons = append(v.Reasons, in.Capital.Reasons...)
 	}
 	legs := mergeLegs(in.Legs)
-	// Which series the book needs: every underlying, the index and every
-	// non-base currency.
+	// Which series the book needs: every underlying's returns (its own, or
+	// its proxy's: ReturnsSeries), the index and every non-base currency.
 	needed := map[string]bool{IndexSymbol: true}
 	currencies := map[string]bool{}
 	for _, l := range legs {
 		if l.Underlying != "" {
-			needed[l.Underlying] = true
+			needed[ReturnsSeries(l.Underlying, l.Currency)] = true
 		}
 		if ccy := strings.ToUpper(l.Currency); ccy != "" && ccy != strings.ToUpper(in.BaseCurrency) {
 			currencies[ccy] = true
@@ -455,7 +455,7 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 	legPnL := make([][]float64, len(legs))
 	values := make([]float64, len(legs))
 	for i, l := range legs {
-		r := returns["u:"+l.Underlying]
+		r := returns["u:"+ReturnsSeries(l.Underlying, l.Currency)]
 		var rfx []float64
 		if l.Currency != "" && l.Currency != base {
 			rfx = returns["fx:"+l.Currency]
@@ -486,6 +486,7 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 	// Euler contributions: cov(leg, total) / var(total), summing to 100%.
 	legReports := make([]LegReport, len(legs))
 	byUnderlying := map[string]*UnderlyingReport{}
+	returnsOf := map[string]string{}
 	var order []string
 	for i, l := range legs {
 		rep := LegReport{ID: l.ID, Symbol: l.Symbol, Underlying: l.Underlying, Kind: l.Kind, Quantity: l.Quantity, ValueBase: values[i]}
@@ -498,6 +499,7 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 			u = &UnderlyingReport{Underlying: l.Underlying}
 			byUnderlying[l.Underlying] = u
 			order = append(order, l.Underlying)
+			returnsOf[l.Underlying] = ReturnsSeries(l.Underlying, l.Currency)
 		}
 		u.ValueBase += rep.ValueBase
 		u.ContributionPct += rep.ContributionPct
@@ -513,7 +515,7 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 		if name == IndexSymbol {
 			u.Beta = 1
 		} else if indexVar > 0 {
-			u.Beta = covariance(returns["u:"+name], indexReturns, indexMean) / indexVar
+			u.Beta = covariance(returns["u:"+returnsOf[name]], indexReturns, indexMean) / indexVar
 		}
 		betas[name] = u.Beta
 		u.BroadIndex = broadIndexUnderlying(legs, name)

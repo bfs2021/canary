@@ -29,6 +29,7 @@ their gain since purchase split into carry, rates and spread.
 
 ### Changed
 
+- The mandate measures IBCF, the EUR-hedged S&P 500 fund, on SPY's local-currency returns on the US close rather than on its own Xetra close four and a half hours earlier, which understated its correlation with US holdings; the book reads no IBCF series, so none can make the verdict stale.
 - The mandate stresses a broad index fund or index by its own gap (owner decision D4, 2026-10-14: "12% for broad index funds"): an optional `index_gap_shock_pct` in `[mandate]` applies to the compiled list of broad index instruments (SPY, SPX, XSP, QQQ, NDX, IWM, RUT, DIA, IBCF and the UCITS S&P 500 and world funds, matched on symbol and currency), single names keep `gap_shock_pct`, and absent the key nothing changes. `canary mandate` shows each name's gap.
 - The protective stop guard also keeps Canary-placed option trails (the Rulebook's profit lock) to the contracts held, and counts a Canary sale working beside one of its stops without a link against the position, shrinking the stop to the rest; `canary order modify` and the replacement preview accept option orders, which the guard needs for that.
 

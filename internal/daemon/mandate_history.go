@@ -154,8 +154,9 @@ func mandateHistoryScope(key string) string {
 }
 
 // mandateHistoryNeeds lists the series a positions read needs: every held
-// stock and ETF, the underlying of every held option, the index proxy and
-// the base currency's pair against every other held currency.
+// stock and ETF (a line on mandate.ReturnsProxies reads its proxy's, the
+// index), the underlying of every held option, the index proxy and the
+// base currency's pair against every other held currency.
 func mandateHistoryNeeds(pos *rpc.PositionsResult, base string) []mandateHistoryNeed {
 	base = normCcy(base)
 	needs := map[string]mandateHistoryNeed{}
@@ -173,8 +174,11 @@ func mandateHistoryNeeds(pos *rpc.PositionsResult, base string) []mandateHistory
 				continue
 			}
 			sym := normSym(row.Symbol)
-			add(mandateHistoryNeed{Key: "u:" + sym, Contract: rpc.ContractParams{ConID: row.ConID, Symbol: sym, SecType: "STK", Currency: normCcy(row.Currency), Exchange: "SMART", PrimaryExch: strings.ToUpper(strings.TrimSpace(row.PrimaryExch))}})
 			currencies[normCcy(row.Currency)] = true
+			if mandate.ReturnsSeries(sym, row.Currency) != sym {
+				continue // moved by its proxy's returns (mandate.ReturnsProxies), which the book always reads
+			}
+			add(mandateHistoryNeed{Key: "u:" + sym, Contract: rpc.ContractParams{ConID: row.ConID, Symbol: sym, SecType: "STK", Currency: normCcy(row.Currency), Exchange: "SMART", PrimaryExch: strings.ToUpper(strings.TrimSpace(row.PrimaryExch))}})
 		}
 		for _, row := range pos.Options {
 			sym := normSym(row.Symbol)

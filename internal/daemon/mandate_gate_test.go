@@ -754,3 +754,52 @@ func TestMandateGapBreachAddedComparesWithTheStandingBook(t *testing.T) {
 		t.Fatal("a new breach passed")
 	}
 }
+
+// A held IBCF line is measured on SPY's returns (review S5): the book reads
+// no IBCF series, so none can make its verdict stale; an IBCF order the
+// book does not hold is priced at its limit, and one without a limit is
+// refused, never passed unmeasured.
+func TestMandateMeasuresIBCFOnTheIndex(t *testing.T) {
+	srv, _ := mandateTestServer(t, testMandateConstitution())
+	seedMandateHistory(t, srv, 0)
+	pos := mandateTestPositions(100)
+	pos.Stocks = append(pos.Stocks, rpc.PositionView{Symbol: "IBCF", SecType: rpc.SecTypeStock, ConID: 9020, Currency: "EUR", PrimaryExch: "IBIS", Quantity: 200, Multiplier: 1, Mark: 50})
+	for _, need := range mandateHistoryNeeds(pos, "EUR") {
+		if need.Key == "u:IBCF" {
+			t.Fatalf("the book reads an IBCF series: %+v", need)
+		}
+	}
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
+	res := srv.evaluateMandate(t.Context(), false)
+	if res.Verdict.Status != mandate.StatusWithin {
+		t.Fatalf("book with IBCF: %s %v", res.Verdict.Status, res.Verdict.Reasons)
+	}
+	var found bool
+	for _, u := range res.Verdict.Underlyings {
+		if u.Underlying == "IBCF" {
+			found = math.Abs(u.Beta-1) < 1e-12
+		}
+	}
+	if !found {
+		t.Fatalf("IBCF not measured at beta 1: %+v", res.Verdict.Underlyings)
+	}
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
+	if res := srv.evaluateMandate(t.Context(), false); res.Verdict.Status != mandate.StatusWithin {
+		t.Fatalf("book: %s %v", res.Verdict.Status, res.Verdict.Reasons)
+	}
+	buy := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 100, LimitPrice: 50, Contract: rpc.ContractParams{Symbol: "IBCF", SecType: "STK", Currency: "EUR", PrimaryExch: "IBIS"}}
+	if blocker := srv.mandateBudgetGate(buy, mandateOpen); blocker != nil {
+		t.Fatalf("an IBCF buy at a limit: %+v", blocker)
+	}
+	if got := srv.mandateHistoryRequests(mandateTestNow); len(got) != 0 {
+		t.Fatalf("an IBCF buy requested a series: %+v", got)
+	}
+	buy.Quantity = 20000
+	if blocker := srv.mandateBudgetGate(buy, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "with this order") {
+		t.Fatalf("a large IBCF buy: %+v", blocker)
+	}
+	buy.Quantity, buy.LimitPrice = 100, 0
+	if blocker := srv.mandateBudgetGate(buy, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "no price for IBCF") {
+		t.Fatalf("an IBCF buy without a limit: %+v", blocker)
+	}
+}

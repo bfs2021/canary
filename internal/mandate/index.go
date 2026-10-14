@@ -70,3 +70,35 @@ func (p Policy) GapShockPctFor(broadIndex bool) float64 {
 	}
 	return p.GapShockPct
 }
+
+// ReturnsProxy is a line the simulation moves with another series' daily
+// returns instead of its own closes.
+type ReturnsProxy struct {
+	Symbol   string
+	Currency string
+	// Series is the underlying whose decision-grade returns the line takes.
+	Series string
+	Why    string
+}
+
+// ReturnsProxies is the fixed list (core sleeve design review S5,
+// 2026-10-14). IBCF holds the S&P 500 hedged to EUR at fund level, so in
+// EUR it moves with the index's local-currency return and carries no USD
+// leg; its own Xetra close at 17:30 CET is four and a half hours before
+// the US close every other US line is measured at, which would understate
+// its correlation with them. SPY's returns put it on the book's clock.
+var ReturnsProxies = []ReturnsProxy{
+	{Symbol: "IBCF", Currency: "EUR", Series: IndexSymbol, Why: "EUR-hedged S&P 500 fund: SPY's local-currency returns, on the US close"},
+}
+
+// ReturnsSeries names the series a line's daily returns are read from: its
+// proxy's for a line on ReturnsProxies, else its own underlying's.
+func ReturnsSeries(underlying, currency string) string {
+	u, c := strings.ToUpper(strings.TrimSpace(underlying)), strings.ToUpper(strings.TrimSpace(currency))
+	for _, p := range ReturnsProxies {
+		if p.Symbol == u && p.Currency == c {
+			return p.Series
+		}
+	}
+	return u
+}

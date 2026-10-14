@@ -592,7 +592,21 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 		return series, series != nil && !mandateSeriesStale(series, now) && len(series.Closes) >= mandate.Closes
 	}
 	var missing []mandateMissing
-	if _, ok := book.Series[sym]; !ok {
+	if returns := mandate.ReturnsSeries(sym, ccy); returns != sym {
+		// A line moved by its proxy's returns (mandate.ReturnsProxies): the
+		// proxy is the index, which every verdict reads; its price is the
+		// held line's or the order's limit, never the proxy's close.
+		if _, ok := book.Series[returns]; !ok {
+			missing = append(missing, mandateMissing{reason: "no daily history for " + returns + ", whose returns " + sym + " is measured by"})
+		}
+		held := false
+		for _, l := range in.Legs {
+			held = held || l.Underlying == sym && l.Spot > 0
+		}
+		if !held && !(draft.LimitPrice > 0) {
+			missing = append(missing, mandateMissing{reason: "no price for " + sym + ": the book does not hold it and the order carries no limit"})
+		}
+	} else if _, ok := book.Series[sym]; !ok {
 		contract := rpc.ContractParams{Symbol: sym, SecType: "STK", Currency: ccy, Exchange: "SMART"}
 		if strings.EqualFold(draft.Contract.SecType, "STK") || strings.EqualFold(draft.Contract.SecType, "ETF") {
 			contract.ConID, contract.PrimaryExch = draft.Contract.ConID, strings.ToUpper(strings.TrimSpace(draft.Contract.PrimaryExch))

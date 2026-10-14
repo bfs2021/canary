@@ -1,6 +1,7 @@
 package mandate
 
 import (
+	"maps"
 	"math"
 	"slices"
 	"testing"
@@ -81,5 +82,38 @@ func TestBroadIndexNeedsEveryLeg(t *testing.T) {
 	}
 	if !broadIndexUnderlying(legs[:1], "SPY") || broadIndexUnderlying(legs, "QQQ") {
 		t.Fatal("broad index by underlying")
+	}
+}
+
+// IBCF, the EUR-hedged S&P 500 fund, moves with SPY's local-currency
+// returns on the US close (review S5): measured without a series of its
+// own, at beta 1, with no currency leg in a EUR book, and its own Xetra
+// series, stale or missing, never makes the verdict unknown.
+func TestIBCFMovesWithTheIndexReturns(t *testing.T) {
+	ibcf := Leg{ID: "con:3", Symbol: "IBCF", Underlying: "IBCF", Kind: KindStock, Quantity: 1000, Multiplier: 1, Currency: "EUR", Spot: 50}
+	in := testInput(t, []Leg{ibcf})
+	if _, ok := in.Series["IBCF"]; ok {
+		t.Fatal("fixture carries an IBCF series")
+	}
+	v := Evaluate(in)
+	if v.Status == StatusUnknown {
+		t.Fatalf("unknown: %v", v.Reasons)
+	}
+	if len(v.Underlyings) != 1 || math.Abs(v.Underlyings[0].Beta-1) > 1e-12 || v.Risk.FXContributionPct != 0 {
+		t.Fatalf("IBCF %+v risk %+v", v.Underlyings, v.Risk)
+	}
+	// The same notional in SPY measured in EUR (no FX leg) has the same risk.
+	spy := Leg{ID: "con:4", Symbol: IndexSymbol, Underlying: IndexSymbol, Kind: KindStock, Quantity: 1000, Multiplier: 1, Currency: "EUR", Spot: 50}
+	if sv := Evaluate(testInput(t, []Leg{spy})); math.Abs(sv.Risk.SDAnnualBase-v.Risk.SDAnnualBase) > 1e-9 {
+		t.Fatalf("IBCF risk %g, SPY at the same notional %g", v.Risk.SDAnnualBase, sv.Risk.SDAnnualBase)
+	}
+	stale := in
+	stale.Series = maps.Clone(in.Series)
+	stale.Series["IBCF"] = Series{Key: "IBCF", Dates: []string{"2026-01-02"}, Closes: []float64{50}, Stale: true}
+	if sv := Evaluate(stale); sv.Status == StatusUnknown {
+		t.Fatalf("a stale IBCF series made the verdict unknown: %v", sv.Reasons)
+	}
+	if ReturnsSeries("ibcf", "eur") != IndexSymbol || ReturnsSeries("IBCF", "USD") != "IBCF" || ReturnsSeries("SYNA", "USD") != "SYNA" {
+		t.Fatal("ReturnsSeries")
 	}
 }

@@ -116,6 +116,16 @@ proposal the owner confirms by writing it into the policy file.
   absent, every underlying takes `gap_shock_pct`, and a file without it
   keeps its fingerprint. The forced reduction's gap cut and the additions
   gate read the same per-underlying gap.
+- Returns proxy (core sleeve design review S5, 2026-10-14): IBCF in EUR,
+  the S&P 500 hedged to EUR at fund level, moves in the simulation with
+  SPY's local-currency daily returns, with no currency leg in a EUR book.
+  Its own Xetra close (17:30 CET) is four and a half hours before the US
+  close every other US line is measured at, and asynchronous closes
+  understate its correlation with them. The book therefore reads no IBCF
+  series, so a missing or stale one can never make the verdict unknown;
+  an IBCF order the book does not hold is priced at its limit, and one
+  without a limit is refused. The list is compiled
+  (`mandate.ReturnsProxies`).
 - Threshold or rule, including units: `max_loss_pct` (D, percent of the
   budget base), `vol_target_pct` (percent a year of the budget base),
   `tax_reserve_base` (base currency), `started_at` (date, YYYY-MM-DD),
