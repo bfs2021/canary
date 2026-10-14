@@ -86,7 +86,7 @@ func TestClusterCountsAWeekOnce(t *testing.T) {
 		{Sessions: 10, Matured: true, Z: new(3.0), MarketReturn: new(0.01)}, {Sessions: 10, Matured: true, Z: new(1.0), MarketReturn: new(0.01)}, {Sessions: 10, Matured: true, Z: new(-1.0), MarketReturn: new(0.01)},
 		{Sessions: 10, Matured: true, Z: new(2.0), MarketReturn: new(-0.02)},
 	}
-	got := sleeveEvidence("owner", 10, decisions, scores)
+	got := sleeveEvidence("owner", rpc.ScorecardStreamEntries, 10, decisions, scores)
 	if got.Clusters != 2 || got.Scored != 4 || math.Abs(got.SumZ-3) > 1e-12 || got.MeanZ == nil || math.Abs(*got.MeanZ-1.5) > 1e-12 {
 		t.Fatalf("evidence = %+v", got)
 	}
@@ -110,9 +110,9 @@ func TestMissingHistoryIsUnknownNotZero(t *testing.T) {
 	if res.Coverage.UnknownByReason[ReasonHistoryUnavailable] != 3 || len(res.Coverage.ScoredByHorizon) != 0 {
 		t.Fatalf("coverage = %+v", res.Coverage)
 	}
-	sleeve := res.Sleeves[horizonIndex(PrimaryHorizon)*1]
+	var sleeve rpc.ScorecardSleeve
 	for _, s := range res.Sleeves {
-		if s.Horizon == PrimaryHorizon {
+		if s.Horizon == PrimaryHorizon && s.Stream == rpc.ScorecardStreamEntries {
 			sleeve = s
 		}
 	}
@@ -197,7 +197,7 @@ func TestICPointThreeIsEstablishedAtTheClosedFormCount(t *testing.T) {
 	for n := 1; n <= 2*closedForm; n++ {
 		decisions = append(decisions, Decision{ID: string(rune('a'+n%26)) + string(rune('0'+n/26)), Sleeve: "sim", ClusterKey: clusterKeyFor("sim", n)})
 		scores = append(scores, rpc.ScorecardHorizonScore{Sessions: PrimaryHorizon, Matured: true, Z: new(0.3 + rng.NormFloat64()), MarketReturn: new(float64(1-2*(n%2)) * 0.01)})
-		got := sleeveEvidence("sim", PrimaryHorizon, decisions, scores)
+		got := sleeveEvidence("sim", rpc.ScorecardStreamEntries, PrimaryHorizon, decisions, scores)
 		if got.Gate == rpc.ScorecardGateEstablished {
 			if n < EstablishedClusters {
 				t.Fatalf("established at %d clusters", n)
@@ -320,4 +320,105 @@ func day(v string) time.Time {
 		panic(err)
 	}
 	return parsed
+}
+
+func TestExitsNeverMoveTheEntriesGate(t *testing.T) {
+	t.Parallel()
+	underlying := syntheticBars(123, "2023-01-01", 900, 29, 100)
+	market := syntheticBars(0, "2023-01-01", 900, 31, 400)
+	var decisions []Decision
+	// Two entries and three hundred exits, the exits all in distinct weeks.
+	for i := range 302 {
+		action, stream, side, sign := "exit", rpc.ScorecardStreamExits, SideSell, -1
+		if i < 2 {
+			action, stream, side, sign = "open", rpc.ScorecardStreamEntries, SideBuy, 1
+		}
+		idx := 300 + (i % 500)
+		decisions = append(decisions, Decision{ID: "d" + string(rune('0'+i%10)) + string(rune('a'+i/10%26)) + string(rune('a'+i/260)), Sleeve: "owner", Stream: stream, Underlying: "ACME", UnderlyingConID: 123, ConID: 123, Symbol: "ACME", Instrument: InstrumentStock, Action: action, Side: side, Sign: sign, Quantity: 1, ExecutedAt: underlying[idx].Day, ClusterKey: clusterKeyFor("owner", i)})
+	}
+	res := Evaluate(Input{AsOf: day("2026-12-01"), Decisions: decisions, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{123: underlying}}})
+	var entries, exits rpc.ScorecardSleeve
+	for _, s := range res.Sleeves {
+		if s.Horizon != PrimaryHorizon {
+			continue
+		}
+		switch s.Stream {
+		case rpc.ScorecardStreamEntries:
+			entries = s
+		case rpc.ScorecardStreamExits:
+			exits = s
+		}
+	}
+	if !entries.Gated || entries.Decisions != 2 || entries.Clusters > 2 || entries.Gate != rpc.ScorecardGateAccruing {
+		t.Fatalf("entries = %+v", entries)
+	}
+	if exits.Gated || exits.Gate != "" || exits.Decisions != 300 || exits.Clusters < 200 || exits.MeanZ == nil {
+		t.Fatalf("exits = %+v", exits)
+	}
+	if res.Coverage.Entries != 2 || res.Coverage.Exits != 300 {
+		t.Fatalf("coverage = %+v", res.Coverage)
+	}
+	// Even an exits stream with overwhelming evidence stays ungated.
+	var exitDecisions []Decision
+	var exitScores []rpc.ScorecardHorizonScore
+	for n := range 400 {
+		exitDecisions = append(exitDecisions, Decision{Sleeve: "owner", Stream: rpc.ScorecardStreamExits, ClusterKey: clusterKeyFor("owner", n)})
+		exitScores = append(exitScores, rpc.ScorecardHorizonScore{Sessions: PrimaryHorizon, Matured: true, Z: new(2.0), MarketReturn: new(float64(1-2*(n%2)) * 0.01)})
+	}
+	loud := sleeveEvidence("owner", rpc.ScorecardStreamExits, PrimaryHorizon, exitDecisions, exitScores)
+	if loud.Gated || loud.Gate != "" || loud.EValue < EstablishedEValue || loud.HolmAdjustedP != nil {
+		t.Fatalf("loud exits = %+v", loud)
+	}
+}
+
+func TestRuleOriginatedFillsNeverCountForOwner(t *testing.T) {
+	t.Parallel()
+	ev := edge.ChangeEvidence{Instruments: map[int64]flexstmt.Instrument{}, LifecycleTradeIDs: map[string]bool{"t-assign": true}}
+	ev.Changes = []edge.PositionChange{
+		{Key: "a", ConID: 123, Symbol: "ACME", AssetClass: "STK", Action: "open", ExecutedAt: day("2026-01-12"), DeltaQuantity: 10, PositionAfter: 10, ExecutionVWAP: new(100.0), Multiplier: new(1.0), ExecutionIDs: []string{"e-hand"}},
+		{Key: "b", ConID: 123, Symbol: "ACME", AssetClass: "STK", Action: "exit", ExecutedAt: day("2026-01-20"), DeltaQuantity: -10, PositionBefore: 10, ExecutionVWAP: new(95.0), Multiplier: new(1.0), ExecutionIDs: []string{"e-stop"}},
+		{Key: "c", ConID: 123, Symbol: "ACME", AssetClass: "STK", Action: "open", ExecutedAt: day("2026-02-02"), DeltaQuantity: 100, PositionAfter: 100, ExecutionVWAP: new(90.0), Multiplier: new(1.0), TradeIDs: []string{"t-assign"}},
+	}
+	resolve := func(change edge.PositionChange) Sleeve {
+		for _, id := range change.ExecutionIDs {
+			if id == "e-stop" {
+				return Sleeve{Name: rpc.ScorecardSleeveRule, Origin: "proposal:trailing_stop"}
+			}
+		}
+		return Sleeve{Name: SleeveOwner}
+	}
+	ledger, _ := BuildLedger(ev, resolve)
+	if len(ledger) != 3 || ledger[0].Sleeve != SleeveOwner || ledger[0].Stream != rpc.ScorecardStreamEntries {
+		t.Fatalf("ledger = %+v", ledger)
+	}
+	if ledger[1].Sleeve != rpc.ScorecardSleeveRule || ledger[1].Origin != "proposal:trailing_stop" || ledger[1].Stream != rpc.ScorecardStreamExits {
+		t.Fatalf("stop fill = %+v", ledger[1])
+	}
+	if ledger[2].Sleeve != rpc.ScorecardSleeveRule || ledger[2].Origin != OriginLifecycle {
+		t.Fatalf("assignment fill = %+v", ledger[2])
+	}
+	// The id names the fill, not the sleeve: a reclassified fill keeps it.
+	owned, _ := BuildLedger(ev, OwnerSleeve)
+	if owned[1].ID != ledger[1].ID || owned[1].Sleeve != SleeveOwner {
+		t.Fatalf("reclassified id changed: %s vs %s", owned[1].ID, ledger[1].ID)
+	}
+	res := Evaluate(Input{AsOf: day("2026-03-01"), Decisions: ledger, History: History{Market: syntheticBars(0, "2025-01-01", 400, 1, 500)}})
+	for _, s := range res.Sleeves {
+		if s.Sleeve == rpc.ScorecardSleeveRule {
+			t.Fatalf("rule sleeve was scored: %+v", s)
+		}
+		want := 0
+		if s.Stream == rpc.ScorecardStreamEntries {
+			want = 1
+		}
+		if s.Sleeve == SleeveOwner && s.Decisions != want {
+			t.Fatalf("owner %s stream counts %d decisions, want 1 entry and 0 exits", s.Stream, s.Decisions)
+		}
+	}
+	if res.Coverage.RuleOriginated["proposal:trailing_stop"] != 1 || res.Coverage.RuleOriginated[OriginLifecycle] != 1 || res.Coverage.Entries != 1 || res.Coverage.Exits != 0 || res.Coverage.Ledger != 3 {
+		t.Fatalf("coverage = %+v", res.Coverage)
+	}
+	if len(res.Decisions) != 3 || res.Decisions[0].Sleeve != rpc.ScorecardSleeveRule || res.Decisions[0].Origin != OriginLifecycle {
+		t.Fatalf("decisions = %+v", res.Decisions)
+	}
 }

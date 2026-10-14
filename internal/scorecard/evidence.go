@@ -33,7 +33,7 @@ func Evaluate(in Input) rpc.ScorecardResult {
 		SchemaVersion: SchemaVersion, State: rpc.ScorecardStateCurrent, AsOf: in.AsOf.UTC(), EvidenceTo: in.EvidenceTo.UTC(), BaseCurrency: strings.ToUpper(strings.TrimSpace(in.BaseCurrency)),
 		PrimaryHorizon: PrimaryHorizon, Horizons: append([]int(nil), Horizons[:]...),
 		Sleeves: []rpc.ScorecardSleeve{}, Decisions: []rpc.ScorecardDecision{},
-		Coverage: rpc.ScorecardCoverage{Skipped: map[string]int{}, ScoredByHorizon: map[int]int{}, UnknownByReason: map[string]int{}, Superseded: in.Superseded},
+		Coverage: rpc.ScorecardCoverage{RuleOriginated: map[string]int{}, Skipped: map[string]int{}, ScoredByHorizon: map[int]int{}, UnknownByReason: map[string]int{}, Superseded: in.Superseded},
 		History:  in.HistoryState, Method: defaultMethod(), NotExecution: true,
 	}
 	out.History.MarketSymbol = firstNonEmpty(in.History.MarketSymbol, "SPY")
@@ -66,6 +66,16 @@ func Evaluate(in Input) rpc.ScorecardResult {
 		} else {
 			out.Coverage.Stocks++
 		}
+		if d.Stream == "" {
+			d.Stream = StreamOf(d.Action)
+		}
+		if d.Sleeve == rpc.ScorecardSleeveRule {
+			out.Coverage.RuleOriginated[firstNonEmpty(d.Origin, "rule")]++
+		} else if d.Stream == rpc.ScorecardStreamEntries {
+			out.Coverage.Entries++
+		} else {
+			out.Coverage.Exits++
+		}
 		underlying := seriesFor(d.UnderlyingConID)
 		entry, entryIdx, entryOK := entryFacts(d, underlying)
 		c := scoreContext{decision: d, entry: entry, entryIdx: entryIdx, entryOK: entryOK, underlying: underlying, market: market, marks: in.Marks[d.ConID], events: in.Events[d.ConID], exits: exits[d.ConID]}
@@ -82,9 +92,13 @@ func Evaluate(in Input) rpc.ScorecardResult {
 		rows = append(rows, scored{decision: d, entry: entry, scores: scores})
 	}
 
+	// Rule-originated fills are ledger rows, never evidence for a sleeve:
+	// a protection stop or an assignment is not a decision anyone made.
 	sleeves := map[string]bool{}
 	for _, row := range rows {
-		sleeves[row.decision.Sleeve] = true
+		if row.decision.Sleeve != rpc.ScorecardSleeveRule {
+			sleeves[row.decision.Sleeve] = true
+		}
 	}
 	names := make([]string, 0, len(sleeves))
 	for name := range sleeves {
@@ -93,16 +107,18 @@ func Evaluate(in Input) rpc.ScorecardResult {
 	sort.Strings(names)
 	for _, h := range Horizons {
 		for _, name := range names {
-			var decisions []Decision
-			var scores []rpc.ScorecardHorizonScore
-			for _, row := range rows {
-				if row.decision.Sleeve != name {
-					continue
+			for _, stream := range []string{rpc.ScorecardStreamEntries, rpc.ScorecardStreamExits} {
+				var decisions []Decision
+				var scores []rpc.ScorecardHorizonScore
+				for _, row := range rows {
+					if row.decision.Sleeve != name || row.decision.Stream != stream {
+						continue
+					}
+					decisions = append(decisions, row.decision)
+					scores = append(scores, row.scores[horizonIndex(h)])
 				}
-				decisions = append(decisions, row.decision)
-				scores = append(scores, row.scores[horizonIndex(h)])
+				out.Sleeves = append(out.Sleeves, sleeveEvidence(name, stream, h, decisions, scores))
 			}
-			out.Sleeves = append(out.Sleeves, sleeveEvidence(name, h, decisions, scores))
 		}
 	}
 	applyHolm(out.Sleeves, PrimaryHorizon)
@@ -152,11 +168,15 @@ type cluster struct {
 	count  int
 }
 
-// sleeveEvidence accumulates one sleeve's evidence at one horizon: each
-// sleeve × entry-week cluster counts once, through the mean z of its
-// decisions.
-func sleeveEvidence(name string, h int, decisions []Decision, scores []rpc.ScorecardHorizonScore) rpc.ScorecardSleeve {
-	out := rpc.ScorecardSleeve{Sleeve: name, Horizon: h, Decisions: len(decisions), Unknown: map[string]int{}, Gate: rpc.ScorecardGateAccruing}
+// sleeveEvidence accumulates one sleeve stream's evidence at one horizon:
+// each sleeve × entry-week cluster counts once, through the mean z of its
+// decisions. Only the entries stream is gated.
+func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []rpc.ScorecardHorizonScore) rpc.ScorecardSleeve {
+	gated := stream == rpc.ScorecardStreamEntries
+	out := rpc.ScorecardSleeve{Sleeve: name, Stream: stream, Horizon: h, Gated: gated, Decisions: len(decisions), Unknown: map[string]int{}}
+	if gated {
+		out.Gate = rpc.ScorecardGateAccruing
+	}
 	byKey := map[string]*cluster{}
 	var wrappers, rvis []float64
 	for i, score := range scores {
@@ -240,6 +260,9 @@ func sleeveEvidence(name string, h int, decisions []Decision, scores []rpc.Score
 		gates.MarketsAgree = sameSign(upMean, downMean)
 	}
 	out.Gates = gates
+	if !gated {
+		return out
+	}
 	switch {
 	case gates.EValue && gates.Clusters && gates.Posterior && gates.HalvesAgree && gates.MarketsAgree:
 		out.Gate = rpc.ScorecardGateEstablished
@@ -256,12 +279,13 @@ func sameSign(a, b float64) bool {
 }
 
 // applyHolm corrects the sleeves' p-values (the 1/E bound) across live
-// sleeves at the primary horizon; with one sleeve nothing is adjusted.
+// sleeves' entries streams at the primary horizon; with one sleeve nothing
+// is adjusted.
 func applyHolm(sleeves []rpc.ScorecardSleeve, h int) {
 	var idx []int
 	var p []float64
 	for i := range sleeves {
-		if sleeves[i].Horizon != h || sleeves[i].Clusters == 0 {
+		if sleeves[i].Horizon != h || !sleeves[i].Gated || sleeves[i].Clusters == 0 {
 			continue
 		}
 		idx = append(idx, i)
@@ -283,7 +307,7 @@ func applyHolm(sleeves []rpc.ScorecardSleeve, h int) {
 
 func publicDecision(d Decision, entry rpc.ScorecardEntry, scores []rpc.ScorecardHorizonScore) rpc.ScorecardDecision {
 	out := rpc.ScorecardDecision{
-		ID: d.ID, Sleeve: d.Sleeve, StrategyRef: d.StrategyRef, Underlying: d.Underlying, Symbol: d.Symbol, Instrument: d.Instrument,
+		ID: d.ID, Sleeve: d.Sleeve, Stream: firstNonEmpty(d.Stream, StreamOf(d.Action)), Origin: d.Origin, StrategyRef: d.StrategyRef, Underlying: d.Underlying, Symbol: d.Symbol, Instrument: d.Instrument,
 		Action: d.Action, Side: d.Side, Sign: d.Sign, Quantity: d.Quantity, FillPrice: d.FillPrice, Currency: d.Currency, NotionalBase: d.NotionalBase,
 		ExecutedAt: d.ExecutedAt, ClusterKey: d.ClusterKey, Entry: entry, Scores: scores,
 	}
@@ -295,9 +319,10 @@ func publicDecision(d Decision, entry rpc.ScorecardEntry, scores []rpc.Scorecard
 
 func defaultMethod() rpc.ScorecardMethod {
 	return rpc.ScorecardMethod{
-		Direction:           "z = sign × (r_u − β·r_SPY) / (σ_idio·√h): log returns from the execution-session close to the close h sessions later; sign is +1 for long exposure and −1 for short (a long put or short call is −1).",
+		Direction:           "z = sign × (r_u − β·r_SPY) / (σ_idio·√h): log returns from the execution-session close to the close h sessions later, so the intraday move after the fill is excluded; sign is +1 for long exposure and −1 for short (a long put or short call is −1).",
 		Lookback:            "β and σ_idio from an OLS of daily log returns on SPY over the 252 sessions ending the session before entry; at least 60 sessions; nothing after entry enters.",
-		Clusters:            "Decisions in one sleeve and ISO entry week form one cluster that counts once through its mean z.",
+		Streams:             "Entries (open, add) ask whether the name moves with the decision and carry the gates and the Holm correction; exits (trim, exit) ask whether it moves against the position afterwards and are reported with the same statistics, never gated. Fills Canary's rules or the broker's lifecycle produced are the rule sleeve and count for no owner stream.",
+		Clusters:            "Decisions in one sleeve, stream and ISO entry week form one cluster that counts once through its mean z.",
 		Posterior:           "Posterior on IC with prior N(0, 0.1²) and unit variance per cluster mean: P(IC > 0.05) and P(IC > 0.10).",
 		EValue:              "Mixture-SPRT e-value E_n = (1+nτ²)^(−1/2)·exp(τ²S_n²/(2(1+nτ²))), τ = 0.2, reported only while S_n > 0, else 0 (against).",
 		Gates:               "established: E ≥ 100, n ≥ 100 clusters, P(IC > 0.05) ≥ 0.95, and the same sign of mean z in both chronological halves and in up- and down-market clusters; futile: n ≥ 60 and P(IC > 0.10) < 0.05; otherwise accruing. Holm correction across sleeves when more than one is live.",

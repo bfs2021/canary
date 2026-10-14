@@ -35,15 +35,60 @@ observation in daemon.db (`scorecard/ledger`, kind `scorecard.decision.v1`,
 never decision-eligible), appended once by its stable id. Back-fill starts at
 the earliest statement trade the retained projection holds.
 
-Fields on the persisted row: decision id (hash of sleeve, contract, execution
-time, side and the execution record ids), sleeve, underlying (symbol and
-contract id), instrument (stock or option with expiry, strike, right and
-multiplier), action, side, underlying-direction sign (+1 long exposure, −1
-short: a long put or a short call is −1, a short put or a long call +1),
-quantity, fill price (execution VWAP), notional in base currency, execution
-FX, execution time, cluster key = sleeve × ISO week of entry, and the lineage
-field `strategy_ref` (empty for hand and TWS trades; a Canary order_ref
-lineage fills it later). Sleeve is `owner` for every trade today.
+Fields on the persisted row: decision id (hash of contract, execution time,
+side, action, quantity and the execution record ids; the sleeve is an
+attribute, so a fill keeps its id when later lineage reclassifies it),
+sleeve, stream, origin, underlying (symbol and contract id), instrument (stock
+or option with expiry, strike, right and multiplier), action, side,
+underlying-direction sign (+1 long exposure, −1 short: a long put or a short
+call is −1, a short put or a long call +1), quantity, fill price (execution
+VWAP), notional in base currency, execution FX, execution time, cluster key =
+sleeve × ISO week of entry, and the lineage field `strategy_ref` (empty for
+hand and TWS trades; a Canary order_ref lineage fills it later).
+
+### Streams: entries and exits
+
+Pooling every position change into one stream would mix two skills: entry
+selection (does the name move with the decision after an open or add?) and
+exit timing (does it move against the position after a trim or exit?). Many
+exits are not discretionary at all: protection stops, expiry closes, budget
+reductions, exercise and assignment. Pooling would dilute the entry IC that is
+the owner's candidate edge and make the gate meaningless. So each decision
+carries a stream: `entries` (open, add) is the primary stream and the only
+one with gates, the Holm correction and the CLI headline; `exits` (trim,
+exit) is reported per sleeve with the same statistics and never gates. A
+flip (long to short in one fill) is Edge's exit part plus its open part, each
+in its own stream.
+
+### The rule sleeve
+
+Fills that Canary's own rules or the broker's lifecycle produced are the
+`rule` sleeve, with an `origin`, and count for no owner stream. They stay in
+the ledger and the decision list and are counted under
+`coverage.rule_originated` by origin. The daemon's resolver
+(`scorecardSleeveResolver`) reads two local sources:
+
+- Canary's order journal, joined to the statement fill by execution id (the
+  same join Edge's protection context uses), and the proposal records joined
+  by order reference. A fill whose submitted proposal carries one of the
+  buckets `trailing_stop`, `option_loss_exit`, `option_profit_trail`,
+  `budget_reduction`, `option_expiry_close`, `theta_hygiene`,
+  `risk_reduction`, `strategy_exit`, `option_exit_review`, `cash_sweep` or
+  `currency_leveling`, or whose journal origin is `daemon-preauthorised`,
+  `daemon-protective-guard` or the daemon's internal transmit origin, is
+  `rule` with origin `proposal:<bucket>` or `origin:<origin>`.
+- The broker's option lifecycle rows (`OptionEAE`: exercise, assignment,
+  expiration and their underlying deliveries) share a trade id with the
+  trade rows they produced; such a fill is `rule` with origin `lifecycle`,
+  whatever the journal says.
+
+What remains unclassifiable: the Flex trade row keeps no transaction type or
+notes, so a lifecycle delivery without an `OptionEAE` row, a stop that rested
+at the broker outside Canary's journal, a Canary order older than the
+journal's 400-day read, and any fill while the bounded journal or proposal
+read is withheld (10,000-record cap) all read as the owner's. The coverage
+counts say how many rows the resolver could tag; they never say the owner
+stream is clean of rule fills.
 
 Entry facts that need market history (underlying close of the execution
 session, the implied volatility inverted from the fill price by Black-Scholes,
@@ -81,7 +126,12 @@ h sessions after entry.
   are log returns from the execution-session close to the close h sessions
   later, and β and σ_idio come from an OLS of daily log returns on SPY over
   the 252 sessions ending the session before the decision. Nothing after the
-  entry enters β or σ. At least 60 overlapping sessions are required.
+  entry enters β or σ. At least 60 overlapping sessions are required. Entry
+  is measured from the close of the execution session, not from the fill:
+  the intraday move after the fill is excluded, which is conservative (a
+  fill that was right within the day earns nothing for it) and avoids any
+  intraday look-ahead, since the daemon holds no intraday history for the
+  fill's session.
 - Realised-vs-implied (options): |r_u| / (IV·√(h/252)).
 - Wrapper (options): option P&L over the horizon, or to exit when earlier,
   minus the P&L of a static delta-equivalent stock position (delta at entry ×
@@ -98,11 +148,12 @@ h sessions after entry.
   on the fill), so the field is served as unknown with that reason until a
   fill-time quote capture exists.
 
-## Evidence per sleeve
+## Evidence per sleeve and stream
 
-At the primary horizon, decisions are grouped into clusters by sleeve × ISO
-week of entry and each cluster contributes its mean z once. With n clusters
-and running sum S_n:
+At the primary horizon, the decisions of one sleeve and stream are grouped
+into clusters by ISO week of entry and each cluster contributes its mean z
+once. The entries stream carries the gates below; the exits stream reports
+the same figures with no gate. With n clusters and running sum S_n:
 
 - Posterior on IC with prior N(0, 0.1²) and unit variance per cluster mean:
   mean S_n/(100+n), variance 1/(100+n); P(IC > 0.05) and P(IC > 0.1).
@@ -114,8 +165,9 @@ and running sum S_n:
   `futile` when n ≥ 60 and P(IC > 0.1) < 0.05; otherwise `accruing`.
 - Also the wrapper mean with a 95% bootstrap interval (1,000 resamples,
   seeded) and the realised-vs-implied median.
-- Holm correction across sleeves when more than one is live
-  (`scorecard.Holm`); only `owner` exists today, so it is a pass-through.
+- Holm correction across sleeves' entries streams when more than one sleeve
+  is live (`scorecard.Holm`); only `owner` exists today, so it is a
+  pass-through. The rule sleeve is never a live sleeve.
 
 With a true IC of 0.3 per cluster the closed form passes E ≥ 100 at n = 145
 clusters; a sleeve of one decision a week needs about three years, a sleeve
@@ -135,17 +187,22 @@ sleeve is never called skilled before `established`, and `accruing` reads as
 
 The worker runs after start, every two hours, and when Edge's statement
 evidence changes. The publication (`scorecard_publication`, version 1) carries the
-evidence per sleeve, the matured decisions with their scores and the coverage
-counts (unknown by reason).
+evidence per sleeve and stream, the decisions with their scores and the
+coverage counts (entries, exits, rule-originated by origin, unknown by
+reason).
 
 ## Tests
 
-`internal/scorecard`: zero-skill random z keeps E small and reaches futility;
+`internal/scorecard`: an exit-only sleeve, however loud, never moves the
+entries gate and is never gated itself; rule-originated and lifecycle fills
+never count for the owner and keep their id when reclassified; zero-skill
+random z keeps E small and reaches futility;
 IC 0.3 is established at the closed-form cluster count and in a seeded
 simulation; β and σ use only pre-decision sessions (a look-ahead sentinel in
 later bars changes nothing); Black-Scholes IV round-trips; direction sign for
 long and short puts and calls; a week counts once however many decisions it
 holds; missing history is unknown, not zero. `internal/edge`: position changes
 match Edge's own classification. `internal/daemon`: the ledger appends a
-decision once and reloads it. `internal/cli`: golden render. `internal/stress`:
+decision once and reloads it; the resolver tags proposal buckets and daemon
+origins as rule and leaves hand and TWS fills to the owner. `internal/cli`: golden render. `internal/stress`:
 `TestOnlyTheDaemonEvaluates` names the scorecard evaluators.

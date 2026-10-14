@@ -17,6 +17,7 @@ import (
 
 	"github.com/osauer/canary/v2/internal/edge"
 	"github.com/osauer/canary/v2/internal/flexstmt"
+	"github.com/osauer/canary/v2/internal/rpc"
 )
 
 // Schema, sleeve, horizon and estimation constants.
@@ -83,6 +84,9 @@ const (
 	ReasonIdioVolZero              = "idio_vol_zero"
 	ReasonUnsupportedAsset         = "unsupported_asset"
 	ReasonZeroQuantity             = "zero_quantity"
+
+	// OriginLifecycle marks a fill the broker's option lifecycle produced.
+	OriginLifecycle = "lifecycle"
 )
 
 // Horizons is the closed set of post-entry session lenses.
@@ -92,8 +96,12 @@ var Horizons = [...]int{5, PrimaryHorizon, MaxHorizon}
 // position change, its sleeve and its cluster. Lineage holds broker
 // identifiers and never leaves the daemon.
 type Decision struct {
-	ID              string          `json:"id"`
-	Sleeve          string          `json:"sleeve"`
+	ID     string `json:"id"`
+	Sleeve string `json:"sleeve"`
+	// Stream is entries (open, add) or exits (trim, exit); Origin names the
+	// rule or lifecycle source when the sleeve is rule.
+	Stream          string          `json:"stream"`
+	Origin          string          `json:"origin,omitempty"`
 	StrategyRef     string          `json:"strategy_ref,omitempty"`
 	Underlying      string          `json:"underlying"`
 	UnderlyingConID int64           `json:"underlying_conid"`
@@ -131,15 +139,36 @@ type Lineage struct {
 	RecordIDs    []string `json:"record_ids,omitempty"`
 	ExecutionIDs []string `json:"execution_ids,omitempty"`
 	OrderIDs     []string `json:"order_ids,omitempty"`
+	TradeIDs     []string `json:"trade_ids,omitempty"`
 }
 
-// SleeveResolver assigns a sleeve and strategy reference to a change. The
-// default resolver returns the owner sleeve; a Canary order_ref lineage
-// resolver replaces it when automated sleeves exist.
-type SleeveResolver func(edge.PositionChange) (sleeve, strategyRef string)
+// Sleeve is a resolver's answer: the sleeve a fill belongs to, the strategy
+// lineage behind it and, for the rule sleeve, the rule or event that
+// produced it.
+type Sleeve struct {
+	Name        string
+	StrategyRef string
+	Origin      string
+}
+
+// SleeveResolver assigns a sleeve to a change from its order lineage. The
+// default resolver returns the owner sleeve; the daemon's resolver reads
+// Canary's order journal and proposal records to tag rule-originated fills.
+type SleeveResolver func(edge.PositionChange) Sleeve
 
 // OwnerSleeve is the default resolver: every fill is the owner's.
-func OwnerSleeve(edge.PositionChange) (string, string) { return SleeveOwner, "" }
+func OwnerSleeve(edge.PositionChange) Sleeve { return Sleeve{Name: SleeveOwner} }
+
+// StreamOf is the stream of an action: open and add are entries, trim and
+// exit are exits.
+func StreamOf(action string) string {
+	switch action {
+	case edge.ActionOpen, edge.ActionAdd:
+		return rpc.ScorecardStreamEntries
+	default:
+		return rpc.ScorecardStreamExits
+	}
+}
 
 // BuildLedger derives the ledger rows from Edge's classified changes, oldest
 // first. Stocks, ETFs and options enter; every other asset class is counted
@@ -165,22 +194,34 @@ func BuildLedger(ev edge.ChangeEvidence, resolve SleeveResolver) ([]Decision, ma
 			skipped[ReasonUnsupportedAsset]++
 			continue
 		}
-		sleeve, strategyRef := resolve(change)
-		sleeve = strings.ToLower(strings.TrimSpace(sleeve))
+		resolved := resolve(change)
+		sleeve := strings.ToLower(strings.TrimSpace(resolved.Name))
 		if sleeve == "" {
 			sleeve = SleeveOwner
+		}
+		strategyRef, origin := resolved.StrategyRef, resolved.Origin
+		// A fill the broker's lifecycle rows share a trade id with is a
+		// delivery, not a decision, whatever the resolver said.
+		for _, tradeID := range change.TradeIDs {
+			if ev.LifecycleTradeIDs[tradeID] {
+				sleeve, origin = rpc.ScorecardSleeveRule, OriginLifecycle
+				break
+			}
+		}
+		if sleeve == rpc.ScorecardSleeveRule && origin == "" {
+			origin = "rule"
 		}
 		side := SideBuy
 		if change.DeltaQuantity < 0 {
 			side = SideSell
 		}
 		d := Decision{
-			Sleeve: sleeve, StrategyRef: strategyRef, ConID: change.ConID, Symbol: change.Symbol, Instrument: instrument,
+			Sleeve: sleeve, Stream: StreamOf(change.Action), Origin: origin, StrategyRef: strategyRef, ConID: change.ConID, Symbol: change.Symbol, Instrument: instrument,
 			Action: change.Action, Side: side, Quantity: math.Abs(change.DeltaQuantity),
 			FillPrice: positive(change.ExecutionVWAP), Multiplier: positive(change.Multiplier), Currency: change.Currency,
 			ExecutionFX: positive(change.ExecutionFX), NotionalBase: positive(change.ExecutionNotionalBase),
 			ExecutedAt: change.ExecutedAt.UTC(), PositionBefore: change.PositionBefore, PositionAfter: change.PositionAfter, PathUnbalanced: change.PathUnbalanced,
-			Lineage: Lineage{RecordIDs: append([]string(nil), change.RecordIDs...), ExecutionIDs: append([]string(nil), change.ExecutionIDs...), OrderIDs: append([]string(nil), change.OrderIDs...)},
+			Lineage: Lineage{RecordIDs: append([]string(nil), change.RecordIDs...), ExecutionIDs: append([]string(nil), change.ExecutionIDs...), OrderIDs: append([]string(nil), change.OrderIDs...), TradeIDs: append([]string(nil), change.TradeIDs...)},
 		}
 		meta, haveMeta := ev.Instruments[change.ConID]
 		switch instrument {
@@ -269,7 +310,9 @@ func optionContractFrom(meta flexstmt.Instrument, multiplier *float64) *OptionCo
 func decisionID(d Decision) string {
 	h := sha256.New()
 	h.Write([]byte("canary.scorecard.decision.v1"))
-	for _, value := range []string{d.Sleeve, strconv.FormatInt(d.ConID, 10), d.ExecutedAt.UTC().Format(time.RFC3339Nano), d.Side, d.Action, strconv.FormatFloat(d.Quantity, 'g', -1, 64), strings.Join(d.Lineage.RecordIDs, ",")} {
+	// The sleeve is an attribute, not identity: a fill keeps its id when
+	// later lineage reclassifies it.
+	for _, value := range []string{strconv.FormatInt(d.ConID, 10), d.ExecutedAt.UTC().Format(time.RFC3339Nano), d.Side, d.Action, strconv.FormatFloat(d.Quantity, 'g', -1, 64), strings.Join(d.Lineage.RecordIDs, ",")} {
 		h.Write([]byte{0})
 		h.Write([]byte(value))
 	}

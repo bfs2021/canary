@@ -40,6 +40,7 @@ type PositionChange struct {
 	RecordIDs    []string
 	ExecutionIDs []string
 	OrderIDs     []string
+	TradeIDs     []string
 	// PathUnbalanced is true when the contract's quantity path does not
 	// reconcile with the retained position snapshots.
 	PathUnbalanced bool
@@ -68,6 +69,11 @@ type ChangeEvidence struct {
 	Marks       map[int64][]ContractMark
 	Events      map[int64][]ContractEvent
 	FXRates     []flexstmt.FXRate
+	// LifecycleTradeIDs are the trade ids the broker's option lifecycle rows
+	// (exercise, assignment, expiration and their underlying deliveries)
+	// share with trade rows: such a fill is a lifecycle delivery, not a
+	// decision.
+	LifecycleTradeIDs map[string]bool
 	// PositionsAnchored is false when no open-position snapshot exists, so
 	// every position path is unproved.
 	PositionsAnchored bool
@@ -77,7 +83,7 @@ type ChangeEvidence struct {
 // statements, oldest first. It is deterministic under reordered evidence and
 // performs no I/O.
 func PositionChanges(statements []flexstmt.Statement, baseCurrency string) (ChangeEvidence, error) {
-	out := ChangeEvidence{Instruments: map[int64]flexstmt.Instrument{}, Marks: map[int64][]ContractMark{}, Events: map[int64][]ContractEvent{}}
+	out := ChangeEvidence{Instruments: map[int64]flexstmt.Instrument{}, Marks: map[int64][]ContractMark{}, Events: map[int64][]ContractEvent{}, LifecycleTradeIDs: map[string]bool{}}
 	ev, err := collectEvidence(statements)
 	if err != nil {
 		return out, err
@@ -100,6 +106,9 @@ func PositionChanges(statements []flexstmt.Statement, baseCurrency string) (Chan
 		out.Marks[conid] = marks
 	}
 	for _, event := range ev.optionEvents {
+		if event.TradeID != "" {
+			out.LifecycleTradeIDs[event.TradeID] = true
+		}
 		if event.ConID == 0 || event.Date.IsZero() {
 			continue
 		}
@@ -160,7 +169,7 @@ func positionChangeFrom(group groupedTrade, part changePart, before float64, unb
 		Action: part.action, Direction: part.direction, ExecutedAt: group.executedAt,
 		DeltaQuantity: part.delta, PositionBefore: before, PositionAfter: before + part.delta,
 		ExecutionVWAP: cloneFloat(group.vwap), Multiplier: cloneFloat(group.multiplier), ExecutionFX: cloneFloat(group.executionFX), ClosePrice: cloneFloat(group.closePrice),
-		RecordIDs: append([]string(nil), group.recordIDs...), ExecutionIDs: append([]string(nil), group.executionIDs...), OrderIDs: append([]string(nil), group.orderIDs...),
+		RecordIDs: append([]string(nil), group.recordIDs...), ExecutionIDs: append([]string(nil), group.executionIDs...), OrderIDs: append([]string(nil), group.orderIDs...), TradeIDs: append([]string(nil), group.tradeIDs...),
 		PathUnbalanced: unbalanced,
 	}
 	if group.executionNotionalBase != nil {

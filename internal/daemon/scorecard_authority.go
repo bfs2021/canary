@@ -152,7 +152,8 @@ func (s *Server) rebuildScorecard(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ledger, skipped := scorecard.BuildLedger(evidence, scorecard.OwnerSleeve)
+	localEvents, localProposals, _ := s.edgeProtectionEvidence(ctx, scope)
+	ledger, skipped := scorecard.BuildLedger(evidence, scorecardSleeveResolver(localEvents, localProposals))
 	ledgerScope := scorecardLedgerScopePrefix + scopeFingerprint
 	persisted, err := s.loadScorecardLedger(ctx, ledgerScope)
 	if err != nil {
@@ -510,7 +511,68 @@ func scorecardStateOnlyResult(state, reason string) rpc.ScorecardResult {
 	return rpc.ScorecardResult{
 		SchemaVersion: scorecard.SchemaVersion, State: state, Reason: reason, PrimaryHorizon: scorecard.PrimaryHorizon, Horizons: append([]int(nil), scorecard.Horizons[:]...),
 		Sleeves: []rpc.ScorecardSleeve{}, Decisions: []rpc.ScorecardDecision{},
-		Coverage: rpc.ScorecardCoverage{Skipped: map[string]int{}, ScoredByHorizon: map[int]int{}, UnknownByReason: map[string]int{}},
+		Coverage: rpc.ScorecardCoverage{RuleOriginated: map[string]int{}, Skipped: map[string]int{}, ScoredByHorizon: map[int]int{}, UnknownByReason: map[string]int{}},
 		History:  rpc.ScorecardHistory{MarketSymbol: "SPY"}, NotExecution: true,
+	}
+}
+
+// scorecardSleeveResolver reads Canary's own order journal and proposal
+// records: a fill whose execution the journal matches to a protection or
+// automatic proposal bucket, or to a daemon-originated write, is the rule
+// sleeve with that origin. Every other fill (hand, TWS, console, or any fill
+// the bounded journal read could not see) is the owner's.
+func scorecardSleeveResolver(events []orderJournalEvent, proposals []proposalEvent) scorecard.SleeveResolver {
+	byExecution := map[string][]orderJournalEvent{}
+	for _, ev := range events {
+		if ev.ExecID != "" {
+			byExecution[ev.ExecID] = append(byExecution[ev.ExecID], ev)
+		}
+	}
+	bucketByRef := map[string]string{}
+	for _, p := range proposals {
+		if p.Type == "submitted" && p.OrderRef != "" && p.Bucket != "" {
+			bucketByRef[p.OrderRef] = p.Bucket
+		}
+	}
+	return func(change edgecore.PositionChange) scorecard.Sleeve {
+		for _, execID := range change.ExecutionIDs {
+			for _, ev := range byExecution[execID] {
+				if origin := scorecardRuleOrigin(ev, bucketByRef); origin != "" {
+					return scorecard.Sleeve{Name: rpc.ScorecardSleeveRule, Origin: origin}
+				}
+			}
+		}
+		return scorecard.Sleeve{Name: scorecard.SleeveOwner}
+	}
+}
+
+func scorecardRuleOrigin(ev orderJournalEvent, bucketByRef map[string]string) string {
+	if bucket := bucketByRef[ev.OrderRef]; ev.OrderRef != "" && scorecardRuleBucket(bucket) {
+		return "proposal:" + bucket
+	}
+	switch ev.Origin {
+	case rpc.OrderOriginDaemonPreAuthorised, rpc.OrderOriginDaemonProtectiveGuard:
+		return "origin:" + ev.Origin
+	}
+	if ev.TransmitOrigin == corestore.OriginDaemon {
+		return "origin:" + string(ev.TransmitOrigin)
+	}
+	return ""
+}
+
+// scorecardRuleBucket names the proposal buckets whose fills are a rule's,
+// not a decision: protection, hygiene, budget and expiry exits, strategy
+// exits and the cash sweeps.
+func scorecardRuleBucket(bucket string) bool {
+	switch bucket {
+	// "option_profit_trail" has no rpc constant yet; the owner named it as
+	// a rule bucket, so a proposal that carries it is tagged when it exists.
+	case rpc.TradeProposalBucketTrailingStop, rpc.TradeProposalBucketOptionLossExit, "option_profit_trail",
+		rpc.TradeProposalBucketBudgetReduction, rpc.TradeProposalBucketOptionExpiryClose, rpc.TradeProposalBucketThetaHygiene,
+		rpc.TradeProposalBucketRiskReduction, rpc.TradeProposalBucketStrategyExit, rpc.TradeProposalBucketOptionExitReview,
+		rpc.TradeProposalBucketCashSweep, rpc.TradeProposalBucketCurrencyLeveling:
+		return true
+	default:
+		return false
 	}
 }

@@ -73,6 +73,7 @@ type groupedTrade struct {
 	recordIDs             []string
 	executionIDs          []string
 	orderIDs              []string
+	tradeIDs              []string
 	underlyingConID       int64
 	underlyingSymbol      string
 	queryComplete         bool
@@ -451,6 +452,9 @@ func groupTrades(trades []flexstmt.Trade, baseCurrency string, fxRates []flexstm
 			}
 			if row.OrderID != "" && !slices.Contains(g.orderIDs, row.OrderID) {
 				g.orderIDs = append(g.orderIDs, row.OrderID)
+			}
+			if row.TradeID != "" && !slices.Contains(g.tradeIDs, row.TradeID) {
+				g.tradeIDs = append(g.tradeIDs, row.TradeID)
 			}
 			executionFX := baseConversionFX(row.Currency, baseCurrency, row.ExecutedAt, row.FXRateToBase, fxRates)
 			if g.executionFX == nil && executionFX != nil {

@@ -118,3 +118,37 @@ func TestScorecardReadBoundsToSleeveAndPage(t *testing.T) {
 		t.Fatalf("unbounded = %+v, %v", all, err)
 	}
 }
+
+func TestScorecardSleeveResolverTagsRuleOriginsNeverOwner(t *testing.T) {
+	t.Parallel()
+	events := []orderJournalEvent{
+		{ExecID: "e-stop", OrderRef: "canary-stop-1", Origin: rpc.OrderOriginPairedDevice},
+		{ExecID: "e-sweep", OrderRef: "canary-sweep-1", Origin: rpc.OrderOriginPairedDevice},
+		{ExecID: "e-pre", OrderRef: "canary-pre-1", Origin: rpc.OrderOriginDaemonPreAuthorised},
+		{ExecID: "e-daemon", OrderRef: "canary-d-1", TransmitOrigin: corestore.OriginDaemon},
+		{ExecID: "e-hand", OrderRef: "canary-hand-1", Origin: rpc.OrderOriginHumanTTY},
+	}
+	proposals := []proposalEvent{
+		{Type: "submitted", OrderRef: "canary-stop-1", Bucket: rpc.TradeProposalBucketTrailingStop},
+		{Type: "submitted", OrderRef: "canary-sweep-1", Bucket: rpc.TradeProposalBucketCashSweep},
+		{Type: "previewed", OrderRef: "canary-hand-1", Bucket: rpc.TradeProposalBucketTrailingStop},
+	}
+	resolve := scorecardSleeveResolver(events, proposals)
+	for _, tc := range []struct {
+		exec       string
+		wantSleeve string
+		wantOrigin string
+	}{
+		{"e-stop", rpc.ScorecardSleeveRule, "proposal:trailing_stop"},
+		{"e-sweep", rpc.ScorecardSleeveRule, "proposal:cash_sweep"},
+		{"e-pre", rpc.ScorecardSleeveRule, "origin:" + rpc.OrderOriginDaemonPreAuthorised},
+		{"e-daemon", rpc.ScorecardSleeveRule, "origin:daemon_internal"},
+		{"e-hand", scorecard.SleeveOwner, ""},
+		{"e-tws", scorecard.SleeveOwner, ""},
+	} {
+		got := resolve(edgecore.PositionChange{ExecutionIDs: []string{tc.exec}})
+		if got.Name != tc.wantSleeve || got.Origin != tc.wantOrigin {
+			t.Fatalf("%s resolved to %+v, want %s %q", tc.exec, got, tc.wantSleeve, tc.wantOrigin)
+		}
+	}
+}

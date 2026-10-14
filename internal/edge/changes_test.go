@@ -20,6 +20,8 @@ func TestPositionChangesMatchAnalyzeAndCarryLineage(t *testing.T) {
 		flexstmt.Trade{RecordID: "call-close", AccountID: "U", ConID: 456, UnderlyingConID: 123, Symbol: "ACME CALL", UnderlyingSymbol: "ACME", AssetClass: "OPT", Currency: "USD", FXRateToBase: new(.9), OrderID: "o-call-2", ExecutionID: "e-call-2", ExecutedAt: dayTime("2026-01-20", 10), Side: "SELL", OpenClose: "C", Quantity: new(float64(1)), Price: new(float64(5)), Multiplier: new(float64(100)), Commission: new(float64(-1)), Taxes: new(float64(0)), RealizedPNL: new(float64(200)), LevelOfDetail: "EXECUTION"},
 	)
 	st.Positions = append(st.Positions, flexstmt.OpenPosition{RecordID: "p-call", AccountID: "U", ConID: 456, Symbol: "ACME CALL", AssetClass: "OPT", Currency: "USD", ReportDate: day("2026-01-15"), Quantity: new(float64(1)), Multiplier: new(float64(100)), MarkPrice: new(float64(4))})
+	st.Trades[0].TradeID = "t-stock"
+	st.OptionEvents = append(st.OptionEvents, flexstmt.OptionEvent{RecordID: "assign", AccountID: "U", ConID: 123, Symbol: "ACME", AssetClass: "STK", Currency: "USD", Date: dayTime("2026-01-05", 12), TransactionType: "ASSIGNMENT", Quantity: new(float64(10)), TradeID: "t-stock"})
 	analyzed, err := Analyze(Input{AsOf: day("2026-02-10"), WindowDays: 365, BaseCurrency: "EUR", Statements: []flexstmt.Statement{st}, Bars: barsMap(123, "2026-01-06", 20, 105)})
 	if err != nil {
 		t.Fatal(err)
@@ -47,6 +49,9 @@ func TestPositionChangesMatchAnalyzeAndCarryLineage(t *testing.T) {
 	}
 	if got.Changes[2].Action != ActionExit || got.Changes[2].PositionAfter != 0 {
 		t.Fatalf("call exit = %+v", got.Changes[2])
+	}
+	if !got.LifecycleTradeIDs["t-stock"] || len(stock.TradeIDs) != 1 || stock.TradeIDs[0] != "t-stock" {
+		t.Fatalf("lifecycle lineage = %v / %v", got.LifecycleTradeIDs, stock.TradeIDs)
 	}
 	if got.Instruments[456].PutCall != "C" || len(got.Marks[456]) != 1 || got.Marks[456][0].Price != 4 || !got.PositionsAnchored {
 		t.Fatalf("evidence = instruments %d marks %+v anchored %v", len(got.Instruments), got.Marks, got.PositionsAnchored)

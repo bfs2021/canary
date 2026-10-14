@@ -82,15 +82,17 @@ func renderScorecard(env *Env, res rpc.ScorecardResult, horizon int) {
 	}
 	renderScorecardDecisions(env, res, horizon)
 	fmt.Fprintln(out)
-	riskReadLine(env, "Coverage", fmt.Sprintf("%d decisions in the ledger", res.Coverage.Ledger), fmt.Sprintf("%d stock", res.Coverage.Stocks), fmt.Sprintf("%d option", res.Coverage.Options), scorecardCounts("skipped", res.Coverage.Skipped), scorecardCounts("unknown", res.Coverage.UnknownByReason))
+	riskReadLine(env, "Coverage", fmt.Sprintf("%d decisions in the ledger", res.Coverage.Ledger), fmt.Sprintf("%d stock", res.Coverage.Stocks), fmt.Sprintf("%d option", res.Coverage.Options),
+		fmt.Sprintf("%d entries", res.Coverage.Entries), fmt.Sprintf("%d exits", res.Coverage.Exits), scorecardCounts("rule-originated, in no owner stream", res.Coverage.RuleOriginated),
+		scorecardCounts("skipped", res.Coverage.Skipped), scorecardCounts("unknown", res.Coverage.UnknownByReason))
 	history := fmt.Sprintf("%d names", res.History.Names)
 	if res.History.Missing > 0 || res.History.Pending > 0 {
 		history = fmt.Sprintf("%d names, %d without history, %d still to fetch", res.History.Names, res.History.Missing, res.History.Pending)
 	}
 	riskReadLine(env, "History", history, fmt.Sprintf("%s %d sessions", res.History.MarketSymbol, res.History.MarketBars))
 	fmt.Fprintln(out)
-	riskReadLine(env, "Reading", "z is the underlying's move after the decision, net of its market exposure, in units of its own daily noise; positive means the move went the decision's way. Each entry week counts once. The e-value is the weight of evidence for information in the decisions (100 is the bar); the posterior gives the chance the true mean z per week exceeds 0.05 and 0.10.")
-	riskReadLine(env, "", "A sleeve is established only when every gate passes; until then nothing here says whether the decisions carry information. Read-only review of past fills; it places no orders.")
+	riskReadLine(env, "Reading", "z is the underlying's move from the close of the fill's session, net of its market exposure, in units of its own daily noise; positive means the move went the decision's way. Entries (opens and adds) carry the gates; exits (trims and exits) are reported, never gated. Each entry week counts once. The e-value is the weight of evidence for information in the decisions (100 is the bar); the posterior gives the chance the true mean z per week exceeds 0.05 and 0.10.")
+	riskReadLine(env, "", "A sleeve is established only when every gate on its entries passes; until then nothing here says whether the decisions carry information. Fills made by Canary's rules or the broker's lifecycle are the rule sleeve and count for no one. Read-only review of past fills; it places no orders.")
 }
 
 func scorecardStateWords(res rpc.ScorecardResult) string {
@@ -122,16 +124,21 @@ func scorecardOtherHorizons(res rpc.ScorecardResult, horizon int) string {
 }
 
 func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
-	gate := strings.ToUpper(s.Gate)
-	tone := ""
-	switch s.Gate {
-	case rpc.ScorecardGateEstablished:
-		tone = "green"
-	case rpc.ScorecardGateFutile:
-		tone = "red"
+	if !s.Gated {
+		riskDisplayLine(env, env.bold("Sleeve "+s.Sleeve+" · exits")+"  ", "REPORTED, NOT GATED", func(t string) string { return env.dim(env.bold(t)) })
+		riskDisplayLine(env, "  ", "Trims and exits: did the name move against the position afterwards? Exit timing is a different skill from entry selection and never gates the sleeve.", nil)
+	} else {
+		gate := strings.ToUpper(s.Gate)
+		tone := ""
+		switch s.Gate {
+		case rpc.ScorecardGateEstablished:
+			tone = "green"
+		case rpc.ScorecardGateFutile:
+			tone = "red"
+		}
+		riskDisplayLine(env, env.bold("Sleeve "+s.Sleeve+" · entries")+"  ", gate, func(t string) string { return riskTone(env, tone, env.bold(t)) })
+		riskDisplayLine(env, "  ", scorecardGateWords(s), nil)
 	}
-	riskDisplayLine(env, env.bold("Sleeve "+s.Sleeve)+"  ", gate, func(t string) string { return riskTone(env, tone, env.bold(t)) })
-	riskDisplayLine(env, "  ", scorecardGateWords(s), nil)
 	riskReadLine(env, "  Sample", fmt.Sprintf("%d decisions", s.Decisions), fmt.Sprintf("%d scored", s.Scored), fmt.Sprintf("%d entry weeks (each counts once)", s.Clusters))
 	if s.Clusters == 0 {
 		return
@@ -142,7 +149,7 @@ func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
 		eValue = fmt.Sprintf("%.1f of %.0f", s.EValue, scorecard.EstablishedEValue)
 	}
 	riskReadLine(env, "  Evidence", "e-value "+eValue, "P(IC > 0.05) "+scorecardProb(s.PAbove005), "P(IC > 0.10) "+scorecardProb(s.PAbove010))
-	if s.ClustersToEstablish != nil {
+	if s.Gated && s.ClustersToEstablish != nil {
 		riskReadLine(env, "  Distance", fmt.Sprintf("at this mean the e-value gate needs about %d weeks; the sample gate needs %d", *s.ClustersToEstablish, scorecard.EstablishedClusters))
 	}
 	halves := "halves " + scorecardSigned(s.Gates.FirstHalfMeanZ, 2) + " / " + scorecardSigned(s.Gates.SecondHalfMeanZ, 2)
@@ -169,11 +176,11 @@ func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
 func scorecardGateWords(s rpc.ScorecardSleeve) string {
 	switch s.Gate {
 	case rpc.ScorecardGateEstablished:
-		return "Every gate passes: the evidence says these decisions carry information at this horizon."
+		return "Opens and adds: every gate passes, the evidence says these entries carry information at this horizon."
 	case rpc.ScorecardGateFutile:
-		return "The evidence says these decisions carry no usable information at this horizon; the posterior leaves under a 5% chance of a mean z above 0.10."
+		return "Opens and adds: the evidence says these entries carry no usable information at this horizon; the posterior leaves under a 5% chance of a mean z above 0.10."
 	default:
-		return "Not enough evidence yet to say either way."
+		return "Opens and adds: not enough evidence yet to say either way."
 	}
 }
 
@@ -247,13 +254,18 @@ func renderScorecardDecisions(env *Env, res rpc.ScorecardResult, horizon int) {
 }
 
 func scorecardDecisionNote(d rpc.ScorecardDecision, score *rpc.ScorecardHorizonScore, base string) string {
+	parts := []string{}
+	if d.Sleeve == rpc.ScorecardSleeveRule {
+		parts = append(parts, "rule "+strings.ReplaceAll(strings.ReplaceAll(d.Origin, "proposal:", ""), "_", " ")+", counts for no one")
+	}
 	if score.Z == nil {
 		if score.Reason != "" {
-			return strings.ReplaceAll(score.Reason, "_", " ")
+			parts = append(parts, strings.ReplaceAll(score.Reason, "_", " "))
+		} else {
+			parts = append(parts, "unknown")
 		}
-		return "unknown"
+		return strings.Join(parts, ", ")
 	}
-	parts := []string{}
 	if d.Instrument == scorecard.InstrumentOption {
 		if score.WrapperBase != nil {
 			parts = append(parts, "wrapper "+formatMoneyCcyForPnL(*score.WrapperBase, base))

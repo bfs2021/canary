@@ -3,68 +3,98 @@ Decision scorecard  CURRENT
 Scored · 5 Sep 14:00 TZ · statements to 2026-09-04
 Horizon · 10 sessions after entry · primary 10 · others 5, 21
 
-Sleeve owner  ACCRUING
-  Not enough evidence yet to say either way.
-  Sample · 24 decisions · 18 scored · 9 entry weeks (each counts once)
-  Mean z per week · +0.31 · running sum +2.8
-  Evidence · e-value 1.4 of 100 · P(IC > 0.05) 0.40 · P(IC > 0.10) 0.22
+Sleeve owner · entries  ACCRUING
+  Opens and adds: not enough evidence yet to say either way.
+  Sample · 14 decisions · 11 scored · 7 entry weeks (each counts once)
+  Mean z per week · +0.31 · running sum +2.2
+  Evidence · e-value 1.2 of 100 · P(IC > 0.05) 0.38 · P(IC > 0.10) 0.20
   Distance · at this mean the e-value gate needs about 136 weeks; the sample
     gate needs 100
-  Consistency · halves +0.45 / +0.20 · up markets +0.52 (6) / down -0.10 (3)
-  Options · wrapper mean -€ 412.50 (95% -€ 1,280.00 to € 310.00) over 7 ·
-    realised/implied median 0.84 over 7
-  Unknown · history unavailable 2, immature 4
+  Consistency · halves +0.45 / +0.20 · up markets +0.52 (4) / down -0.10 (3)
+  Options · wrapper mean -€ 412.50 (95% -€ 1,280.00 to € 310.00) over 5 ·
+    realised/implied median 0.84 over 5
+  Unknown · history unavailable 1, immature 2
 
-Latest decisions · 3 of 24
+Sleeve owner · exits  REPORTED, NOT GATED
+  Trims and exits: did the name move against the position afterwards? Exit
+  timing is a different skill from entry selection and never gates the sleeve.
+  Sample · 7 decisions · 5 scored · 4 entry weeks (each counts once)
+  Mean z per week · -0.12 · running sum -0.5
+  Evidence · e-value 0 (against) · P(IC > 0.05) 0.29 · P(IC > 0.10) 0.14
+  Consistency · halves -0.30 / +0.06 · up markets -0.20 (2) / down +0.04 (2)
+  Unknown · immature 2
+
+Latest decisions · 4 of 24
   DATE       NAME     ACT   SIDE      QTY      z  NOTE
+  2026-08-26 SYND     exit  sell       25  +0.90  rule trailing stop, counts for no one
   2026-08-24 SYNA C   open  buy         3  +1.12  wrapper -€ 96.30, moved 0.6x implied
   2026-08-21 SYNB     trim  sell       40  -0.62
   2026-08-14 SYNC     open  buy        15      —  history unavailable
 
-Coverage · 24 decisions in the ledger · 15 stock · 9 option · skipped:
-  unsupported asset 2 · unknown: history unavailable 6, immature 14
+Coverage · 24 decisions in the ledger · 15 stock · 9 option · 14 entries · 7
+  exits · rule-originated, in no owner stream: lifecycle 1, proposal:trailing
+  stop 2 · skipped: unsupported asset 2 · unknown: history unavailable 6,
+  immature 14
 History · 11 names, 1 without history, 0 still to fetch · SPY 530 sessions
 
-Reading · z is the underlying's move after the decision, net of its market
-  exposure, in units of its own daily noise; positive means the move went the
-  decision's way. Each entry week counts once. The e-value is the weight of
-  evidence for information in the decisions (100 is the bar); the posterior
-  gives the chance the true mean z per week exceeds 0.05 and 0.10.
-A sleeve is established only when every gate passes; until then nothing here
-  says whether the decisions carry information. Read-only review of past fills;
-  it places no orders.
+Reading · z is the underlying's move from the close of the fill's session, net
+  of its market exposure, in units of its own daily noise; positive means the
+  move went the decision's way. Entries (opens and adds) carry the gates; exits
+  (trims and exits) are reported, never gated. Each entry week counts once. The
+  e-value is the weight of evidence for information in the decisions (100 is the
+  bar); the posterior gives the chance the true mean z per week exceeds 0.05 and
+  0.10.
+A sleeve is established only when every gate on its entries passes; until then
+  nothing here says whether the decisions carry information. Fills made by
+  Canary's rules or the broker's lifecycle are the rule sleeve and count for no
+  one. Read-only review of past fills; it places no orders.
 # canary scorecard · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mDecision scorecard\x1b[0m  \x1b[2m\x1b[1mCURRENT\x1b[0m\x1b[0m
 Scored · 5 Sep 14:00 TZ · statements to 2026-09-04
 Horizon · 10 sessions after entry · primary 10 · others 5, 21
 
-\x1b[1mSleeve owner\x1b[0m  \x1b[2m\x1b[1mACCRUING\x1b[0m\x1b[0m
-  Not enough evidence yet to say either way.
-  Sample · 24 decisions · 18 scored · 9 entry weeks (each counts once)
-  Mean z per week · +0.31 · running sum +2.8
-  Evidence · e-value 1.4 of 100 · P(IC > 0.05) 0.40 · P(IC > 0.10) 0.22
+\x1b[1mSleeve owner · entries\x1b[0m  \x1b[2m\x1b[1mACCRUING\x1b[0m\x1b[0m
+  Opens and adds: not enough evidence yet to say either way.
+  Sample · 14 decisions · 11 scored · 7 entry weeks (each counts once)
+  Mean z per week · +0.31 · running sum +2.2
+  Evidence · e-value 1.2 of 100 · P(IC > 0.05) 0.38 · P(IC > 0.10) 0.20
   Distance · at this mean the e-value gate needs about 136 weeks; the sample
     gate needs 100
-  Consistency · halves +0.45 / +0.20 · up markets +0.52 (6) / down -0.10 (3)
-  Options · wrapper mean -€ 412.50 (95% -€ 1,280.00 to € 310.00) over 7 ·
-    realised/implied median 0.84 over 7
-  Unknown · history unavailable 2, immature 4
+  Consistency · halves +0.45 / +0.20 · up markets +0.52 (4) / down -0.10 (3)
+  Options · wrapper mean -€ 412.50 (95% -€ 1,280.00 to € 310.00) over 5 ·
+    realised/implied median 0.84 over 5
+  Unknown · history unavailable 1, immature 2
 
-\x1b[1mLatest decisions · 3 of 24\x1b[0m
+\x1b[1mSleeve owner · exits\x1b[0m  \x1b[2m\x1b[1mREPORTED, NOT GATED\x1b[0m\x1b[0m
+  Trims and exits: did the name move against the position afterwards? Exit
+  timing is a different skill from entry selection and never gates the sleeve.
+  Sample · 7 decisions · 5 scored · 4 entry weeks (each counts once)
+  Mean z per week · -0.12 · running sum -0.5
+  Evidence · e-value 0 (against) · P(IC > 0.05) 0.29 · P(IC > 0.10) 0.14
+  Consistency · halves -0.30 / +0.06 · up markets -0.20 (2) / down +0.04 (2)
+  Unknown · immature 2
+
+\x1b[1mLatest decisions · 4 of 24\x1b[0m
   DATE       NAME     ACT   SIDE      QTY      z  NOTE
+  2026-08-26 SYND     exit  sell       25  +0.90  \x1b[2mrule trailing stop, counts for no one\x1b[0m
   2026-08-24 SYNA C   open  buy         3  +1.12  \x1b[2mwrapper -€ 96.30, moved 0.6x implied\x1b[0m
   2026-08-21 SYNB     trim  sell       40  -0.62
   2026-08-14 SYNC     open  buy        15      —  \x1b[2mhistory unavailable\x1b[0m
 
-Coverage · 24 decisions in the ledger · 15 stock · 9 option · skipped:
-  unsupported asset 2 · unknown: history unavailable 6, immature 14
+Coverage · 24 decisions in the ledger · 15 stock · 9 option · 14 entries · 7
+  exits · rule-originated, in no owner stream: lifecycle 1, proposal:trailing
+  stop 2 · skipped: unsupported asset 2 · unknown: history unavailable 6,
+  immature 14
 History · 11 names, 1 without history, 0 still to fetch · SPY 530 sessions
 
-Reading · z is the underlying's move after the decision, net of its market
-  exposure, in units of its own daily noise; positive means the move went the
-  decision's way. Each entry week counts once. The e-value is the weight of
-  evidence for information in the decisions (100 is the bar); the posterior
-  gives the chance the true mean z per week exceeds 0.05 and 0.10.
-A sleeve is established only when every gate passes; until then nothing here
-  says whether the decisions carry information. Read-only review of past fills;
-  it places no orders.
+Reading · z is the underlying's move from the close of the fill's session, net
+  of its market exposure, in units of its own daily noise; positive means the
+  move went the decision's way. Entries (opens and adds) carry the gates; exits
+  (trims and exits) are reported, never gated. Each entry week counts once. The
+  e-value is the weight of evidence for information in the decisions (100 is the
+  bar); the posterior gives the chance the true mean z per week exceeds 0.05 and
+  0.10.
+A sleeve is established only when every gate on its entries passes; until then
+  nothing here says whether the decisions carry information. Fills made by
+  Canary's rules or the broker's lifecycle are the rule sleeve and count for no
+  one. Read-only review of past fills; it places no orders.

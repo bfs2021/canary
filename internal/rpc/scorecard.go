@@ -21,6 +21,17 @@ const (
 	ScorecardGateFutile      = "futile"
 	ScorecardGateAccruing    = "accruing"
 
+	// Streams separate two skills: entries (open, add) ask whether the name
+	// moves with the decision and carry the gates; exits (trim, exit) ask
+	// whether it moves against the position afterwards and are reported,
+	// never gated.
+	ScorecardStreamEntries = "entries"
+	ScorecardStreamExits   = "exits"
+
+	// ScorecardSleeveRule is the sleeve of fills Canary's own rules or the
+	// broker's lifecycle produced; they never count for an owner stream.
+	ScorecardSleeveRule = "rule"
+
 	// MaxScorecardDecisions bounds the decisions one read returns.
 	MaxScorecardDecisions = 2000
 	// DefaultScorecardDecisions is the decision page when the caller names
@@ -77,10 +88,14 @@ type ScorecardResult struct {
 // ScorecardSleeve is the sequential evidence for one sleeve at one horizon.
 // Every figure carries its sample; a gate word never stands alone.
 type ScorecardSleeve struct {
-	Sleeve    string `json:"sleeve"`
-	Horizon   int    `json:"horizon"`
-	Decisions int    `json:"decisions"`
-	Scored    int    `json:"scored"`
+	Sleeve  string `json:"sleeve"`
+	Stream  string `json:"stream"`
+	Horizon int    `json:"horizon"`
+	// Gated is true for the entries stream only; an exits stream reports the
+	// same statistics with no gate.
+	Gated     bool `json:"gated"`
+	Decisions int  `json:"decisions"`
+	Scored    int  `json:"scored"`
 	// Clusters is the number of sleeve × entry-week clusters with a score.
 	Clusters int      `json:"clusters"`
 	MeanZ    *float64 `json:"mean_z,omitempty"`
@@ -95,7 +110,7 @@ type ScorecardSleeve struct {
 	// reported as 0.
 	EValue        float64        `json:"e_value"`
 	EValueAgainst bool           `json:"e_value_against"`
-	Gate          string         `json:"gate"`
+	Gate          string         `json:"gate,omitempty"`
 	Gates         ScorecardGates `json:"gates"`
 	// ClustersToEstablish projects, at the current mean z per cluster, how
 	// many clusters the e-value gate needs; nil when the mean is not positive.
@@ -141,8 +156,12 @@ type ScorecardRealisedVsImplied struct {
 
 // ScorecardDecision is one ledger decision with its entry facts and scores.
 type ScorecardDecision struct {
-	ID          string                   `json:"id"`
-	Sleeve      string                   `json:"sleeve"`
+	ID     string `json:"id"`
+	Sleeve string `json:"sleeve"`
+	// Stream is entries or exits; Origin names the rule or lifecycle source
+	// of a rule-sleeve fill.
+	Stream      string                   `json:"stream"`
+	Origin      string                   `json:"origin,omitempty"`
 	StrategyRef string                   `json:"strategy_ref,omitempty"`
 	Underlying  string                   `json:"underlying"`
 	Symbol      string                   `json:"symbol"`
@@ -205,9 +224,14 @@ type ScorecardHorizonScore struct {
 
 // ScorecardCoverage makes the ledger and its gaps explicit.
 type ScorecardCoverage struct {
-	Ledger          int            `json:"ledger"`
-	Stocks          int            `json:"stocks"`
-	Options         int            `json:"options"`
+	Ledger  int `json:"ledger"`
+	Stocks  int `json:"stocks"`
+	Options int `json:"options"`
+	Entries int `json:"entries"`
+	Exits   int `json:"exits"`
+	// RuleOriginated counts the ledger rows Canary's rules or the broker's
+	// lifecycle produced, by origin; they are in no owner stream.
+	RuleOriginated  map[string]int `json:"rule_originated"`
 	Skipped         map[string]int `json:"skipped"`
 	ScoredByHorizon map[int]int    `json:"scored_by_horizon"`
 	UnknownByReason map[string]int `json:"unknown_by_reason"`
@@ -229,6 +253,7 @@ type ScorecardHistory struct {
 // ScorecardMethod travels with every result.
 type ScorecardMethod struct {
 	Direction           string  `json:"direction"`
+	Streams             string  `json:"streams"`
 	Lookback            string  `json:"lookback"`
 	Clusters            string  `json:"clusters"`
 	Posterior           string  `json:"posterior"`
