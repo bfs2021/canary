@@ -334,6 +334,15 @@ const (
 	// the drawdown brake is engaged. Rows are close-or-reduce only; in shadow
 	// mode they are listed and journaled but never previewable or submittable.
 	TradeProposalBucketBudgetReduction = "budget_reduction"
+	// TradeProposalBucketMandateReduction is the forced reduction of the
+	// mandate risk budget (owner decision 2026-10-14 06:26 CEST, "Protection
+	// that acts"): on a budget breach, one reduce-only batch sized back to
+	// budget, largest risk contributor first, every row NeverSkipVeto. Rows
+	// exist whenever the risk constitution carries [mandate] and the verdict
+	// reads reduce, or over on two consecutive fresh verdicts; the daemon
+	// places them only when the owner lists mandate_reduction under
+	// [authority].pre_authorised.
+	TradeProposalBucketMandateReduction = "mandate_reduction"
 
 	// BudgetReductionModeShadow and BudgetReductionModeActive are the two
 	// governor modes. Shadow is the policy default.
@@ -374,7 +383,8 @@ type TradeProposalAutomatic struct {
 	PreAuthorised bool `json:"pre_authorised"`
 	// Bucket is the pre-authorised bucket identifier the policy names
 	// (trailing_stop, option_loss_exit, option_profit_trail,
-	// budget_reduction); empty for a proposal outside that vocabulary.
+	// budget_reduction, mandate_reduction, cash_sweep); empty for a proposal
+	// outside that vocabulary.
 	Bucket    string    `json:"bucket,omitempty"`
 	State     string    `json:"state,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitzero"`
@@ -524,8 +534,12 @@ type TradeProposalSnapshot struct {
 	// generation: why it generated nothing, or what it measured. Absent when
 	// the bucket is not enabled in the protection policy.
 	BudgetReduction *TradeProposalBudgetStatus `json:"budget_reduction,omitempty"`
-	Blockers        []TradingBlocker           `json:"blockers,omitempty"`
-	LoadedFromState bool                       `json:"loaded_from_state,omitempty"`
+	// MandateReduction is the mandate's forced reduction for this
+	// generation: the verdict it read, whether it proposed, held or withdrew
+	// rows, and the batch. Absent while the constitution carries no [mandate].
+	MandateReduction *TradeProposalMandateStatus `json:"mandate_reduction,omitempty"`
+	Blockers         []TradingBlocker            `json:"blockers,omitempty"`
+	LoadedFromState  bool                        `json:"loaded_from_state,omitempty"`
 	// CashSweep is the cash sweep's typed status for this generation: per
 	// currency, the band figures and why it invests, redeems, holds or
 	// generates nothing. Absent while the bucket is not enabled.
@@ -659,6 +673,196 @@ type TradeProposalBudgetPlanOrder struct {
 	Cycle      int            `json:"cycle"`
 }
 
+// Mandate reduction states (TradeProposalMandateStatus.State).
+const (
+	// MandateReductionNoVerdict: [mandate] is written but no verdict has been
+	// measured for the policy in force yet.
+	MandateReductionNoVerdict = "no_verdict"
+	// MandateReductionUnknown: the verdict cannot be measured (or is too old
+	// to trust); nothing is sized blind. Standing rows are held, not sent.
+	MandateReductionUnknown = "unknown"
+	// MandateReductionBookChanged: the held positions differ from the book
+	// the verdict measured (a fill, a hand trade); nothing is sized on it.
+	// Standing rows are held until a verdict on the book as it is.
+	MandateReductionBookChanged = "book_changed"
+	// MandateReductionWithin: the risk is within budget; unsent rows were
+	// withdrawn, orders already at the broker are untouched.
+	MandateReductionWithin = "within"
+	// MandateReductionWatching: one verdict read over; a second consecutive
+	// one starts the batch.
+	MandateReductionWatching = "watching"
+	// MandateReductionReducing: the batch is proposed.
+	MandateReductionReducing = "reducing"
+	// MandateReductionHeld: standing rows wait for a fresh verdict.
+	MandateReductionHeld = "held"
+	// MandateReductionNothingReducible: the verdict calls for a reduction,
+	// but no leg can be reduced (every candidate is protection, part of a
+	// multi-leg unit, ignored, or not held any more).
+	MandateReductionNothingReducible = "nothing_reducible"
+)
+
+// Mandate reduction phases: why a row is in the batch.
+const (
+	// MandatePhaseExpiry: an in-the-money long option within three sessions
+	// of expiry whose exercise would put the book over budget; reduced first.
+	MandatePhaseExpiry = "expiry"
+	// MandatePhaseGap: a leg of an underlying whose one-name gap loss is over
+	// its cap.
+	MandatePhaseGap = "gap"
+	// MandatePhaseRisk: the largest contributor to the simulated variance.
+	MandatePhaseRisk = "risk"
+)
+
+// TradeProposalMandateStatus is the mandate's forced reduction, one
+// generation: the verdict it was sized on, the target, the batch and what
+// happened to standing rows. Money is base currency a year.
+type TradeProposalMandateStatus struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+	// VerdictStatus, VerdictAt and VerdictFingerprint identify the verdict
+	// the batch was sized on (the standing one while rows are held).
+	VerdictStatus      string    `json:"verdict_status,omitempty"`
+	VerdictAt          time.Time `json:"verdict_at,omitzero"`
+	VerdictFingerprint string    `json:"verdict_fingerprint,omitempty"`
+	// ConsecutiveOver counts the consecutive scheduled verdicts, at least
+	// five minutes apart, reading over or reduce; the batch starts at two,
+	// or at one for a gap-cap breach.
+	ConsecutiveOver int `json:"consecutive_over,omitempty"`
+	// Episode names the breach from the batch's first verdict until a
+	// verdict reads within; empty while none runs.
+	Episode string `json:"episode,omitempty"`
+	// RiskAnnualBase is the measured risk, BudgetAnnualSD the budget and
+	// TargetAnnualSD the figure the batch sizes to (0.95 × budget, so the
+	// next verdict reads within). ProjectedRiskAnnualBase is the risk once
+	// the whole batch has filled, as sized; nil while nothing is sized.
+	RiskAnnualBase          float64  `json:"risk_annual_base,omitempty"`
+	BudgetAnnualSD          float64  `json:"budget_annual_sd_base,omitempty"`
+	TargetAnnualSD          float64  `json:"target_annual_sd_base,omitempty"`
+	ProjectedRiskAnnualBase *float64 `json:"projected_risk_annual_base,omitempty"`
+	// TargetReached says the batch, filled as sized, meets the target; false
+	// when nothing reduces further.
+	TargetReached bool `json:"target_reached,omitempty"`
+	// Rows counts the batch; Withdrawn the unsent rows this generation
+	// withdrew because the verdict reads within.
+	Rows      int `json:"rows"`
+	Withdrawn int `json:"withdrawn,omitempty"`
+	// Held says the rows wait for a fresh verdict, and why.
+	Held       bool   `json:"held,omitempty"`
+	HoldReason string `json:"hold_reason,omitempty"`
+	// Plan is the batch in dispatch order.
+	Plan []TradeProposalMandatePlanOrder `json:"plan,omitempty"`
+	// LeftOut names held legs the batch may not touch, with the reason.
+	LeftOut      []string `json:"left_out,omitempty"`
+	BaseCurrency string   `json:"base_currency,omitempty"`
+}
+
+// TradeProposalMandatePlanOrder is one order of the mandate batch.
+type TradeProposalMandatePlanOrder struct {
+	Rank     int            `json:"rank"`
+	Contract ContractParams `json:"contract"`
+	Action   string         `json:"action"`
+	// Units is the whole cut the plan asks for (contracts or shares);
+	// Quantity is this cycle's order, held to the order caps; Waits says
+	// why it is lower (zero: no row this cycle), such as shares that cover
+	// short calls until the buyback has filled.
+	Units    int    `json:"units"`
+	Quantity int    `json:"quantity"`
+	Waits    string `json:"waits,omitempty"`
+	// Phase says why (MandatePhase*); ContributionPct the leg's share of the
+	// variance on the verdict; RiskCutAnnualBase the risk the cut removes.
+	Phase             string  `json:"phase"`
+	ContributionPct   float64 `json:"contribution_pct"`
+	RiskCutAnnualBase float64 `json:"risk_cut_annual_base"`
+}
+
+// TradeProposalMandate is one mandate_reduction row's arithmetic: its place
+// in the batch, what selected it, the verdict it was sized on and the risk
+// the batch takes the book to. Base currency a year.
+type TradeProposalMandate struct {
+	// Rank is the row's place in the batch, which the daemon dispatches in
+	// rank order; BatchRows the batch's size.
+	Rank      int    `json:"rank"`
+	BatchRows int    `json:"batch_rows"`
+	Phase     string `json:"phase"`
+	// ContributionPct is the leg's Euler share of the variance on the
+	// verdict it was sized on; GapLossBase and GapCapBase the one-name gap
+	// figures for a gap row; SessionsToExpiry for an expiry row.
+	ContributionPct  float64  `json:"contribution_pct"`
+	GapLossBase      *float64 `json:"gap_loss_base,omitempty"`
+	GapCapBase       *float64 `json:"gap_cap_base,omitempty"`
+	SessionsToExpiry *int     `json:"sessions_to_expiry,omitempty"`
+	// Units is the plan's whole cut for this leg; the row's quantity is at
+	// most that, held to the order caps, and the next cycle measures the
+	// remainder from the position as it then is. Lot is the step the cut
+	// moves in (one contract, or 1, 10 or 100 shares).
+	Units int `json:"units"`
+	Lot   int `json:"lot,omitempty"`
+	// RiskAnnualBase and BudgetAnnualSD are the verdict's figures;
+	// TargetAnnualSD what the batch sizes to; RiskCutAnnualBase the risk this
+	// cut removes in its place in the batch; RiskAfterAnnualBase the risk once
+	// the whole batch has filled.
+	RiskAnnualBase      float64 `json:"risk_annual_base"`
+	BudgetAnnualSD      float64 `json:"budget_annual_sd_base"`
+	TargetAnnualSD      float64 `json:"target_annual_sd_base"`
+	RiskCutAnnualBase   float64 `json:"risk_cut_annual_base"`
+	RiskAfterAnnualBase float64 `json:"risk_after_annual_base"`
+	// VerdictStatus, VerdictAt and VerdictFingerprint name the verdict the
+	// row was sized on: every generation sizes the batch afresh.
+	VerdictStatus      string    `json:"verdict_status"`
+	VerdictAt          time.Time `json:"verdict_at,omitzero"`
+	VerdictFingerprint string    `json:"verdict_fingerprint"`
+	// Episode names the breach the row belongs to, from the batch's first
+	// verdict until a verdict reads within: a row re-sized inside one episode
+	// by at most one lot above the size its notice carried keeps its veto
+	// clock (proposal_automatic.go). Session is the trading date (New York)
+	// of the verdict it was sized on: part of the row's revision, so a DAY
+	// order that expired unfilled is proposed afresh the next session.
+	Episode string `json:"episode,omitempty"`
+	Session string `json:"session,omitempty"`
+	// Held says the row waits: the verdict cannot be measured right now, so
+	// the sizing cannot be confirmed; HoldReason says why. A held row is not
+	// sent, by the scheduler or by hand, and keeps its veto window.
+	Held         bool   `json:"held,omitempty"`
+	HoldReason   string `json:"hold_reason,omitempty"`
+	BaseCurrency string `json:"base_currency,omitempty"`
+}
+
+// CloneProposalMandate deep-copies a row's mandate block.
+func CloneProposalMandate(in *TradeProposalMandate) *TradeProposalMandate {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.GapLossBase != nil {
+		v := *in.GapLossBase
+		out.GapLossBase = &v
+	}
+	if in.GapCapBase != nil {
+		v := *in.GapCapBase
+		out.GapCapBase = &v
+	}
+	if in.SessionsToExpiry != nil {
+		v := *in.SessionsToExpiry
+		out.SessionsToExpiry = &v
+	}
+	return &out
+}
+
+// CloneMandateStatus deep-copies the snapshot's mandate status.
+func CloneMandateStatus(in *TradeProposalMandateStatus) *TradeProposalMandateStatus {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	if in.ProjectedRiskAnnualBase != nil {
+		v := *in.ProjectedRiskAnnualBase
+		out.ProjectedRiskAnnualBase = &v
+	}
+	out.Plan = append([]TradeProposalMandatePlanOrder(nil), in.Plan...)
+	out.LeftOut = append([]string(nil), in.LeftOut...)
+	return &out
+}
+
 // TradeProposalBudget is one governor row's arithmetic: which cap selected the
 // line, what was measured, the excess, and the row's place in the reduction
 // order. Base currency throughout.
@@ -771,8 +975,10 @@ type TradeProposalCounts struct {
 	// BudgetReduction counts the premium budget governor's rows;
 	// BudgetReductionShadow is the subset generated in shadow mode, which are
 	// counted in Total but never in Actionable.
-	BudgetReduction             int     `json:"budget_reduction,omitempty"`
-	BudgetReductionShadow       int     `json:"budget_reduction_shadow,omitempty"`
+	BudgetReduction       int `json:"budget_reduction,omitempty"`
+	BudgetReductionShadow int `json:"budget_reduction_shadow,omitempty"`
+	// MandateReduction counts the mandate's forced-reduction rows.
+	MandateReduction            int     `json:"mandate_reduction,omitempty"`
 	MarketFlags                 int     `json:"market_flags,omitempty"`
 	ThetaPerDay                 float64 `json:"theta_per_day"`
 	RiskReductionExcessNotional float64 `json:"risk_reduction_excess_notional,omitempty"`
@@ -868,6 +1074,9 @@ type TradeProposal struct {
 	// Budget is the premium budget governor's arithmetic for a
 	// budget_reduction row; nil on every other bucket.
 	Budget *TradeProposalBudget `json:"budget,omitempty"`
+	// Mandate is the forced reduction's arithmetic for a mandate_reduction
+	// row; nil on every other bucket.
+	Mandate *TradeProposalMandate `json:"mandate,omitempty"`
 	// Automatic is served, never persisted: the daemon decorates each row
 	// with its pre-authorisation and automatic-submission record at read time.
 	Automatic *TradeProposalAutomatic `json:"automatic,omitempty"`

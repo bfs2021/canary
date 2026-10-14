@@ -110,9 +110,11 @@ const (
 	AlertPresentationProtectionAutoBudgetReduction      = risk.AlertPresentationProtectionAutoBudgetReduction
 	AlertPresentationProtectionAutoBudgetReductionNow   = risk.AlertPresentationProtectionAutoBudgetReductionNow
 	AlertPresentationProtectionAutoCashSweep            = risk.AlertPresentationProtectionAutoCashSweep
+	AlertPresentationProtectionAutoMandateReduction     = risk.AlertPresentationProtectionAutoMandateReduction
 	AlertPresentationProtectionAutoDeferred             = risk.AlertPresentationProtectionAutoDeferred
 	AlertPresentationProtectionAutoHeld                 = risk.AlertPresentationProtectionAutoHeld
 	AlertPresentationProtectionAutoHeldUnverified       = risk.AlertPresentationProtectionAutoHeldUnverified
+	AlertPresentationProtectionAutoHeldMandate          = risk.AlertPresentationProtectionAutoHeldMandate
 	AlertPresentationProtectionReconciliationRequired   = risk.AlertPresentationProtectionReconciliationRequired
 	AlertPresentationOrderIntegrityMismatch             = risk.AlertPresentationOrderIntegrityMismatch
 	AlertPresentationDataHealthGateway                  = risk.AlertPresentationDataHealthGateway

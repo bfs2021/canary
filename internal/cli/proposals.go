@@ -681,6 +681,9 @@ func renderProposalsText(env *Env, snap *rpc.TradeProposalSnapshot) {
 		statusRow(env, out, "Budget", budget)
 		renderProposalBudgetPlan(out, snap.BudgetReduction)
 	}
+	if m := formatProposalMandateStatus(snap.MandateReduction); m != "" {
+		statusRow(env, out, "Mandate", m)
+	}
 	printTradingBlockers(out, "  ", snap.Blockers)
 	var shadow, sweep, leveling []rpc.TradeProposal
 	for _, p := range snap.Proposals {
@@ -740,6 +743,9 @@ func renderProposalRow(env *Env, out io.Writer, p *rpc.TradeProposal) {
 	}
 	if budget := formatProposalBudget(p.Budget); budget != "" {
 		fmt.Fprintf(out, "      Budget:      %s\n", budget)
+	}
+	if m := formatProposalMandate(p.Mandate); m != "" {
+		fmt.Fprintf(out, "      Mandate:     %s\n", m)
 	}
 	if sizing := formatProposalTrailSizing(p.TrailSizing); sizing != "" {
 		fmt.Fprintf(out, "      Trail sizing: %s\n", sizing)

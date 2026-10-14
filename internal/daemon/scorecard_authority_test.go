@@ -152,3 +152,28 @@ func TestScorecardSleeveResolverTagsRuleOriginsNeverOwner(t *testing.T) {
 		}
 	}
 }
+
+// The mandate's forced reduction is a rule's sale, never the owner's: a fill
+// of a mandate_reduction row approved on the paired device counts as rule,
+// as one the daemon placed under pre-authorisation does by its origin.
+func TestScorecardSleeveResolverTagsMandateReductionAsRule(t *testing.T) {
+	t.Parallel()
+	if !scorecardRuleBucket(rpc.TradeProposalBucketMandateReduction) {
+		t.Fatal("mandate_reduction is not a rule bucket")
+	}
+	events := []orderJournalEvent{
+		{ExecID: "e-mandate", OrderRef: "canary-mandate-1", Origin: rpc.OrderOriginPairedDevice},
+		{ExecID: "e-mandate-auto", OrderRef: "canary-mandate-2", Origin: rpc.OrderOriginDaemonPreAuthorised},
+	}
+	proposals := []proposalEvent{
+		{Type: "submitted", OrderRef: "canary-mandate-1", Bucket: rpc.TradeProposalBucketMandateReduction},
+		{Type: "submitted", OrderRef: "canary-mandate-2", Bucket: rpc.TradeProposalBucketMandateReduction},
+	}
+	resolve := scorecardSleeveResolver(events, proposals)
+	for _, exec := range []string{"e-mandate", "e-mandate-auto"} {
+		got := resolve(edgecore.PositionChange{ExecutionIDs: []string{exec}})
+		if got.Name != rpc.ScorecardSleeveRule || got.Origin != "proposal:"+rpc.TradeProposalBucketMandateReduction {
+			t.Fatalf("%s resolved to %+v, want rule proposal:mandate_reduction", exec, got)
+		}
+	}
+}

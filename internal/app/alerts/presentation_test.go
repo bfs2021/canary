@@ -63,6 +63,7 @@ func TestWaitingProtectionPresentationsReadAsPending(t *testing.T) {
 		rpc.AlertPresentationProtectionAutoDeferred:       "Deferred: trading frozen · resubmits when lifted",
 		rpc.AlertPresentationProtectionAutoHeld:           "Held: hand order working",
 		rpc.AlertPresentationProtectionAutoHeldUnverified: "Held: open orders unreadable",
+		rpc.AlertPresentationProtectionAutoHeldMandate:    "Held: risk not measurable",
 	} {
 		got, ok := PresentationFor(code, rpc.AlertEpisodeOpen)
 		if !ok || !strings.HasPrefix(got.Body, want) || !strings.Contains(got.Body, "Open Protection to veto it.") {
@@ -114,6 +115,34 @@ func TestCashSweepAutomaticPresentation(t *testing.T) {
 	at := time.Date(2026, 9, 30, 13, 0, 0, 0, time.UTC)
 	if err := rpc.ValidateAlertCandidate(rpc.AlertCandidate{
 		EpisodeKey: episode, OccurrenceKey: occurrence, EvidenceFingerprint: "sha256:" + strings.Repeat("d", 64),
+		Source: rpc.AlertSourceProtection, Kind: rpc.AlertKindProtectionAutomatic, PresentationCode: code,
+		State: rpc.AlertEpisodeOpen, Severity: rpc.AlertSeverityAct, EvidenceHealth: rpc.AlertEvidenceCurrent,
+		Destination: rpc.AlertDestinationAlerts, EvidenceAsOf: at, StateChangedAt: at, ObservedAt: at,
+	}); err != nil {
+		t.Fatalf("not a valid Protection presentation code: %v", err)
+	}
+}
+
+// The mandate's forced reduction has its own notice copy, with no "now"
+// variant (every row waits the full window), and is a valid Protection code.
+func TestMandateReductionAutomaticPresentation(t *testing.T) {
+	t.Parallel()
+	code := rpc.AlertPresentationProtectionAutoMandateReduction
+	got, ok := PresentationFor(code, rpc.AlertEpisodeOpen)
+	if !ok || !strings.Contains(got.Title, "risk budget") || !strings.Contains(got.Body, "full veto window") || !strings.Contains(got.Body, "Open Protection to veto it.") {
+		t.Fatalf("presentation = %+v ok=%v", got, ok)
+	}
+	episode, err := rpc.BuildAlertEpisodeKey(rpc.AlertSourceProtection, rpc.AlertKindProtectionAutomatic, "mandate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	occurrence, err := rpc.BuildAlertOccurrenceKey(episode, "sequence:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 14, 13, 0, 0, 0, time.UTC)
+	if err := rpc.ValidateAlertCandidate(rpc.AlertCandidate{
+		EpisodeKey: episode, OccurrenceKey: occurrence, EvidenceFingerprint: "sha256:" + strings.Repeat("e", 64),
 		Source: rpc.AlertSourceProtection, Kind: rpc.AlertKindProtectionAutomatic, PresentationCode: code,
 		State: rpc.AlertEpisodeOpen, Severity: rpc.AlertSeverityAct, EvidenceHealth: rpc.AlertEvidenceCurrent,
 		Destination: rpc.AlertDestinationAlerts, EvidenceAsOf: at, StateChangedAt: at, ObservedAt: at,

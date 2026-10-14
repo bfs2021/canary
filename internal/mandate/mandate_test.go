@@ -1,6 +1,7 @@
 package mandate
 
 import (
+	"encoding/json"
 	"math"
 	"math/rand/v2"
 	"strings"
@@ -324,5 +325,33 @@ func TestShortStockUpsideGapAndIndexStress(t *testing.T) {
 	// A short of a name with positive beta gains when the index falls.
 	if v.Stresses.IndexLossBase >= 0 {
 		t.Fatalf("index stress on a short: %+v", v.Stresses)
+	}
+}
+
+// At a budget of zero (the maximum loss) the ratio is unbounded: it encodes
+// as null, which JSON can carry, and reads back unbounded, so a reader never
+// falls back to an older verdict for want of an encoding.
+func TestRiskRatioEncodesAtZeroBudget(t *testing.T) {
+	in := testInput(t, []Leg{{ID: "con:1", Symbol: "SYNA", Underlying: "SYNA", Kind: KindStock, Quantity: 1000, Multiplier: 1, Currency: "EUR", Spot: 100}})
+	in.Capital.Room, in.Capital.BudgetAnnualSD = 0, 0
+	v := Evaluate(in)
+	if v.Status != StatusReduce || v.Risk == nil || !math.IsInf(v.Risk.RatioToBudget, 1) {
+		t.Fatalf("verdict %s ratio %+v", v.Status, v.Risk)
+	}
+	raw, err := json.Marshal(v)
+	if err != nil || !strings.Contains(string(raw), `"ratio_to_budget":null`) {
+		t.Fatalf("encode: %s %v", raw, err)
+	}
+	var back Verdict
+	if err := json.Unmarshal(raw, &back); err != nil || !math.IsInf(back.Risk.RatioToBudget, 1) || back.Risk.SDAnnualBase != v.Risk.SDAnnualBase {
+		t.Fatalf("decode: %+v %v", back.Risk, err)
+	}
+	// A finite ratio round-trips as the number it is.
+	in.Capital.BudgetAnnualSD = 50000
+	v = Evaluate(in)
+	raw, _ = json.Marshal(v)
+	back = Verdict{}
+	if err := json.Unmarshal(raw, &back); err != nil || back.Risk.RatioToBudget != v.Risk.RatioToBudget {
+		t.Fatalf("finite ratio %v → %v (%v)", v.Risk.RatioToBudget, back.Risk.RatioToBudget, err)
 	}
 }

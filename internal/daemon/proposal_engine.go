@@ -39,6 +39,10 @@ type proposalEngine struct {
 	// the premium budget governor. Test seam; nil reads the daemon's own
 	// risk-policy manager and capital state.
 	budgetInput func(acct *rpc.AccountResult, now time.Time) budgetGovernorInput
+	// mandateInput resolves the kept mandate verdict and the order caps for
+	// the forced reduction (mandate_reduction.go). Test seam; nil reads the
+	// daemon's own verdict cache.
+	mandateInput func(now time.Time) mandateReductionInput
 	// resolve returns the proposal a preview or submit names. Test seam; nil
 	// re-validates against a fresh refresh (revalidatedProposal).
 	resolve  func(ctx context.Context, key, revision string) (rpc.TradeProposal, []rpc.TradingBlocker, error)
@@ -330,7 +334,7 @@ func (e *proposalEngine) snapshotForRead(show, refresh bool) rpc.TradeProposalSn
 	// stays scoped, including budget/cash status with no generated proposals.
 	// Only genuinely unscoped shells without financial evidence pass through.
 	bound := strings.TrimSpace(snap.AccountID) != "" || strings.TrimSpace(snap.AccountMode) != ""
-	if bound || len(snap.Proposals) > 0 || snap.CashSweep != nil || snap.CurrencyLeveling != nil || snap.BudgetReduction != nil || len(snap.OptionHedges) > 0 {
+	if bound || len(snap.Proposals) > 0 || snap.CashSweep != nil || snap.CurrencyLeveling != nil || snap.BudgetReduction != nil || snap.MandateReduction != nil || len(snap.OptionHedges) > 0 {
 		scope := e.currentScope()
 		if blockers := proposalScopeBlockers(snap.AccountID, snap.AccountMode, scope); len(blockers) > 0 {
 			shell := emptyProposalSnapshot(e.clock())
@@ -557,7 +561,7 @@ func (e *proposalEngine) refresh(ctx context.Context, show bool) (rpc.TradePropo
 		}
 		sources.MarketEvents = &fp
 	}
-	proposals, thetaSuppressions, hedges, budget := e.generateBook(ctx, policy, policyStatus, acct, pos, sources, marketEvents, scope, now)
+	proposals, thetaSuppressions, hedges, budget, mandateStatus := e.generateBook(ctx, policy, policyStatus, acct, pos, sources, marketEvents, scope, now)
 	sweepRows, sweep := e.cashSweepProposals(ctx, policy, policyStatus, acct, pos, sources, scope, now)
 	proposals = append(proposals, sweepRows...)
 	levelingRows, leveling := e.currencyLevelingProposals(ctx, policy, policyStatus, acct, sources, scope, now)
@@ -626,6 +630,7 @@ func (e *proposalEngine) refresh(ctx context.Context, show bool) (rpc.TradePropo
 		Proposals:                  proposals,
 		OptionHedges:               hedges,
 		BudgetReduction:            budget,
+		MandateReduction:           mandateStatus,
 		Counts:                     proposalCounts(proposals, protectionCoverageBaseCurrency(pos)),
 	}
 	snap.Counts.OptionHedges = len(hedges)
@@ -688,7 +693,7 @@ func (e *proposalEngine) thetaSuppressionEvents(snap rpc.TradeProposalSnapshot, 
 }
 
 func (e *proposalEngine) generate(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, scope brokerStateScope, now time.Time) ([]rpc.TradeProposal, []thetaSuppression) {
-	proposals, suppressions, _, _ := e.generateBook(ctx, policy, status, acct, pos, sources, marketEvents, scope, now)
+	proposals, suppressions, _, _, _ := e.generateBook(ctx, policy, status, acct, pos, sources, marketEvents, scope, now)
 	e.mergeSameContract(proposals)
 	return proposals, suppressions
 }
@@ -697,12 +702,14 @@ func (e *proposalEngine) generate(ctx context.Context, policy protectionPolicy, 
 // held long options the engine skips as hedges are returned beside the
 // proposals, so a consumer can show a hedge as what it is instead of nothing.
 // The fourth value is the premium budget governor's status, nil while its
-// bucket is not enabled.
-func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, scope brokerStateScope, now time.Time) ([]rpc.TradeProposal, []thetaSuppression, []rpc.OptionHedge, *rpc.TradeProposalBudgetStatus) {
+// bucket is not enabled; the fifth the mandate's forced-reduction status,
+// nil while the constitution carries no [mandate].
+func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, scope brokerStateScope, now time.Time) ([]rpc.TradeProposal, []thetaSuppression, []rpc.OptionHedge, *rpc.TradeProposalBudgetStatus, *rpc.TradeProposalMandateStatus) {
 	var hedges []rpc.OptionHedge
 	var out []rpc.TradeProposal
 	var suppressions []thetaSuppression
 	var budget *rpc.TradeProposalBudgetStatus
+	var mandateStatus *rpc.TradeProposalMandateStatus
 	baseCcy := protectionCoverageBaseCurrency(pos)
 	if policy.Buckets.ThetaHygiene.Enabled {
 		for _, row := range pos.Options {
@@ -734,6 +741,12 @@ func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPoli
 		rows, st := e.budgetReductionProposals(policy, status, e.resolveBudgetInput(acct, now), acct, pos, sources, marketEvents, scope, now)
 		out = append(out, rows...)
 		budget = st
+	}
+	// The mandate's forced reduction needs no bucket table: it runs whenever
+	// the risk constitution carries [mandate] (mandate_reduction.go).
+	if rows, st := e.mandateReductionProposals(policy, status, e.resolveMandateInput(ctx, policy, pos, scope, now), acct, pos, sources, marketEvents, now); st != nil {
+		out = append(out, rows...)
+		mandateStatus = st
 	}
 	if policy.Buckets.TrailingStop.Enabled {
 		stockEnabled := true
@@ -894,7 +907,7 @@ func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPoli
 			}
 		}
 	}
-	return out, suppressions, hedges, budget
+	return out, suppressions, hedges, budget, mandateStatus
 }
 
 // optionHedgeRecord describes one held long option the engine holds as
@@ -2237,6 +2250,11 @@ func (e *proposalEngine) preview(ctx context.Context, p rpc.TradeProposalPreview
 		e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
 		return rpc.TradeProposalPreviewResult{Proposal: prop, Blockers: blockers, AsOf: now}, nil
 	}
+	// A held mandate row waits for a fresh verdict; nobody previews it.
+	if blockers := mandateHeldBlockers(prop); len(blockers) > 0 {
+		e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
+		return rpc.TradeProposalPreviewResult{Proposal: prop, Blockers: blockers, AsOf: now}, nil
+	}
 	if gate != nil {
 		if blockers := gate(prop); len(blockers) > 0 {
 			e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
@@ -2413,6 +2431,12 @@ func (e *proposalEngine) submit(ctx context.Context, p rpc.TradeProposalSubmitPa
 		return rpc.TradeProposalSubmitResult{Proposal: prop, Blockers: blockers, AsOf: now}, err
 	}
 	if blockers := shadowProposalBlockers(prop); len(blockers) > 0 {
+		e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
+		return rpc.TradeProposalSubmitResult{Proposal: prop, Blockers: blockers, AsOf: now}, nil
+	}
+	// A held mandate row is sent by nobody until a fresh verdict confirms
+	// its sizing; the scheduler holds its record instead (submitDueAutomatic).
+	if blockers := mandateHeldBlockers(prop); len(blockers) > 0 {
 		e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
 		return rpc.TradeProposalSubmitResult{Proposal: prop, Blockers: blockers, AsOf: now}, nil
 	}
@@ -3570,7 +3594,8 @@ func proposalCounts(proposals []rpc.TradeProposal, baseCurrency string) rpc.Trad
 	var thetaBase, riskBase float64
 	thetaBaseOK, riskBaseOK := true, true
 	for _, p := range proposals {
-		if p.AutomaticEligible() {
+		// A held mandate row waits for a verdict; nobody can act on it yet.
+		if p.AutomaticEligible() && len(mandateHeldBlockers(p)) == 0 {
 			out.Actionable++
 		}
 		if p.CoveredBy != "" {
@@ -3611,6 +3636,8 @@ func proposalCounts(proposals []rpc.TradeProposal, baseCurrency string) rpc.Trad
 			if p.Shadow {
 				out.BudgetReductionShadow++
 			}
+		case rpc.TradeProposalBucketMandateReduction:
+			out.MandateReduction++
 		}
 	}
 	// A raw sum across different local currencies is meaningless. Rather
@@ -3725,6 +3752,12 @@ func proposalRevisionTerms(p rpc.TradeProposal) []string {
 		raw, _ := json.Marshal(binding)
 		terms = append(terms, "cash-sweep-material-v1:"+string(raw))
 	}
+	if p.Bucket == rpc.TradeProposalBucketMandateReduction && p.Mandate != nil && p.Mandate.Session != "" {
+		// A mandate row is one session's order: the next session's row is a
+		// new revision, so a DAY order that expired unfilled (its record
+		// terminal) never strands the batch.
+		terms = append(terms, "mandate-session:"+p.Mandate.Session)
+	}
 	if p.OptionExit != nil {
 		// Receipt times/values refresh at preview; scope and resulting role
 		// are semantic revision inputs. Never churn solely on receipt time.
@@ -3837,11 +3870,13 @@ func cloneProposalSnapshot(in rpc.TradeProposalSnapshot) rpc.TradeProposalSnapsh
 		out.Proposals[i].MarketFlags = append([]rpc.MarketEventFlag(nil), in.Proposals[i].MarketFlags...)
 		out.Proposals[i].Blockers = append([]rpc.TradingBlocker(nil), in.Proposals[i].Blockers...)
 		out.Proposals[i].Budget = cloneProposalBudget(in.Proposals[i].Budget)
+		out.Proposals[i].Mandate = rpc.CloneProposalMandate(in.Proposals[i].Mandate)
 		out.Proposals[i].Covers = append([]rpc.TradeProposalCoverage(nil), in.Proposals[i].Covers...)
 		out.Proposals[i].CashSweep = rpc.CloneProposalCashSweep(in.Proposals[i].CashSweep)
 		out.Proposals[i].CurrencyLeveling = rpc.CloneProposalCurrencyLeveling(in.Proposals[i].CurrencyLeveling)
 	}
 	out.BudgetReduction = cloneBudgetStatus(in.BudgetReduction)
+	out.MandateReduction = rpc.CloneMandateStatus(in.MandateReduction)
 	out.CashSweep = rpc.CloneCashSweepStatus(in.CashSweep)
 	out.CurrencyLeveling = rpc.CloneCurrencyLevelingStatus(in.CurrencyLeveling)
 	out.Blockers = append([]rpc.TradingBlocker(nil), in.Blockers...)

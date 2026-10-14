@@ -80,6 +80,17 @@ const (
 	// a live queued authorisation: the owner armed that order, and Canary
 	// sends it instead.
 	automaticQueuedReason = "a queued authorisation the owner armed is live for this contract and side; Canary sends that order instead"
+	// automaticEpisodeResizedReason supersedes a mandate record whose row was
+	// re-sized within its breach episode: the new revision's record carries
+	// the veto clock on while its size stays within one lot above the size
+	// the clock was started for, so a batch re-sized every verdict is never
+	// starved; a larger growth starts a fresh notice and a full window.
+	automaticEpisodeResizedReason = "the reduction was re-sized within its breach; the new revision keeps this veto clock unless it grew by more than one lot"
+	// automaticNewSessionReason restarts a mandate record whose veto clock
+	// began before the session it would be sent in: a fresh notice and a
+	// full window in the session, never a send at the open on a clock the
+	// owner may have slept through.
+	automaticNewSessionReason = "a new session: the reduction gets a fresh notice and a full veto window before it is placed"
 )
 
 // automaticSubmissionRecord is one durable automatic-submission intent, keyed
@@ -129,6 +140,20 @@ type automaticSubmissionRecord struct {
 	// record existed and never holds it.
 	SettlingBaseline      []string `json:"settling_baseline,omitempty"`
 	SettlingBaselineKnown bool     `json:"settling_baseline_known,omitempty"`
+	// Episode is a mandate reduction's breach episode: a row re-sized
+	// within it by at most one lot above ClockQuantity, the size its notice
+	// carried when its veto clock started (CreatedAt), keeps that clock
+	// across revisions; an owner's veto holds its line for the rest of it.
+	Episode       string `json:"episode,omitempty"`
+	ClockQuantity int    `json:"clock_quantity,omitempty"`
+}
+
+// clockQuantity is the size a record's veto clock was started for.
+func (r automaticSubmissionRecord) clockQuantity() int {
+	if r.ClockQuantity > 0 {
+		return r.ClockQuantity
+	}
+	return r.Quantity
 }
 
 func (r automaticSubmissionRecord) pending() bool {
@@ -286,6 +311,24 @@ func (s *automaticSubmissionStore) listLocked() []automaticSubmissionRecord {
 	return out
 }
 
+// served is the record a served row reads: the one for its key and
+// revision, or, for a mandate row in a breach episode whose line the owner
+// vetoed, that veto, which holds the line for the rest of the episode.
+func (s *automaticSubmissionStore) served(p rpc.TradeProposal) (automaticSubmissionRecord, bool) {
+	if rec, ok := s.get(p.Key, p.Revision); ok {
+		return rec, true
+	}
+	if s == nil || p.Mandate == nil || p.Mandate.Episode == "" {
+		return automaticSubmissionRecord{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if prior := automaticEpisodePrior(s.records, p.Key, p.Mandate.Episode); prior != nil && prior.State == rpc.TradeProposalAutomaticVetoed {
+		return *prior, true
+	}
+	return automaticSubmissionRecord{}, false
+}
+
 func (s *automaticSubmissionStore) get(key, revision string) (automaticSubmissionRecord, bool) {
 	if s == nil {
 		return automaticSubmissionRecord{}, false
@@ -382,6 +425,10 @@ func automaticBucketFor(p rpc.TradeProposal) string {
 		return ""
 	case preAuthorisedBucketBudgetReduction:
 		return preAuthorisedBucketBudgetReduction
+	case rpc.TradeProposalBucketMandateReduction:
+		// Every mandate row is NeverSkipVeto: the full window even under the
+		// latched brake, each order held to the caps in force.
+		return preAuthorisedBucketMandateReduction
 	case rpc.TradeProposalBucketCashSweep:
 		// Every sweep row is NeverSkipVeto: the full window even under the
 		// latched brake, and max_order_notional bounds each order.
@@ -527,6 +574,8 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 			switch {
 			case !ok:
 				reason = "proposal disappeared from the current set"
+			case prop.Revision != rec.Revision && rec.Episode != "" && prop.Mandate != nil && prop.Mandate.Episode == rec.Episode:
+				reason = automaticEpisodeResizedReason
 			case prop.Revision != rec.Revision:
 				reason = "proposal revision changed; a new window starts for the new revision"
 			case !proposalUnblocked(snap, prop):
@@ -567,11 +616,32 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 				SettlingBaseline: slices.Clone(baseline), SettlingBaselineKnown: baselineKnown,
 			}
 			// A reduction to budget is a discretionary-scale action, not a
-			// stop: the governor marks its rows NeverSkipVeto and they wait the
-			// full window even under the latched brake.
+			// stop: the governor and the mandate's forced reduction mark their
+			// rows NeverSkipVeto and they wait the full window even under the
+			// latched brake.
 			if latched && !prop.NeverSkipVeto {
 				rec.LatchSkippedWindow = true
 				rec.SubmitAt = now
+			}
+			// A mandate row re-sized within its breach keeps the veto clock of
+			// the record it replaces, which never reached the broker, while
+			// its size stays within one lot above the size that clock (and its
+			// notice) was started for; a larger growth gets a fresh notice and
+			// a full window, re-noticed once per such growth, not per verdict.
+			// A line the owner vetoed in this breach gets no record again in it.
+			if prop.Mandate != nil && prop.Mandate.Episode != "" {
+				rec.Episode, rec.ClockQuantity = prop.Mandate.Episode, prop.Quantity
+				if prior := automaticEpisodePrior(records, prop.Key, rec.Episode); prior != nil {
+					if prior.State == rpc.TradeProposalAutomaticVetoed {
+						continue
+					}
+					if prior.State == rpc.TradeProposalAutomaticSuperseded && prior.Reason == automaticEpisodeResizedReason &&
+						prop.Quantity <= prior.clockQuantity()+max(1, prop.Mandate.Lot) {
+						rec.CreatedAt, rec.SubmitAt, rec.NoticedAt = prior.CreatedAt, prior.SubmitAt, prior.NoticedAt
+						rec.SettlingBaseline, rec.SettlingBaselineKnown = slices.Clone(prior.SettlingBaseline), prior.SettlingBaselineKnown
+						rec.ClockQuantity = prior.clockQuantity()
+					}
+				}
 			}
 			// A row whose order prices off the regular session submits no
 			// earlier than the open plus the opening offset: the due time is
@@ -585,6 +655,21 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 	if err != nil && e.server != nil {
 		e.server.warnf("pre-authorised protection: reconcile records: %v", err)
 	}
+}
+
+// automaticEpisodePrior is the latest record of key in a mandate breach
+// episode, the one a re-sized row's record follows.
+func automaticEpisodePrior(records map[string]*automaticSubmissionRecord, key, episode string) *automaticSubmissionRecord {
+	var prior *automaticSubmissionRecord
+	for _, rec := range records {
+		if rec.Key != key || rec.Episode != episode {
+			continue
+		}
+		if prior == nil || rec.ResolvedAt.After(prior.ResolvedAt) || rec.ResolvedAt.Equal(prior.ResolvedAt) && rec.Revision > prior.Revision {
+			prior = rec
+		}
+	}
+	return prior
 }
 
 // automaticWillCreate reports whether reconcileAutomatic is about to create a
@@ -649,11 +734,17 @@ func (e *proposalEngine) markAutomaticNoticed(ctx context.Context, keys []automa
 type automaticNoticeKey struct {
 	Key      string
 	Revision string
-	Bucket   string
-	SubmitAt time.Time
-	Latched  bool
-	Deferred bool
-	Hold     string
+	// Episode is a mandate reduction's breach episode: its notice is one per
+	// line, episode and veto clock (ClockStart, ClockQuantity), however often
+	// the row is re-sized within one lot of that clock's size.
+	Episode       string
+	ClockStart    time.Time
+	ClockQuantity int
+	Bucket        string
+	SubmitAt      time.Time
+	Latched       bool
+	Deferred      bool
+	Hold          string
 }
 
 // Settling-rule hold classes carried to the alert producer. They name the
@@ -661,6 +752,9 @@ type automaticNoticeKey struct {
 const (
 	automaticNoticeHoldHandOrder  = "hand_order"
 	automaticNoticeHoldUnverified = "unverified"
+	// automaticNoticeHoldMandate: a mandate reduction waits for a verdict
+	// that confirms its sizing (automaticHoldMandateVerdict).
+	automaticNoticeHoldMandate = "mandate_verdict"
 )
 
 // automaticPendingNotices lists the waiting records in scope for the
@@ -679,11 +773,16 @@ func (e *proposalEngine) automaticPendingNotices(scope brokerStateScope) []autom
 		if !rec.waiting() || !sameBrokerScope(brokerStateScope{Account: rec.AccountID, Mode: rec.AccountMode}, scope) {
 			continue
 		}
-		notice := automaticNoticeKey{Key: rec.Key, Revision: rec.Revision, Bucket: rec.Bucket, SubmitAt: rec.SubmitAt, Latched: rec.LatchSkippedWindow, Deferred: rec.deferred()}
+		notice := automaticNoticeKey{Key: rec.Key, Revision: rec.Revision, Episode: rec.Episode, ClockStart: rec.CreatedAt, ClockQuantity: rec.clockQuantity(),
+			Bucket: rec.Bucket, SubmitAt: rec.SubmitAt, Latched: rec.LatchSkippedWindow, Deferred: rec.deferred()}
 		if !rec.HeldAt.IsZero() {
-			notice.Hold = automaticNoticeHoldHandOrder
-			if rec.HoldReason == automaticHoldUnavailable {
+			switch rec.HoldReason {
+			case automaticHoldUnavailable:
 				notice.Hold = automaticNoticeHoldUnverified
+			case automaticHoldMandateVerdict:
+				notice.Hold = automaticNoticeHoldMandate
+			default:
+				notice.Hold = automaticNoticeHoldHandOrder
 			}
 		}
 		out = append(out, notice)
@@ -697,7 +796,9 @@ func (e *proposalEngine) automaticPendingNotices(scope brokerStateScope) []autom
 // rule holds a due record of the current scope while a hand order placed
 // after the record was created, or modified since, is still working at the
 // broker; the record fires as soon as that order fills or is cancelled, on
-// its original window.
+// its original window. A held mandate row (no verdict confirms its sizing)
+// holds its record the same way. The mandate batch goes in rank order; a
+// refusal of one row never holds the others.
 func (e *proposalEngine) submitDueAutomatic(ctx context.Context) {
 	now := e.clock()
 	frozen := e.server != nil && e.server.tradingFrozen()
@@ -708,7 +809,9 @@ func (e *proposalEngine) submitDueAutomatic(ctx context.Context) {
 	var cached, fresh *automaticSettlingBook
 	var served map[string]rpc.TradeProposal
 	records := e.automatic.list()
-	prioritizeCashSweepRecords(records, e.Snapshot(false).Proposals)
+	ordered := e.Snapshot(false).Proposals
+	prioritizeCashSweepRecords(records, ordered)
+	prioritizeMandateRecords(records, ordered)
 	for _, rec := range records {
 		if !rec.due(now, frozen) {
 			continue
@@ -725,8 +828,16 @@ func (e *proposalEngine) submitDueAutomatic(ctx context.Context) {
 			}
 		}
 		if prop, ok := served[automaticRecordKey(rec.Key, rec.Revision)]; ok {
+			if len(mandateHeldBlockers(prop)) > 0 {
+				e.holdAutomatic(ctx, rec, automaticHoldMandateVerdict)
+				continue
+			}
 			if at := e.automaticSessionDue(prop, now); at.After(now) {
 				e.rescheduleAutomatic(ctx, rec, at)
+				continue
+			}
+			if rec.Episode != "" && e.automaticClockBeforeSession(prop, rec, now) {
+				e.restartAutomaticClock(ctx, prop, rec, automaticNewSessionReason)
 				continue
 			}
 		}
@@ -954,6 +1065,41 @@ func (e *proposalEngine) rescheduleAutomatic(ctx context.Context, rec automaticS
 	}
 }
 
+// automaticClockBeforeSession reports a record whose veto clock started
+// before the regular session it would now be sent in opened.
+func (e *proposalEngine) automaticClockBeforeSession(prop rpc.TradeProposal, rec automaticSubmissionRecord, now time.Time) bool {
+	if e == nil || e.server == nil || !proposalHasContract(prop) {
+		return false
+	}
+	_, session, hasMarket, ok := e.proposalSessionAt(prop, now, nil)
+	return hasMarket && ok && session.IsOpen && !session.Open.IsZero() && rec.CreatedAt.Before(session.Open)
+}
+
+// restartAutomaticClock starts a waiting record's veto clock again: a new
+// notice is needed (the notice key carries the clock) and the full window
+// runs from it, no earlier than the session allows.
+func (e *proposalEngine) restartAutomaticClock(ctx context.Context, prop rpc.TradeProposal, rec automaticSubmissionRecord, reason string) {
+	now := e.clock()
+	window, err := time.ParseDuration(rec.VetoWindow)
+	if err != nil || window <= 0 {
+		window = defaultVetoWindow
+	}
+	due := e.automaticSessionDue(prop, now.Add(window))
+	err = e.automatic.update(ctx, func(records map[string]*automaticSubmissionRecord) []automaticSubmissionEvent {
+		r, ok := records[automaticRecordKey(rec.Key, rec.Revision)]
+		if !ok || !r.waiting() {
+			return nil
+		}
+		r.CreatedAt, r.SubmitAt, r.NoticedAt = now, due, time.Time{}
+		r.HeldAt, r.HoldReason = time.Time{}, ""
+		r.ClockQuantity = r.Quantity
+		return []automaticSubmissionEvent{{At: now, Type: automaticEventRescheduled, Key: r.Key, Revision: r.Revision, Bucket: r.Bucket, State: r.State, AccountID: r.AccountID, AccountMode: r.AccountMode, SubmitAt: r.SubmitAt, Reason: reason}}
+	})
+	if err != nil && e.server != nil {
+		e.server.warnf("pre-authorised protection: restart the veto clock of %s: %v", rec.Key, err)
+	}
+}
+
 // holdAutomatic records that the settling rule holds a due record, once per
 // hold and again only when the reason changes. The window is not touched.
 func (e *proposalEngine) holdAutomatic(ctx context.Context, rec automaticSubmissionRecord, reason string) {
@@ -1036,7 +1182,7 @@ func (e *proposalEngine) submitAutomatic(ctx context.Context, rec automaticSubmi
 		return nil
 	}})
 	finish := e.clock()
-	deferred := false
+	deferred, held := false, false
 	outcomeErr := e.automatic.update(ctx, func(records map[string]*automaticSubmissionRecord) []automaticSubmissionEvent {
 		r, ok := records[automaticRecordKey(rec.Key, rec.Revision)]
 		if !ok || r.terminal() {
@@ -1051,6 +1197,16 @@ func (e *proposalEngine) submitAutomatic(ctx context.Context, rec automaticSubmi
 			r.OrderRef = res.OrderRef
 			r.Reason = "placed by the daemon under the pre-authorised protection policy"
 			return []automaticSubmissionEvent{{At: finish, Type: automaticEventSubmitted, Key: r.Key, Revision: r.Revision, Bucket: r.Bucket, State: r.State, AccountID: r.AccountID, AccountMode: r.AccountMode, OrderRef: r.OrderRef, Origin: rpc.OrderOriginDaemonPreAuthorised}}
+		case err == nil && !staged && mandateHeldRefusal(res.Blockers):
+			// The revalidated mandate row is held (its verdict cannot be
+			// confirmed): nothing was sent, and the record keeps waiting on
+			// its original window, as under the settling rule.
+			held = true
+			r.HeldAt, r.HoldReason = finish, automaticHoldMandateVerdict
+			if !rec.HeldAt.IsZero() && rec.HoldReason == automaticHoldMandateVerdict {
+				r.HeldAt = rec.HeldAt
+			}
+			return []automaticSubmissionEvent{{At: finish, Type: automaticEventHeld, Key: r.Key, Revision: r.Revision, Bucket: r.Bucket, State: r.State, AccountID: r.AccountID, AccountMode: r.AccountMode, SubmitAt: r.SubmitAt, Reason: r.HoldReason}}
 		case !staged && automaticBlockersSupersede(res.Blockers):
 			r.ResolvedAt = finish
 			r.State = rpc.TradeProposalAutomaticSuperseded
@@ -1088,6 +1244,8 @@ func (e *proposalEngine) submitAutomatic(ctx context.Context, rec automaticSubmi
 		s.infof("pre-authorised protection: submitted %s bucket %s after %s", rec.Key, rec.Bucket, finish.Sub(now).Round(time.Millisecond))
 	case deferred:
 		s.infof("pre-authorised protection: %s bucket %s deferred by trading.freeze; resubmits once it is lifted", rec.Key, rec.Bucket)
+	case held:
+		s.infof("pre-authorised protection: %s bucket %s held until a fresh mandate verdict confirms its sizing", rec.Key, rec.Bucket)
 	default:
 		s.warnf("pre-authorised protection: %s bucket %s not submitted: %s", rec.Key, rec.Bucket, automaticOutcomeReason(res, err))
 	}
@@ -1360,6 +1518,9 @@ func (e *proposalEngine) Veto(ctx context.Context, p rpc.TradeProposalVetoParams
 				AccountID: snap.AccountID, AccountMode: snap.AccountMode, State: rpc.TradeProposalAutomaticPending,
 				VetoWindow: policy.Authority.vetoWindow().String(), CreatedAt: now, SubmitAt: now,
 			}
+			if served.Mandate != nil {
+				rec.Episode = served.Mandate.Episode
+			}
 			records[automaticRecordKey(rec.Key, rec.Revision)] = rec
 		}
 		switch rec.State {
@@ -1401,7 +1562,7 @@ func (e *proposalEngine) decorateAutomatic(snap *rpc.TradeProposalSnapshot) {
 		prop := &snap.Proposals[i]
 		bucket := automaticBucketFor(*prop)
 		pre := policyOK && policy.preAuthorised(bucket)
-		if rec, ok := e.automatic.get(prop.Key, prop.Revision); ok {
+		if rec, ok := e.automatic.served(*prop); ok {
 			prop.Automatic = rec.view(pre, now)
 			continue
 		}

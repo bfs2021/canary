@@ -1592,7 +1592,18 @@ func alertShadowMapProtection(input alertShadowProtectionInput, observedAt time.
 // one pre-authorised record: the proposal key and revision, so a new
 // revision is a new notice and a veto or submission recovers the old one.
 func alertShadowAutomaticEpisodeKey(scope alertShadowBrokerScope, notice automaticNoticeKey) (string, error) {
-	return rpc.BuildAlertEpisodeKey(rpc.AlertSourceProtection, rpc.AlertKindProtectionAutomatic, scope.account, scope.mode, notice.Key, notice.Revision)
+	return rpc.BuildAlertEpisodeKey(rpc.AlertSourceProtection, rpc.AlertKindProtectionAutomatic, scope.account, scope.mode, notice.Key, alertShadowAutomaticRevision(notice))
+}
+
+// alertShadowAutomaticRevision is what a notice is one per: the proposal
+// revision, or, for a mandate reduction, its breach episode and veto clock
+// (when it started, for what size): a row re-sized within one lot keeps its
+// notice, a material growth or a new session raises a new one.
+func alertShadowAutomaticRevision(notice automaticNoticeKey) string {
+	if notice.Episode != "" {
+		return fmt.Sprintf("episode:%s:clock:%d:qty:%d", notice.Episode, notice.ClockStart.Unix(), notice.ClockQuantity)
+	}
+	return notice.Revision
 }
 
 // alertShadowAutomaticObservation is the act-severity notice for one waiting
@@ -1613,7 +1624,7 @@ func alertShadowAutomaticObservation(scope alertShadowBrokerScope, notice automa
 		Latched  bool   `json:"latched"`
 		Deferred bool   `json:"deferred,omitempty"`
 		Hold     string `json:"hold,omitempty"`
-	}{policyFingerprint, notice.Key, notice.Revision, notice.Bucket, notice.Latched, notice.Deferred, notice.Hold})
+	}{policyFingerprint, notice.Key, alertShadowAutomaticRevision(notice), notice.Bucket, notice.Latched, notice.Deferred, notice.Hold})
 	if err != nil {
 		return alertEpisodeObservation{}, err
 	}
@@ -1633,6 +1644,8 @@ func alertShadowAutomaticObservation(scope alertShadowBrokerScope, notice automa
 // applies only once the freeze is lifted), then the freeze deferral.
 func alertProtectionAutomaticPresentationCode(notice automaticNoticeKey) rpc.AlertPresentationCode {
 	switch {
+	case notice.Hold == automaticNoticeHoldMandate:
+		return rpc.AlertPresentationProtectionAutoHeldMandate
 	case notice.Hold == automaticNoticeHoldUnverified:
 		return rpc.AlertPresentationProtectionAutoHeldUnverified
 	case notice.Hold != "":
@@ -1659,6 +1672,9 @@ func alertProtectionAutomaticPresentationCode(notice automaticNoticeKey) rpc.Ale
 	case preAuthorisedBucketCashSweep:
 		// NeverSkipVeto: the latched brake never places a sweep row now.
 		return rpc.AlertPresentationProtectionAutoCashSweep
+	case preAuthorisedBucketMandateReduction:
+		// NeverSkipVeto as well: a reduction to budget always waits.
+		return rpc.AlertPresentationProtectionAutoMandateReduction
 	default:
 		if notice.Latched {
 			return rpc.AlertPresentationProtectionAutoTrailingStopNow

@@ -719,6 +719,13 @@ func (st *riskCapitalStore) effectiveFlowsLocked(c *risk.Constitution) (effectiv
 // only when that policy also sets drawdown.release = automatic. It returns whether this is the first
 // reading for the day, so the caller can refresh reconciliation evidence.
 func (st *riskCapitalStore) Observe(equityBase float64, asOf time.Time, c *risk.Constitution, scope brokerStateScope, recoveryAllowed bool) bool {
+	return st.ObserveWithPnL(equityBase, mandatePnLReading{}, asOf, c, scope, recoveryAllowed)
+}
+
+// ObserveWithPnL is Observe with the broker's daily P&L of the same read,
+// which the mandate's flow check sets against the equity move
+// (mandate_capital.go).
+func (st *riskCapitalStore) ObserveWithPnL(equityBase float64, pnl mandatePnLReading, asOf time.Time, c *risk.Constitution, scope brokerStateScope, recoveryAllowed bool) bool {
 	if st == nil || equityBase <= 0 || math.IsNaN(equityBase) || math.IsInf(equityBase, 0) || asOf.IsZero() {
 		return false
 	}
@@ -778,7 +785,7 @@ func (st *riskCapitalStore) Observe(equityBase float64, asOf time.Time, c *risk.
 	}
 
 	flows, _, _ := st.effectiveFlowsLocked(c)
-	if st.observeMandateLocked(c, equityBase, asOf, flows, now) {
+	if st.observeMandateLocked(c, equityBase, pnl, asOf, flows, now) {
 		force = true
 	}
 	adjusted := equityBase - flows

@@ -561,14 +561,14 @@ func scorecardRuleOrigin(ev orderJournalEvent, bucketByRef map[string]string) st
 }
 
 // scorecardRuleBucket names the proposal buckets whose fills are a rule's,
-// not a decision: protection, hygiene, budget and expiry exits, strategy
-// exits and the cash sweeps.
+// not a decision: protection, hygiene, budget and expiry exits, the mandate's
+// forced reduction, strategy exits and the cash sweeps.
 func scorecardRuleBucket(bucket string) bool {
 	switch bucket {
 	// "option_profit_trail" has no rpc constant yet; the owner named it as
 	// a rule bucket, so a proposal that carries it is tagged when it exists.
 	case rpc.TradeProposalBucketTrailingStop, rpc.TradeProposalBucketOptionLossExit, "option_profit_trail",
-		rpc.TradeProposalBucketBudgetReduction, rpc.TradeProposalBucketOptionExpiryClose, rpc.TradeProposalBucketThetaHygiene,
+		rpc.TradeProposalBucketBudgetReduction, rpc.TradeProposalBucketMandateReduction, rpc.TradeProposalBucketOptionExpiryClose, rpc.TradeProposalBucketThetaHygiene,
 		rpc.TradeProposalBucketRiskReduction, rpc.TradeProposalBucketStrategyExit, rpc.TradeProposalBucketOptionExitReview,
 		rpc.TradeProposalBucketCashSweep, rpc.TradeProposalBucketCurrencyLeveling:
 		return true
