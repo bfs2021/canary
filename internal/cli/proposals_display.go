@@ -23,6 +23,9 @@ func renderProposalsSummary(env *Env, snap *rpc.TradeProposalSnapshot) {
 	if budget := formatProposalBudgetStatus(snap.BudgetReduction); budget != "" {
 		displayRow(env, env.Stdout, "Budget", budget)
 	}
+	if m := formatProposalMandateStatus(snap.MandateReduction); m != "" {
+		displayRow(env, env.Stdout, "Mandate", m)
+	}
 	// Preserve producer order and keep the cash sweep and currency leveling
 	// distinct from protection: protection first, then each under its own
 	// heading.
@@ -103,6 +106,9 @@ func renderProposalsSummary(env *Env, snap *rpc.TradeProposalSnapshot) {
 			}
 			if p.Reason != "" {
 				displayLine(env, "  "+p.Reason, nil)
+			}
+			if m := formatProposalMandate(p.Mandate); m != "" {
+				displayLine(env, "  Mandate: "+m, nil)
 			}
 			if automatic := strings.TrimSpace(formatProposalAutomaticColumn(p.Automatic)); automatic != "" {
 				displayLine(env, "  "+automatic, nil)

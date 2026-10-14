@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/osauer/canary/v2/internal/rpc"
 )
@@ -64,4 +65,37 @@ func budgetRulebookReviewText(review string) string {
 		return "Rulebook limits: the file could not be read"
 	}
 	return ""
+}
+
+// formatProposalMandateStatus is the one-line account of the mandate's
+// forced reduction for the list header: its state and why.
+func formatProposalMandateStatus(st *rpc.TradeProposalMandateStatus) string {
+	if st == nil {
+		return ""
+	}
+	return briefJoin(strings.ReplaceAll(st.State, "_", " "), st.Reason)
+}
+
+// formatProposalMandate is one mandate_reduction row in plain words: its
+// place in the batch, why it is there, its share of the risk and the verdict
+// it was sized on.
+func formatProposalMandate(m *rpc.TradeProposalMandate) string {
+	if m == nil {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("rank %d of %d", m.Rank, max(m.BatchRows, m.Rank)), mandatePhaseWords(m.Phase), mandateShare(m.ContributionPct) + " of the risk"}
+	verdict := fmt.Sprintf("sized on the %s verdict of %s", m.VerdictStatus, m.VerdictAt.Local().Format("15:04 MST"))
+	if m.BudgetAnnualSD > 0 {
+		verdict += fmt.Sprintf(": risk %s a year, %s of the budget %s", mandateAmount(m.RiskAnnualBase, m.BaseCurrency),
+			mandatePct(m.RiskAnnualBase/m.BudgetAnnualSD*100), mandateAmount(m.BudgetAnnualSD, m.BaseCurrency))
+	}
+	parts = append(parts, verdict)
+	if !m.ConfirmedAt.IsZero() {
+		parts = append(parts, "kept by the verdict of "+m.ConfirmedAt.Local().Format("15:04 MST"))
+	}
+	parts = append(parts, "this cut takes "+mandateAmount(m.RiskCutAnnualBase, m.BaseCurrency)+" a year off")
+	if m.Held {
+		parts = append(parts, "held: "+m.HoldReason)
+	}
+	return briefJoin(parts...)
 }

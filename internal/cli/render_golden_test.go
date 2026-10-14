@@ -243,8 +243,9 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "scorecard_backfilling", argv: []string{"scorecard"}, conn: goldenConn{rpc.MethodScorecardRead: goldenScorecardBackfilling()}},
 		{name: "stress_details", argv: []string{"stress", "--details"}, render: func(env *Env) { renderStress(env, goldenStress(), true) }},
 		{name: "mandate", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandate(mandate.StatusWithin)}},
-		{name: "mandate_reduce", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandate(mandate.StatusReduce)}},
+		{name: "mandate_reduce", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateReducing()}},
 		{name: "mandate_unknown", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateUnknown()}},
+		{name: "mandate_unknown_held", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateHeld()}},
 		{name: "mandate_inactive", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: rpc.MandateRiskResult{AsOf: goldenAt, Message: "the risk constitution carries no [mandate] table; the mandate budget is inactive", Gate: &rpc.MandateGateView{}}}},
 		{name: "status", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: goldenHealthReady(readyTrading), rpc.MethodAlertCandidates: goldenAlerts(3)}},
 		{name: "status_attention", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: goldenHealthAttention(), rpc.MethodAlertCandidates: goldenAlerts(2)}},
@@ -257,6 +258,8 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "technical", argv: []string{"technical", "SYNA,SYNB,SYNC"}, conn: goldenConn{rpc.MethodTechnical: goldenTechnical()}},
 		{name: "proposals_list_empty", argv: []string{"proposals", "list"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: rpc.TradeProposalSnapshot{Revision: "rev-0000", PolicyID: "protection", PolicyVersion: 1, Proposals: []rpc.TradeProposal{}}}},
 		{name: "proposals_list_one", argv: []string{"proposals", "list"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: goldenProposals()}},
+		{name: "proposals_list_mandate", argv: []string{"proposals", "list"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: goldenMandateProposals()}},
+		{name: "proposals_list_mandate_details", argv: []string{"proposals", "list", "--details"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: goldenMandateProposals()}},
 		{name: "proposals_list_sweep_borrowed", argv: []string{"proposals", "list"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: goldenSweepBorrowed()}},
 		{name: "proposals_list_sweep_borrowed_details", argv: []string{"proposals", "list", "--details"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: goldenSweepBorrowed()}},
 		{name: "proposals_list_leveling", argv: []string{"proposals", "list"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: goldenLevelingProposals()}},
@@ -412,9 +415,15 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 		TaxReserveBase: 70000, RiskBase: 225000, FlowsSinceStart: -5000, HWMRiskBase: 235000, HWMAsOf: goldenAt.Add(-48 * time.Hour),
 		BudgetBase: 230000, DrawdownBase: 5000, DrawdownPct: 2.13, Room: 0.929, BudgetAnnualSD: 32050}
 	up := 6200 * scale
+	// The within book is drawn gaining in the index stress and the reduce
+	// book losing, so both words of the P&L render are pinned.
+	indexLoss := -9870.0
+	if scale > 1 {
+		indexLoss = 39480
+	}
 	verdict := &mandate.Verdict{Status: status, AsOf: goldenAt, BaseCurrency: "EUR", Capital: capital,
 		Risk:      &mandate.Risk{SD1DBase: 1510 * scale, SDAnnualBase: 23970 * scale, ES99Base: 4120 * scale, RatioToBudget: 0.748 * scale, FXContributionPct: 11.2},
-		Stresses:  &mandate.Stresses{GapShockPct: 25, GapCapBase: 22940, IndexShockPct: 10, IndexLossBase: 9870 * scale},
+		Stresses:  &mandate.Stresses{GapShockPct: 25, GapCapBase: 22940, IndexShockPct: 10, IndexLossBase: indexLoss},
 		Scenarios: 252, ScenariosFrom: "2025-09-05", ScenariosTo: "2026-09-04",
 		Legs: []mandate.LegReport{
 			{ID: "con:9001", Symbol: "SYNA", Underlying: "SYNA", Kind: mandate.KindStock, Quantity: 1000 * scale, ValueBase: 90000 * scale, ContributionPct: 71.4},
@@ -444,6 +453,73 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 		res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "the mandate risk 95,880 EUR a year is over the budget 32,050 EUR (299%); a gap in SYNA, SYNB would lose more than the gap cap 22,940 EUR"}
 	}
 	return res
+}
+
+// goldenMandateReducing is the reduce verdict with its forced reduction:
+// two rows, pre-authorised, the daemon placing both after the veto window.
+func goldenMandateReducing() rpc.MandateRiskResult {
+	res := goldenMandate(mandate.StatusReduce)
+	res.Reduction = &rpc.MandateReductionView{State: rpc.MandateReductionReducing, Rows: 2, Pending: 2, VetoUntil: goldenAt.Add(30 * time.Minute), PreAuthorised: true,
+		Reason: "the verdict reads reduce (299% of the budget 32,050 EUR); 2 rows sized to take the risk to 30,100 EUR a year, inside the 30,448 EUR target",
+		Orders: []rpc.MandateReductionOrder{
+			{Rank: 1, Key: "mandate_reduction:0001", Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "STK"}, Action: rpc.OrderActionSell, Quantity: 3200,
+				Phase: rpc.MandatePhaseGap, ContributionPct: 71.4, Automatic: rpc.TradeProposalAutomaticPending, SubmitAt: goldenAt.Add(30 * time.Minute)},
+			{Rank: 2, Key: "mandate_reduction:0002", Contract: rpc.ContractParams{Symbol: "SYNB", SecType: "STK"}, Action: rpc.OrderActionSell, Quantity: 1200,
+				Phase: rpc.MandatePhaseRisk, ContributionPct: 33.1, Automatic: rpc.TradeProposalAutomaticPending, SubmitAt: goldenAt.Add(30 * time.Minute)},
+		}}
+	return res
+}
+
+// goldenMandateHeld is the unknown verdict with a standing batch held: not
+// pre-authorised, so the row would wait for the owner anyway.
+func goldenMandateHeld() rpc.MandateRiskResult {
+	res := goldenMandateUnknown()
+	res.Reduction = &rpc.MandateReductionView{State: rpc.MandateReductionHeld, Rows: 1, Held: true,
+		HoldReason: "the mandate risk cannot be measured: daily history for SYNB is stale (last read 2026-09-02 06:10:00)",
+		Orders: []rpc.MandateReductionOrder{{Rank: 1, Key: "mandate_reduction:0001", Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "STK"}, Action: rpc.OrderActionSell,
+			Quantity: 400, Phase: rpc.MandatePhaseRisk, ContributionPct: 71.4, Held: true}}}
+	return res
+}
+
+// goldenMandateProposals is the forced reduction as canary proposals lists
+// it: an expiring call first, then the largest contributor held to the
+// order cap, pre-authorised and waiting out the veto window.
+func goldenMandateProposals() rpc.TradeProposalSnapshot {
+	verdictAt := goldenAt.Add(-time.Minute)
+	auto := &rpc.TradeProposalAutomatic{PreAuthorised: true, Bucket: rpc.TradeProposalBucketMandateReduction, State: rpc.TradeProposalAutomaticPending,
+		CreatedAt: goldenAt, SubmitAt: goldenAt.Add(30 * time.Minute), VetoWindow: "30m0s"}
+	sessions := 2
+	mandateRow := func(rank int, phase string, contribution, cut float64) *rpc.TradeProposalMandate {
+		m := &rpc.TradeProposalMandate{Rank: rank, BatchRows: 2, Phase: phase, ContributionPct: contribution, Units: 600,
+			RiskAnnualBase: 41200, BudgetAnnualSD: 36000, TargetAnnualSD: 34200, RiskCutAnnualBase: cut, RiskAfterAnnualBase: 34050,
+			VerdictStatus: mandate.StatusOver, VerdictAt: verdictAt, VerdictFingerprint: "a1b2c3d4e5f6", BaseCurrency: "EUR"}
+		if phase == rpc.MandatePhaseExpiry {
+			m.Units, m.SessionsToExpiry = 5, &sessions
+		}
+		return m
+	}
+	return rpc.TradeProposalSnapshot{
+		Revision: "rev-0002", PolicyID: "protection", PolicyVersion: 3,
+		Counts: rpc.TradeProposalCounts{Total: 2, Actionable: 2, MandateReduction: 2},
+		MandateReduction: &rpc.TradeProposalMandateStatus{State: rpc.MandateReductionReducing, VerdictStatus: mandate.StatusOver, VerdictAt: verdictAt,
+			VerdictFingerprint: "a1b2c3d4e5f6", ConsecutiveOver: 2, RiskAnnualBase: 41200, BudgetAnnualSD: 36000, TargetAnnualSD: 34200, ProjectedRiskAnnualBase: new(34050.0),
+			TargetReached: true, Rows: 2, BaseCurrency: "EUR",
+			Reason: "the verdict reads over (114% of the budget 36,000 EUR); 2 rows sized to take the risk to 34,050 EUR a year, inside the 34,200 EUR target"},
+		Proposals: []rpc.TradeProposal{
+			{Key: "mandate_reduction:0001", Bucket: rpc.TradeProposalBucketMandateReduction, Action: rpc.OrderActionSell, Quantity: 5, Symbol: "SYNB", SecType: "OPT",
+				OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, PositionEffect: rpc.OrderPositionEffectClose, PositionQuantity: 5, NeverSkipVeto: true,
+				Contract: rpc.ContractParams{Symbol: "SYNB", SecType: "OPT", Currency: "EUR", Expiry: "20260909", Strike: 75, Right: "C"},
+				Reason:   "mandate risk 41,200 EUR a year is 114% of the budget 36,000 EUR (over); in the money 2 sessions before expiry; exercised, the delivered shares would put the book over budget, so it goes first: sell 5 of 5 contracts; the batch takes the risk to 34,050 EUR, inside the 34,200 EUR target",
+				Mandate:  mandateRow(1, rpc.MandatePhaseExpiry, 4.2, 700), Automatic: auto,
+				Details: []string{"order 1 of 2 in the batch, sent in this order; this cut takes 700 EUR a year off the risk", "waits the full veto window even under a latched brake: a reduction to budget is a discretionary-scale action, not a stop"}},
+			{Key: "mandate_reduction:0002", Bucket: rpc.TradeProposalBucketMandateReduction, Action: rpc.OrderActionSell, Quantity: 200, Symbol: "SYNA", SecType: "STK",
+				OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, PositionEffect: rpc.OrderPositionEffectReduce, PositionQuantity: 3000, NeverSkipVeto: true,
+				Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "STK", Currency: "EUR"},
+				Reason:   "mandate risk 41,200 EUR a year is 114% of the budget 36,000 EUR (over); the largest risk contributor left (88% of the risk): sell 200 of 3000 shares now (the batch asks for 600; the order caps hold one order to 200, and the next cycle measures the rest); the batch takes the risk to 34,050 EUR, inside the 34,200 EUR target",
+				Mandate:  mandateRow(2, rpc.MandatePhaseRisk, 88.1, 6450), Automatic: auto,
+				Details: []string{"order 2 of 2 in the batch, sent in this order; this cut takes 6,450 EUR a year off the risk", "waits the full veto window even under a latched brake: a reduction to budget is a discretionary-scale action, not a stop"}},
+		},
+	}
 }
 
 // goldenMandateUnknown is a verdict the evidence cannot establish: one

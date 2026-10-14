@@ -54,6 +54,24 @@ func mandatePct(v float64) string {
 	return strings.Replace(fmt.Sprintf("%.0f%%", v), "-", "−", 1)
 }
 
+// mandateStressPnL states a stress figure, a loss when positive, as P&L in
+// words: "loses 12,000 EUR" or "gains 73,847 EUR", never a signed loss a
+// reader takes for the opposite.
+func mandateStressPnL(loss float64, ccy string) string {
+	if loss < 0 {
+		return "gains " + mandateAmount(-loss, ccy)
+	}
+	return "loses " + mandateAmount(loss, ccy)
+}
+
+// mandateCap prints a gap cap as a bare grouped figure for a parenthesis.
+func mandateCap(v float64) string {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return "unmeasurable"
+	}
+	return groupThousands(fmt.Sprintf("%.0f", math.Abs(v)))
+}
+
 // mandateShare prints a contribution share with one decimal.
 func mandateShare(v float64) string {
 	return strings.Replace(fmt.Sprintf("%.1f%%", v), "-", "−", 1)
@@ -101,6 +119,7 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 			riskDisplayLine(env, "Additions · ", "open · reductions, closes, cancels and hedges always are", env.green)
 		}
 	}
+	renderMandateReduction(env, res.Reduction, ccy)
 	if len(v.Reasons) > 0 {
 		fmt.Fprintln(env.Stdout, "\n"+env.bold("Why unknown"))
 		for _, reason := range v.Reasons {
@@ -108,13 +127,14 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 		}
 	}
 	if len(v.Underlyings) > 0 {
-		fmt.Fprintln(env.Stdout, "\n"+env.bold("Contributions")+"  share of the risk · beta to "+mandate.IndexSymbol+" · gap loss against the cap")
+		fmt.Fprintln(env.Stdout, "\n"+env.bold("Contributions")+"  share of the risk · beta to "+mandate.IndexSymbol+" · one-name gap against its cap")
 		for _, u := range v.Underlyings {
-			gap := fmt.Sprintf("gap −%s %s", mandatePct(v.Stresses.GapShockPct), mandateAmount(u.GapDownLossBase, ccy))
+			gap := fmt.Sprintf("gap −%s %s", mandatePct(v.Stresses.GapShockPct), mandateStressPnL(u.GapDownLossBase, ccy))
 			if u.GapUpLossBase != nil {
-				gap += fmt.Sprintf(", +%s %s", mandatePct(v.Stresses.GapShockPct), mandateAmount(*u.GapUpLossBase, ccy))
+				gap += fmt.Sprintf(", +%s %s", mandatePct(v.Stresses.GapShockPct), mandateStressPnL(*u.GapUpLossBase, ccy))
 			}
-			line := briefJoin(u.Underlying, mandateShare(u.ContributionPct), fmt.Sprintf("beta %.2f", u.Beta), gap, "cap "+mandateAmount(u.GapCapBase, ccy))
+			gap += " (cap " + mandateCap(u.GapCapBase) + ")"
+			line := briefJoin(u.Underlying, mandateShare(u.ContributionPct), fmt.Sprintf("beta %.2f", u.Beta), gap)
 			style := func(s string) string { return s }
 			if u.GapBreach {
 				line += " · BREACH"
@@ -135,7 +155,7 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 	}
 	if s := v.Stresses; s != nil {
 		fmt.Fprintln(env.Stdout, "\n"+env.bold("Stresses"))
-		riskReadLine(env, "  Index −"+mandatePct(s.IndexShockPct)+" through beta", mandateAmount(s.IndexLossBase, ccy))
+		riskReadLine(env, "  Index −"+mandatePct(s.IndexShockPct)+" through beta", mandateStressPnL(s.IndexLossBase, ccy))
 		breaches := "none"
 		if len(s.GapBreaches) > 0 {
 			breaches = strings.Join(s.GapBreaches, ", ")
@@ -171,5 +191,60 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 			}
 		}
 	}
-	riskReadLine(env, "", "Measurement and gate only: the mandate refuses risk-adding orders; it places none.")
+	riskReadLine(env, "", "The mandate refuses risk-adding orders. Its reduction is a set of proposals (canary proposals); the daemon places them itself only when mandate_reduction is pre-authorised, after the veto window.")
+}
+
+// renderMandateReduction prints the forced reduction under the gate: its
+// state, who places the rows and when, and the rows in dispatch order.
+func renderMandateReduction(env *Env, r *rpc.MandateReductionView, ccy string) {
+	if r == nil {
+		return
+	}
+	state := strings.ReplaceAll(r.State, "_", " ")
+	var style func(string) string
+	var head string
+	switch {
+	case r.Held && r.Rows > 0:
+		head, style = fmt.Sprintf("%d %s not sent: %s", r.Rows, pluralWord(r.Rows, "row", "rows"), r.HoldReason), env.yellow
+	case r.Rows > 0 && r.PreAuthorised:
+		head, style = fmt.Sprintf("%d %s, pre-authorised", r.Rows, pluralWord(r.Rows, "row", "rows")), env.yellow
+		if r.Pending > 0 && !r.VetoUntil.IsZero() {
+			head += fmt.Sprintf(": the daemon places %d after the veto window, the last at %s", r.Pending, formatTimeShort(r.VetoUntil.Local()))
+		}
+	case r.Rows > 0:
+		head, style = fmt.Sprintf("%d %s wait for your approval; mandate_reduction is not pre-authorised", r.Rows, pluralWord(r.Rows, "row", "rows")), env.yellow
+	default:
+		head = r.Reason
+	}
+	riskDisplayLine(env, "Reduction · ", briefJoin(state, head), style)
+	for _, o := range r.Orders {
+		verb := strings.ToLower(o.Action)
+		parts := []string{fmt.Sprintf("%d. %s %d %s", o.Rank, verb, o.Quantity, queuedContractLabel(o.Contract)), mandatePhaseWords(o.Phase), mandateShare(o.ContributionPct) + " of the risk"}
+		switch {
+		case o.Held:
+			parts = append(parts, "held")
+		case o.Blocked != "":
+			parts = append(parts, "blocked: "+o.Blocked)
+		case !o.SubmitAt.IsZero():
+			parts = append(parts, "places itself at "+formatTimeShort(o.SubmitAt.Local())+" unless vetoed")
+		case o.Automatic != "":
+			parts = append(parts, o.Automatic)
+		case !r.PreAuthorised:
+			parts = append(parts, "waits for your approval")
+		}
+		riskDisplayLine(env, "  ", briefJoin(parts...), nil)
+	}
+}
+
+// mandatePhaseWords names why a reduction row is in the batch.
+func mandatePhaseWords(phase string) string {
+	switch phase {
+	case rpc.MandatePhaseExpiry:
+		return "expires in the money first"
+	case rpc.MandatePhaseGap:
+		return "gap over its cap"
+	case rpc.MandatePhaseRisk:
+		return "largest risk"
+	}
+	return phase
 }

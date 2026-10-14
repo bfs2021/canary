@@ -25,8 +25,9 @@ Evidence
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · stale: 318 closes to 2026-09-01 · read 05:00:00 TZ
-Measurement and gate only: the mandate refuses risk-adding orders; it places
-  none.
+The mandate refuses risk-adding orders. Its reduction is a set of proposals
+  (canary proposals); the daemon places them itself only when mandate_reduction
+  is pre-authorised, after the veto window.
 # canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mMandate\x1b[0m  \x1b[33m\x1b[1mUNKNOWN\x1b[0m\x1b[0m
 Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
@@ -54,5 +55,6 @@ Not modelled · SYNT (bill, no equity risk modelled)
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · [33mstale: 318 closes to 2026-09-01[0m · read 05:00:00 TZ
-Measurement and gate only: the mandate refuses risk-adding orders; it places
-  none.
+The mandate refuses risk-adding orders. Its reduction is a set of proposals
+  (canary proposals); the daemon places them itself only when mandate_reduction
+  is pre-authorised, after the veto window.
