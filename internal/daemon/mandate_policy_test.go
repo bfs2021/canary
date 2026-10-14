@@ -239,6 +239,7 @@ func TestMandateCoreTable(t *testing.T) {
 		t.Fatalf("an absent table enters the fingerprint projection: %s", raw)
 	}
 	written := strings.Replace(withTable, "policy_version = 6", "policy_version = 7", 1) + coreTableTOML
+	written = strings.Replace(written, "gap_room_pct = 33.3\n", "gap_room_pct = 33.3\nindex_gap_shock_pct = 12.0\n", 1)
 	writePolicyTestFile(t, path, written)
 	m.reload()
 	got := m.snapshot()
@@ -289,7 +290,7 @@ func TestMandateCoreTable(t *testing.T) {
 	if got.status != rpc.RiskPolicyStatusActive {
 		t.Fatalf("half-written: %s %q", got.status, got.message)
 	}
-	if keys := strings.Join(got.policy.Mandate.CoreUnapprovedKeys(), " "); !strings.Contains(keys, "mandate.core.con_id") || strings.Contains(keys, "mandate.core.rule") {
+	if keys := strings.Join(got.policy.Mandate.CoreUnapprovedKeys(), " "); !strings.Contains(keys, "mandate.core.con_id") || strings.Contains(keys, "mandate.core.rule") || !strings.Contains(keys, "mandate.index_gap_shock_pct") {
 		t.Fatalf("core keys %s", keys)
 	}
 	if all := strings.Join(got.policy.UnapprovedKeys(), " "); strings.Contains(all, "mandate.core") {

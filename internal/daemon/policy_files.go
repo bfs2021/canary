@@ -1346,8 +1346,8 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # the core is inactive. Written, the daemon decides the core's target each
 # month under the compiled rule and shows it in canary core; in this
 # release it proposes nothing and places no order. Its volatility share is
-# core_vol_pct above. Every key is yours; a missing one holds the core and
-# is named there. con_id is IBKR's contract id for the ISIN on IBIS. The
+# core_vol_pct above; it also needs index_gap_shock_pct in [mandate]. Every
+# key is yours; a missing one holds the core and is named there. con_id is IBKR's contract id for the ISIN on IBIS. The
 # numbers are the design's proposals.
 # [mandate.core]
 # rule = "core-ibcf-v1"

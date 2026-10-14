@@ -86,7 +86,11 @@ type ConstitutionMandateCore struct {
 }
 
 // CoreUnapprovedKeys lists the [mandate.core] keys the owner has not
-// written, and the sleeve share the core reads.
+// written, and the two [mandate] keys the core reads: its sleeve share and
+// the index gap. Without index_gap_shock_pct the core's fund would be
+// stressed as a single name, its target would sit at the gap cap's margin,
+// and a modest rise would breach it and set up a forced sale the next
+// month buys back (core sleeve review, 2026-10-14).
 func (m *ConstitutionMandate) CoreUnapprovedKeys() []string {
 	if m == nil || m.Core == nil {
 		return nil
@@ -107,6 +111,7 @@ func (m *ConstitutionMandate) CoreUnapprovedKeys() []string {
 		{"mandate.core.min_order_base", c.MinOrderBase == nil},
 		{"mandate.core.max_value_pct", c.MaxValuePct == nil},
 		{"mandate.sleeves.core_vol_pct", m.Sleeves == nil || m.Sleeves.CoreVolPct == nil},
+		{"mandate.index_gap_shock_pct", m.IndexGapShockPct == nil},
 	} {
 		if k.missing {
 			out = append(out, k.key)

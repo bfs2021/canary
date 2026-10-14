@@ -96,7 +96,7 @@ answered here; "built" means phase 1 carries it, with a test.
 
 | # | Finding | Resolution | Where |
 |---|---|---|---|
-| B1 | At its target (40% of the budget base) the core's one-name 25% gap loses 10% of the base, at the 9.99% gap cap: the core breaches it, the forced reduction sells, the next month buys back: ping-pong | D4: broad index funds take a 12% gap (4.8% of the base, under half the cap). The incremental additions gate refuses an addition that creates or deepens a gap-cap breach (it checked volatility only). The core's sizing lands inside every gap cap with margin: its gap at most 0.95 of the cap | Built: `index_gap_shock_pct`, `mandate.BroadIndexInstruments`, `mandateGapBreachAdded`, `coreHeadroomFits` |
+| B1 | At its target (40% of the budget base) the core's one-name 25% gap loses 10% of the base, at the 9.99% gap cap: the core breaches it, the forced reduction sells, the next month buys back: ping-pong | D4: broad index funds take a 12% gap (4.8% of the base, under half the cap). The incremental additions gate refuses an addition that creates or deepens a gap-cap breach (it checked volatility only). The core's sizing lands inside every gap cap with margin: its gap at most 0.95 of the cap. The core is not ready until `index_gap_shock_pct` is written: at 25% its target would sit at the cap's margin and a rise of about 5% would breach it | Built: `index_gap_shock_pct`, `mandate.BroadIndexInstruments`, `mandateGapBreachAdded`, `coreHeadroomFits`, `CoreUnapprovedKeys` |
 | S1 | Honesty | This is a beta allocation the owner chose with a drawdown filter, no alpha claim. The lab supplies parity and the kill rule only; s0's Sharpe hypothesis is dropped as a success test; the kill rule's reference is concrete (the new spec); Desk shows no IC, e-value or "established" for the core | Lab spec `2408d09e6189`; Desk in phase 2 |
 | S2 | Lab accounting | The design's 1995-2015 turnover run (five configurations) is logged with `lab prior`; the 10% band was picked on that turnover; "S&P 500 only" is recorded as hindsight-prone; a new s0 version matching the rule is registered | Built in the lab: registry seq 29-31 |
 | S3 | Costs beyond commission and spread | Whipsaw, tax on realised gains, Vorabpauschale and hedge carry, each with a number or "unknown" | "Turnover and cost" below |
@@ -832,6 +832,10 @@ band_pct        = 10
 min_order_base  = 2500
 max_value_pct   = 40             # of the budget base × room
 ```
+
+The core also reads two `[mandate]` keys and holds while either is
+unwritten: `[mandate.sleeves] core_vol_pct` and `index_gap_shock_pct` (the
+owner's 12, D4).
 
 Phase 2 adds the window keys (`window_sessions = 5`, `send_after =
 "15:45"` Europe/Berlin) with the rows that read them, and the cash rule's

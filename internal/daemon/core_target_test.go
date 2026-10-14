@@ -30,6 +30,7 @@ func testCoreConstitution() *risk.Constitution {
 	c := testMandateConstitution()
 	c.Mandate.Core = &risk.ConstitutionMandateCore{Rule: core.RuleID, ISIN: core.ISIN, ConID: new(coreTestConID), Exchange: core.Exchange, Currency: core.Currency,
 		ScalePct: new(100.0), BandPct: new(10.0), MinOrderBase: new(2500.0), MaxValuePct: new(40.0)}
+	c.Mandate.IndexGapShockPct = new(12.0) // the owner's D4
 	c.Capital.BaseCurrency = "EUR"
 	return c
 }
@@ -119,7 +120,6 @@ func withIBCF(pos *rpc.PositionsResult, shares, mark float64) *rpc.PositionsResu
 // their margin. The result is read-only and names the rule and the spec.
 func TestCoreTargetFirstBuyAtTheRuleTarget(t *testing.T) {
 	c := testCoreConstitution()
-	c.Mandate.IndexGapShockPct = new(12.0)
 	srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
 	res := coreEvaluate(t, srv)
 	if res.Status != rpc.CoreStatusReady || len(res.Reasons) != 0 {
@@ -159,11 +159,29 @@ func TestCoreTargetFirstBuyAtTheRuleTarget(t *testing.T) {
 }
 
 // Review B1: without the index gap the core at its target would breach the
-// single-name gap cap and the forced reduction would sell it back. The
-// buy is cut to the largest holding that keeps the core's 25% gap within
-// 95% of its cap and the book within 95% of the budget.
+// single-name gap cap and the forced reduction would sell it back, so the
+// core is not ready until index_gap_shock_pct is written; it holds and
+// says why.
+func TestCoreTargetHoldsWithoutTheIndexGap(t *testing.T) {
+	c := testCoreConstitution()
+	c.Mandate.IndexGapShockPct = nil
+	srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
+	res := coreEvaluate(t, srv)
+	if res.Status != rpc.CoreStatusHold || !strings.Contains(strings.Join(res.Reasons, " "), "mandate.index_gap_shock_pct") || res.Action.Kind != core.ActionHold || res.Sizing != nil {
+		t.Fatalf("status %s reasons %v action %+v sizing %+v", res.Status, res.Reasons, res.Action, res.Sizing)
+	}
+	if !slices.Contains(res.Policy.Unapproved, "mandate.index_gap_shock_pct") {
+		t.Fatalf("policy view %+v", res.Policy)
+	}
+}
+
+// Where the core's gap binds before its target (an index gap of 24%, so
+// the target's gap loses more than 95% of the cap), the buy is cut to the
+// largest holding that keeps the core's gap within 95% of its cap and the
+// book within 95% of the budget, and the mandate gate admits it.
 func TestCoreTargetBuyCutToTheGapCapMargin(t *testing.T) {
 	c := testCoreConstitution()
+	c.Mandate.IndexGapShockPct = new(24.0)
 	srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
 	res := coreEvaluate(t, srv)
 	if res.Status != rpc.CoreStatusReady {
@@ -176,10 +194,10 @@ func TestCoreTargetBuyCutToTheGapCapMargin(t *testing.T) {
 	price := res.Holding.Price
 	_, kept, _, _ := srv.mandateVerdicts.current()
 	capBase := mandate.GapCapBase(kept.Policy, kept.Capital)
-	if loss := float64(a.Quantity) * price * 0.25; loss > core.HeadroomFactor*capBase+1e-6 {
+	if loss := float64(a.Quantity) * price * 0.24; loss > core.HeadroomFactor*capBase+1e-6 {
 		t.Fatalf("the cut buy's gap loses %.0f, over 95%% of the cap %.0f", loss, capBase)
 	}
-	if loss := float64(a.Quantity+1) * price * 0.25; loss <= core.HeadroomFactor*capBase {
+	if loss := float64(a.Quantity+1) * price * 0.24; loss <= core.HeadroomFactor*capBase {
 		t.Fatalf("one share more still fits: %.0f <= %.0f", loss, core.HeadroomFactor*capBase)
 	}
 	// The cut buy passes the mandate gate the order would meet.
@@ -197,7 +215,7 @@ func TestCoreHeadroomNeverBreaksTheBudget(t *testing.T) {
 	for i := range 12 {
 		c := testCoreConstitution()
 		if i%2 == 0 {
-			c.Mandate.IndexGapShockPct = new(12.0)
+			c.Mandate.IndexGapShockPct = new(24.0) // the gap binds before the target
 		}
 		srv := coreTestServer(t, c, mandateTestPositions(float64(50+r.IntN(400))), 0.25)
 		res := coreEvaluate(t, srv)
@@ -219,7 +237,6 @@ func TestCoreHeadroomNeverBreaksTheBudget(t *testing.T) {
 // frozen target, a lower one lowers it at once.
 func TestCoreTargetFrozenMonthDriftAndCeiling(t *testing.T) {
 	c := testCoreConstitution()
-	c.Mandate.IndexGapShockPct = new(12.0)
 	srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
 	first := coreEvaluate(t, srv)
 	if first.Status != rpc.CoreStatusReady {
@@ -260,7 +277,6 @@ func TestCoreTargetFrozenMonthDriftAndCeiling(t *testing.T) {
 // sales open; a holding inside the band does nothing.
 func TestCoreTargetTrendOffSellsAllAndBlockedBuysStillSell(t *testing.T) {
 	c := testCoreConstitution()
-	c.Mandate.IndexGapShockPct = new(12.0)
 	srv := coreTestServer(t, c, withIBCF(mandateTestPositions(100), 10, 60), -0.6)
 	res := coreEvaluate(t, srv)
 	if res.Status != rpc.CoreStatusReady || res.Decision.TrendOn || res.Action.Kind != core.ActionSellAll || res.Action.Quantity != 10 || res.Holding.PriceSource != "mark" {
