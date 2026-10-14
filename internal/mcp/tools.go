@@ -444,6 +444,26 @@ var Tools = []Tool{
 		},
 	},
 	{
+		Name: "canary_mandate", Title: "Canary Mandate Risk Budget",
+		Description: "Read the daemon's mandate risk verdict: the book's ex-ante volatility (historical simulation with full revaluation of every stock and option leg, currency moves included) against the owner's volatility budget, which is the mandate's target times the high-water mark of the risk base (equity after the tax reserve, cash-flow adjusted) times the room left under the maximum loss. `verdict.status` is within, over, reduce or unknown; `verdict.reasons` names every missing or stale input (the verdict is unknown, never within, without them); `verdict.underlyings` and `verdict.legs` carry Euler risk contributions that sum to 100%, betas to SPY and each name's gap loss against its gap cap; `verdict.stresses` the index shock and the gap breaches; `evidence` the clocks of the equity, positions and every daily series; `gate.refuses_additions` whether risk-adding orders are refused right now (`mandate_budget` on an order preview). `active` is false while the constitution carries no [mandate] table. Use it for 'can I add risk', 'what is driving the risk' or 'why was my order refused with mandate_budget'; use canary_stress for the broader stress findings and canary_policy_check for the mandate keys and the realised figures. Read-only; it places no order and changes no limit; refresh=true reads the account and positions again first.",
+		JSONSchema: schemaObject(map[string]json.RawMessage{
+			"refresh": json.RawMessage(`{"type":"boolean","description":"when true, the daemon reads the account and positions again before judging; false (the default) serves a verdict younger than thirty seconds as it is"}`),
+		}, nil), ReadOnlyHint: new(true), RPCMethods: []string{rpc.MethodMandateRisk},
+		Handler: func(ctx context.Context, conn *dial.Conn, args json.RawMessage) (json.RawMessage, error) {
+			var in struct {
+				Refresh bool `json:"refresh"`
+			}
+			if err := unmarshalArgs(args, &in); err != nil {
+				return nil, err
+			}
+			res, err := rpc.FetchMandateRisk(ctx, conn, in.Refresh)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(res)
+		},
+	},
+	{
 		Name:         "canary_brief",
 		Title:        "Canary Daily Brief",
 		Description:  "Start here for the daemon's current desk summary: regime stage and verdict, portfolio-stress summary, breadth coverage, modeled gamma response and expiry horizons, and observed 25-delta option skew. Preserve freshness, rankability, source warnings and unavailable values. Take severity order from Canary: `attention_order` lists what needs attention (drawdown tier, latch, rules at act, then other attention rows) and `ready.ranked` orders every Ready row; never re-sort them. Gamma models potential amplification or damping; open interest does not prove bullish/bearish intent or dealer inventory, and put-call skew is relative option pricing, not a forecast. Use canary_regime for all market indicators and confirmation details, canary_stress for full portfolio-risk evidence, canary_status to diagnose degraded sources and canary_edge for retrospective decision outcomes; drill into canary_positions or canary_account only when the brief points there. Read-only; never acknowledges the brief or writes to the journal.",

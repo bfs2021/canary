@@ -1,0 +1,10 @@
+# canary mandate · COLUMNS=80 · colour off
+Mandate  INACTIVE
+the risk constitution carries no [mandate] table; the mandate budget is inactive
+Next · write [mandate] into risk-policy.toml with a higher policy_version;
+  canary policy default constitution shows the keys
+# canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mMandate\x1b[0m  \x1b[2mINACTIVE\x1b[0m
+the risk constitution carries no [mandate] table; the mandate budget is inactive
+Next · write [mandate] into risk-policy.toml with a higher policy_version;
+  canary policy default constitution shows the keys

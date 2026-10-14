@@ -77,6 +77,9 @@ type riskCapitalStateFileV1 struct {
 	StatementAuthorityActive          bool                 `json:"statement_authority_active,omitempty"`
 	IncorporatedStatementLineIDs      []string             `json:"incorporated_statement_line_ids,omitempty"`
 	AppliedStatementPeakCorrectionIDs []string             `json:"applied_statement_peak_correction_ids,omitempty"`
+	// Mandate is the mandate risk budget's high-water mark and samples
+	// (mandate_capital.go); nil until the constitution carries [mandate].
+	Mandate *mandateCapitalStateV1 `json:"mandate,omitempty"`
 }
 
 type capitalEventV1 struct {
@@ -775,6 +778,9 @@ func (st *riskCapitalStore) Observe(equityBase float64, asOf time.Time, c *risk.
 	}
 
 	flows, _, _ := st.effectiveFlowsLocked(c)
+	if st.observeMandateLocked(c, equityBase, asOf, flows, now) {
+		force = true
+	}
 	adjusted := equityBase - flows
 	if !st.state.Seeded || adjusted > st.state.AdjustedPeakBase {
 		// Every peak ratchet is journaled: the peak is monotonic runtime

@@ -91,12 +91,14 @@ func TestOnlyTheDaemonEvaluates(t *testing.T) {
 			"RegimeHeadline": true, "CompactPositionsRisk": true},
 		"scorecard": {"Evaluate": true, "BuildLedger": true, "PosteriorAbove": true, "EValue": true, "ImpliedVol": true},
 		"edge":      {"PositionChanges": true},
+		"mandate":   {"Evaluate": true, "EvaluateCapital": true, "WithLeg": true},
 	}
 	allowed := map[string]bool{
 		filepath.Join("internal", "daemon"):    true,
 		filepath.Join("internal", "stress"):    true,
 		filepath.Join("internal", "rpc"):       true,
 		filepath.Join("internal", "scorecard"): true,
+		filepath.Join("internal", "mandate"):   true,
 		"regimelab":                            true,
 		"tmp":                                  true,
 	}

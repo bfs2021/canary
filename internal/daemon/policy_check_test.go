@@ -435,6 +435,29 @@ func TestPolicyCheckCatalogue(t *testing.T) {
 			edit: func(f *pcFiles, _ *PolicyCheckInput) {
 				f.protection = replace(f.protection, "max_order_notional = 9000.0\nkeep_cash", "max_order_notional = 15000.0\nbills_exempt_from_trading_max_notional = true\nkeep_cash")
 			}, absent: []string{"cap_above_trading_max", "cap_without_fx_headroom"}, contains: "That is intended: bills may pass the order cap up to the sweep's cap, while orders that open or add, the fallback ETF buy and conversions keep it."},
+		{name: "mandate target above the maximum loss", rule: "mandate_keys_inconsistent", severity: rpc.PolicyCheckError,
+			edit: func(f *pcFiles, _ *PolicyCheckInput) {
+				f.constitution = replace(f.constitution, "schema_version = 1", "schema_version = 2") + "\n[mandate]\nmax_loss_pct = 30.0\nvol_target_pct = 40.0\ntax_reserve_base = 70000.0\nstarted_at = \"2026-10-01\"\ngap_shock_pct = 25.0\ngap_room_pct = 33.3\n"
+			}, absent: []string{"file_refused"}, contains: "The volatility target 40% a year is above the maximum loss 30%"},
+		{name: "mandate sleeve above the target and a future start", rule: "mandate_keys_inconsistent", severity: rpc.PolicyCheckError,
+			edit: func(f *pcFiles, _ *PolicyCheckInput) {
+				f.constitution = replace(f.constitution, "schema_version = 1", "schema_version = 2") + "\n[mandate]\nmax_loss_pct = 30.0\nvol_target_pct = 15.0\ntax_reserve_base = 70000.0\nstarted_at = \"2030-01-01\"\ngap_shock_pct = 25.0\ngap_room_pct = 33.3\n[mandate.sleeves]\nowner_vol_pct = 20.0\n"
+			}, absent: []string{"file_refused"}, contains: "The sleeve share owner_vol_pct = 20% is above"},
+		{name: "mandate risk base half the maximum loss below its high", rule: "mandate_realised_drawdown", severity: rpc.PolicyCheckWarn,
+			edit: func(f *pcFiles, in *PolicyCheckInput) {
+				f.constitution = replace(f.constitution, "schema_version = 1", "schema_version = 2") + "\n[mandate]\nmax_loss_pct = 30.0\nvol_target_pct = 15.0\ntax_reserve_base = 70000.0\nstarted_at = \"2026-10-01\"\ngap_shock_pct = 25.0\ngap_room_pct = 33.3\n"
+				in.Mandate = &PolicyCheckMandate{Known: true, DrawdownPct: 18, Room: 0.4, Samples: 10, BaseCurrency: "EUR"}
+			}, absent: []string{"mandate_keys_inconsistent", "mandate_realised_volatility"}, contains: "The risk base is 18% below its high-water mark, 60% of the mandate's maximum loss 30%"},
+		{name: "mandate capital state unknown", rule: "mandate_realised_drawdown", severity: rpc.PolicyCheckWarn,
+			edit: func(f *pcFiles, in *PolicyCheckInput) {
+				f.constitution = replace(f.constitution, "schema_version = 1", "schema_version = 2") + "\n[mandate]\nmax_loss_pct = 30.0\nvol_target_pct = 15.0\ntax_reserve_base = 70000.0\nstarted_at = \"2026-10-01\"\ngap_shock_pct = 25.0\ngap_room_pct = 33.3\n"
+				in.Mandate = &PolicyCheckMandate{Reason: "no usable equity observation"}
+			}, contains: "cannot be measured: no usable equity observation"},
+		{name: "mandate realised volatility above the target", rule: "mandate_realised_volatility", severity: rpc.PolicyCheckWarn,
+			edit: func(f *pcFiles, in *PolicyCheckInput) {
+				f.constitution = replace(f.constitution, "schema_version = 1", "schema_version = 2") + "\n[mandate]\nmax_loss_pct = 30.0\nvol_target_pct = 15.0\ntax_reserve_base = 70000.0\nstarted_at = \"2026-10-01\"\ngap_shock_pct = 25.0\ngap_room_pct = 33.3\n"
+				in.Mandate = &PolicyCheckMandate{Known: true, DrawdownPct: 2, Room: 0.93, Samples: 70, Vol20Pct: new(24.0), Vol60Pct: new(16.0), BaseCurrency: "EUR"}
+			}, absent: []string{"mandate_realised_drawdown"}, contains: "realised volatility (24% over 20 days, annualised) is above 1.25 times the target 15%"},
 		{name: "a sweep currency with no bills listed and no usable ETF", rule: "sweep_nothing_to_buy", severity: rpc.PolicyCheckWarn,
 			edit: func(f *pcFiles, _ *PolicyCheckInput) {
 				f.protection = replace(f.protection, "isins = [\""+synthDEBill+"\"]\n", "")

@@ -127,6 +127,7 @@ func catalogExtras() map[string]CommandSpec {
 		"macro":          {Group: GroupMarkets, Brief: "Economic calendar and official releases", Flags: flags(boolFlag("details"), valueFlag("window-start", nil), valueFlag("window-end", nil), boolFlag("json"))},
 		"regime":         {Group: GroupMarkets, Brief: "Market conditions across eight indicators", Flags: flags(boolFlag("explain"), valueFlag("view", []string{"full", "monitor"}), boolFlag("profiles"), boolFlag("json"))},
 		"stress":         {Group: GroupDesk, Brief: "Check portfolio risks and the evidence behind them", Flags: flags(boolFlag("details"), boolFlag("json"))},
+		"mandate":        {Group: GroupDesk, Brief: "Check the book's risk against the mandate's volatility budget", Flags: flags(boolFlag("refresh"), boolFlag("json"))},
 		"brief":          {Group: GroupDesk, Brief: "Portfolio summary, urgent items first; more with --details", Flags: flags(boolFlag("details"), boolFlag("json")), Guard: GuardReadOnly},
 		"edge":           {Group: GroupDesk, Brief: "Review past trading decisions using broker records", Flags: flags(valueFlag("window", []string{"90d", "365d"}), valueFlag("horizon", []string{"1", "5", "20"}), valueFlag("limit", nil), valueFlag("change", nil), valueFlag("option", nil), boolFlag("json")), Guard: GuardReadOnly},
 		"scorecard":      {Group: GroupDesk, Brief: "Score past decisions per strategy, with the evidence and its gates", Flags: flags(valueFlag("sleeve", nil), valueFlag("horizon", []string{"5", "10", "21"}), valueFlag("limit", nil), boolFlag("json")), Guard: GuardReadOnly},

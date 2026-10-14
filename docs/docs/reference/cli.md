@@ -32,6 +32,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary macro`](#canary-macro) | Markets | Public economic calendar, official publications and source coverage | `read-only` | yes |
 | [`canary regime`](#canary-regime) | Markets | Detailed broad-market regime across volatility, credit, funding, FX, gamma, and breadth | `read-only` | yes |
 | [`canary stress`](#canary-stress) | Desk | Portfolio stress with margin, exposure, concentration, options, protection, and source evidence | `read-only` | yes |
+| [`canary mandate`](#canary-mandate) | Desk | Mandate risk budget: the book's ex-ante volatility against the owner's budget, what drives it, gap and index stresses, and whether additions are open | `read-only` | yes |
 | [`canary brief`](#canary-brief) | Desk | Combined post- and pre-trade operator brief with disclosed source degradation | `read-only` | yes |
 | [`canary edge`](#canary-edge) | Desk | Review past trading decisions using broker records | `read-only` | yes |
 | [`canary scorecard`](#canary-scorecard) | Desk | Score past decisions per strategy against the underlying's own history, with sequential evidence and gates | `read-only` | yes |
@@ -414,6 +415,23 @@ canary stress [--details] [--json]
 | Flag | Takes a value | Allowed values |
 |------|---------------|----------------|
 | `--details` | no | - |
+| `--json` | no | - |
+
+## `canary mandate`
+
+Mandate risk budget: the book's ex-ante volatility against the owner's budget, what drives it, gap and index stresses, and whether additions are open.
+
+Guard `read-only`. Also available as an MCP tool.
+
+```text
+canary mandate [--refresh] [--json]
+```
+
+**Flags**
+
+| Flag | Takes a value | Allowed values |
+|------|---------------|----------------|
+| `--refresh` | no | - |
 | `--json` | no | - |
 
 ## `canary brief`

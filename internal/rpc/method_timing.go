@@ -100,6 +100,9 @@ var methodTimings = []MethodTiming{
 	// The sum of its sequential reads: account, positions, regime, market
 	// events, rules and the account P&L retry.
 	{Method: MethodStressSnapshot, Lifetime: MethodLifetimeUnary, DaemonTimeout: 135 * time.Second},
+	// The mandate verdict reads the account (10s) and the positions (30s)
+	// before a simulation that takes milliseconds.
+	{Method: MethodMandateRisk, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	{Method: MethodOrderPlace, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
 	{Method: MethodOrderModify, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
 	{Method: MethodOrderCancel, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},

@@ -76,6 +76,10 @@ type Constitution struct {
 	// and a change to it is a revision. A pointer: absent keeps every
 	// existing fingerprint.
 	DeskDevice *ConstitutionDeskDevice `toml:"desk_device" json:"desk_device,omitempty"`
+	// Mandate is the owner's maximum loss and volatility budget on the risk
+	// base (owner decisions 2026-10-14; mandate.go). A pointer: absent keeps
+	// every existing fingerprint and the mandate gate is inactive.
+	Mandate *ConstitutionMandate `toml:"mandate" json:"mandate,omitempty"`
 }
 
 // ConstitutionDeskDevice is the [desk_device] table: the public key of the
@@ -446,6 +450,9 @@ func (c Constitution) Validate() error {
 	if err := c.PortfolioPlan.validate(); err != nil {
 		return err
 	}
+	if err := c.Mandate.validate(c.Semantics()); err != nil {
+		return err
+	}
 	return c.OrderLimits.validate()
 }
 
@@ -562,6 +569,7 @@ func (c Constitution) UnapprovedKeys() []string {
 			out = append(out, "position_add.max_underlying_stock_pct_nlv")
 		}
 	}
+	out = append(out, c.Mandate.UnapprovedKeys()...)
 	// cadence.* keys are deliberately not approval material: the timezone
 	// overrides fail Validate, never this list.
 	return out
@@ -641,10 +649,12 @@ func (c Constitution) FingerprintKey() string {
 			OrderLimits   *ConstitutionOrderLimits `json:"order_limits,omitempty"`
 			DeskDevice    *ConstitutionDeskDevice  `json:"desk_device,omitempty"`
 			PositionAdd   *StockAddPolicy          `json:"position_add,omitempty"`
+			Mandate       *ConstitutionMandate     `json:"mandate,omitempty"`
 		}{
 			Kind: base.Kind, SchemaVersion: base.SchemaVersion, PolicyID: base.PolicyID, PolicyVersion: base.PolicyVersion,
 			Capital: base.Capital, Drawdown: base.Drawdown, Override: base.Override, Recon: recon,
 			Cadence: legacyCadence, Inventory: base.Inventory, OrderLimits: c.OrderLimits, DeskDevice: c.DeskDevice, PositionAdd: c.PositionAdd,
+			Mandate: c.Mandate,
 		}
 		raw, _ = json.Marshal(normalized)
 	} else if c.SchemaVersion != 2 && c.PolicyVersion < 4 {
@@ -662,9 +672,10 @@ func (c Constitution) FingerprintKey() string {
 			OrderLimits   *ConstitutionOrderLimits `json:"order_limits,omitempty"`
 			DeskDevice    *ConstitutionDeskDevice  `json:"desk_device,omitempty"`
 			PositionAdd   *StockAddPolicy          `json:"position_add,omitempty"`
+			Mandate       *ConstitutionMandate     `json:"mandate,omitempty"`
 		}{
-			OrderLimits: c.OrderLimits,
-			DeskDevice:  c.DeskDevice, PositionAdd: c.PositionAdd,
+			OrderLimits: c.OrderLimits, Mandate: c.Mandate,
+			DeskDevice: c.DeskDevice, PositionAdd: c.PositionAdd,
 			Kind:          strings.TrimSpace(c.Kind),
 			SchemaVersion: c.SchemaVersion,
 			PolicyID:      strings.TrimSpace(c.PolicyID),
@@ -692,11 +703,13 @@ func (c Constitution) FingerprintKey() string {
 			OrderLimits   *ConstitutionOrderLimits `json:"order_limits,omitempty"`
 			DeskDevice    *ConstitutionDeskDevice  `json:"desk_device,omitempty"`
 			PositionAdd   *StockAddPolicy          `json:"position_add,omitempty"`
+			Mandate       *ConstitutionMandate     `json:"mandate,omitempty"`
 		}{
 			Kind: strings.TrimSpace(c.Kind), SchemaVersion: c.SchemaVersion,
 			PolicyID: strings.TrimSpace(c.PolicyID), PolicyVersion: c.PolicyVersion,
 			Capital: c.Capital, Drawdown: c.Drawdown, Override: c.Override,
 			Recon: c.Recon, Cadence: v4Cadence, Inventory: c.Inventory, OrderLimits: c.OrderLimits, DeskDevice: c.DeskDevice, PositionAdd: c.PositionAdd,
+			Mandate: c.Mandate,
 		}
 		raw, _ = json.Marshal(normalized)
 	}

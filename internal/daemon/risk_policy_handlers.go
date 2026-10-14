@@ -93,6 +93,11 @@ func (s *Server) policyCheckReport(ctx context.Context, now time.Time, acct *rpc
 	for _, f := range files {
 		in.FileStatus[f.Policy] = f.Status
 	}
+	if c := s.riskPolicies.snapshot().policy; c.MandateActive() && s.riskCapital != nil {
+		capital, realised := s.riskCapital.MandateCapitalForScope(c, s.currentBrokerStateScope(), now)
+		in.Mandate = &PolicyCheckMandate{Known: capital.Known, Reason: strings.Join(capital.Reasons, "; "), DrawdownPct: capital.DrawdownPct, Room: capital.Room,
+			Samples: realised.Samples, Vol20Pct: realised.Vol20Pct, Vol60Pct: realised.Vol60Pct, BaseCurrency: capital.BaseCurrency}
+	}
 	if acct == nil {
 		in.BookSkipped = "the account read failed"
 	} else {
@@ -494,9 +499,8 @@ func (s *Server) riskPolicyBrake(draft rpc.OrderDraft, position rpc.OrderPositio
 	if s.riskPolicies == nil || s.riskCapital == nil {
 		return nil, nil
 	}
-	switch position.Effect {
-	case "close", "reduce":
-		return nil, nil
+	if !s.riskAddingOrder(draft, position) {
+		return nil, nil // a close, a reduce or a hedge entry stays available under a drawdown breach
 	}
 	now := time.Now().UTC()
 	if s.now != nil {
@@ -505,10 +509,6 @@ func (s *Server) riskPolicyBrake(draft rpc.OrderDraft, position rpc.OrderPositio
 	evaluation := s.acceptedRiskPolicy(now)
 	if evaluation.policy == nil {
 		return nil, nil // unapproved constitution: policy show owns that disclosure; the order limits refuse every order
-	}
-	if strings.EqualFold(draft.Action, "BUY") && strings.EqualFold(draft.Contract.SecType, "OPT") &&
-		strings.EqualFold(draft.Contract.Right, "P") && s.rulebookPolicy().IsHedgeSymbol(draft.Contract.Symbol) {
-		return nil, nil // hedge entry stays available under a drawdown breach
 	}
 	v := evaluation.capitalNudge.Report
 	consumed := "n/a"

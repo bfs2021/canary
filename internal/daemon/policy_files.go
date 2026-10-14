@@ -1313,6 +1313,29 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # [desk_device]
 # companion = ""
 # passkey = ""
+
+# Optional mandate risk budget (owner decisions 2026-10-14; design
+# internal-docs/design/mandate-risk-budget.md). Absent, nothing changes.
+# Written, the daemon measures the book's ex-ante volatility by historical
+# simulation against vol_target_pct of the high-water mark of the risk base
+# (equity after tax_reserve_base, cash-flow adjusted, counted from
+# started_at) and refuses every risk-adding order while the verdict is not
+# within budget or cannot be measured; reductions, closes, cancels and
+# hedges stay open. Every key below is yours; the two gap numbers are
+# proposals until you write them. canary mandate shows the verdict.
+# [mandate]
+# max_loss_pct = 0.0
+# vol_target_pct = 0.0
+# tax_reserve_base = 0.0
+# started_at = "2000-01-01"
+# gap_shock_pct = 25.0
+# gap_room_pct = 33.3
+# Volatility shares per sleeve, recorded only; enforcement per sleeve comes
+# later.
+# [mandate.sleeves]
+# owner_vol_pct = 0.0
+# core_vol_pct = 0.0
+# overlay_vol_pct = 0.0
 `)
 	return []byte(b.String())
 }

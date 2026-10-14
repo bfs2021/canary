@@ -430,6 +430,15 @@ type Server struct {
 	// Advisory/shadow end to end in v1: neither may reach broker-write
 	riskPolicies *riskPolicyManager
 	riskCapital  *riskCapitalStore
+	// mandateHistory holds the decision-grade daily closes and
+	// mandateVerdicts the kept mandate verdict (mandate_history.go,
+	// mandate_verdict.go).
+	mandateHistory  mandateHistoryStore
+	mandateVerdicts mandateVerdictCache
+	// mandateHistoryFetchForTest replaces the broker history read and
+	// mandatePositionsForTest the positions read behind the mandate.
+	mandateHistoryFetchForTest func(context.Context, rpc.MarketHistoryParams, int, time.Time) (*rpc.MarketHistoryResult, error)
+	mandatePositionsForTest    func(context.Context) (*rpc.PositionsResult, error)
 	// orderLimitsNLV is the latest current account reading the order cap
 	// in force scales with ([order_limits], order_limits.go).
 	orderLimitsNLV orderLimitsNLVState
@@ -1528,6 +1537,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.startRulebookCanonicalRefreshLoop(serverCtx)
 	s.startAlertShadowObservationLoops(serverCtx)
 	s.startMarketHistoryRefresh(serverCtx)
+	s.startMandateHistoryRefresh(serverCtx)
 	s.startLendingMarketRefresh(serverCtx)
 	s.startShortInterestRefresh(serverCtx)
 	s.startMarketTapeCollection(serverCtx)
@@ -2847,6 +2857,8 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleStressSnapshot(ctx, req) })
 	case rpc.MethodScorecardRead:
 		s.unary(req, enc, func() (any, error) { return s.handleScorecardRead(ctx, req) })
+	case rpc.MethodMandateRisk:
+		s.unary(req, enc, func() (any, error) { return s.handleMandateRisk(ctx, req) })
 	case rpc.MethodAlertCandidates:
 		s.unary(req, enc, func() (any, error) { return s.handleAlertCandidates(ctx, req) })
 	case rpc.MethodAlertStatus:

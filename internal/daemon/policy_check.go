@@ -255,6 +255,25 @@ type PolicyCheckInput struct {
 	// the risk constitution, so a draft's order caps reach every rule.
 	ProtectionData   []byte
 	ConstitutionData []byte
+	// Mandate is the daemon's mandate capital state and the realised
+	// figures of the risk base (mandate_capital.go); nil when no daemon
+	// answered or the constitution carries no [mandate] table, which skips
+	// the realised checks.
+	Mandate *PolicyCheckMandate
+}
+
+// PolicyCheckMandate is what the realised mandate checks read: the
+// drawdown and room the daemon measured, and the realised volatility of the
+// risk base over its last 20 and 60 daily samples, annualised in percent.
+type PolicyCheckMandate struct {
+	Known        bool
+	Reason       string
+	DrawdownPct  float64
+	Room         float64
+	Samples      int
+	Vol20Pct     *float64
+	Vol60Pct     *float64
+	BaseCurrency string
 }
 
 // PolicyCheckInputFromConfigFile reads config.toml the way the daemon does
@@ -339,6 +358,7 @@ type policyCheckContext struct {
 	constitution    *risk.Constitution
 
 	book        *PolicyCheckBook
+	mandate     *PolicyCheckMandate
 	fileStatus  map[string]string
 	skipped     []string
 	assumptions []string
@@ -346,7 +366,7 @@ type policyCheckContext struct {
 
 func newPolicyCheckContext(in PolicyCheckInput) *policyCheckContext {
 	c := &policyCheckContext{now: in.Now, trading: in.Trading.WithDefaults(), orderCapOverride: in.OrderCapOverride,
-		config: cmp.Or(filepath.Base(in.ConfigPath), "config.toml"), book: in.Book, fileStatus: in.FileStatus}
+		config: cmp.Or(filepath.Base(in.ConfigPath), "config.toml"), book: in.Book, mandate: in.Mandate, fileStatus: in.FileStatus}
 	if c.now.IsZero() {
 		c.now = time.Now()
 	}
@@ -674,6 +694,9 @@ func CheckPolicy(in PolicyCheckInput) rpc.PolicyCheckReport {
 	}
 	if c.fileStatus == nil {
 		c.skip("version-bump drift: no daemon answered, so the policies in force are unknown")
+	}
+	if c.mandate == nil && c.constitution != nil && c.constitution.Mandate != nil {
+		c.skip("the mandate's realised drawdown and volatility: no daemon answered, so the risk base's history is unknown")
 	}
 	report := rpc.PolicyCheckReport{AsOf: c.now, Findings: []rpc.PolicyCheckFinding{}}
 	for _, src := range c.sources() {
