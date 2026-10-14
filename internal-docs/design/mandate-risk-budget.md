@@ -316,18 +316,31 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   room, a smaller budget and gap cap, a batch), a deposit would raise the
   high-water mark and read as a drawdown once declared. With every equity
   observation the capital state keeps the broker's daily P&L of the same
-  read; an equity move since the last observation, net of declared and
-  statement flows, larger than max(1% of equity, 3 × the book's own P&L
-  move over the span) is a suspected flow (`flow_suspect`, journaled
-  `mandate_flow_suspected`). While suspected the high-water mark does not
-  move and the capital reads unknown, so the verdict is unknown: additions
-  stay refused, no new mandate rows, standing rows held. It clears
-  (`mandate_flow_cleared`) once the move from the observation before it is
-  explained (the flow declared with `canary policy capital-event`, or
-  incorporated from the statement, or the P&L catching up), or once a
-  statement covering its day has been reconciled. Across a session start
-  the yardstick is the new session's own P&L. Without the broker's P&L on
-  both ends nothing is judged.
+  read and judges the unexplained part of the move since the last
+  observation: the move net of declared and statement flows, less the
+  P&L over the same span (the new session's own P&L across a session
+  start; zero where the broker reports none, so without P&L the whole move
+  counts). More than max(1% of equity, 1,000 in base currency) is a
+  suspected flow (`flow_suspect`, journaled `mandate_flow_suspected`); the
+  floor stands for the accruals a broker posts to cash that its daily P&L
+  may not carry (interest, a dividend, a fee), and a flow that small moves
+  the budget by under 150 a year at the 15% target. While suspected the
+  high-water mark does not move and the capital reads unknown, so the
+  verdict is unknown: additions stay refused, no new mandate rows,
+  standing rows held. The unexplained part is then measured cumulatively
+  from the observation before the suspicion, the P&L summed step by step,
+  so a later P&L move never offsets it (a 3% withdrawal stays suspect
+  through a +1% day; an 8% withdrawal on a −4% day is flagged). It clears
+  (`mandate_flow_cleared`) only when that cumulative part is back under
+  the threshold, because a declared or statement flow accounts for it or
+  the reading that raised it is undone (a glitch), or when a statement
+  covering its day has been reconciled. How the owner clears it: declare
+  the flow (`canary policy capital-event deposit|withdrawal --amount …
+  --effective-at …`), or let the next statement reconciliation cover the
+  day. A suspicion nothing explains stays in the safe direction, the room
+  held, until one of the two (revised 2026-10-14 17:27 CEST after the
+  third review: the first version let a later P&L move offset a flow and
+  did not judge a move without P&L).
 - **Surfaces.** `canary proposals` (and `--details`, JSON, MCP
   `canary_proposals`) lists the rows with bucket, rank, share of the risk
   and the verdict in plain words under a Mandate header; `canary mandate`
@@ -342,10 +355,10 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   the owner acts. A line a stop holds is not reduced while the stop works.
   Within an episode a row may grow by one lot on its clock: the owner sees
   the current size on the Protection row, not in the push. The flow check
-  needs the broker's daily P&L: without it an undeclared flow still reads
-  as a drawdown until declared; a P&L feed that lags a fast market can
-  suspect a flow for a few minutes, holding the batch, until it catches
-  up. One unit of an order may exceed a cap, judged by the order gate as
+  reads the broker's daily P&L: a P&L feed that lags a fast market, or
+  is missing, can suspect a flow (the safe direction: the room is held)
+  until it catches up, the flow is declared or a statement covers the
+  day. One unit of an order may exceed a cap, judged by the order gate as
   for the governor. After any fill the batch waits for the next verdict
   (at most two minutes).
 - **Verification** (synthetic books; `internal/daemon/mandate_reduction_test.go`,

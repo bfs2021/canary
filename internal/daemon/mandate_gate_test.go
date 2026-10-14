@@ -364,12 +364,13 @@ func TestMandateCapitalStateHighWaterMarkAndFlows(t *testing.T) {
 	if st.state.Mandate != nil {
 		t.Fatal("an observation before the start seeded the mandate")
 	}
-	st.Observe(300000, mandateTestNow.Add(-3*24*time.Hour), c, testLiveObserveScope, true)
+	// Each move is the book's own P&L, as the broker reports it.
+	observeWithPnL(st, c, 300000, 0, mandateTestNow.Add(-3*24*time.Hour))
 	// A new high counts once a reading at least five minutes later
 	// confirms it, at the lower of the two.
-	st.Observe(312000, mandateTestNow.Add(-2*24*time.Hour), c, testLiveObserveScope, true)
-	st.Observe(310000, mandateTestNow.Add(-2*24*time.Hour+10*time.Minute), c, testLiveObserveScope, true)
-	st.Observe(295000, mandateTestNow.Add(-time.Minute), c, testLiveObserveScope, true)
+	observeWithPnL(st, c, 312000, 12000, mandateTestNow.Add(-2*24*time.Hour))
+	observeWithPnL(st, c, 310000, 10000, mandateTestNow.Add(-2*24*time.Hour+10*time.Minute))
+	observeWithPnL(st, c, 295000, -15000, mandateTestNow.Add(-time.Minute))
 	capital, realised := st.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow)
 	if !capital.Known || capital.HWMRiskBase != 240000 || capital.RiskBase != 225000 || capital.DrawdownBase != 15000 || math.Abs(capital.DrawdownPct-6.25) > 1e-9 {
 		t.Fatalf("capital %+v", capital)
@@ -381,7 +382,7 @@ func TestMandateCapitalStateHighWaterMarkAndFlows(t *testing.T) {
 	if _, err := st.ApplyCapitalEventForPolicy(rpc.CapitalEventParams{Type: "withdrawal", AmountBase: 50000}, rpc.OrderOriginHumanTTY, c); err != nil {
 		t.Fatal(err)
 	}
-	st.Observe(245000, mandateTestNow, c, testLiveObserveScope, true)
+	observeWithPnL(st, c, 245000, -15000, mandateTestNow)
 	capital, _ = st.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow)
 	if !capital.Known || capital.FlowsSinceStart != -50000 || capital.BudgetBase != 190000 || capital.DrawdownBase != 15000 {
 		t.Fatalf("after a withdrawal %+v", capital)
@@ -410,104 +411,154 @@ func TestMandateHighWaterMarkIgnoresASingleGlitch(t *testing.T) {
 	c := testMandateConstitution()
 	reconcileNow(t, st)
 	at := mandateTestNow.Add(-time.Hour)
-	st.Observe(300000, at, c, testLiveObserveScope, true)
+	observeWithPnL(st, c, 300000, 0, at)
 	mark := func() float64 {
 		t.Helper()
 		capital, _ := st.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow)
 		return capital.HWMRiskBase
 	}
 	seeded := mark()
-	st.Observe(600000, at.Add(time.Minute), c, testLiveObserveScope, true) // the glitch
-	st.Observe(300000, at.Add(7*time.Minute), c, testLiveObserveScope, true)
+	observeWithPnL(st, c, 600000, 0, at.Add(time.Minute)) // the glitch
+	observeWithPnL(st, c, 300000, 0, at.Add(7*time.Minute))
 	if got := mark(); got != seeded {
 		t.Fatalf("a single spike moved the mark: %v → %v", seeded, got)
 	}
-	st.Observe(320000, at.Add(10*time.Minute), c, testLiveObserveScope, true)
-	st.Observe(330000, at.Add(12*time.Minute), c, testLiveObserveScope, true)
+	observeWithPnL(st, c, 320000, 20000, at.Add(10*time.Minute))
+	observeWithPnL(st, c, 330000, 30000, at.Add(12*time.Minute))
 	if got := mark(); got != seeded {
 		t.Fatalf("a high confirmed too soon: %v", got)
 	}
-	st.Observe(325000, at.Add(16*time.Minute), c, testLiveObserveScope, true)
+	observeWithPnL(st, c, 325000, 25000, at.Add(16*time.Minute))
 	if got := mark(); got != seeded+20000 {
 		t.Fatalf("a confirmed high: mark %v, want %v (the lower of the readings)", got, seeded+20000)
 	}
 }
 
-// An equity move the book's own P&L does not explain is a suspected cash
-// flow: the room is held (the capital reads unknown, so additions stay
-// refused and the reduction sizes nothing) and the high-water mark does not
-// move, until the flow is declared or a statement covering its day is
-// reconciled. A move the P&L explains is no flow; nor is anything while the
-// broker reports no P&L.
-func TestMandateUnexplainedEquityMoveHoldsTheRoom(t *testing.T) {
+// observeWithPnL is one account read: equity with the broker's daily P&L
+// of the same session.
+func observeWithPnL(st *riskCapitalStore, c *risk.Constitution, equity, pnl float64, at time.Time) {
+	st.ObserveWithPnL(equity, mandatePnLReading{DailyBase: &pnl, Session: mandateSessionDate(at)}, at, c, testLiveObserveScope, true)
+}
+
+// mandateFlowTestStore is a capital store seeded at 300,000 an hour before
+// mandateTestNow, with the helpers the flow tests read it through.
+func mandateFlowTestStore(t *testing.T) (*riskCapitalStore, *risk.Constitution, time.Time, func() mandate.Capital) {
+	t.Helper()
 	st := newTestRiskCapitalStore(t)
 	st.now = func() time.Time { return mandateTestNow }
 	c := testMandateConstitution()
 	reconcileNow(t, st)
 	at := mandateTestNow.Add(-time.Hour)
-	session := mandateSessionDate(at)
-	observe := func(equity, pnl float64, when time.Time, sessionKey string) {
-		t.Helper()
-		st.ObserveWithPnL(equity, mandatePnLReading{DailyBase: &pnl, Session: sessionKey}, when, c, testLiveObserveScope, true)
-	}
-	capital := func() mandate.Capital {
+	observeWithPnL(st, c, 300000, 0, at)
+	return st, c, at, func() mandate.Capital {
 		t.Helper()
 		got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow)
 		return got
 	}
-	observe(300000, 0, at, session)
-	observe(300500, 500, at.Add(5*time.Minute), session)
-	// A market move the book's P&L explains: no flow.
-	observe(285500, -14500, at.Add(10*time.Minute), session)
-	if got := capital(); !got.Known {
-		t.Fatalf("a P&L-explained move held the room: %v", got.Reasons)
+}
+
+// The part of an equity move that declared flows and the book's own P&L
+// leave unexplained, more than 1% of equity (or 1,000), is a suspected cash
+// flow: the room is held (the capital reads unknown, so additions stay
+// refused and the reduction sizes nothing) and the high-water mark does not
+// move. It is measured cumulatively, so a later P&L move never offsets it:
+// it clears when a declared or statement flow accounts for it, when the
+// reading that raised it is undone, or when a statement covering its day is
+// reconciled. A move the P&L explains is no flow; without the broker's P&L
+// the whole move counts.
+func TestMandateUnexplainedEquityMoveHoldsTheRoom(t *testing.T) {
+	suspected := func(t *testing.T, got mandate.Capital) bool {
+		t.Helper()
+		return !got.Known && len(got.Reasons) > 0 && strings.Contains(got.Reasons[0], "a cash flow is suspected")
 	}
-	mark := capital().HWMRiskBase
-	// An undeclared withdrawal of 20,000: equity drops, the P&L does not.
-	observe(265600, -14400, at.Add(12*time.Minute), session)
-	got := capital()
-	if got.Known || len(got.Reasons) == 0 || !strings.Contains(got.Reasons[0], "a cash flow is suspected") {
-		t.Fatalf("an unexplained drop did not hold the room: %+v", got)
-	}
-	// Declared, it is explained and the room returns, the drawdown unmoved
-	// by the withdrawal.
-	if _, err := st.ApplyCapitalEventForPolicy(rpc.CapitalEventParams{Type: "withdrawal", AmountBase: 20000}, rpc.OrderOriginHumanTTY, c); err != nil {
-		t.Fatal(err)
-	}
-	observe(265700, -14300, at.Add(14*time.Minute), session)
-	// The drawdown is the market's 14,300, never the withdrawal.
-	if got := capital(); !got.Known || got.HWMRiskBase != mark || math.Abs(got.DrawdownBase-14300) > 1 {
-		t.Fatalf("after the declaration: %+v", got)
-	}
-	// An undeclared deposit: held, and the mark never rises on it.
-	observe(305700, -14300, at.Add(16*time.Minute), session)
-	observe(305800, -14200, at.Add(24*time.Minute), session)
-	if got := capital(); got.Known || got.HWMRiskBase != mark {
-		t.Fatalf("an undeclared deposit: %+v", got)
-	}
-	// A statement covering the day is reconciled: the suspicion clears.
-	st.mu.Lock()
-	st.state.StatementCoverageTo = at
-	st.mu.Unlock()
-	observe(305900, -14100, at.Add(26*time.Minute), session)
-	if got := capital(); !got.Known {
-		t.Fatalf("a statement covering the day did not clear it: %v", got.Reasons)
-	}
-	// Overnight: the next session's own P&L is the yardstick.
-	next := mandateSessionDate(at.Add(24 * time.Hour))
-	observe(285900, 100, at.Add(27*time.Minute), next)
-	if got := capital(); got.Known {
-		t.Fatal("an overnight drop the new session's P&L does not explain was not held")
-	}
-	// No broker P&L: nothing to judge by, so nothing is suspected.
-	st2 := newTestRiskCapitalStore(t)
-	st2.now = st.now
-	reconcileNow(t, st2)
-	st2.Observe(300000, at, c, testLiveObserveScope, true)
-	st2.Observe(250000, at.Add(time.Minute), c, testLiveObserveScope, true)
-	if got, _ := st2.MandateCapitalForScope(c, brokerStateScope{}, mandateTestNow); !got.Known {
-		t.Fatalf("without P&L a drop was held: %v", got.Reasons)
-	}
+	t.Run("a market move the P&L explains is no flow", func(t *testing.T) {
+		st, c, at, capital := mandateFlowTestStore(t)
+		observeWithPnL(st, c, 285000, -15000, at.Add(10*time.Minute))
+		if got := capital(); !got.Known {
+			t.Fatalf("a P&L-explained move held the room: %v", got.Reasons)
+		}
+	})
+	t.Run("an undeclared 3% withdrawal stays suspect through a +1% day", func(t *testing.T) {
+		st, c, at, capital := mandateFlowTestStore(t)
+		observeWithPnL(st, c, 291000, 0, at.Add(10*time.Minute))
+		observeWithPnL(st, c, 294000, 3000, at.Add(20*time.Minute))
+		observeWithPnL(st, c, 294100, 3100, at.Add(30*time.Minute))
+		if got := capital(); !suspected(t, got) {
+			t.Fatalf("a later P&L move offset the withdrawal: %+v", got)
+		}
+		// Declared, it is accounted for and the room returns; the drawdown
+		// is the market's, never the withdrawal.
+		if _, err := st.ApplyCapitalEventForPolicy(rpc.CapitalEventParams{Type: "withdrawal", AmountBase: 9000}, rpc.OrderOriginHumanTTY, c); err != nil {
+			t.Fatal(err)
+		}
+		observeWithPnL(st, c, 294100, 3100, at.Add(35*time.Minute))
+		if got := capital(); !got.Known || got.DrawdownBase > 1 {
+			t.Fatalf("after the declaration: %+v", got)
+		}
+	})
+	t.Run("an 8% withdrawal on a -4% day is flagged", func(t *testing.T) {
+		st, c, at, capital := mandateFlowTestStore(t)
+		observeWithPnL(st, c, 264000, -12000, at.Add(10*time.Minute))
+		if got := capital(); !suspected(t, got) {
+			t.Fatalf("a withdrawal on a falling day passed: %+v", got)
+		}
+	})
+	t.Run("a 10% jump without P&L is flagged, a small move is not", func(t *testing.T) {
+		st, c, at, capital := mandateFlowTestStore(t)
+		st.ObserveWithPnL(301500, mandatePnLReading{}, at.Add(5*time.Minute), c, testLiveObserveScope, true)
+		if got := capital(); !got.Known {
+			t.Fatalf("a 0.5%% move without P&L held the room: %v", got.Reasons)
+		}
+		st.ObserveWithPnL(331650, mandatePnLReading{}, at.Add(10*time.Minute), c, testLiveObserveScope, true)
+		if got := capital(); !suspected(t, got) {
+			t.Fatalf("a 10%% jump without P&L passed: %+v", got)
+		}
+		// Undone by the next reading (a glitch), it clears.
+		st.ObserveWithPnL(301600, mandatePnLReading{}, at.Add(12*time.Minute), c, testLiveObserveScope, true)
+		if got := capital(); !got.Known {
+			t.Fatalf("an undone glitch stayed suspect: %v", got.Reasons)
+		}
+	})
+	t.Run("a deposit declared late never reads as drawdown", func(t *testing.T) {
+		st, c, at, capital := mandateFlowTestStore(t)
+		mark := capital().HWMRiskBase
+		observeWithPnL(st, c, 330000, 0, at.Add(10*time.Minute))
+		observeWithPnL(st, c, 330200, 200, at.Add(20*time.Minute))
+		if got := capital(); !suspected(t, got) || got.HWMRiskBase != 0 && got.HWMRiskBase != mark {
+			t.Fatalf("an undeclared deposit: %+v", got)
+		}
+		if _, err := st.ApplyCapitalEventForPolicy(rpc.CapitalEventParams{Type: "deposit", AmountBase: 30000}, rpc.OrderOriginHumanTTY, c); err != nil {
+			t.Fatal(err)
+		}
+		observeWithPnL(st, c, 330300, 300, at.Add(30*time.Minute))
+		if got := capital(); !got.Known || got.HWMRiskBase != mark || got.DrawdownBase > 1 {
+			t.Fatalf("a deposit declared late read as drawdown: %+v", got)
+		}
+	})
+	t.Run("a statement covering the day clears what nothing else explains", func(t *testing.T) {
+		st, c, at, capital := mandateFlowTestStore(t)
+		observeWithPnL(st, c, 280000, 0, at.Add(10*time.Minute))
+		observeWithPnL(st, c, 280100, 100, at.Add(20*time.Minute))
+		if got := capital(); !suspected(t, got) {
+			t.Fatalf("not suspected: %+v", got)
+		}
+		st.mu.Lock()
+		st.state.StatementCoverageTo = at
+		st.mu.Unlock()
+		observeWithPnL(st, c, 280200, 200, at.Add(30*time.Minute))
+		if got := capital(); !got.Known {
+			t.Fatalf("a statement covering the day did not clear it: %v", got.Reasons)
+		}
+	})
+	t.Run("overnight the new session's own P&L is the yardstick", func(t *testing.T) {
+		st, c, at, _ := mandateFlowTestStore(t)
+		next := at.Add(24 * time.Hour)
+		st.now = func() time.Time { return next.Add(time.Minute) }
+		observeWithPnL(st, c, 280000, 100, next)
+		if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, next.Add(time.Minute)); !suspected(t, got) {
+			t.Fatalf("an overnight drop the new session's P&L does not explain passed: %+v", got)
+		}
+	})
 }
 
 // A suspected cash flow makes the verdict unknown: additions are refused and

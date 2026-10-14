@@ -47,9 +47,9 @@ type mandateCapitalStateV1 struct {
 	PendingHigh   float64   `json:"pending_high_adjusted_base,omitempty"`
 	PendingHighAt time.Time `json:"pending_high_at,omitzero"`
 	// Last is the previous observation the flow check compares with;
-	// FlowSuspect an equity move the book's P&L does not explain, which
-	// holds the room until a declared or statement flow explains it, or a
-	// statement covering its day shows none.
+	// FlowSuspect an equity move flows and the book's P&L do not explain,
+	// which holds the room until a declared or statement flow explains it,
+	// or a statement covering its day is reconciled.
 	Last        *mandateFlowBase    `json:"last_observation,omitempty"`
 	FlowSuspect *mandateFlowSuspect `json:"flow_suspect,omitempty"`
 	// FlowsAtStart is the capital store's effective cumulative flow when the
@@ -84,61 +84,87 @@ type mandateFlowBase struct {
 	Session    string    `json:"session,omitempty"`
 }
 
-// mandateFlowSuspect is an equity move the book's own P&L does not explain:
-// a cash flow nobody has declared yet. Base is the observation before it.
+// mandateFlowSuspect is an equity move that neither declared or statement
+// flows nor the book's own P&L explain: a cash flow nobody has declared
+// yet. Base is the observation before it; PnLSince the broker's P&L from
+// Base to the latest reading, summed step by step; Unexplained the part of
+// the move from Base that flows and P&L leave over, as last measured.
 type mandateFlowSuspect struct {
 	At          time.Time       `json:"at"`
 	Base        mandateFlowBase `json:"base"`
-	EquityMove  float64         `json:"equity_move_base"`
-	PnLMove     float64         `json:"pnl_move_base"`
+	PnLSince    float64         `json:"pnl_since_base"`
+	Unexplained float64         `json:"unexplained_base"`
 	ThresholdAt float64         `json:"threshold_base"`
 }
 
-// mandateUnexplainedMove measures the equity move from base to an
-// observation that the flows and the broker's daily P&L do not explain: the
-// move, the P&L over the same span (the new session's own P&L when it spans
-// a session start), the threshold max(1% of equity, 3 × |P&L move|), and
-// whether the P&L is known on both ends; without it nothing is judged.
-func mandateUnexplainedMove(base mandateFlowBase, equityBase, flows float64, pnl mandatePnLReading) (move, pnlMove, threshold float64, ok bool) {
-	if pnl.DailyBase == nil || base.DailyPnL == nil {
-		return 0, 0, 0, false
+// mandateFlowFloorBase is the least unexplained move, in base currency,
+// that reads as a flow however small the book: below it are the accruals a
+// broker posts to cash that its daily P&L may not carry (interest, a
+// dividend, a fee), and a flow that small moves the budget by under 150 a
+// year at the 15% target.
+const mandateFlowFloorBase = 1000
+
+// mandateFlowThreshold is the unexplained move that reads as a flow.
+func mandateFlowThreshold(equityBase float64) float64 {
+	return math.Max(0.01*equityBase, mandateFlowFloorBase)
+}
+
+// mandatePnLStep is the broker's P&L between two consecutive readings: the
+// difference within one session, the new session's own P&L across a
+// session start (the old session's last reading taken as its close).
+// Without it on the readings it needs, the step counts zero: the whole move
+// is unexplained.
+func mandatePnLStep(last mandateFlowBase, pnl mandatePnLReading) float64 {
+	switch {
+	case pnl.DailyBase == nil:
+		return 0
+	case last.Session != pnl.Session:
+		return *pnl.DailyBase
+	case last.DailyPnL == nil:
+		return 0
+	default:
+		return *pnl.DailyBase - *last.DailyPnL
 	}
-	move = equityBase - base.EquityBase - (flows - base.FlowsBase)
-	pnlMove = *pnl.DailyBase
-	if base.Session == pnl.Session {
-		pnlMove -= *base.DailyPnL
-	}
-	threshold = math.Max(0.01*equityBase, 3*math.Abs(pnlMove))
-	return move, pnlMove, threshold, true
 }
 
 // mandateFlowCheckLocked raises, keeps or clears the flow suspicion for one
-// observation. An equity move larger than max(1% of equity, 3 × the book's
-// own P&L move) since the last observation, with no declared or statement
-// flow to account for it, is a suspected cash flow: an undeclared
-// withdrawal would read as a drawdown and shrink the budget, a deposit
-// would raise the high-water mark and read as a drawdown once declared. The
-// suspicion clears once the move from the observation before it is
-// explained (a flow declared or incorporated from the statement, or the
-// P&L catching up), or a statement covering its day has been reconciled.
+// observation. The unexplained part of an equity move is the move net of
+// declared and statement flows, less the broker's P&L over the same span
+// (zero where the broker reports none); more than mandateFlowThreshold
+// since the last observation is a suspected cash flow: an undeclared
+// withdrawal would read as a drawdown and shrink the budget, a deposit would
+// raise the high-water mark and read as a drawdown once declared. While
+// suspected, the unexplained part is measured from the observation before
+// it, the P&L summed step by step, so a later P&L move never offsets it: it
+// clears only when that cumulative part is back under the threshold (a flow
+// declared or incorporated from the statement accounts for it, or the
+// reading that raised it is undone) or a statement covering its day has
+// been reconciled, which accounts for every flow of that day.
 func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *risk.Constitution, equityBase float64, pnl mandatePnLReading, asOf time.Time, flows float64, now time.Time) {
+	threshold := mandateFlowThreshold(equityBase)
 	if s := m.FlowSuspect; s != nil {
-		move, _, threshold, ok := mandateUnexplainedMove(s.Base, equityBase, flows, pnl)
+		if m.Last != nil {
+			s.PnLSince += mandatePnLStep(*m.Last, pnl)
+		}
+		s.Unexplained = equityBase - s.Base.EquityBase - (flows - s.Base.FlowsBase) - s.PnLSince
+		explained := math.Abs(s.Unexplained) <= threshold
 		statement := !st.state.StatementCoverageTo.IsZero() && !utcDateBefore(st.state.StatementCoverageTo, s.At)
-		if (ok && math.Abs(move) <= threshold) || statement {
+		if explained || statement {
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_cleared",
-				"suspected_at": s.At.UTC(), "equity_base": equityBase, "flows_base": flows, "by_statement": statement && !(ok && math.Abs(move) <= threshold),
+				"suspected_at": s.At.UTC(), "unexplained_base": s.Unexplained, "equity_base": equityBase, "flows_base": flows, "by_statement": statement && !explained,
 				"policy_fingerprint": constitutionFingerprint(c),
 			})
 			m.FlowSuspect = nil
 		}
 	} else if m.Last != nil {
-		if move, pnlMove, threshold, ok := mandateUnexplainedMove(*m.Last, equityBase, flows, pnl); ok && math.Abs(move) > threshold {
-			m.FlowSuspect = &mandateFlowSuspect{At: asOf, Base: *m.Last, EquityMove: move, PnLMove: pnlMove, ThresholdAt: threshold}
+		step := mandatePnLStep(*m.Last, pnl)
+		if unexplained := equityBase - m.Last.EquityBase - (flows - m.Last.FlowsBase) - step; math.Abs(unexplained) > threshold {
+			m.FlowSuspect = &mandateFlowSuspect{At: asOf, Base: *m.Last, PnLSince: step, Unexplained: unexplained, ThresholdAt: threshold}
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_suspected",
-				"equity_move_base": move, "pnl_move_base": pnlMove, "threshold_base": threshold, "equity_base": equityBase, "equity_as_of": asOf.UTC(),
+				"unexplained_base": unexplained, "pnl_move_base": step, "pnl_reported": pnl.DailyBase != nil, "threshold_base": threshold,
+				"equity_base": equityBase, "equity_as_of": asOf.UTC(),
 				"policy_fingerprint": constitutionFingerprint(c),
 			})
 		}
@@ -286,8 +312,8 @@ func (st *riskCapitalStore) MandateCapitalForScope(c *risk.Constitution, scope b
 	if m != nil && m.StartedAt == c.Mandate.StartedAt && m.FlowSuspect != nil {
 		s := m.FlowSuspect
 		capital.Known = false
-		capital.Reasons = append([]string{fmt.Sprintf("a cash flow is suspected: equity moved %s at %s that the book's own P&L (%s) does not explain; the room is held until the flow is declared (canary policy capital-event) or a statement explains it",
-			mandateMoney(s.EquityMove, in.BaseCurrency), s.At.UTC().Format(time.DateTime), mandateMoney(s.PnLMove, in.BaseCurrency))}, capital.Reasons...)
+		capital.Reasons = append([]string{fmt.Sprintf("a cash flow is suspected: an equity move of %s since %s that declared flows and the book's own P&L do not explain; the room is held until the flow is declared (canary policy capital-event) or a statement covering the day is reconciled",
+			mandateMoney(s.Unexplained, in.BaseCurrency), s.At.UTC().Format(time.DateTime))}, capital.Reasons...)
 	}
 	var realised mandateRealised
 	if m != nil && m.StartedAt == c.Mandate.StartedAt {
