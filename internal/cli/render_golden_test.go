@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/osauer/canary/v2/internal/config"
+	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
@@ -239,6 +240,10 @@ func renderGoldenCases() []renderGoldenCase {
 		// rulebook reads; the golden pins the renderer it hands the result to.
 		{name: "stress", argv: []string{"stress"}, render: func(env *Env) { renderStress(env, goldenStress(), false) }},
 		{name: "stress_details", argv: []string{"stress", "--details"}, render: func(env *Env) { renderStress(env, goldenStress(), true) }},
+		{name: "mandate", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandate(mandate.StatusWithin)}},
+		{name: "mandate_reduce", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandate(mandate.StatusReduce)}},
+		{name: "mandate_unknown", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateUnknown()}},
+		{name: "mandate_inactive", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: rpc.MandateRiskResult{AsOf: goldenAt, Message: "the risk constitution carries no [mandate] table; the mandate budget is inactive", Gate: &rpc.MandateGateView{}}}},
 		{name: "status", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: goldenHealthReady(readyTrading), rpc.MethodAlertCandidates: goldenAlerts(3)}},
 		{name: "status_attention", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: goldenHealthAttention(), rpc.MethodAlertCandidates: goldenAlerts(2)}},
 		{name: "trading_status", argv: []string{"trading", "status"}, conn: goldenConn{rpc.MethodTradingStatus: readyTrading}},
@@ -388,6 +393,72 @@ func goldenRegime(authority rpc.RegimeAuthorityHealth) rpc.RegimeSnapshotResult 
 		WarningDetails: []rpc.RegimeWarning{{Code: "gamma_computing", Message: "Dealer gamma model is still computing."}},
 		SourceHealth:   []rpc.SourceHealth{{Source: "broker", Status: "ok", AsOf: goldenAt, Notes: []string{"live quotes"}}},
 	}
+}
+
+// goldenMandate is a synthetic mandate verdict: a two-name book with a
+// short call, within budget or, with the quantities scaled up, a reduce with
+// one gap breach.
+func goldenMandate(status string) rpc.MandateRiskResult {
+	scale := 1.0
+	if status == mandate.StatusReduce {
+		scale = 4
+	}
+	capital := mandate.Capital{Known: true, BaseCurrency: "EUR", StartedAt: "2026-09-01", EquityBase: 300000, EquityAsOf: goldenAt.Add(-2 * time.Minute),
+		TaxReserveBase: 70000, RiskBase: 225000, FlowsSinceStart: -5000, HWMRiskBase: 235000, HWMAsOf: goldenAt.Add(-48 * time.Hour),
+		BudgetBase: 230000, DrawdownBase: 5000, DrawdownPct: 2.13, Room: 0.929, BudgetAnnualSD: 32050}
+	up := 6200 * scale
+	verdict := &mandate.Verdict{Status: status, AsOf: goldenAt, BaseCurrency: "EUR", Capital: capital,
+		Risk:      &mandate.Risk{SD1DBase: 1510 * scale, SDAnnualBase: 23970 * scale, ES99Base: 4120 * scale, RatioToBudget: 0.748 * scale, FXContributionPct: 11.2},
+		Stresses:  &mandate.Stresses{GapShockPct: 25, GapCapBase: 22940, IndexShockPct: 10, IndexLossBase: 9870 * scale},
+		Scenarios: 252, ScenariosFrom: "2025-09-05", ScenariosTo: "2026-09-04",
+		Legs: []mandate.LegReport{
+			{ID: "con:9001", Symbol: "SYNA", Underlying: "SYNA", Kind: mandate.KindStock, Quantity: 1000 * scale, ValueBase: 90000 * scale, ContributionPct: 71.4},
+			{ID: "con:9002", Symbol: "SYNB", Underlying: "SYNB", Kind: mandate.KindStock, Quantity: 500 * scale, ValueBase: 40000 * scale, ContributionPct: 33.1},
+			{ID: "con:9004", Symbol: "SYNA 20261218 110 C", Underlying: "SYNA", Kind: mandate.KindOption, Quantity: -2 * scale, ValueBase: -540 * scale, ContributionPct: -4.5},
+		},
+		Underlyings: []mandate.UnderlyingReport{
+			{Underlying: "SYNA", ValueBase: 89460 * scale, ContributionPct: 66.9, Beta: 1.12, GapDownLossBase: 22100 * scale, GapUpLossBase: &up, GapLossBase: 22100 * scale, GapCapBase: 22940, GapBreach: scale > 1},
+			{Underlying: "SYNB", ValueBase: 40000 * scale, ContributionPct: 33.1, Beta: 0.64, GapDownLossBase: 10000 * scale, GapLossBase: 10000 * scale, GapCapBase: 22940, GapBreach: scale > 1},
+		},
+		NotModelled: []string{"SYNT (bill, no equity risk modelled)"}}
+	if scale > 1 {
+		verdict.Stresses.GapBreaches = []string{"SYNA", "SYNB"}
+	}
+	res := rpc.MandateRiskResult{AsOf: goldenAt, Active: true, Verdict: verdict,
+		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: "sha256:synthetic"},
+		Policy:            &rpc.MandatePolicyView{MaxLossPct: 30, VolTargetPct: 15, TaxReserveBase: 70000, StartedAt: "2026-09-01", GapShockPct: 25, GapRoomPct: 33.3},
+		Evidence: &rpc.MandateEvidence{EvaluatedAt: goldenAt, EquityAsOf: goldenAt.Add(-2 * time.Minute), PositionsAsOf: goldenAt.Add(-time.Minute),
+			Series: []rpc.MandateSeriesEvidence{
+				{Key: "fx:USD", Closes: 320, LastClose: "2026-09-04", FetchedAt: goldenAt.Add(-9 * time.Hour), Source: "IBKR historical bars · MIDPOINT"},
+				{Key: "u:SPY", Closes: 320, LastClose: "2026-09-04", FetchedAt: goldenAt.Add(-9 * time.Hour), Source: "IBKR historical bars · TRADES"},
+				{Key: "u:SYNA", Closes: 320, LastClose: "2026-09-04", FetchedAt: goldenAt.Add(-9 * time.Hour), Source: "IBKR historical bars · TRADES"},
+				{Key: "u:SYNB", Closes: 318, LastClose: "2026-09-04", FetchedAt: goldenAt.Add(-9 * time.Hour), Source: "IBKR historical bars · TRADES"},
+			}},
+		Gate: &rpc.MandateGateView{}}
+	if status != mandate.StatusWithin {
+		res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "the mandate risk 95,880 EUR a year is over the budget 32,050 EUR (299%); a gap in SYNA, SYNB would lose more than the gap cap 22,940 EUR"}
+	}
+	return res
+}
+
+// goldenMandateUnknown is a verdict the evidence cannot establish: one
+// series stale, one option without IV.
+func goldenMandateUnknown() rpc.MandateRiskResult {
+	res := goldenMandate(mandate.StatusWithin)
+	v := res.Verdict
+	v.Status = mandate.StatusUnknown
+	v.Reasons = []string{"daily history for SYNB is stale (last read 2026-09-02 06:10:00)", "SYNA 20261218 110 C: no implied volatility on the position row"}
+	v.Risk, v.Stresses, v.Underlyings = nil, nil, nil
+	v.Scenarios, v.ScenariosFrom, v.ScenariosTo = 0, "", ""
+	for i := range v.Legs {
+		v.Legs[i].ContributionPct, v.Legs[i].ValueBase = 0, 0
+		v.Legs[i].Unknown = "not simulated"
+	}
+	v.Legs[2].Unknown = "no implied volatility on the position row"
+	res.Evidence.Series[3].Stale = true
+	res.Evidence.Series[3].LastClose = "2026-09-01"
+	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "the mandate risk cannot be measured: daily history for SYNB is stale (last read 2026-09-02 06:10:00)"}
+	return res
 }
 
 func goldenStress() rpc.StressResult {

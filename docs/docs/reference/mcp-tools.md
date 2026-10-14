@@ -4,7 +4,7 @@
 
 These are the tools `canary mcp` exposes to MCP clients (Claude Code, Claude Desktop, or any other MCP host). Every public tool uses the canonical `canary_*` namespace. Each entry lists the tool name an LLM picks against, the description the LLM reads to decide whether to invoke, and the parameter schema the LLM binds against.
 
-**37 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
+**38 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
 
 ## `canary_add`
 
@@ -236,6 +236,16 @@ Read the detailed broad-market regime: all eight indicators, independent cluster
 Read the full current portfolio-stress assessment: margin, P&L and tape shocks, exposure, concentration, protection coverage, held-name and options risk, market indicators, and source health. Use after canary_brief or for an explicit portfolio-risk question; use canary_regime for the detailed broad-market dashboard. Preserves the same shared assessment used by the app. Missing inputs cannot become healthy zero values. Advisory and read-only; cannot preview or submit orders or change limits.
 
 *No parameters.*
+
+## `canary_mandate`
+
+Read the daemon's mandate risk verdict: the book's ex-ante volatility (historical simulation with full revaluation of every stock and option leg, currency moves included) against the owner's volatility budget, which is the mandate's target times the high-water mark of the risk base (equity after the tax reserve, cash-flow adjusted) times the room left under the maximum loss. `verdict.status` is within, over, reduce or unknown; `verdict.reasons` names every missing or stale input (the verdict is unknown, never within, without them); `verdict.underlyings` and `verdict.legs` carry Euler risk contributions that sum to 100%, betas to SPY and each name's gap loss against its gap cap; `verdict.stresses` the index shock and the gap breaches; `evidence` the clocks of the equity, positions and every daily series; `gate.refuses_additions` whether risk-adding orders are refused right now (`mandate_budget` on an order preview). `active` is false while the constitution carries no [mandate] table. Use it for 'can I add risk', 'what is driving the risk' or 'why was my order refused with mandate_budget'; use canary_stress for the broader stress findings and canary_policy_check for the mandate keys and the realised figures. Read-only; it places no order and changes no limit; refresh=true reads the account and positions again first.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `refresh` | boolean | no | when true, the daemon reads the account and positions again before judging; false (the default) serves a verdict younger than thirty seconds as it is |
 
 ## `canary_brief`
 

@@ -566,6 +566,19 @@
       }
     },
     {
+      "name": "canary_mandate",
+      "description": "Read the daemon's mandate risk verdict: the book's ex-ante volatility (historical simulation with full revaluation of every stock and option leg, currency moves included) against the owner's volatility budget, which is the mandate's target times the high-water mark of the risk base (equity after the tax reserve, cash-flow adjusted) times the room left under the maximum loss. `verdict.status` is within, over, reduce or unknown; `verdict.reasons` names every missing or stale input (the verdict is unknown, never within, without them); `verdict.underlyings` and `verdict.legs` carry Euler risk contributions that sum to 100%, betas to SPY and each name's gap loss against its gap cap; `verdict.stresses` the index shock and the gap breaches; `evidence` the clocks of the equity, positions and every daily series; `gate.refuses_additions` whether risk-adding orders are refused right now (`mandate_budget` on an order preview). `active` is false while the constitution carries no [mandate] table. Use it for 'can I add risk', 'what is driving the risk' or 'why was my order refused with mandate_budget'; use canary_stress for the broader stress findings and canary_policy_check for the mandate keys and the realised figures. Read-only; it places no order and changes no limit; refresh=true reads the account and positions again first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "refresh": {
+            "type": "boolean",
+            "description": "when true, the daemon reads the account and positions again before judging; false (the default) serves a verdict younger than thirty seconds as it is"
+          }
+        }
+      }
+    },
+    {
       "name": "canary_brief",
       "description": "Read Canary's current daily brief exactly as the daemon composed it. Use when the user asks what changed since the last close, what matters today, which inputs are missing or stale, or what still needs attention before trading. This is the same typed brief used by Canary's terminal and paired app; it does not rebuild the answer from separate account, position, regime, or rulebook calls. Read-only: it never acknowledges the brief, records a sign-off, advances a review clock, writes to the journal, or changes settings. For market indicators use `canary_regime`; for full portfolio-risk evidence use `canary_stress`. NOT for drilling into one holding or account total; use `canary_positions` or `canary_account` after the brief points to that detail.",
       "inputSchema": {

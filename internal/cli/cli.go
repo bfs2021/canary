@@ -249,6 +249,7 @@ func init() {
 		{"macro", "Public economic calendar, official publications and source coverage", "canary macro [--window-start DATE --window-end DATE] [--details] [--json]", runMacro},
 		{"regime", "Detailed broad-market regime across volatility, credit, funding, FX, gamma, and breadth", "canary regime [--explain] [--json [--view full|monitor] [--profiles]]", runRegime},
 		{"stress", "Portfolio stress with margin, exposure, concentration, options, protection, and source evidence", "canary stress [--details] [--json]", runStress},
+		{"mandate", "Mandate risk budget: the book's ex-ante volatility against the owner's budget, what drives it, gap and index stresses, and whether additions are open", "canary mandate [--refresh] [--json]", runMandate},
 		{"brief", "Combined post- and pre-trade operator brief with disclosed source degradation", "canary brief [--details] [--json]", runBrief},
 		{"edge", "Review past trading decisions using broker records", "canary edge [--window 90d|365d] [--horizon 1|5|20] [--limit N] [--change ID] [--option ID] [--json]", runEdge},
 		{"short-interest", "Screen FINRA short positions across US equities", "canary short-interest screen [--listed-only] [--min-average-volume SHARES] [--min-days-to-cover N] [--min-price USD] [--min-avg-dollar-volume-20d USD] [--sort-by FIELD] [--sort-dir asc|desc] [--limit N] [--exclude SYMBOL,...] [--json]", runShortInterest},
