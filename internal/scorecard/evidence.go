@@ -1,6 +1,7 @@
 package scorecard
 
 import (
+	"maps"
 	"math"
 	"sort"
 	"strings"
@@ -38,9 +39,7 @@ func Evaluate(in Input) rpc.ScorecardResult {
 	}
 	out.History.MarketSymbol = firstNonEmpty(in.History.MarketSymbol, "SPY")
 	out.History.MarketBars = len(in.History.Market)
-	for reason, count := range in.Skipped {
-		out.Coverage.Skipped[reason] = count
-	}
+	maps.Copy(out.Coverage.Skipped, in.Skipped)
 	market := newSeries(in.History.Market)
 	underlyingSeries := map[int64]series{}
 	seriesFor := func(conid int64) series {

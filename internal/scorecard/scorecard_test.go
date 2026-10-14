@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"testing"
 	"time"
 
@@ -380,10 +381,8 @@ func TestRuleOriginatedFillsNeverCountForOwner(t *testing.T) {
 		{Key: "c", ConID: 123, Symbol: "ACME", AssetClass: "STK", Action: "open", ExecutedAt: day("2026-02-02"), DeltaQuantity: 100, PositionAfter: 100, ExecutionVWAP: new(90.0), Multiplier: new(1.0), TradeIDs: []string{"t-assign"}},
 	}
 	resolve := func(change edge.PositionChange) Sleeve {
-		for _, id := range change.ExecutionIDs {
-			if id == "e-stop" {
-				return Sleeve{Name: rpc.ScorecardSleeveRule, Origin: "proposal:trailing_stop"}
-			}
+		if slices.Contains(change.ExecutionIDs, "e-stop") {
+			return Sleeve{Name: rpc.ScorecardSleeveRule, Origin: "proposal:trailing_stop"}
 		}
 		return Sleeve{Name: SleeveOwner}
 	}

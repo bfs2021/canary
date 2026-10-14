@@ -21,10 +21,10 @@ const (
 	ScorecardGateFutile      = "futile"
 	ScorecardGateAccruing    = "accruing"
 
-	// Streams separate two skills: entries (open, add) ask whether the name
-	// moves with the decision and carry the gates; exits (trim, exit) ask
-	// whether it moves against the position afterwards and are reported,
-	// never gated.
+	// ScorecardStreamEntries and ScorecardStreamExits separate two skills:
+	// entries (open, add) ask whether the name moves with the decision and
+	// carry the gates; exits (trim, exit) ask whether it moves against the
+	// position afterwards and are reported, never gated.
 	ScorecardStreamEntries = "entries"
 	ScorecardStreamExits   = "exits"
 

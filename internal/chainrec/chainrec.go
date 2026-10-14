@@ -223,6 +223,7 @@ type Failure struct {
 	Err    error
 }
 
+// Error names the failure status and the underlying broker error.
 func (f *Failure) Error() string {
 	if f.Err == nil {
 		return f.Status
@@ -230,6 +231,7 @@ func (f *Failure) Error() string {
 	return f.Status + ": " + f.Err.Error()
 }
 
+// Unwrap returns the underlying broker error.
 func (f *Failure) Unwrap() error { return f.Err }
 
 // Fail wraps err as a classified failure.
