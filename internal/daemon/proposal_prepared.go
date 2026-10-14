@@ -318,7 +318,7 @@ func (e *proposalEngine) preparedSubmitCheck(ctx context.Context, p rpc.TradePro
 	if originalErr != nil || currentErr != nil || !bytes.Equal(originalTerms, currentTerms) || prop.Quantity != record.Proposal.Quantity {
 		return refuse(preparedBlocker("prepared_proposal_changed", "The current proposal terms differ from the reviewed proposal; prepare and confirm again."))
 	}
-	for _, check := range [][]rpc.TradingBlocker{shadowProposalBlockers(prop), unitProposalOrderBlockers(prop), cashSweepCurrentEvidenceBlockers(prop, e.clock()), proposalPreviewSafetyBlockers(prop, &record.Preview)} {
+	for _, check := range [][]rpc.TradingBlocker{shadowProposalBlockers(prop), mandateHeldBlockers(prop), unitProposalOrderBlockers(prop), cashSweepCurrentEvidenceBlockers(prop, e.clock()), proposalPreviewSafetyBlockers(prop, &record.Preview)} {
 		if len(check) > 0 {
 			return refuse(check)
 		}

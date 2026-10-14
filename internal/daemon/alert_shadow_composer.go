@@ -1592,7 +1592,17 @@ func alertShadowMapProtection(input alertShadowProtectionInput, observedAt time.
 // one pre-authorised record: the proposal key and revision, so a new
 // revision is a new notice and a veto or submission recovers the old one.
 func alertShadowAutomaticEpisodeKey(scope alertShadowBrokerScope, notice automaticNoticeKey) (string, error) {
-	return rpc.BuildAlertEpisodeKey(rpc.AlertSourceProtection, rpc.AlertKindProtectionAutomatic, scope.account, scope.mode, notice.Key, notice.Revision)
+	return rpc.BuildAlertEpisodeKey(rpc.AlertSourceProtection, rpc.AlertKindProtectionAutomatic, scope.account, scope.mode, notice.Key, alertShadowAutomaticRevision(notice))
+}
+
+// alertShadowAutomaticRevision is what a notice is one per: the proposal
+// revision, or a mandate reduction's breach episode, so a batch re-sized
+// every verdict raises one notice per line, not one per size.
+func alertShadowAutomaticRevision(notice automaticNoticeKey) string {
+	if notice.Episode != "" {
+		return "episode:" + notice.Episode
+	}
+	return notice.Revision
 }
 
 // alertShadowAutomaticObservation is the act-severity notice for one waiting
@@ -1613,7 +1623,7 @@ func alertShadowAutomaticObservation(scope alertShadowBrokerScope, notice automa
 		Latched  bool   `json:"latched"`
 		Deferred bool   `json:"deferred,omitempty"`
 		Hold     string `json:"hold,omitempty"`
-	}{policyFingerprint, notice.Key, notice.Revision, notice.Bucket, notice.Latched, notice.Deferred, notice.Hold})
+	}{policyFingerprint, notice.Key, alertShadowAutomaticRevision(notice), notice.Bucket, notice.Latched, notice.Deferred, notice.Hold})
 	if err != nil {
 		return alertEpisodeObservation{}, err
 	}

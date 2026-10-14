@@ -192,6 +192,21 @@ func sameContractBest(proposals []rpc.TradeProposal, rows []int) int {
 // mergeSameContractProposals merges the rows in place. channel says which
 // rows Canary places itself; nil treats every row as waiting for approval.
 func mergeSameContractProposals(proposals []rpc.TradeProposal, channel func(rpc.TradeProposal) sameContractChannel) {
+	mergeSameContractProposalsLatched(proposals, channel, false)
+}
+
+// sameContractStopFirst reports a stop that must stay live beside primary
+// while the drawdown brake is latched: the latch places a pre-authorised
+// stop at once, and a mandate reduction waits its full veto window, so
+// covering the stop would delay it by that window. The stop goes first;
+// netting then holds the sale behind it.
+func sameContractStopFirst(latched bool, primary, row rpc.TradeProposal) bool {
+	return latched && primary.Bucket == rpc.TradeProposalBucketMandateReduction && sameContractStanding(row)
+}
+
+// mergeSameContractProposalsLatched is the merge with the drawdown brake's
+// latch known (sameContractStopFirst).
+func mergeSameContractProposalsLatched(proposals []rpc.TradeProposal, channel func(rpc.TradeProposal) sameContractChannel, latched bool) {
 	if channel == nil {
 		channel = func(rpc.TradeProposal) sameContractChannel { return sameContractManual }
 	}
@@ -227,7 +242,7 @@ func mergeSameContractProposals(proposals []rpc.TradeProposal, channel func(rpc.
 		a := sameContractBest(proposals, auto)
 		if a >= 0 {
 			for _, i := range auto {
-				if i != a {
+				if i != a && !sameContractStopFirst(latched, proposals[a], proposals[i]) {
 					coverSameContract(&proposals[a], &proposals[i])
 				}
 			}
@@ -324,7 +339,7 @@ func (e *proposalEngine) sameContractChannels() func(rpc.TradeProposal) sameCont
 		if !attached {
 			return sameContractExcluded
 		}
-		if rec, found := e.automatic.get(p.Key, p.Revision); found && !rec.waiting() && rec.State != rpc.TradeProposalAutomaticSubmitting {
+		if rec, found := e.automatic.served(p); found && !rec.waiting() && rec.State != rpc.TradeProposalAutomaticSubmitting {
 			return sameContractExcluded
 		}
 		return sameContractAutomatic
@@ -342,7 +357,12 @@ func (e *proposalEngine) mergeSameContract(proposals []rpc.TradeProposal) {
 			automatic[p.Key] = true
 		}
 	}
-	mergeSameContractProposals(proposals, channel)
+	latched := false
+	if e != nil && (e.latchedForTest != nil || e.server != nil) {
+		scope := e.currentScope()
+		latched = brokerScopeConcrete(scope) && e.automaticLatched(scope)
+	}
+	mergeSameContractProposalsLatched(proposals, channel, latched)
 	e.mu.Lock()
 	e.mergedAutomatic = automatic
 	e.mu.Unlock()

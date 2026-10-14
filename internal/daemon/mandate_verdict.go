@@ -31,6 +31,13 @@ const (
 	mandateVerdictRefreshEvery = 2 * time.Minute
 	mandateVerdictServeWithin  = 30 * time.Second
 	mandateBudgetCode          = rpc.MandateBudgetBlockerCode
+	// mandateStreakSpacing is how far apart two scheduled verdicts must be to
+	// count as consecutive for the forced reduction; mandateStreakMaxGap is
+	// how long a reading may wait for the next before the streak starts
+	// again. A read's own evaluation never counts: only the background
+	// cadence, so polling cannot build the streak in seconds.
+	mandateStreakSpacing = 5 * time.Minute
+	mandateStreakMaxGap  = 15 * time.Minute
 )
 
 type mandateVerdictCache struct {
@@ -39,11 +46,18 @@ type mandateVerdictCache struct {
 	input       *mandate.Input
 	evaluatedAt time.Time
 	fingerprint string
-	// overStreak counts consecutive evaluations reading over or reduce,
-	// each within mandateVerdictMaxAge of the one before and under the same
-	// policy; the forced reduction starts on an over verdict at two
-	// (mandate_reduction.go). Any other reading resets it.
-	overStreak int
+	// overStreak counts consecutive scheduled evaluations reading over or
+	// reduce, each at least mandateStreakSpacing and at most
+	// mandateStreakMaxGap after the last one counted (streakAt), under one
+	// policy (streakFP); the forced reduction starts at two, or at one on a
+	// gap-cap breach (mandate_reduction.go). Any reading, scheduled or not,
+	// that is neither over nor reduce resets it. scheduledAt is the last
+	// scheduled evaluation, which keeps the cadence however often reads
+	// evaluate.
+	overStreak  int
+	streakAt    time.Time
+	streakFP    string
+	scheduledAt time.Time
 }
 
 // mandateVerdictKept is one read of the cache.
@@ -66,17 +80,39 @@ func (c *mandateVerdictCache) kept() mandateVerdictKept {
 	return mandateVerdictKept{result: c.result, input: c.input, evaluatedAt: c.evaluatedAt, fingerprint: c.fingerprint, overStreak: c.overStreak}
 }
 
-func (c *mandateVerdictCache) set(result *rpc.MandateRiskResult, input *mandate.Input, at time.Time, fingerprint string) {
+// set keeps one evaluation; scheduled says it came from the background
+// cadence rather than a read, and only those count toward the streak.
+func (c *mandateVerdictCache) set(result *rpc.MandateRiskResult, input *mandate.Input, at time.Time, fingerprint string, scheduled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	streak := 0
-	if result != nil && result.Verdict != nil && (result.Verdict.Status == mandate.StatusOver || result.Verdict.Status == mandate.StatusReduce) {
-		streak = 1
-		if c.overStreak > 0 && fingerprint == c.fingerprint && !c.evaluatedAt.IsZero() && at.Sub(c.evaluatedAt) <= mandateVerdictMaxAge {
-			streak = c.overStreak + 1
+	breach := result != nil && result.Verdict != nil && (result.Verdict.Status == mandate.StatusOver || result.Verdict.Status == mandate.StatusReduce)
+	switch {
+	case !breach || (c.overStreak > 0 && fingerprint != c.streakFP):
+		c.overStreak, c.streakAt, c.streakFP = 0, time.Time{}, ""
+	}
+	if breach && scheduled {
+		gap := at.Sub(c.streakAt)
+		switch {
+		case c.overStreak > 0 && gap < mandateStreakSpacing:
+			// Too soon after the last counted reading: it neither counts nor
+			// resets.
+		case c.overStreak > 0 && gap <= mandateStreakMaxGap:
+			c.overStreak, c.streakAt = c.overStreak+1, at
+		default:
+			c.overStreak, c.streakAt, c.streakFP = 1, at, fingerprint
 		}
 	}
-	c.result, c.input, c.evaluatedAt, c.fingerprint, c.overStreak = result, input, at, fingerprint, streak
+	if scheduled {
+		c.scheduledAt = at
+	}
+	c.result, c.input, c.evaluatedAt, c.fingerprint = result, input, at, fingerprint
+}
+
+// lastScheduled is the time of the last scheduled evaluation.
+func (c *mandateVerdictCache) lastScheduled() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.scheduledAt
 }
 
 // mandateVerdictFingerprint names one verdict for the rows sized on it: the
@@ -122,12 +158,16 @@ func (s *Server) refreshMandateVerdict(ctx context.Context) {
 	}
 	c := s.riskPolicies.snapshot().policy
 	if !c.MandateActive() {
-		s.mandateVerdicts.set(nil, nil, time.Time{}, "")
+		s.mandateVerdicts.set(nil, nil, time.Time{}, "", true)
 		return
 	}
-	// A revised policy is judged at once; otherwise the verdict's age decides.
-	if _, _, at, fp := s.mandateVerdicts.current(); !at.IsZero() && fp == c.FingerprintKey() && s.nowUTC().Sub(at) < mandateVerdictRefreshEvery {
-		return
+	// A revised policy is judged at once; otherwise the cadence decides. A
+	// read's evaluation does not move it: the forced reduction counts only
+	// scheduled verdicts.
+	if _, _, _, fp := s.mandateVerdicts.current(); fp == c.FingerprintKey() {
+		if last := s.mandateVerdicts.lastScheduled(); !last.IsZero() && s.nowUTC().Sub(last) < mandateVerdictRefreshEvery {
+			return
+		}
 	}
 	s.evaluateMandate(ctx, false)
 }
@@ -159,14 +199,16 @@ func (s *Server) handleMandateRisk(ctx context.Context, req *rpc.Request) (*rpc.
 }
 
 // evaluateMandate runs one evaluation and keeps it. With refreshAccount the
-// account is read first (which observes equity into the capital state).
+// account is read first (which observes equity into the capital state): a
+// read's evaluation. Without it, the evaluation is the scheduled one, the
+// only kind the forced reduction's streak counts.
 func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.MandateRiskResult {
 	now := s.nowUTC()
 	mgr := s.riskPolicies.snapshot()
 	c := mgr.policy
 	if !c.MandateActive() {
 		res := mandateInactiveResult(now, mgr)
-		s.mandateVerdicts.set(nil, nil, time.Time{}, "")
+		s.mandateVerdicts.set(nil, nil, time.Time{}, "", !refreshAccount)
 		return res
 	}
 	if refreshAccount {
@@ -224,7 +266,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: fp},
 		Policy:            mandatePolicyView(c.Mandate)}
 	res.Gate = s.mandateGateView(res, now)
-	s.mandateVerdicts.set(res, &in, now, fp)
+	s.mandateVerdicts.set(res, &in, now, fp, !refreshAccount)
 	return res
 }
 
@@ -353,6 +395,8 @@ func mandateStatusSentence(v *mandate.Verdict, ccy string) string {
 		sentence := fmt.Sprintf("the mandate risk %s a year is over the budget %s", mandateMoney(v.Risk.SDAnnualBase, ccy), mandateMoney(v.Capital.BudgetAnnualSD, ccy))
 		if !math.IsInf(v.Risk.RatioToBudget, 0) && v.Capital.BudgetAnnualSD > 0 {
 			sentence += fmt.Sprintf(" (%.0f%%)", v.Risk.RatioToBudget*100)
+		} else if v.Capital.Known && v.Capital.BudgetAnnualSD <= 0 {
+			sentence += " (the loss has reached the mandate's maximum, so no risk is in budget)"
 		}
 		if v.Stresses != nil && len(v.Stresses.GapBreaches) > 0 {
 			sentence += "; a gap in " + strings.Join(v.Stresses.GapBreaches, ", ") + " would lose more than the gap cap " + mandateMoney(v.Stresses.GapCapBase, ccy)

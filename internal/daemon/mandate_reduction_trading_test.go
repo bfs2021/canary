@@ -89,3 +89,28 @@ func TestMandateReductionHeldRowReachesNoBroker(t *testing.T) {
 		t.Fatalf("hand submit of a held row: %+v err %v broker %d", res, err, broker.count())
 	}
 }
+
+// The device-confirmed prepared path refuses a row held since it was
+// prepared: the hold applies to every way an order leaves.
+func TestMandateReductionPreparedSubmitRefusesAHeldRow(t *testing.T) {
+	t.Parallel()
+	rig := newAutomaticTradingRig(t, "")
+	broker := &brokerCallLog{}
+	broker.install(rig.server)
+	prop := rig.mandateProposal(automaticTestStockRow(), 40, 1, 1)
+	revision := rig.install(prop)
+	prepared, err := rig.engine.Prepare(t.Context(), rpc.TradeProposalPreviewParams{Key: prop.Key, Revision: revision, FastPath: true})
+	if err != nil || !prepared.Accepted || prepared.PreparedRef == "" {
+		t.Fatalf("prepare: accepted=%v blockers=%v err=%v", prepared.Accepted, prepared.Blockers, err)
+	}
+	held := prop
+	held.Mandate = rpc.CloneProposalMandate(prop.Mandate)
+	held.Mandate.Held, held.Mandate.HoldReason = true, "the mandate risk cannot be measured: daily history for SYN is stale"
+	if again := rig.install(held); again != revision {
+		t.Fatalf("holding changed the revision")
+	}
+	out := preparedSubmit(t, rig, prepared)
+	if out.Accepted || len(out.Blockers) == 0 || out.Blockers[0].Code != mandateSizingHeldCode || broker.count() != 0 {
+		t.Fatalf("prepared submit of a held row: accepted %v blockers %+v broker %d", out.Accepted, out.Blockers, broker.count())
+	}
+}

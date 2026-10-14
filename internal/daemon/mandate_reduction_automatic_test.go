@@ -26,7 +26,7 @@ func (r *automaticTestRig) mandateProposal(row rpc.PositionView, qty, rank, batc
 		"mandate risk is over the budget; the largest risk contributor left")
 	p.NeverSkipVeto = true
 	p.Mandate = &rpc.TradeProposalMandate{Rank: rank, BatchRows: batch, Phase: rpc.MandatePhaseRisk, Units: qty,
-		VerdictStatus: mandate.StatusOver, VerdictAt: r.now, VerdictFingerprint: "synthetic"}
+		VerdictStatus: mandate.StatusOver, VerdictAt: r.now, VerdictFingerprint: "synthetic", Episode: "mandate-synthetic-1"}
 	return p
 }
 

@@ -90,9 +90,6 @@ func formatProposalMandate(m *rpc.TradeProposalMandate) string {
 			mandatePct(m.RiskAnnualBase/m.BudgetAnnualSD*100), mandateAmount(m.BudgetAnnualSD, m.BaseCurrency))
 	}
 	parts = append(parts, verdict)
-	if !m.ConfirmedAt.IsZero() {
-		parts = append(parts, "kept by the verdict of "+m.ConfirmedAt.Local().Format("15:04 MST"))
-	}
 	parts = append(parts, "this cut takes "+mandateAmount(m.RiskCutAnnualBase, m.BaseCurrency)+" a year off")
 	if m.Held {
 		parts = append(parts, "held: "+m.HoldReason)

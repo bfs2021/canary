@@ -724,9 +724,13 @@ type TradeProposalMandateStatus struct {
 	VerdictStatus      string    `json:"verdict_status,omitempty"`
 	VerdictAt          time.Time `json:"verdict_at,omitzero"`
 	VerdictFingerprint string    `json:"verdict_fingerprint,omitempty"`
-	// ConsecutiveOver counts the consecutive fresh verdicts reading over or
-	// reduce; an over verdict starts the batch at two.
+	// ConsecutiveOver counts the consecutive scheduled verdicts, at least
+	// five minutes apart, reading over or reduce; the batch starts at two,
+	// or at one for a gap-cap breach.
 	ConsecutiveOver int `json:"consecutive_over,omitempty"`
+	// Episode names the breach from the batch's first verdict until a
+	// verdict reads within; empty while none runs.
+	Episode string `json:"episode,omitempty"`
 	// RiskAnnualBase is the measured risk, BudgetAnnualSD the budget and
 	// TargetAnnualSD the figure the batch sizes to (0.95 × budget, so the
 	// next verdict reads within). ProjectedRiskAnnualBase is the risk once
@@ -758,9 +762,12 @@ type TradeProposalMandatePlanOrder struct {
 	Contract ContractParams `json:"contract"`
 	Action   string         `json:"action"`
 	// Units is the whole cut the plan asks for (contracts or shares);
-	// Quantity is this cycle's order, held to the order caps.
-	Units    int `json:"units"`
-	Quantity int `json:"quantity"`
+	// Quantity is this cycle's order, held to the order caps; Waits says
+	// why it is lower (zero: no row this cycle), such as shares that cover
+	// short calls until the buyback has filled.
+	Units    int    `json:"units"`
+	Quantity int    `json:"quantity"`
+	Waits    string `json:"waits,omitempty"`
 	// Phase says why (MandatePhase*); ContributionPct the leg's share of the
 	// variance on the verdict; RiskCutAnnualBase the risk the cut removes.
 	Phase             string  `json:"phase"`
@@ -798,12 +805,14 @@ type TradeProposalMandate struct {
 	RiskCutAnnualBase   float64 `json:"risk_cut_annual_base"`
 	RiskAfterAnnualBase float64 `json:"risk_after_annual_base"`
 	// VerdictStatus, VerdictAt and VerdictFingerprint name the verdict the
-	// row was sized on; ConfirmedAt, when later, the verdict that kept it (a
-	// standing cut is kept while the risk stays over budget).
+	// row was sized on: every generation sizes the batch afresh.
 	VerdictStatus      string    `json:"verdict_status"`
 	VerdictAt          time.Time `json:"verdict_at,omitzero"`
 	VerdictFingerprint string    `json:"verdict_fingerprint"`
-	ConfirmedAt        time.Time `json:"confirmed_at,omitzero"`
+	// Episode names the breach the row belongs to, from the batch's first
+	// verdict until a verdict reads within: a row re-sized inside one episode
+	// keeps its veto clock (proposal_automatic.go).
+	Episode string `json:"episode,omitempty"`
 	// Held says the row waits: the verdict cannot be measured right now, so
 	// the sizing cannot be confirmed; HoldReason says why. A held row is not
 	// sent, by the scheduler or by hand, and keeps its veto window.

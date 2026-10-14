@@ -126,6 +126,11 @@ func (e *proposalEngine) prepareOwnerQueue(ctx context.Context, p rpc.TradePropo
 			out.Blockers = shadowProposalBlockers(prop)
 			return out, nil
 		}
+		// A held mandate row waits for a verdict; nobody queues it either.
+		if blockers := mandateHeldBlockers(prop); len(blockers) > 0 {
+			out.Blockers = blockers
+			return out, nil
+		}
 		out.Proposal = &prop
 		quantity := prop.Quantity
 		if p.Quantity < 0 || p.Quantity > prop.Quantity {

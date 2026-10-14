@@ -744,7 +744,7 @@ func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPoli
 	}
 	// The mandate's forced reduction needs no bucket table: it runs whenever
 	// the risk constitution carries [mandate] (mandate_reduction.go).
-	if rows, st := e.mandateReductionProposals(policy, status, e.resolveMandateInput(policy, pos, scope, now), acct, pos, sources, marketEvents, now); st != nil {
+	if rows, st := e.mandateReductionProposals(policy, status, e.resolveMandateInput(ctx, policy, pos, scope, now), acct, pos, sources, marketEvents, now); st != nil {
 		out = append(out, rows...)
 		mandateStatus = st
 	}

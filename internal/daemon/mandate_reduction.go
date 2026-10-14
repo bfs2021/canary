@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"math"
 	"slices"
@@ -19,23 +20,27 @@ import (
 // largest risk contributor first, pre-authorised with the 30-minute veto. The
 // brake releases when risk is back in budget, not when P&L recovers.").
 //
-// While the risk constitution carries [mandate], a verdict reading reduce, or
-// over on two consecutive fresh verdicts, becomes one batch of
-// mandate_reduction rows, sized with the daemon's own evaluator on the book
-// the verdict measured: first the in-the-money long options about to expire
-// whose exercise would put the book over budget, then, cut by cut, the legs
-// behind a one-name gap breach and the largest Euler contributor, each by the
-// smallest whole step (contracts, or share lots) that takes the book to risk
-// ≤ 0.95 × budget with every gap cap met, or else by the step that cuts the
-// most risk, re-evaluated after every cut. Every row is reduce-only,
-// NeverSkipVeto, bounded by the order caps in force, and carries the verdict
-// it was sized on. A batch stands while the verdict stays over budget; a
-// verdict reading within withdraws the unsent rows (orders at the broker are
-// never cancelled); an unknown verdict, or one measured on another book than
-// the one held, holds them, unsent, with the reason. Nothing here places an
-// order: the rows go through the ordinary proposal path, and the daemon sends
-// them only when the owner lists mandate_reduction under
-// [authority].pre_authorised.
+// While the risk constitution carries [mandate], two consecutive scheduled
+// verdicts at least five minutes apart reading over or reduce (one, on a
+// gap-cap breach) start a breach episode: every generation then sizes one
+// batch of mandate_reduction rows afresh, with the daemon's own evaluator on
+// the book the verdict measured. Cut by cut, the book re-evaluated after
+// each: the largest gap loser of a name over its gap cap, then the largest
+// Euler contributor, each by the smallest whole step (contracts, or share
+// lots) that takes the book to risk ≤ 0.95 × budget with every gap cap met,
+// or else by the step that takes the most risk off. Shares that cover short
+// options are only sold once those options are bought back; a long option
+// that protects its own stock, and every other protection leg, is never
+// sold. An in-the-money long option close to expiry is cut first only where
+// its exercise alone would push the planned book over budget. Every row is
+// reduce-only, NeverSkipVeto, bounded by the order caps in force, and carries
+// the verdict it was sized on and its episode, inside which a re-sized row
+// keeps its veto clock. A verdict reading within ends the episode and
+// withdraws the rows (orders at the broker are never cancelled); an unknown
+// verdict, or one measured on another book than the one held, holds them,
+// unsent, with the reason. Nothing here places an order: the rows go through
+// the ordinary proposal path, and the daemon sends them only when the owner
+// lists mandate_reduction under [authority].pre_authorised.
 
 const (
 	// mandateReductionTargetFactor sizes the batch to this share of the
@@ -44,12 +49,19 @@ const (
 	// mandateReductionExpirySessions is how close to expiry an in-the-money
 	// long option is judged by its exercise.
 	mandateReductionExpirySessions = 3
-	// mandateReductionOverReadings is how many consecutive fresh over
-	// verdicts start the batch; a reduce verdict starts it at once.
+	// mandateReductionOverReadings is how many consecutive scheduled over or
+	// reduce verdicts start the batch; a gap-cap breach starts it at one.
 	mandateReductionOverReadings = 2
 	// mandateReductionMaxCuts bounds the sizing loop.
 	mandateReductionMaxCuts = 64
 	mandateReductionEpsilon = 1e-6
+)
+
+// Roles of a leg in the batch.
+const (
+	mandateRoleFree    = ""        // cut on its own
+	mandateRoleStock   = "stock"   // a stock that covers short options (unit)
+	mandateRoleCovered = "covered" // a short option a stock covers: bought back first
 )
 
 // mandateSizingHeldCode is the preview and submit refusal of a held row.
@@ -60,14 +72,15 @@ const mandateSizingHeldCode = "mandate_sizing_held"
 const automaticHoldMandateVerdict = "held: the mandate verdict this reduction was sized on cannot be confirmed right now; it is placed once a fresh verdict confirms the sizing, or withdrawn once the risk is back within budget, without a new veto window"
 
 // mandateReductionInput is what the forced reduction reads: the kept verdict
-// and the evaluator input it rests on, the order caps, and the standing rows
-// of the last generation. The engine gathers it; tests build it directly.
+// and the evaluator input it rests on, the order caps, the working orders,
+// and the standing rows and episode of the last generation. The engine
+// gathers it; tests build it directly.
 type mandateReductionInput struct {
 	// Active is true while the constitution carries [mandate].
 	Active bool
 	// Result and Input are the kept verdict and the evaluator input it was
-	// measured on; EvaluatedAt when; OverStreak the consecutive over or
-	// reduce readings (mandateVerdictCache).
+	// measured on; EvaluatedAt when; OverStreak the consecutive scheduled
+	// over or reduce readings (mandateVerdictCache).
 	Result      *rpc.MandateRiskResult
 	Input       *mandate.Input
 	EvaluatedAt time.Time
@@ -77,29 +90,32 @@ type mandateReductionInput struct {
 	// in force in base currency (0 when unknown). Both bound one order.
 	MaxOrderNotional float64
 	OrderCapBase     float64
-	// HedgeSymbol reports a Rulebook hedge symbol: a long put on one is
-	// protection and never a candidate.
-	HedgeSymbol func(string) bool
 	// Ignored reports a row key the owner ignored; its leg leaves the batch.
 	Ignored func(key string) bool
+	// WorkingOrder reports a same-side order working at the broker for a
+	// held line, and whether it is conditional (a stop or a trail): netting
+	// holds a reduction row behind any of them, and a conditional one may
+	// stand for good, so its line leaves the plan. Nil reads none.
+	WorkingOrder func(row rpc.PositionView, action string) (found, conditional bool)
 	// Previous holds the mandate_reduction rows of the last generation in
-	// this scope: the standing batch to keep, extend, hold or withdraw.
+	// this scope, and Episode its breach episode.
 	Previous []rpc.TradeProposal
+	Episode  string
 }
 
 // resolveMandateInput honours the test seam, else reads the daemon's own
-// verdict cache and order caps; the standing rows and the ignore check come
-// from the engine either way unless the seam set them.
-func (e *proposalEngine) resolveMandateInput(policy protectionPolicy, pos *rpc.PositionsResult, scope brokerStateScope, now time.Time) mandateReductionInput {
+// verdict cache, order caps and working orders; the standing rows, the
+// episode and the ignore check come from the engine unless the seam set them.
+func (e *proposalEngine) resolveMandateInput(ctx context.Context, policy protectionPolicy, pos *rpc.PositionsResult, scope brokerStateScope, now time.Time) mandateReductionInput {
 	var in mandateReductionInput
 	if e != nil && e.mandateInput != nil {
 		in = e.mandateInput(now)
 	} else {
-		in = e.mandateReductionInput(policy, pos)
+		in = e.mandateReductionInput(ctx, policy, pos, scope)
 	}
 	if e != nil {
-		if in.Previous == nil {
-			in.Previous = e.standingMandateRows(scope)
+		if in.Previous == nil && in.Episode == "" {
+			in.Previous, in.Episode = e.standingMandateRows(scope)
 		}
 		if in.Ignored == nil {
 			in.Ignored = func(key string) bool { return e.isIgnored(scope, key) }
@@ -108,9 +124,10 @@ func (e *proposalEngine) resolveMandateInput(policy protectionPolicy, pos *rpc.P
 	return in
 }
 
-// mandateReductionInput reads the kept verdict for the policy in force and
-// the order caps. A daemon without the risk-policy manager reads inactive.
-func (e *proposalEngine) mandateReductionInput(policy protectionPolicy, pos *rpc.PositionsResult) mandateReductionInput {
+// mandateReductionInput reads the kept verdict for the policy in force, the
+// order caps and the broker's working orders. A daemon without the
+// risk-policy manager reads inactive.
+func (e *proposalEngine) mandateReductionInput(ctx context.Context, policy protectionPolicy, pos *rpc.PositionsResult, scope brokerStateScope) mandateReductionInput {
 	in := mandateReductionInput{MaxOrderNotional: policy.Buckets.RiskReduction.MaxOrderNotional}
 	if e == nil || e.server == nil || e.server.riskPolicies == nil {
 		return in
@@ -121,23 +138,47 @@ func (e *proposalEngine) mandateReductionInput(policy protectionPolicy, pos *rpc
 		return in
 	}
 	in.Active = true
-	in.HedgeSymbol = e.rulebookPolicy().IsHedgeSymbol
 	if kept := s.mandateVerdicts.kept(); kept.result != nil && kept.fingerprint == c.FingerprintKey() {
 		in.Result, in.Input, in.EvaluatedAt, in.OverStreak = kept.result, kept.input, kept.evaluatedAt, kept.overStreak
 	}
 	if limits := s.orderLimitsInForce(protectionCoverageBaseCurrency(pos)); limits.Complete {
 		in.OrderCapBase = limits.CapBase
 	}
+	if ctx != nil {
+		if snapshot, inventoryScope, err := s.brokerOpenOrderInventory(ctx, false); err == nil && sameBrokerScope(inventoryScope, scope) {
+			in.WorkingOrder = func(row rpc.PositionView, action string) (bool, bool) {
+				secType := positionWireSecType(row.SecType)
+				probe := rpc.TradeProposal{Action: action, SecType: secType, Contract: proposalContractFromPosition(row, secType)}
+				order, found, _ := sameContractWorkingOrder(snapshot, inventoryScope, probe)
+				return found, found && mandateConditionalOrder(order.OrderType)
+			}
+		}
+	}
 	return in
 }
 
-// standingMandateRows returns the last generation's mandate rows for scope.
-func (e *proposalEngine) standingMandateRows(scope brokerStateScope) []rpc.TradeProposal {
+// mandateConditionalOrder reports a stop or a trail: an order that may work
+// at the broker for good without filling.
+func mandateConditionalOrder(orderType string) bool {
+	switch strings.ToUpper(strings.TrimSpace(orderType)) {
+	case rpc.OrderTypeTRAIL, rpc.OrderTypeTRAILLIMIT, "STP", "STP LMT", "STOP", "STOP LIMIT":
+		return true
+	}
+	return false
+}
+
+// standingMandateRows returns the last generation's mandate rows and breach
+// episode for scope.
+func (e *proposalEngine) standingMandateRows(scope brokerStateScope) ([]rpc.TradeProposal, string) {
 	e.mu.Lock()
 	snap := e.snapshot
 	e.mu.Unlock()
 	if snap.Kind == "" || !sameBrokerScope(brokerStateScope{Account: snap.AccountID, Mode: snap.AccountMode}, scope) {
-		return nil
+		return nil, ""
+	}
+	episode := ""
+	if snap.MandateReduction != nil {
+		episode = snap.MandateReduction.Episode
 	}
 	var out []rpc.TradeProposal
 	for _, p := range snap.Proposals {
@@ -149,7 +190,7 @@ func (e *proposalEngine) standingMandateRows(scope brokerStateScope) []rpc.Trade
 		row.Details = slices.Clone(p.Details)
 		out = append(out, row)
 	}
-	return out
+	return out, episode
 }
 
 // mandateCut is one leg of the batch: the evaluator leg, the position row
@@ -160,6 +201,10 @@ type mandateCut struct {
 	row  rpc.PositionView
 	full int // the whole units held, the most the cut may reach
 	step int // the lot the cut moves in: 1 contract, or 1, 10 or 100 shares
+	// role is free, stock (it covers short options: unit) or covered (a
+	// short option a stock covers, bought back before that stock is sold).
+	role string
+	unit *mandateUnit
 	// units is the cut; rank its place in the batch (1 = first); phase why.
 	units int
 	rank  int
@@ -172,15 +217,62 @@ type mandateCut struct {
 	gapCap       *float64
 	sessions     *int
 	riskCut      float64
-	// standing says the cut was kept from the last generation, sized on the
-	// verdict named by sizedStatus, sizedAt and sizedFingerprint, with the
-	// order quantity prevQty for prevUnits.
-	standing         bool
-	sizedStatus      string
-	sizedAt          time.Time
-	sizedFingerprint string
-	prevQty          int
-	prevUnits        int
+	// prevUnits and prevQty are the last generation's cut and order on this
+	// line, when its position has not moved since.
+	prevUnits int
+	prevQty   int
+}
+
+// mandateUnit is a stock and the short options of its own underlying it
+// covers: short calls over long shares, short puts over a short sale. The
+// shares are never cut below what the remaining short options need, so an
+// assignment can never flip the line; cutting further buys the options back
+// first. fixedNeed is the cover owed to short options the batch may not
+// touch; slack a cover deficit the book already carries, which a cut may
+// never deepen.
+type mandateUnit struct {
+	stock     *mandateCut
+	covered   []*mandateCut
+	fixedNeed float64
+	slack     float64
+}
+
+// need is the shares the unit's short options need with the given cuts.
+func (u *mandateUnit) need(units func(*mandateCut) int) float64 {
+	need := u.fixedNeed
+	for _, o := range u.covered {
+		need += (math.Abs(o.leg.Quantity) - float64(units(o))) * o.leg.Multiplier
+	}
+	return need
+}
+
+// couple returns the cuts a stock cut of s units needs: the covered options
+// bought back, deepest in the money first, until the shares left cover what
+// remains, never below their own cut so far. ok is false when even buying
+// every one back leaves the shares short of cover.
+func (u *mandateUnit) couple(s int) (map[string]int, bool) {
+	out := map[string]int{u.stock.id: s}
+	left := math.Abs(u.stock.leg.Quantity) - float64(s) + u.slack
+	need := u.need(func(o *mandateCut) int { return o.units })
+	for _, o := range u.covered {
+		if need <= left+1e-9 {
+			break
+		}
+		k := min(o.full-o.units, int(math.Ceil((need-left)/o.leg.Multiplier-1e-9)))
+		if k <= 0 {
+			continue
+		}
+		out[o.id] = o.units + k
+		need -= float64(k) * o.leg.Multiplier
+	}
+	return out, need <= left+1e-9
+}
+
+// freeNow is how many shares may be sold this cycle with the short options
+// as they are held now: a buyback the batch asks for must fill first.
+func (u *mandateUnit) freeNow() int {
+	held := math.Abs(u.stock.row.Quantity) - u.need(func(*mandateCut) int { return 0 })
+	return max(0, int(math.Floor(held+1e-9)))
 }
 
 // mandateBatch is the sized batch.
@@ -194,16 +286,16 @@ type mandateBatch struct {
 	leftOut    []string
 }
 
-// mandateReductionProposals turns the kept verdict into the batch, keeps or
-// extends the standing one, holds it while the verdict cannot be trusted for
-// the book as held, and withdraws it once the risk is back within budget. It
-// returns no status while the constitution carries no [mandate]: nothing
-// changes anywhere.
+// mandateReductionProposals sizes the batch afresh from the kept verdict,
+// holds the standing rows while no verdict can be trusted for the book as
+// held, and withdraws them once the risk is back within budget. It returns
+// no status while the constitution carries no [mandate]: nothing changes
+// anywhere.
 func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, status rpc.ProtectionPolicyStatus, in mandateReductionInput, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, now time.Time) ([]rpc.TradeProposal, *rpc.TradeProposalMandateStatus) {
 	if !in.Active || pos == nil {
 		return nil, nil
 	}
-	st := &rpc.TradeProposalMandateStatus{BaseCurrency: protectionCoverageBaseCurrency(pos)}
+	st := &rpc.TradeProposalMandateStatus{BaseCurrency: protectionCoverageBaseCurrency(pos), Episode: in.Episode}
 	standing := mandateStandingRows(in.Previous)
 	hold := func(state, why string) ([]rpc.TradeProposal, *rpc.TradeProposalMandateStatus) {
 		st.State, st.Reason = state, why
@@ -234,10 +326,10 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	case in.EvaluatedAt.IsZero() || age > mandateVerdictMaxAge:
 		return hold(rpc.MandateReductionUnknown, fmt.Sprintf("the verdict is %s old; the batch trusts one up to %s", formatQuoteAge(age), mandateVerdictMaxAge))
 	case v.Status == mandate.StatusWithin:
-		// The brake releases when the risk is back in budget: every standing
-		// row leaves the set, so a waiting automatic record is superseded.
-		// Nothing is cancelled at the broker.
-		st.State, st.Withdrawn = rpc.MandateReductionWithin, len(standing)
+		// The brake releases when the risk is back in budget: the episode
+		// ends and every standing row leaves the set, so a waiting automatic
+		// record is superseded. Nothing is cancelled at the broker.
+		st.State, st.Withdrawn, st.Episode = rpc.MandateReductionWithin, len(standing), ""
 		st.Reason = fmt.Sprintf("the mandate risk %s a year is within the budget %s", mandateMoney(st.RiskAnnualBase, ccy), mandateMoney(st.BudgetAnnualSD, ccy))
 		if st.Withdrawn > 0 {
 			st.Reason += fmt.Sprintf("; %d standing %s withdrawn, orders already at the broker are untouched", st.Withdrawn, pluralNoun(st.Withdrawn, "row"))
@@ -249,15 +341,18 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	if drift := mandateBookDrift(*in.Input, pos, now); drift != "" {
 		return hold(rpc.MandateReductionBookChanged, fmt.Sprintf("the positions changed since the verdict of %s (%s); the batch waits for a verdict on the book as it is", mandateClock(v.AsOf), drift))
 	}
-	if v.Status == mandate.StatusOver && in.OverStreak < mandateReductionOverReadings && len(standing) == 0 {
+	gapBreach := v.Stresses != nil && len(v.Stresses.GapBreaches) > 0
+	if in.Episode == "" && in.OverStreak < mandateReductionOverReadings && (!gapBreach || in.OverStreak < 1) {
 		st.State = rpc.MandateReductionWatching
-		st.Reason = fmt.Sprintf("one verdict reads over (%s of the budget %s); a second consecutive one starts the batch", mandatePctOfBudget(v), mandateMoney(st.BudgetAnnualSD, ccy))
+		st.Reason = fmt.Sprintf("the verdict reads %s (%s of the budget %s); a confirming scheduled verdict at least %s later starts the batch",
+			v.Status, mandatePctOfBudget(v), mandateMoney(st.BudgetAnnualSD, ccy), mandateStreakSpacing)
 		return nil, st
 	}
-	// A breach: size the batch, from the standing cuts where they still
-	// apply, on the verdict's own book.
+	if st.Episode == "" {
+		st.Episode = "mandate-" + v.AsOf.UTC().Format("20060102T150405Z") + "-" + st.VerdictFingerprint
+	}
 	candidates, leftOut := e.mandateCandidates(policy, in, pos, now)
-	batch := mandateSizeBatch(*in.Input, candidates, mandateStandingCuts(standing, candidates), now)
+	batch := mandateSizeBatch(*in.Input, candidates, standing, now)
 	batch.leftOut = append(leftOut, batch.leftOut...)
 	st.LeftOut = batch.leftOut
 	st.BudgetAnnualSD, st.TargetAnnualSD, st.RiskAnnualBase = batch.budget, batch.target, batch.riskBefore
@@ -273,26 +368,43 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	st.ProjectedRiskAnnualBase = new(batch.riskAfter)
 	var out []rpc.TradeProposal
 	for _, c := range batch.cuts {
-		p := e.mandateReductionRow(policy, status, sources, now, in, st, batch, c, ccy)
+		qty, waits := mandateCycleQuantity(c, in, st.BaseCurrency)
+		st.Plan = append(st.Plan, rpc.TradeProposalMandatePlanOrder{Rank: c.rank, Contract: budgetDisplayContract(c.row), Action: mandateAction(c.row),
+			Units: c.units, Quantity: qty, Waits: waits, Phase: c.phase, ContributionPct: c.contribution, RiskCutAnnualBase: c.riskCut})
+		if qty <= 0 {
+			continue
+		}
+		p := e.mandateReductionRow(policy, status, sources, now, in, st, batch, c, qty, waits, ccy)
 		if c.row.Stale && strings.EqualFold(positionWireSecType(c.row.SecType), "OPT") {
 			budgetBlock(&p, rpc.TradingBlocker{Code: "fresh_option_quote_required", Message: "the position mark is stale, so the order cannot be priced from it", Action: "Refresh during the options session (09:30-16:00 ET) so the mark is current before acting."})
 		}
 		enrichProposalPositionContext(&p, c.row, acct)
 		applyMarketEventFlagsToProposal(&p, marketEvents)
-		st.Plan = append(st.Plan, rpc.TradeProposalMandatePlanOrder{Rank: c.rank, Contract: budgetDisplayContract(c.row), Action: p.Action,
-			Units: c.units, Quantity: p.Quantity, Phase: c.phase, ContributionPct: c.contribution, RiskCutAnnualBase: c.riskCut})
 		out = append(out, p)
 	}
 	st.Rows = len(out)
 	st.State = rpc.MandateReductionReducing
 	st.Reason = fmt.Sprintf("the verdict reads %s (%s of the budget %s); %d %s sized to take the risk to %s a year", v.Status, mandatePctOfBudget(v), mandateMoney(batch.budget, ccy),
-		len(out), pluralNoun(len(out), "row"), mandateMoney(batch.riskAfter, ccy))
+		len(batch.cuts), pluralNoun(len(batch.cuts), "cut"), mandateMoney(batch.riskAfter, ccy))
 	if batch.reached {
 		st.Reason += fmt.Sprintf(", inside the %s target", mandateMoney(batch.target, ccy))
 	} else {
 		st.Reason += fmt.Sprintf("; the batch does not reach the %s target, nothing reduces further", mandateMoney(batch.target, ccy))
 	}
+	if waiting := len(batch.cuts) - len(out); waiting == 1 {
+		st.Reason += "; 1 cut waits for the orders ahead of it to fill"
+	} else if waiting > 1 {
+		st.Reason += fmt.Sprintf("; %d cuts wait for the orders ahead of them to fill", waiting)
+	}
 	return out, st
+}
+
+// mandateAction is the reducing side of a held line.
+func mandateAction(row rpc.PositionView) string {
+	if row.Quantity < 0 {
+		return rpc.OrderActionBuy
+	}
+	return rpc.OrderActionSell
 }
 
 // mandateClock is a verdict time as the rows state it.
@@ -397,6 +509,9 @@ func (e *proposalEngine) mandateHeldRows(policy protectionPolicy, status rpc.Pro
 	st.State, st.Held, st.HoldReason, st.Rows = rpc.MandateReductionHeld, true, why, len(out)
 	st.VerdictStatus, st.VerdictAt, st.VerdictFingerprint = first.VerdictStatus, first.VerdictAt, first.VerdictFingerprint
 	st.RiskAnnualBase, st.BudgetAnnualSD, st.TargetAnnualSD = first.RiskAnnualBase, first.BudgetAnnualSD, first.TargetAnnualSD
+	if st.Episode == "" {
+		st.Episode = first.Episode
+	}
 	st.Reason = fmt.Sprintf("%d standing %s held: %s", len(out), pluralNoun(len(out), "row"), why)
 	return out, st
 }
@@ -437,18 +552,22 @@ func mandateMergedLegs(legs []mandate.Leg) []mandate.Leg {
 	return out
 }
 
-// mandateCandidates lists the legs the batch may cut: every stock or option
-// leg of the verdict's book that is still held, except a long put on a
-// Rulebook hedge symbol (protection), a leg of a multi-leg unit (the strategy
-// workflow reduces those), and a leg whose row the owner ignored. leftOut
-// names what was left out and why.
+// mandateCandidates lists the legs the batch may cut and ties every stock to
+// the short options it covers. Never cut: a protection leg (a hedge-listed
+// put, a long option that protects its own stock, a leg the option policy
+// derives as protection: the budget governor's test), a leg of a multi-leg
+// unit (the strategy workflow reduces it), a row the owner ignored, and a
+// line a working stop or trail holds (netting would hold the row for as
+// long as it works). leftOut names what was left out and why.
 func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateReductionInput, pos *rpc.PositionsResult, now time.Time) (map[string]*mandateCut, []string) {
 	rows := mandatePositionRows(pos)
-	intents := directionalOptionIntents(policy.Buckets.TrailingStop.Options)
-	unitLegs, ambiguous := optionExitStrategyScope(pos, intents, now)
+	cfg := policy.Buckets.TrailingStop.Options
+	unitLegs, ambiguous := optionExitStrategyScope(pos, directionalOptionIntents(cfg), now)
+	pol := e.rulebookPolicy()
+	legs := mandateMergedLegs(in.Input.Legs)
 	out := map[string]*mandateCut{}
 	var leftOut []string
-	for _, leg := range mandateMergedLegs(in.Input.Legs) {
+	for _, leg := range legs {
 		row, held := rows[leg.ID]
 		if !held || leg.Quantity == 0 || row.Quantity == 0 || (leg.Quantity > 0) != (row.Quantity > 0) {
 			continue
@@ -457,20 +576,24 @@ func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateRe
 		if positionWireSecType(row.SecType) == "STK" {
 			name = normSym(row.Symbol)
 		}
-		action := rpc.OrderActionSell
-		if row.Quantity < 0 {
-			action = rpc.OrderActionBuy
-		}
+		action := mandateAction(row)
+		option := leg.Kind == mandate.KindOption
 		switch {
-		case leg.Kind == mandate.KindOption && leg.Quantity > 0 && leg.Right == "P" && in.HedgeSymbol != nil && in.HedgeSymbol(row.Symbol):
-			leftOut = append(leftOut, name+" (protection: a hedge-listed put)")
+		case option && leg.Quantity > 0 && budgetLegIsProtection(cfg, row, pos, unitLegs, ambiguous, pol, now):
+			leftOut = append(leftOut, name+" (protection: the reduction never sells it)")
 			continue
-		case leg.Kind == mandate.KindOption && (unitLegs[row.ConID] || ambiguous[normSym(row.Symbol)]):
+		case option && (unitLegs[row.ConID] || ambiguous[normSym(row.Symbol)]):
 			leftOut = append(leftOut, name+" (a leg of a multi-leg unit; reduce it through the strategy workflow)")
 			continue
 		case in.Ignored != nil && in.Ignored(proposalKey(rpc.TradeProposalBucketMandateReduction, proposalContractFromPosition(row, positionWireSecType(row.SecType)), action)):
 			leftOut = append(leftOut, name+" (its row is ignored)")
 			continue
+		}
+		if in.WorkingOrder != nil {
+			if found, conditional := in.WorkingOrder(row, action); found && conditional {
+				leftOut = append(leftOut, name+" (a working stop or trail holds this line, so the reduction cannot "+strings.ToLower(action)+" beside it and the next line is cut instead)")
+				continue
+			}
 		}
 		full := int(math.Floor(math.Min(math.Abs(leg.Quantity), math.Abs(row.Quantity)) + 1e-9))
 		if full <= 0 {
@@ -481,6 +604,44 @@ func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateRe
 			c.step = mandateShareLot(full)
 		}
 		out[leg.ID] = c
+	}
+	// Tie each stock to the short options of its own underlying it covers;
+	// the ones the batch may not touch still need their cover.
+	for _, stock := range out {
+		if stock.leg.Kind != mandate.KindStock {
+			continue
+		}
+		right := "C"
+		if stock.leg.Quantity < 0 {
+			right = "P"
+		}
+		u := &mandateUnit{stock: stock}
+		for _, leg := range legs {
+			if leg.Kind != mandate.KindOption || leg.Quantity >= 0 || leg.Right != right || leg.Underlying != stock.leg.Underlying {
+				continue
+			}
+			if c, ok := out[leg.ID]; ok {
+				u.covered = append(u.covered, c)
+			} else {
+				u.fixedNeed += math.Abs(leg.Quantity) * leg.Multiplier
+			}
+		}
+		if len(u.covered) == 0 && u.fixedNeed == 0 {
+			continue
+		}
+		// Deepest in the money first: the lowest call strike, the highest
+		// put strike.
+		slices.SortStableFunc(u.covered, func(a, b *mandateCut) int {
+			if right == "C" {
+				return cmp.Compare(a.leg.Strike, b.leg.Strike)
+			}
+			return cmp.Compare(b.leg.Strike, a.leg.Strike)
+		})
+		u.slack = max(0, u.need(func(*mandateCut) int { return 0 })-math.Abs(stock.leg.Quantity))
+		stock.role, stock.unit = mandateRoleStock, u
+		for _, o := range u.covered {
+			o.role = mandateRoleCovered
+		}
 	}
 	return out, leftOut
 }
@@ -499,45 +660,37 @@ func mandateShareLot(shares int) int {
 	}
 }
 
-// mandateStandingCuts reads the standing batch's cuts onto the candidates:
-// a row whose leg is still held at the quantity it was sized on keeps its
-// cut, rank, phase and the verdict it was sized on; any other row starts
-// again.
-func mandateStandingCuts(standing []rpc.TradeProposal, candidates map[string]*mandateCut) []*mandateCut {
-	var out []*mandateCut
-	for _, p := range standing {
-		c, ok := candidates[mandateLegID(rpc.PositionView{ConID: p.Contract.ConID})]
-		if !ok || c.units > 0 || p.Mandate.Units <= 0 || p.Mandate.Units > c.full || p.PositionQuantity != c.row.Quantity {
-			continue
-		}
-		c.units, c.rank, c.phase, c.standing = p.Mandate.Units, len(out)+1, p.Mandate.Phase, true
-		c.gapLoss, c.gapCap, c.sessions = p.Mandate.GapLossBase, p.Mandate.GapCapBase, p.Mandate.SessionsToExpiry
-		c.sizedStatus, c.sizedAt, c.sizedFingerprint = p.Mandate.VerdictStatus, p.Mandate.VerdictAt, p.Mandate.VerdictFingerprint
-		c.prevQty, c.prevUnits = p.Quantity, p.Mandate.Units
-		out = append(out, c)
-	}
-	return out
+// mandateSizer sizes one batch on the verdict's book.
+type mandateSizer struct {
+	in         mandate.Input
+	candidates map[string]*mandateCut
+	ids        []string
+	cuts       []*mandateCut
+	budget     float64
+	target     float64
+	leftOut    []string
+	// expiry and sessions are the expiry gate's cuts, which lead every pass.
+	expiry   map[string]int
+	sessions map[string]int
 }
 
-// mandateBook returns the book with every cut applied, extra at extraUnits
-// in place of its own: each cut leg's quantity moves toward zero by its
-// units, never past it. in carries one leg per contract.
-func mandateBook(in mandate.Input, cuts []*mandateCut, extra *mandateCut, extraUnits int) mandate.Input {
-	byID := map[string]int{}
-	for _, c := range cuts {
-		byID[c.id] = c.units
-	}
-	if extra != nil {
-		byID[extra.id] = extraUnits
-	}
-	out := in
-	out.Legs = slices.Clone(in.Legs)
+// book is the evaluator input with every cut applied, over in place of a
+// cut's own units.
+func (z *mandateSizer) book(over map[string]int) mandate.Input {
+	out := z.in
+	out.Legs = slices.Clone(z.in.Legs)
 	for i := range out.Legs {
-		units := byID[out.Legs[i].ID]
+		l := &out.Legs[i]
+		units := 0
+		if c, ok := z.candidates[l.ID]; ok {
+			units = c.units
+		}
+		if u, ok := over[l.ID]; ok {
+			units = u
+		}
 		if units <= 0 {
 			continue
 		}
-		l := &out.Legs[i]
 		cut := math.Min(float64(units), math.Abs(l.Quantity))
 		if l.Quantity > 0 {
 			l.Quantity -= cut
@@ -546,6 +699,330 @@ func mandateBook(in mandate.Input, cuts []*mandateCut, extra *mandateCut, extraU
 		}
 	}
 	return out
+}
+
+// eval evaluates book(over).
+func (z *mandateSizer) eval(over map[string]int) mandate.Verdict {
+	return mandate.Evaluate(z.book(over))
+}
+
+// commit applies a move: each cut raised, joining the batch in the given
+// phase the first time; covered options go ahead of their stock.
+func (z *mandateSizer) commit(cuts map[string]int, phase string) {
+	var moved []*mandateCut
+	for id, units := range cuts {
+		if c := z.candidates[id]; units > c.units {
+			c.units = units
+			moved = append(moved, c)
+		}
+	}
+	slices.SortStableFunc(moved, func(a, b *mandateCut) int {
+		if r := cmp.Compare(boolRank(a.role != mandateRoleCovered), boolRank(b.role != mandateRoleCovered)); r != 0 {
+			return r
+		}
+		return strings.Compare(a.id, b.id)
+	})
+	for _, c := range moved {
+		if !slices.Contains(z.cuts, c) {
+			c.phase = phase
+			z.cuts = append(z.cuts, c)
+		}
+	}
+}
+
+// move sizes one leg's next cut against f to limit: a stock that covers
+// short options moves with the buybacks it needs (scanned, the coupled f not
+// being convex); any other leg on its own grid. It returns the cuts, and
+// false when no step lowers f.
+func (z *mandateSizer) move(c *mandateCut, f func(over map[string]int) float64, limit float64) (map[string]int, bool) {
+	if c.unit == nil {
+		units, ok := mandateCutTo(c, c.units, func(u int) float64 { return f(map[string]int{c.id: u}) }, limit)
+		return map[string]int{c.id: units}, ok
+	}
+	steps := append([]int{c.units}, mandateCutSteps(c, c.units)...)
+	memo := map[int]float64{}
+	g := func(s int) float64 {
+		if v, ok := memo[s]; ok {
+			return v
+		}
+		v := math.Inf(1)
+		if cuts, ok := c.unit.couple(s); ok {
+			v = f(cuts)
+		}
+		memo[s] = v
+		return v
+	}
+	i, ok := mandateScanTo(steps, g, limit)
+	if !ok {
+		return nil, false
+	}
+	cuts, _ := c.unit.couple(steps[i])
+	return cuts, true
+}
+
+// mandateSizeBatch sizes the batch afresh on the verdict's book: cut by cut,
+// re-evaluating the book after each, the gap breaches and then the largest
+// Euler contributor; then the expiry gate, sizing again around any option it
+// cuts; then the damping against the standing batch.
+func mandateSizeBatch(verdictBook mandate.Input, candidates map[string]*mandateCut, standing []rpc.TradeProposal, now time.Time) mandateBatch {
+	in := verdictBook
+	in.Legs = mandateMergedLegs(verdictBook.Legs)
+	z := &mandateSizer{in: in, candidates: candidates, expiry: map[string]int{}, sessions: map[string]int{}}
+	base := mandate.Evaluate(in)
+	z.budget = base.Capital.BudgetAnnualSD
+	z.target = mandateReductionTargetFactor * z.budget
+	for _, rep := range base.Legs {
+		if c, ok := candidates[rep.ID]; ok {
+			c.contribution = rep.ContributionPct
+		}
+	}
+	for id := range candidates {
+		z.ids = append(z.ids, id)
+	}
+	slices.Sort(z.ids)
+	for pass := 0; ; pass++ {
+		z.reset()
+		z.sizeMain()
+		if pass == 3 || !z.expiryGate(now) {
+			break
+		}
+	}
+	mandateKeepStanding(z, standing)
+	batch := mandateBatch{budget: z.budget, target: z.target, leftOut: z.leftOut}
+	if base.Risk != nil {
+		batch.riskBefore = base.Risk.SDAnnualBase
+	}
+	// Expiry cuts lead the batch; the rest keep the order they were cut in,
+	// a buyback always ahead of the shares it frees.
+	cuts := slices.DeleteFunc(slices.Clone(z.cuts), func(c *mandateCut) bool { return c.units <= 0 })
+	slices.SortStableFunc(cuts, func(a, b *mandateCut) int {
+		return cmp.Compare(boolRank(a.phase != rpc.MandatePhaseExpiry), boolRank(b.phase != rpc.MandatePhaseExpiry))
+	})
+	for _, c := range cuts {
+		if c.role == mandateRoleCovered {
+			continue
+		}
+		batch.cuts = append(batch.cuts, c)
+		if c.unit == nil {
+			continue
+		}
+		for _, o := range c.unit.covered {
+			if o.units > 0 && slices.Contains(cuts, o) && !slices.Contains(batch.cuts, o) {
+				batch.cuts = slices.Insert(batch.cuts, len(batch.cuts)-1, o)
+			}
+		}
+	}
+	for _, c := range cuts {
+		if !slices.Contains(batch.cuts, c) {
+			batch.cuts = append(batch.cuts, c)
+		}
+	}
+	before := batch.riskBefore
+	applied := map[string]int{}
+	for id := range candidates {
+		applied[id] = 0
+	}
+	for i, c := range batch.cuts {
+		c.rank = i + 1
+		applied[c.id] = c.units
+		risk := mandateRisk(z.eval(applied))
+		if math.IsInf(risk, 0) {
+			risk = before
+		}
+		c.riskCut = before - risk
+		before = risk
+	}
+	batch.riskAfter = before
+	batch.reached = mandateTargetReached(z.eval(nil), batch.target)
+	return batch
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// mandateKeepStanding damps the batch against small moves of the risk: a
+// line whose position has not moved keeps the last generation's cut when the
+// fresh one is smaller by no more than one step (never kept larger than
+// that, and never kept where the fresh batch drops the line), so a steady
+// risk does not re-size, and re-revise, a row every verdict. The buybacks a
+// kept stock cut needs are raised to match.
+func mandateKeepStanding(z *mandateSizer, standing []rpc.TradeProposal) {
+	for _, p := range standing {
+		c, ok := z.candidates[mandateLegID(rpc.PositionView{ConID: p.Contract.ConID})]
+		if !ok || p.PositionQuantity != c.row.Quantity {
+			continue
+		}
+		c.prevUnits, c.prevQty = p.Mandate.Units, p.Quantity
+		if c.units > 0 && c.units < p.Mandate.Units && p.Mandate.Units <= min(c.units+c.step, c.full) {
+			c.units = p.Mandate.Units
+		}
+	}
+	for _, c := range slices.Clone(z.cuts) {
+		if c.unit == nil || c.units <= 0 {
+			continue
+		}
+		if cuts, ok := c.unit.couple(c.units); ok {
+			z.commit(cuts, c.phase)
+		}
+	}
+}
+
+// reset starts a sizing pass from the expiry gate's cuts alone.
+func (z *mandateSizer) reset() {
+	z.cuts, z.leftOut = nil, nil
+	for _, c := range z.candidates {
+		c.units, c.phase, c.gapLoss, c.gapCap, c.sessions = 0, "", nil, nil, nil
+	}
+	ids := make([]string, 0, len(z.expiry))
+	for id := range z.expiry {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		c := z.candidates[id]
+		s := z.sessions[id]
+		c.units, c.phase, c.sessions = z.expiry[id], rpc.MandatePhaseExpiry, &s
+		z.cuts = append(z.cuts, c)
+	}
+}
+
+// sizeMain cuts gap breaches first, then the largest contributor, until the
+// book reaches the target or nothing reduces further.
+func (z *mandateSizer) sizeMain() {
+	skipped := map[string]bool{}
+	exhausted := map[string]bool{}
+	for range mandateReductionMaxCuts {
+		v := z.eval(nil)
+		if math.IsInf(mandateRisk(v), 0) {
+			return
+		}
+		if name := mandateFirstBreach(v, skipped); name != "" {
+			if !z.gapStep(v, name) {
+				skipped[name] = true
+				z.leftOut = append(z.leftOut, name+" (its gap loss is over the cap, but no held leg of it can be reduced to bring it under)")
+			}
+			continue
+		}
+		if mandateRisk(v) <= z.target+mandateReductionEpsilon {
+			return
+		}
+		share := map[string]float64{}
+		for _, rep := range v.Legs {
+			share[rep.ID] = rep.ContributionPct
+		}
+		var top *mandateCut
+		for _, id := range z.ids {
+			c := z.candidates[id]
+			if c.units >= c.full || exhausted[c.id] || share[c.id] <= mandateReductionEpsilon {
+				continue
+			}
+			if top == nil || share[c.id] > share[top.id] {
+				top = c
+			}
+		}
+		if top == nil {
+			return
+		}
+		cuts, ok := z.move(top, func(over map[string]int) float64 { return mandateRisk(z.eval(over)) }, z.target)
+		if !ok {
+			exhausted[top.id] = true
+			continue
+		}
+		z.commit(cuts, rpc.MandatePhaseRisk)
+	}
+}
+
+// gapStep cuts the largest gap loser of one breached name, the losers tried
+// in order until one lowers the name's gap loss; false when none can. A gap
+// cut never leaves the book riskier than before it.
+func (z *mandateSizer) gapStep(v mandate.Verdict, name string) bool {
+	loss, capBase := mandateGapLoss(v, name)
+	var report mandate.UnderlyingReport
+	for _, u := range v.Underlyings {
+		if u.Underlying == name {
+			report = u
+		}
+	}
+	up := report.GapUpLossBase != nil && *report.GapUpLossBase > report.GapDownLossBase
+	shock := 0.0
+	if v.Stresses != nil {
+		shock = v.Stresses.GapShockPct
+	}
+	riskNow := mandateRisk(v)
+	var losers []*mandateCut
+	losses := map[string]float64{}
+	for _, id := range z.ids {
+		c := z.candidates[id]
+		if c.units >= c.full || c.leg.Underlying != name {
+			continue
+		}
+		if l := mandateLegGapLoss(z.in, c.leg, math.Abs(c.leg.Quantity)-float64(c.units), shock, up); l > mandateReductionEpsilon {
+			losers = append(losers, c)
+			losses[c.id] = l
+		}
+	}
+	slices.SortStableFunc(losers, func(a, b *mandateCut) int { return cmp.Compare(losses[b.id], losses[a.id]) })
+	for _, c := range losers {
+		cuts, ok := z.move(c, func(over map[string]int) float64 {
+			after := z.eval(over)
+			if mandateRisk(after) > riskNow+mandateReductionEpsilon {
+				return math.Inf(1)
+			}
+			l, _ := mandateGapLoss(after, name)
+			return l
+		}, capBase)
+		if !ok {
+			continue
+		}
+		z.commit(cuts, rpc.MandatePhaseGap)
+		c.gapLoss, c.gapCap = new(loss), new(capBase)
+		return true
+	}
+	return false
+}
+
+// expiryGate checks the planned book against the exercise of every
+// in-the-money long option within three sessions of expiry: where the
+// delivered shares alone would push the planned book over budget, adding
+// risk, the option is cut, ahead of the batch, by the fewest contracts that
+// keep the exercised book inside the target, or closed. It reports whether
+// any expiry cut grew, so the batch is sized again around it.
+func (z *mandateSizer) expiryGate(now time.Time) bool {
+	held := z.eval(nil)
+	if !mandateTargetReached(held, z.target) {
+		return false // over anyway: the exercise is not what pushes it
+	}
+	grew := false
+	for _, id := range z.ids {
+		c := z.candidates[id]
+		if c.role != mandateRoleFree || c.units >= c.full || c.leg.Kind != mandate.KindOption || c.leg.Quantity <= 0 || !mandateInTheMoney(c.leg) {
+			continue
+		}
+		sessions, ok := mandateSessionsToExpiry(c.row.Expiry, now)
+		if !ok || sessions > mandateReductionExpirySessions {
+			continue
+		}
+		exercised := func(units int) mandate.Verdict {
+			return mandate.Evaluate(mandateExercise(z.book(map[string]int{c.id: units}), c.leg, c.full-units))
+		}
+		ex := exercised(c.units)
+		if math.IsInf(mandateRisk(ex), 0) || !mandateOverBudget(ex, z.budget) || !mandateExerciseAddsRisk(ex, held) {
+			continue
+		}
+		units := c.full
+		steps := mandateCutSteps(c, c.units)
+		if first := mandateFirst(steps, func(u int) bool { return mandateTargetReached(exercised(u), z.target) }); first >= 0 {
+			units = steps[first]
+		}
+		if units > z.expiry[id] {
+			z.expiry[id], z.sessions[id], grew = units, sessions, true
+		}
+	}
+	return grew
 }
 
 // mandateRisk is a verdict's annual risk; +Inf when it was not measured.
@@ -579,6 +1056,19 @@ func mandateGapLoss(v mandate.Verdict, name string) (loss, capBase float64) {
 		capBase = v.Stresses.GapCapBase
 	}
 	return 0, capBase
+}
+
+// mandateFirstBreach names the first gap breach not given up on.
+func mandateFirstBreach(v mandate.Verdict, skipped map[string]bool) string {
+	if v.Stresses == nil {
+		return ""
+	}
+	for _, name := range v.Stresses.GapBreaches {
+		if !skipped[name] {
+			return name
+		}
+	}
+	return ""
 }
 
 // mandateCutSteps lists the cuts a leg may take above from: each lot on its
@@ -615,9 +1105,9 @@ func mandateFirst(cuts []int, ok func(int) bool) int {
 }
 
 // mandateArgMin is the index of the smallest value of f along cuts, the
-// first on a tie. f is convex along the cuts (risk is a norm of P&L linear in
-// the cut, a gap loss the larger of two linear losses), so the first cut
-// after which f stops falling is the minimum.
+// first on a tie. f is convex along one leg's cuts (risk is a norm of P&L
+// linear in the cut, a gap loss the larger of two linear losses), so the
+// first cut after which f stops falling is the minimum.
 func mandateArgMin(cuts []int, f func(int) float64) int {
 	lo, hi := 0, len(cuts)-1
 	for lo < hi {
@@ -631,9 +1121,9 @@ func mandateArgMin(cuts []int, f func(int) float64) int {
 	return lo
 }
 
-// mandateCutTo sizes one leg's cut above from against f: the smallest step
-// that brings f to limit or under, or, when no step does, the step at which
-// f is least. improved is false when no step lowers f at all.
+// mandateCutTo sizes one leg's cut above from against a convex f: the
+// smallest step that brings f to limit or under, or, when no step does, the
+// step at which f is least. improved is false when no step lowers f at all.
 func mandateCutTo(c *mandateCut, from int, f func(int) float64, limit float64) (units int, improved bool) {
 	cuts := append([]int{from}, mandateCutSteps(c, from)...)
 	memo := map[int]float64{}
@@ -656,199 +1146,57 @@ func mandateCutTo(c *mandateCut, from int, f func(int) float64, limit float64) (
 	return cuts[best], true
 }
 
-// mandateSizeBatch sizes the batch on the verdict's book: the standing cuts
-// first, then the expiry gate, then cut by cut the gap breaches and the
-// largest Euler contributor, re-evaluating the book after every cut.
-func mandateSizeBatch(verdictBook mandate.Input, candidates map[string]*mandateCut, standing []*mandateCut, now time.Time) mandateBatch {
-	in := verdictBook
-	in.Legs = mandateMergedLegs(verdictBook.Legs)
-	batch := mandateBatch{cuts: standing}
-	base := mandate.Evaluate(in)
-	batch.budget = base.Capital.BudgetAnnualSD
-	batch.target = mandateReductionTargetFactor * batch.budget
-	if base.Risk != nil {
-		batch.riskBefore = base.Risk.SDAnnualBase
+// mandateScanTo sizes a coupled move along steps (steps[0] its start)
+// against a g that need not be convex: the first step reaching limit or
+// under, else the step at which g is least. A long grid is sampled at a
+// stride and refined around the result. ok is false when no step lowers g.
+func mandateScanTo(steps []int, g func(int) float64, limit float64) (int, bool) {
+	n := len(steps)
+	if n < 2 {
+		return 0, false
 	}
-	for _, rep := range base.Legs {
-		if c, ok := candidates[rep.ID]; ok {
-			c.contribution = rep.ContributionPct
-		}
+	stride := max(1, (n-1)/64)
+	var samples []int
+	for i := 1; i < n; i += stride {
+		samples = append(samples, i)
 	}
-	evalWith := func(extra *mandateCut, units int) mandate.Verdict {
-		return mandate.Evaluate(mandateBook(in, batch.cuts, extra, units))
+	if samples[len(samples)-1] != n-1 {
+		samples = append(samples, n-1)
 	}
-	add := func(c *mandateCut, phase string) {
-		if !slices.Contains(batch.cuts, c) {
-			c.rank, c.phase = len(batch.cuts)+1, phase
-			batch.cuts = append(batch.cuts, c)
-		}
-	}
-	ids := make([]string, 0, len(candidates))
-	for id := range candidates {
-		ids = append(ids, id)
-	}
-	slices.Sort(ids)
-
-	// Expiry gate: an in-the-money long option within three sessions of
-	// expiry whose exercise would add risk and put the book over budget is
-	// cut first, regardless of rank, to the contracts whose delivered shares
-	// keep the book inside the target, or closed.
-	for _, id := range ids {
-		c := candidates[id]
-		if c.units >= c.full || c.leg.Kind != mandate.KindOption || c.leg.Quantity <= 0 || !mandateInTheMoney(c.leg) {
-			continue
-		}
-		sessions, ok := mandateSessionsToExpiry(c.row.Expiry, now)
-		if !ok || sessions > mandateReductionExpirySessions {
-			continue
-		}
-		exercised := func(units int) mandate.Verdict {
-			return mandate.Evaluate(mandateExercise(mandateBook(in, batch.cuts, c, units), c.leg, c.full-units))
-		}
-		from := c.units
-		ex, kept := exercised(from), evalWith(c, from)
-		if mandateRisk(ex) == math.Inf(1) || !mandateOverBudget(ex, batch.budget) || !mandateExerciseAddsRisk(ex, kept) {
-			continue
-		}
-		units := c.full
-		cuts := mandateCutSteps(c, from)
-		if first := mandateFirst(cuts, func(u int) bool { return mandateTargetReached(exercised(u), batch.target) }); first >= 0 {
-			units = cuts[first]
-		}
-		c.units, c.sessions = units, &sessions
-		add(c, rpc.MandatePhaseExpiry)
-	}
-
-	// Gap breaches and the variance, one cut at a time: a breached name's
-	// largest gap loser is cut until the name's loss is under its cap; with
-	// no breach left, the largest Euler contributor is cut to the smallest
-	// step that reaches the target, or to the step that cuts the most risk.
-	skipped := map[string]bool{}
-	exhausted := map[string]bool{}
-	for range mandateReductionMaxCuts {
-		v := evalWith(nil, 0)
-		if mandateRisk(v) == math.Inf(1) {
-			break
-		}
-		if name := mandateFirstBreach(v, skipped); name != "" {
-			if !mandateGapStep(in, v, name, ids, candidates, evalWith, add) {
-				skipped[name] = true
-				batch.leftOut = append(batch.leftOut, name+" (its gap loss is over the cap, but no held leg of it can be reduced to bring it under)")
+	start := g(steps[0])
+	best, bestV := 0, start
+	for k, i := range samples {
+		v := g(steps[i])
+		if v <= limit+mandateReductionEpsilon {
+			lo := 1
+			if k > 0 {
+				lo = samples[k-1] + 1
 			}
-			continue
-		}
-		if mandateRisk(v) <= batch.target+mandateReductionEpsilon {
-			break
-		}
-		var top *mandateCut
-		for _, rep := range v.Legs {
-			c, ok := candidates[rep.ID]
-			if !ok || c.units >= c.full || exhausted[c.id] || rep.ContributionPct <= mandateReductionEpsilon {
-				continue
+			for j := lo; j < i; j++ {
+				if g(steps[j]) <= limit+mandateReductionEpsilon {
+					return j, true
+				}
 			}
-			if top == nil || rep.ContributionPct > mandateContribution(v, top.id) {
-				top = c
-			}
+			return i, true
 		}
-		if top == nil {
-			break
-		}
-		units, improved := mandateCutTo(top, top.units, func(u int) float64 { return mandateRisk(evalWith(top, u)) }, batch.target)
-		if !improved {
-			exhausted[top.id] = true
-			continue
-		}
-		top.units = units
-		add(top, rpc.MandatePhaseRisk)
-	}
-
-	// The risk each cut removes in its place, and the risk after the batch.
-	batch.cuts = slices.DeleteFunc(batch.cuts, func(c *mandateCut) bool { return c.units <= 0 })
-	before := batch.riskBefore
-	for i, c := range batch.cuts {
-		c.rank = i + 1
-		risk := mandateRisk(mandate.Evaluate(mandateBook(in, batch.cuts[:i+1], nil, 0)))
-		if math.IsInf(risk, 0) {
-			risk = before
-		}
-		c.riskCut = before - risk
-		before = risk
-	}
-	batch.riskAfter = before
-	batch.reached = mandateTargetReached(evalWith(nil, 0), batch.target)
-	return batch
-}
-
-// mandateContribution is one leg's Euler share on a verdict.
-func mandateContribution(v mandate.Verdict, id string) float64 {
-	for _, rep := range v.Legs {
-		if rep.ID == id {
-			return rep.ContributionPct
+		if v < bestV-mandateReductionEpsilon {
+			best, bestV = i, v
 		}
 	}
-	return 0
-}
-
-// mandateFirstBreach names the first gap breach not given up on.
-func mandateFirstBreach(v mandate.Verdict, skipped map[string]bool) string {
-	if v.Stresses == nil {
-		return ""
+	if best == 0 {
+		return 0, false
 	}
-	for _, name := range v.Stresses.GapBreaches {
-		if !skipped[name] {
-			return name
+	for j := max(1, best-stride+1); j < min(n, best+stride); j++ {
+		if v := g(steps[j]); v < bestV-mandateReductionEpsilon {
+			best, bestV = j, v
 		}
 	}
-	return ""
-}
-
-// mandateGapStep cuts the largest gap loser of one breached name, the losers
-// tried in order until one lowers the name's gap loss; false when none can.
-func mandateGapStep(in mandate.Input, v mandate.Verdict, name string, ids []string, candidates map[string]*mandateCut, evalWith func(*mandateCut, int) mandate.Verdict, add func(*mandateCut, string)) bool {
-	loss, capBase := mandateGapLoss(v, name)
-	var report mandate.UnderlyingReport
-	for _, u := range v.Underlyings {
-		if u.Underlying == name {
-			report = u
-		}
-	}
-	up := report.GapUpLossBase != nil && *report.GapUpLossBase > report.GapDownLossBase
-	shock := 0.0
-	if v.Stresses != nil {
-		shock = v.Stresses.GapShockPct
-	}
-	var losers []*mandateCut
-	losses := map[string]float64{}
-	for _, id := range ids {
-		c := candidates[id]
-		if c.units >= c.full || c.leg.Underlying != name {
-			continue
-		}
-		if l := mandateLegGapLoss(in, c.leg, math.Abs(c.leg.Quantity)-float64(c.units), shock, up); l > mandateReductionEpsilon {
-			losers = append(losers, c)
-			losses[c.id] = l
-		}
-	}
-	slices.SortStableFunc(losers, func(a, b *mandateCut) int { return cmp.Compare(losses[b.id], losses[a.id]) })
-	for _, c := range losers {
-		units, improved := mandateCutTo(c, c.units, func(u int) float64 {
-			l, _ := mandateGapLoss(evalWith(c, u), name)
-			return l
-		}, capBase)
-		if !improved {
-			continue
-		}
-		c.units = units
-		c.gapLoss, c.gapCap = new(loss), new(capBase)
-		add(c, rpc.MandatePhaseGap)
-		return true
-	}
-	return false
+	return best, bestV < start-mandateReductionEpsilon
 }
 
 // mandateExerciseAddsRisk reports an exercise that leaves the book riskier
 // than holding the option: more annual risk, or a gap breach the held book
-// does not have. A protective put's exercise sells stock and adds none.
+// does not have.
 func mandateExerciseAddsRisk(exercised, held mandate.Verdict) bool {
 	if mandateRisk(exercised) > mandateRisk(held)+mandateReductionEpsilon {
 		return true
@@ -965,7 +1313,9 @@ func mandateSessionsToExpiry(expiryYMD string, now time.Time) (int, bool) {
 // mandateOrderLimit is the most units one order may carry under the caps
 // in force at the row's mark: max_order_notional as the issuer trim and the
 // governor apply it, and the [order_limits] cap in base currency when the
-// row's rate is known. Never below one; zero when nothing bounds it.
+// row's rate is known. Never below one, as the governor's: one unit above a
+// cap is the order gate's to judge, which admits it only as a delta-reducing
+// exit. Zero when nothing bounds it.
 func mandateOrderLimit(row rpc.PositionView, base string, maxOrderNotional, capBase float64) int {
 	mark := math.Abs(row.Mark)
 	if mark <= 0 {
@@ -989,25 +1339,36 @@ func mandateOrderLimit(row rpc.PositionView, base string, maxOrderNotional, capB
 	return max(1, limit)
 }
 
-// mandateReductionRow builds one row of the batch: a reduce-only order on
-// the leg, bounded by the order caps, with the arithmetic and the verdict it
-// was sized on. Every row is NeverSkipVeto.
-func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources rpc.TradeProposalSourceFingerprints, now time.Time, in mandateReductionInput, st *rpc.TradeProposalMandateStatus, batch mandateBatch, c *mandateCut, ccy string) rpc.TradeProposal {
-	row := c.row
-	action := rpc.OrderActionSell
-	if row.Quantity < 0 {
-		action = rpc.OrderActionBuy
+// mandateCycleQuantity is this cycle's order for a planned cut: no more
+// shares than are free of cover with the short options as they are held now
+// (a buyback goes first and must fill before the shares it frees are sold),
+// held to the order caps; a kept cut keeps its order while the caps still
+// admit it, so a moving mark does not re-size it. waits says why the order
+// is below the cut.
+func mandateCycleQuantity(c *mandateCut, in mandateReductionInput, base string) (int, string) {
+	qty, waits := c.units, ""
+	if c.unit != nil {
+		if free := c.unit.freeNow(); qty > free {
+			qty = free
+			waits = fmt.Sprintf("%d of these shares cover short options until the buyback ahead of them has filled", c.units-free)
+		}
 	}
-	qty := c.units
-	if limit := mandateOrderLimit(row, st.BaseCurrency, in.MaxOrderNotional, in.OrderCapBase); limit > 0 {
-		qty = min(qty, limit)
+	if limit := mandateOrderLimit(c.row, base, in.MaxOrderNotional, in.OrderCapBase); limit > 0 && qty > limit {
+		qty = limit
+		waits = fmt.Sprintf("the order caps hold one order to %d, and the next cycle measures the rest", limit)
 	}
-	// A kept cut keeps its order while the caps still admit it, so a moving
-	// mark does not re-size the order and restart its veto window.
-	if c.standing && c.units == c.prevUnits && c.prevQty > 0 && c.prevQty <= qty {
+	if c.units == c.prevUnits && c.prevQty > 0 && c.prevQty <= qty {
 		qty = c.prevQty
 	}
-	qty = max(1, min(qty, c.full))
+	return max(0, min(qty, c.full)), waits
+}
+
+// mandateReductionRow builds one row of the batch: a reduce-only order of
+// qty on the leg this cycle, with the arithmetic and the verdict it was
+// sized on. Every row is NeverSkipVeto.
+func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources rpc.TradeProposalSourceFingerprints, now time.Time, in mandateReductionInput, st *rpc.TradeProposalMandateStatus, batch mandateBatch, c *mandateCut, qty int, waits, ccy string) rpc.TradeProposal {
+	row := c.row
+	action := mandateAction(row)
 	effect := rpc.OrderPositionEffectReduce
 	if qty == c.full && c.full == int(math.Ceil(math.Abs(row.Quantity))) {
 		effect = rpc.OrderPositionEffectClose
@@ -1021,24 +1382,22 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 		verb = "buy back"
 	}
 	v := in.Result.Verdict
-	sizedStatus, sizedAt, sizedFP := v.Status, v.AsOf, st.VerdictFingerprint
-	if c.standing && c.sizedFingerprint != "" {
-		sizedStatus, sizedAt, sizedFP = c.sizedStatus, c.sizedAt, c.sizedFingerprint
-	}
 	risk := fmt.Sprintf("mandate risk %s a year is %s of the budget %s (%s)", mandateMoney(batch.riskBefore, ccy), mandatePctOfBudget(v), mandateMoney(batch.budget, ccy), v.Status)
 	order := fmt.Sprintf("%s %d of %d %s", verb, qty, c.full, unit)
 	if qty < c.units {
-		order += fmt.Sprintf(" now (the batch asks for %d; the order caps hold one order to %d, and the next cycle measures the rest)", c.units, qty)
+		order += fmt.Sprintf(" now (the batch asks for %d; %s)", c.units, waits)
 	}
 	var why string
-	switch c.phase {
-	case rpc.MandatePhaseExpiry:
+	switch {
+	case c.phase == rpc.MandatePhaseExpiry:
 		sessions := 0
 		if c.sessions != nil {
 			sessions = *c.sessions
 		}
-		why = fmt.Sprintf("in the money %d %s before expiry; exercised, the delivered shares would put the book over budget, so it goes first", sessions, pluralNoun(sessions, "session"))
-	case rpc.MandatePhaseGap:
+		why = fmt.Sprintf("in the money %d %s before expiry; exercised, the delivered shares would push the reduced book over budget, so it goes first", sessions, pluralNoun(sessions, "session"))
+	case c.role == mandateRoleCovered:
+		why = fmt.Sprintf("short options covered by the %s shares the batch sells: bought back first, so no share sale leaves one uncovered", c.leg.Underlying)
+	case c.phase == rpc.MandatePhaseGap:
 		loss, capBase := 0.0, 0.0
 		if c.gapLoss != nil {
 			loss = *c.gapLoss
@@ -1063,13 +1422,9 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 	if c.phase != rpc.MandatePhaseRisk {
 		details = append(details, fmt.Sprintf("%.0f%% of the risk on the verdict", c.contribution))
 	}
-	sized := fmt.Sprintf("sized on the %s verdict of %s (%s)", sizedStatus, mandateClock(sizedAt), sizedFP)
-	if sizedFP != st.VerdictFingerprint {
-		sized += fmt.Sprintf("; kept: the verdict of %s still reads %s", mandateClock(v.AsOf), v.Status)
-	}
-	details = append(details, sized)
+	details = append(details, fmt.Sprintf("sized on the %s verdict of %s (%s), afresh at every verdict", v.Status, mandateClock(v.AsOf), st.VerdictFingerprint))
 	if qty < c.units {
-		details = append(details, fmt.Sprintf("order held to %d %s by the order caps in force (max_order_notional %.0f; [order_limits] cap %s); the next cycle measures the remainder", qty, unit, in.MaxOrderNotional, mandateMoney(in.OrderCapBase, st.BaseCurrency)))
+		details = append(details, "this cycle: "+waits)
 	}
 	if effect == rpc.OrderPositionEffectClose {
 		details = append(details, "full close: the target leaves nothing of this line to keep")
@@ -1081,7 +1436,7 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 		}
 		details = append(details, note)
 	}
-	details = append(details, "waits the full veto window even under a latched brake: a reduction to budget is a discretionary-scale action, not a stop")
+	details = append(details, "waits the full veto window even under a latched brake: a reduction to budget is a discretionary-scale action, not a stop; re-sized within this breach, it keeps its veto clock")
 
 	p := baseProposal(policy, status, sources, now, rpc.TradeProposalBucketMandateReduction, row, action, qty, effect, reason)
 	p.Details = details
@@ -1092,10 +1447,7 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 		GapLossBase: cloneFloat64Ptr(c.gapLoss), GapCapBase: cloneFloat64Ptr(c.gapCap),
 		RiskAnnualBase: batch.riskBefore, BudgetAnnualSD: batch.budget, TargetAnnualSD: batch.target,
 		RiskCutAnnualBase: c.riskCut, RiskAfterAnnualBase: batch.riskAfter,
-		VerdictStatus: sizedStatus, VerdictAt: sizedAt, VerdictFingerprint: sizedFP, BaseCurrency: ccy,
-	}
-	if sizedFP != st.VerdictFingerprint {
-		p.Mandate.ConfirmedAt = v.AsOf
+		VerdictStatus: v.Status, VerdictAt: v.AsOf, VerdictFingerprint: st.VerdictFingerprint, Episode: st.Episode, BaseCurrency: ccy,
 	}
 	if c.sessions != nil {
 		s := *c.sessions

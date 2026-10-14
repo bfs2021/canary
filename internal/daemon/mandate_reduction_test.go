@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -201,33 +202,83 @@ func TestMandateReductionDominantFirstSizedToTargetSecondOnlyWhenNeeded(t *testi
 	}
 }
 
-// An in-the-money long call two sessions before expiry, whose exercise would
-// add the delivered shares to a book over budget, is cut before the largest
-// contributor; the same call a month out is judged by its risk alone.
-func TestMandateReductionExpiryOptionFirst(t *testing.T) {
+// mandateExercisedRisk is the evaluator's risk of the verdict's book with
+// the cuts applied and the remaining contracts of one option exercised.
+func mandateExercisedRisk(t *testing.T, in mandateReductionInput, cuts map[int]float64, optConID int) float64 {
+	t.Helper()
+	book := *in.Input
+	book.Legs = slices.Clone(book.Legs)
+	var opt mandate.Leg
+	for i := range book.Legs {
+		for conID, units := range cuts {
+			if book.Legs[i].ID == mandateLegID(rpc.PositionView{ConID: conID}) {
+				if book.Legs[i].Quantity > 0 {
+					book.Legs[i].Quantity -= units
+				} else {
+					book.Legs[i].Quantity += units
+				}
+			}
+		}
+		if book.Legs[i].ID == mandateLegID(rpc.PositionView{ConID: optConID}) {
+			opt = book.Legs[i]
+		}
+	}
+	v := mandate.Evaluate(mandateExercise(book, opt, int(opt.Quantity)))
+	if v.Risk == nil {
+		t.Fatalf("unmeasured exercised book: %v", v.Reasons)
+	}
+	return v.Risk.SDAnnualBase
+}
+
+// An in-the-money long call two sessions before expiry is cut first only
+// where its exercise alone would push the planned book over budget, and by
+// that need: a near-the-money call whose delivered shares would add a third
+// to its risk is cut until the exercised book is inside the target; a deep
+// call whose exercise adds next to nothing is left to the variance; the same
+// call a month out never passes the gate.
+func TestMandateReductionExpiryOptionCutByItsOwnNeed(t *testing.T) {
 	t.Parallel()
 	// mandateTestNow is Wednesday 14 October 2026: Thursday and Friday are
 	// the two sessions to a Friday 16 October expiry.
-	call := mandateReductionCall("SYNB", 9005, 5, 75, 80, 5.5, "20261016")
+	call := mandateReductionCall("SYNB", 9005, 20, 79, 80, 2.4, "20261016")
 	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), call)
 	in := mandateReductionFixture(t, pos, 1.1, 1e7, 2)
 	rows, st := mandateReductionRun(t, in, pos)
 	assertMandateRowsReduceOnly(t, rows, pos)
 	opt, ok := mandateRowFor(rows, 9005)
 	if !ok || opt.Mandate.Rank != 1 || opt.Mandate.Phase != rpc.MandatePhaseExpiry || opt.Mandate.SessionsToExpiry == nil || *opt.Mandate.SessionsToExpiry != 2 ||
-		opt.Quantity != 5 || opt.PositionEffect != rpc.OrderPositionEffectClose || opt.SecType != "OPT" {
+		!strings.Contains(opt.Reason, "2 sessions before expiry") {
 		t.Fatalf("expiry row %+v mandate %+v (status %+v)", opt, opt.Mandate, st)
 	}
-	if !strings.Contains(opt.Reason, "2 sessions before expiry") {
-		t.Fatalf("expiry reason %q", opt.Reason)
+	cuts := map[int]float64{9005: float64(opt.Mandate.Units)}
+	if syna, ok := mandateRowFor(rows, 9001); ok {
+		cuts[9001] = float64(syna.Mandate.Units)
 	}
-	syna, ok := mandateRowFor(rows, 9001)
-	if !ok || syna.Mandate.Rank != 2 || syna.Mandate.Phase != rpc.MandatePhaseRisk || !st.TargetReached {
-		t.Fatalf("SYNA after the expiry row: %+v status %+v", syna.Mandate, st)
+	// Sized by its own need, not closed: the exercised book, after the whole
+	// batch, stays within the budget, and without the expiry cut it would not.
+	budget := in.Result.Verdict.Capital.BudgetAnnualSD
+	if risk := mandateExercisedRisk(t, in, cuts, 9005); risk > budget+1e-6 || !st.TargetReached || opt.Mandate.Units >= 20 {
+		t.Fatalf("exercised after the batch %.0f, budget %.0f, %d of 20 cut (status %+v)", risk, budget, opt.Mandate.Units, st)
+	}
+	without := maps.Clone(cuts)
+	delete(without, 9005)
+	if risk := mandateExercisedRisk(t, in, without, 9005); risk <= budget {
+		t.Fatalf("the exercise alone does not push the reduced book over budget (%.0f <= %.0f); the gate had no need", risk, budget)
 	}
 
-	// The same call a month out: no expiry gate.
-	later := mandateReductionCall("SYNB", 9005, 5, 75, 80, 7, "20261120")
+	// A deep call: its exercise adds next to nothing to the reduced book.
+	deep := mandateReductionCall("SYNB", 9005, 5, 60, 80, 20, "20261016")
+	pos = mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), deep)
+	in = mandateReductionFixture(t, pos, 1.1, 1e7, 2)
+	rows, _ = mandateReductionRun(t, in, pos)
+	for _, row := range rows {
+		if row.Mandate.Phase == rpc.MandatePhaseExpiry {
+			t.Fatalf("a deep call whose exercise does not push the book over went through the gate: %+v", row.Mandate)
+		}
+	}
+
+	// The near call a month out: no expiry gate.
+	later := mandateReductionCall("SYNB", 9005, 20, 79, 80, 6, "20261120")
 	pos = mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), later)
 	in = mandateReductionFixture(t, pos, 1.1, 1e7, 2)
 	rows, _ = mandateReductionRun(t, in, pos)
@@ -236,33 +287,51 @@ func TestMandateReductionExpiryOptionFirst(t *testing.T) {
 			t.Fatalf("a call a month out went through the expiry gate: %+v", row.Mandate)
 		}
 	}
-	if first := rows[0]; first.Contract.ConID != 9001 {
-		t.Fatalf("largest contributor not first without the gate: %+v", first.Mandate)
-	}
 }
 
-// One over verdict watches; the second consecutive one starts the batch; a
-// reduce verdict starts it at once. The cache counts the streak: within or
-// unknown resets it, so does a gap longer than the verdict's trust or a new
-// policy.
-func TestMandateReductionOverTwiceReduceOnce(t *testing.T) {
+// The batch starts on two consecutive scheduled verdicts over or reduce, at
+// least five minutes apart; one reading, even reduce, watches; a gap-cap
+// breach starts it on one scheduled reading; a running episode keeps it
+// going. The cache counts only scheduled readings, never a read's, and any
+// reading neither over nor reduce resets it, as do a gap of more than
+// fifteen minutes and a new policy.
+func TestMandateReductionStartsOnConfirmedVerdicts(t *testing.T) {
 	t.Parallel()
 	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
-	in := mandateReductionFixture(t, pos, 1.1, 1e7, 1)
-	rows, st := mandateReductionRun(t, in, pos)
-	if len(rows) != 0 || st.State != rpc.MandateReductionWatching || st.ConsecutiveOver != 1 || !strings.Contains(st.Reason, "a second consecutive one starts the batch") {
-		t.Fatalf("one over: rows %d status %+v", len(rows), st)
+	for _, tc := range []struct {
+		name    string
+		ratio   float64
+		streak  int
+		episode string
+		state   string
+	}{
+		{"one over", 1.1, 1, "", rpc.MandateReductionWatching},
+		{"two over", 1.1, 2, "", rpc.MandateReductionReducing},
+		{"one reduce", 1.5, 1, "", rpc.MandateReductionWatching},
+		{"two reduce", 1.5, 2, "", rpc.MandateReductionReducing},
+		{"no scheduled reading, episode running", 1.1, 0, "mandate-ep", rpc.MandateReductionReducing},
+	} {
+		in := mandateReductionFixture(t, pos, tc.ratio, 1e7, tc.streak)
+		in.Episode = tc.episode
+		rows, st := mandateReductionRun(t, in, pos)
+		if st.State != tc.state || (tc.state == rpc.MandateReductionWatching) != (len(rows) == 0) {
+			t.Fatalf("%s: rows %d status %+v", tc.name, len(rows), st)
+		}
+		if tc.state == rpc.MandateReductionWatching && !strings.Contains(st.Reason, "a confirming scheduled verdict at least 5m0s later starts the batch") {
+			t.Fatalf("%s: reason %q", tc.name, st.Reason)
+		}
+		if tc.state == rpc.MandateReductionReducing && (st.Episode == "" || rows[0].Mandate.Episode != st.Episode || tc.episode != "" && st.Episode != tc.episode) {
+			t.Fatalf("%s: episode %q row %q", tc.name, st.Episode, rows[0].Mandate.Episode)
+		}
 	}
-	in.OverStreak = 2
-	if rows, st = mandateReductionRun(t, in, pos); len(rows) == 0 || st.State != rpc.MandateReductionReducing {
-		t.Fatalf("two over: rows %d status %+v", len(rows), st)
+	// A gap-cap breach acts on one scheduled reading, never on none.
+	gap := mandateReductionFixture(t, pos, 0.5, 600000, 1)
+	if rows, st := mandateReductionRun(t, gap, pos); len(rows) == 0 || st.State != rpc.MandateReductionReducing {
+		t.Fatalf("gap breach on one reading: rows %d status %+v", len(rows), st)
 	}
-	reduce := mandateReductionFixture(t, pos, 1.5, 1e7, 1)
-	if reduce.Result.Verdict.Status != mandate.StatusReduce {
-		t.Fatalf("fixture %s, want reduce", reduce.Result.Verdict.Status)
-	}
-	if rows, st = mandateReductionRun(t, reduce, pos); len(rows) == 0 || st.State != rpc.MandateReductionReducing {
-		t.Fatalf("one reduce: rows %d status %+v", len(rows), st)
+	gap.OverStreak = 0
+	if rows, st := mandateReductionRun(t, gap, pos); len(rows) != 0 || st.State != rpc.MandateReductionWatching {
+		t.Fatalf("gap breach on a read alone: rows %d status %+v", len(rows), st)
 	}
 
 	verdict := func(status string) *rpc.MandateRiskResult {
@@ -270,28 +339,30 @@ func TestMandateReductionOverTwiceReduceOnce(t *testing.T) {
 	}
 	var c mandateVerdictCache
 	at := mandateTestNow
-	steps := []struct {
-		status string
-		gap    time.Duration
-		fp     string
-		want   int
+	for i, step := range []struct {
+		status    string
+		gap       time.Duration
+		fp        string
+		scheduled bool
+		want      int
 	}{
-		{mandate.StatusOver, 0, "a", 1},
-		{mandate.StatusOver, 2 * time.Minute, "a", 2},
-		{mandate.StatusReduce, 2 * time.Minute, "a", 3},
-		{mandate.StatusWithin, 2 * time.Minute, "a", 0},
-		{mandate.StatusOver, 2 * time.Minute, "a", 1},
-		{mandate.StatusUnknown, 2 * time.Minute, "a", 0},
-		{mandate.StatusOver, 2 * time.Minute, "a", 1},
-		{mandate.StatusOver, 6 * time.Minute, "a", 1},
-		{mandate.StatusOver, 2 * time.Minute, "b", 1},
-		{mandate.StatusOver, 2 * time.Minute, "b", 2},
-	}
-	for i, step := range steps {
+		{mandate.StatusOver, 0, "a", true, 1},
+		{mandate.StatusOver, 2 * time.Minute, "a", true, 1},    // too soon: neither counts nor resets
+		{mandate.StatusReduce, 2 * time.Minute, "a", false, 1}, // a read never counts
+		{mandate.StatusOver, 2 * time.Minute, "a", true, 2},    // six minutes after the first
+		{mandate.StatusReduce, 6 * time.Minute, "a", true, 3},
+		{mandate.StatusWithin, time.Minute, "a", false, 0}, // any reading within resets
+		{mandate.StatusOver, time.Minute, "a", true, 1},
+		{mandate.StatusOver, 16 * time.Minute, "a", true, 1}, // too long a gap starts again
+		{mandate.StatusUnknown, time.Minute, "a", true, 0},
+		{mandate.StatusOver, time.Minute, "a", true, 1},
+		{mandate.StatusOver, 5 * time.Minute, "b", true, 1}, // a new policy starts again
+		{mandate.StatusOver, 5 * time.Minute, "b", true, 2},
+	} {
 		at = at.Add(step.gap)
-		c.set(verdict(step.status), &mandate.Input{}, at, step.fp)
+		c.set(verdict(step.status), &mandate.Input{}, at, step.fp, step.scheduled)
 		if got := c.kept().overStreak; got != step.want {
-			t.Fatalf("step %d (%s after %s, policy %s): streak %d, want %d", i, step.status, step.gap, step.fp, got, step.want)
+			t.Fatalf("step %d (%s after %s, policy %s, scheduled %v): streak %d, want %d", i, step.status, step.gap, step.fp, step.scheduled, got, step.want)
 		}
 	}
 }
@@ -396,30 +467,90 @@ func TestMandateReductionWithinWithdrawsStandingRows(t *testing.T) {
 	}
 }
 
-// A standing batch is kept while the verdict stays over: the same cut, the
-// same order, the verdict it was sized on, confirmed by the new one.
-func TestMandateReductionStandingBatchIsKept(t *testing.T) {
-	t.Parallel()
-	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
-	first := mandateReductionFixture(t, pos, 1.1, 1e7, 2)
-	standing, _ := mandateReductionRun(t, first, pos)
-	// The next verdict reads over by a little less: the standing cut stands.
-	next := mandateReductionFixture(t, pos, 1.06, 1e7, 3)
+// mandateReductionNext is a later verdict on the same book, two minutes on,
+// with the last generation standing.
+func mandateReductionNext(t *testing.T, pos *rpc.PositionsResult, ratio float64, standing []rpc.TradeProposal) mandateReductionInput {
+	t.Helper()
+	next := mandateReductionFixture(t, pos, ratio, 1e7, 3)
 	next.Result.Verdict.AsOf = mandateTestNow.Add(2 * time.Minute)
 	next.Input.Now = next.Result.Verdict.AsOf
 	next.EvaluatedAt = mandateTestNow
 	next.Previous = standing
-	rows, st := mandateReductionRun(t, next, pos)
-	if len(rows) != len(standing) || st.State != rpc.MandateReductionReducing {
-		t.Fatalf("rows %d status %+v", len(rows), st)
+	if len(standing) > 0 {
+		next.Episode = standing[0].Mandate.Episode
 	}
-	for i, row := range rows {
-		prev := standing[i]
-		if row.Key != prev.Key || row.Quantity != prev.Quantity || row.Mandate.Units != prev.Mandate.Units || row.Mandate.VerdictFingerprint != prev.Mandate.VerdictFingerprint ||
-			!row.Mandate.ConfirmedAt.Equal(next.Result.Verdict.AsOf) {
-			t.Fatalf("standing cut not kept: %+v → %+v", prev.Mandate, row.Mandate)
+	return next
+}
+
+// Every verdict sizes the batch afresh: once the risk eases, a standing cut
+// shrinks to what the new verdict needs (a reduce-sized sale never goes out
+// on a book that is now only just over); once it rises, the cut grows.
+func TestMandateReductionStandingBatchShrinksAndGrows(t *testing.T) {
+	t.Parallel()
+	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
+	big, _ := mandateReductionRun(t, mandateReductionFixture(t, pos, 1.6, 1e7, 2), pos)
+	eased := mandateReductionNext(t, pos, 1.02, nil)
+	fresh, _ := mandateReductionRun(t, eased, pos)
+	eased = mandateReductionNext(t, pos, 1.02, big)
+	kept, st := mandateReductionRun(t, eased, pos)
+	bigSyna, _ := mandateRowFor(big, 9001)
+	freshSyna, _ := mandateRowFor(fresh, 9001)
+	keptSyna, ok := mandateRowFor(kept, 9001)
+	if !ok || keptSyna.Mandate.Units != freshSyna.Mandate.Units || keptSyna.Mandate.Units >= bigSyna.Mandate.Units || !st.TargetReached {
+		t.Fatalf("eased: standing %d, fresh %d, served %d (status %+v)", bigSyna.Mandate.Units, freshSyna.Mandate.Units, keptSyna.Mandate.Units, st)
+	}
+	target := 0.95 * eased.Result.Verdict.Capital.BudgetAnnualSD
+	if over := mandateRiskAfter(t, eased, map[int]float64{9001: float64(keptSyna.Mandate.Units - 100)}); over <= target {
+		t.Fatalf("the served cut is larger than the eased verdict needs: %d", keptSyna.Mandate.Units)
+	}
+	if keptSyna.Mandate.Episode != bigSyna.Mandate.Episode || keptSyna.Mandate.VerdictFingerprint != mandateVerdictFingerprint(eased.Result) {
+		t.Fatalf("episode %q → %q, verdict %q", bigSyna.Mandate.Episode, keptSyna.Mandate.Episode, keptSyna.Mandate.VerdictFingerprint)
+	}
+
+	small, _ := mandateReductionRun(t, mandateReductionFixture(t, pos, 1.05, 1e7, 2), pos)
+	risen := mandateReductionNext(t, pos, 1.2, small)
+	grown, _ := mandateReductionRun(t, risen, pos)
+	smallSyna, _ := mandateRowFor(small, 9001)
+	grownSyna, ok := mandateRowFor(grown, 9001)
+	if !ok || grownSyna.Mandate.Units <= smallSyna.Mandate.Units || slices.Equal(proposalRevisionTerms(smallSyna), proposalRevisionTerms(grownSyna)) {
+		t.Fatalf("risen: standing %d, served %d", smallSyna.Mandate.Units, grownSyna.Mandate.Units)
+	}
+}
+
+// A small ease of the risk does not re-size a standing cut: the fresh cut
+// one lot smaller keeps the standing order (and so its revision); a larger
+// ease takes the fresh one.
+func TestMandateReductionStandingCutDampsOneLot(t *testing.T) {
+	t.Parallel()
+	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
+	standing, _ := mandateReductionRun(t, mandateReductionFixture(t, pos, 1.12, 1e7, 2), pos)
+	before, _ := mandateRowFor(standing, 9001)
+	seen := false
+	for ratio := 1.119; ratio > 1.0; ratio -= 0.001 {
+		fresh, _ := mandateReductionRun(t, mandateReductionNext(t, pos, ratio, nil), pos)
+		freshSyna, _ := mandateRowFor(fresh, 9001)
+		if freshSyna.Mandate == nil || freshSyna.Mandate.Units >= before.Mandate.Units {
+			continue
+		}
+		served, _ := mandateReductionRun(t, mandateReductionNext(t, pos, ratio, standing), pos)
+		row, _ := mandateRowFor(served, 9001)
+		switch before.Mandate.Units - freshSyna.Mandate.Units {
+		case 100:
+			seen = true
+			if row.Mandate.Units != before.Mandate.Units || !slices.Equal(proposalRevisionTerms(row), proposalRevisionTerms(before)) {
+				t.Fatalf("ratio %.3f: one lot smaller fresh (%d) re-sized the standing %d to %d", ratio, freshSyna.Mandate.Units, before.Mandate.Units, row.Mandate.Units)
+			}
+		default:
+			if row.Mandate.Units != freshSyna.Mandate.Units {
+				t.Fatalf("ratio %.3f: fresh %d, standing %d, served %d", ratio, freshSyna.Mandate.Units, before.Mandate.Units, row.Mandate.Units)
+			}
+			if !seen {
+				t.Fatal("no ratio gave a fresh cut exactly one lot smaller")
+			}
+			return
 		}
 	}
+	t.Fatal("the risk never eased enough to shrink the cut")
 }
 
 // Every row is reduce-only and never flips: a short line is bought back, by
@@ -492,7 +623,7 @@ func TestMandateReductionGapBreachCutToCap(t *testing.T) {
 	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
 	// The gap cap is about a tenth of the budget base at full room; this
 	// base puts SYNA's 25% gap over it while the variance is inside target.
-	in := mandateReductionFixture(t, pos, 0.5, 600000, 0)
+	in := mandateReductionFixture(t, pos, 0.5, 600000, 1)
 	v := in.Result.Verdict
 	if v.Status != mandate.StatusReduce || v.Stresses == nil || !slices.Contains(v.Stresses.GapBreaches, "SYNA") || mandateRisk(*v) > 0.95*v.Capital.BudgetAnnualSD {
 		t.Fatalf("fixture %s breaches %+v", v.Status, v.Stresses)
@@ -523,7 +654,7 @@ func TestMandateReductionAbsentMandateChangesNothing(t *testing.T) {
 	}
 	srv, _ := mandateTestServer(t, testConstitutionV3())
 	engine := &proposalEngine{server: srv}
-	if got := engine.mandateReductionInput(defaultProtectionPolicy(), pos); got.Active || got.Result != nil {
+	if got := engine.mandateReductionInput(t.Context(), defaultProtectionPolicy(), pos, brokerStateScope{}); got.Active || got.Result != nil {
 		t.Fatalf("server without [mandate]: %+v", got)
 	}
 	engine.mandateInput = func(time.Time) mandateReductionInput { return mandateReductionInput{} }

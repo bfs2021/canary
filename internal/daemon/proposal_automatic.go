@@ -80,6 +80,11 @@ const (
 	// a live queued authorisation: the owner armed that order, and Canary
 	// sends it instead.
 	automaticQueuedReason = "a queued authorisation the owner armed is live for this contract and side; Canary sends that order instead"
+	// automaticEpisodeResizedReason supersedes a mandate record whose row was
+	// re-sized within its breach episode: the new revision's record carries
+	// the veto clock on (the owner's veto covers the episode's direction), so
+	// a batch growing or shrinking every verdict is never starved.
+	automaticEpisodeResizedReason = "the reduction was re-sized within its breach; the new revision keeps this veto clock"
 )
 
 // automaticSubmissionRecord is one durable automatic-submission intent, keyed
@@ -129,6 +134,10 @@ type automaticSubmissionRecord struct {
 	// record existed and never holds it.
 	SettlingBaseline      []string `json:"settling_baseline,omitempty"`
 	SettlingBaselineKnown bool     `json:"settling_baseline_known,omitempty"`
+	// Episode is a mandate reduction's breach episode: a row re-sized
+	// within it keeps its veto clock across revisions, and an owner's veto
+	// holds its line for the rest of it.
+	Episode string `json:"episode,omitempty"`
 }
 
 func (r automaticSubmissionRecord) pending() bool {
@@ -284,6 +293,24 @@ func (s *automaticSubmissionStore) listLocked() []automaticSubmissionRecord {
 		return automaticRecordKey(out[i].Key, out[i].Revision) < automaticRecordKey(out[j].Key, out[j].Revision)
 	})
 	return out
+}
+
+// served is the record a served row reads: the one for its key and
+// revision, or, for a mandate row in a breach episode whose line the owner
+// vetoed, that veto, which holds the line for the rest of the episode.
+func (s *automaticSubmissionStore) served(p rpc.TradeProposal) (automaticSubmissionRecord, bool) {
+	if rec, ok := s.get(p.Key, p.Revision); ok {
+		return rec, true
+	}
+	if s == nil || p.Mandate == nil || p.Mandate.Episode == "" {
+		return automaticSubmissionRecord{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if prior := automaticEpisodePrior(s.records, p.Key, p.Mandate.Episode); prior != nil && prior.State == rpc.TradeProposalAutomaticVetoed {
+		return *prior, true
+	}
+	return automaticSubmissionRecord{}, false
 }
 
 func (s *automaticSubmissionStore) get(key, revision string) (automaticSubmissionRecord, bool) {
@@ -531,6 +558,8 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 			switch {
 			case !ok:
 				reason = "proposal disappeared from the current set"
+			case prop.Revision != rec.Revision && rec.Episode != "" && prop.Mandate != nil && prop.Mandate.Episode == rec.Episode:
+				reason = automaticEpisodeResizedReason
 			case prop.Revision != rec.Revision:
 				reason = "proposal revision changed; a new window starts for the new revision"
 			case !proposalUnblocked(snap, prop):
@@ -578,6 +607,21 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 				rec.LatchSkippedWindow = true
 				rec.SubmitAt = now
 			}
+			// A mandate row re-sized within its breach keeps the veto clock of
+			// the record it replaces, which never reached the broker; a line
+			// the owner vetoed in this breach gets no record again in it.
+			if prop.Mandate != nil && prop.Mandate.Episode != "" {
+				rec.Episode = prop.Mandate.Episode
+				if prior := automaticEpisodePrior(records, prop.Key, rec.Episode); prior != nil {
+					if prior.State == rpc.TradeProposalAutomaticVetoed {
+						continue
+					}
+					if prior.State == rpc.TradeProposalAutomaticSuperseded && prior.Reason == automaticEpisodeResizedReason {
+						rec.CreatedAt, rec.SubmitAt, rec.NoticedAt = prior.CreatedAt, prior.SubmitAt, prior.NoticedAt
+						rec.SettlingBaseline, rec.SettlingBaselineKnown = slices.Clone(prior.SettlingBaseline), prior.SettlingBaselineKnown
+					}
+				}
+			}
 			// A row whose order prices off the regular session submits no
 			// earlier than the open plus the opening offset: the due time is
 			// max(notice + veto window, open + offset).
@@ -590,6 +634,21 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 	if err != nil && e.server != nil {
 		e.server.warnf("pre-authorised protection: reconcile records: %v", err)
 	}
+}
+
+// automaticEpisodePrior is the latest record of key in a mandate breach
+// episode, the one a re-sized row's record follows.
+func automaticEpisodePrior(records map[string]*automaticSubmissionRecord, key, episode string) *automaticSubmissionRecord {
+	var prior *automaticSubmissionRecord
+	for _, rec := range records {
+		if rec.Key != key || rec.Episode != episode {
+			continue
+		}
+		if prior == nil || rec.ResolvedAt.After(prior.ResolvedAt) || rec.ResolvedAt.Equal(prior.ResolvedAt) && rec.Revision > prior.Revision {
+			prior = rec
+		}
+	}
+	return prior
 }
 
 // automaticWillCreate reports whether reconcileAutomatic is about to create a
@@ -654,6 +713,9 @@ func (e *proposalEngine) markAutomaticNoticed(ctx context.Context, keys []automa
 type automaticNoticeKey struct {
 	Key      string
 	Revision string
+	// Episode is a mandate reduction's breach episode: its notice is one per
+	// line and episode, however often the row is re-sized.
+	Episode  string
 	Bucket   string
 	SubmitAt time.Time
 	Latched  bool
@@ -687,7 +749,7 @@ func (e *proposalEngine) automaticPendingNotices(scope brokerStateScope) []autom
 		if !rec.waiting() || !sameBrokerScope(brokerStateScope{Account: rec.AccountID, Mode: rec.AccountMode}, scope) {
 			continue
 		}
-		notice := automaticNoticeKey{Key: rec.Key, Revision: rec.Revision, Bucket: rec.Bucket, SubmitAt: rec.SubmitAt, Latched: rec.LatchSkippedWindow, Deferred: rec.deferred()}
+		notice := automaticNoticeKey{Key: rec.Key, Revision: rec.Revision, Episode: rec.Episode, Bucket: rec.Bucket, SubmitAt: rec.SubmitAt, Latched: rec.LatchSkippedWindow, Deferred: rec.deferred()}
 		if !rec.HeldAt.IsZero() {
 			switch rec.HoldReason {
 			case automaticHoldUnavailable:
@@ -1392,6 +1454,9 @@ func (e *proposalEngine) Veto(ctx context.Context, p rpc.TradeProposalVetoParams
 				AccountID: snap.AccountID, AccountMode: snap.AccountMode, State: rpc.TradeProposalAutomaticPending,
 				VetoWindow: policy.Authority.vetoWindow().String(), CreatedAt: now, SubmitAt: now,
 			}
+			if served.Mandate != nil {
+				rec.Episode = served.Mandate.Episode
+			}
 			records[automaticRecordKey(rec.Key, rec.Revision)] = rec
 		}
 		switch rec.State {
@@ -1433,7 +1498,7 @@ func (e *proposalEngine) decorateAutomatic(snap *rpc.TradeProposalSnapshot) {
 		prop := &snap.Proposals[i]
 		bucket := automaticBucketFor(*prop)
 		pre := policyOK && policy.preAuthorised(bucket)
-		if rec, ok := e.automatic.get(prop.Key, prop.Revision); ok {
+		if rec, ok := e.automatic.served(*prop); ok {
 			prop.Automatic = rec.view(pre, now)
 			continue
 		}
