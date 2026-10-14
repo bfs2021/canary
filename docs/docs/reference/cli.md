@@ -27,6 +27,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary watchlist`](#canary-watchlist) | Markets | View and edit your saved watchlist; no orders or risk-limit changes | `local` | CLI only |
 | [`canary add`](#canary-add) |  | Plan a stock addition or opening and review it through existing order confirmation | `read-only` | yes |
 | [`canary setups`](#canary-setups) | Markets | Review volume signals, find standard call options and check prices after entry; no orders or risk-limit changes | `read-only` | CLI only |
+| [`canary chains`](#canary-chains) | Markets | Daily option-chain snapshots the recorder kept: coverage per run and a CSV export of quotes, IV, greeks and open interest | `read-only` | CLI only |
 | [`canary calendar`](#canary-calendar) | Markets | Official exchange sessions, holidays, early closes, and coverage bounds | `read-only` | yes |
 | [`canary macro`](#canary-macro) | Markets | Public economic calendar, official publications and source coverage | `read-only` | yes |
 | [`canary regime`](#canary-regime) | Markets | Detailed broad-market regime across volatility, credit, funding, FX, gamma, and breadth | `read-only` | yes |
@@ -313,6 +314,28 @@ Subcommands: `evaluate`, `options`, `coverage`, `markouts`.
 | `--order-ref` | yes | - |
 | `--since` | yes | - |
 | `--json` | no | - |
+
+## `canary chains`
+
+Daily option-chain snapshots the recorder kept: coverage per run and a CSV export of quotes, IV, greeks and open interest.
+
+Guard `read-only`. CLI only, with no MCP tool: research panel of recorded option chains: bulk CSV export and run coverage for the owner, not a decision input; read-only CLI and RPC only.
+
+```text
+canary chains recorded [--symbol SYM] [--date YYYY-MM-DD] [--limit N] [--json|--csv]
+```
+
+Subcommands: `recorded`.
+
+**Flags**
+
+| Flag | Takes a value | Allowed values |
+|------|---------------|----------------|
+| `--symbol` | yes | - |
+| `--date` | yes | - |
+| `--limit` | yes | - |
+| `--json` | no | - |
+| `--csv` | no | - |
 
 ## `canary calendar`
 

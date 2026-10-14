@@ -671,6 +671,16 @@ func settingsLeafOf(v reflect.Value) (settingsLeaf, bool) {
 			parts = append(parts, k+" "+value.MapIndex(reflect.ValueOf(k)).String())
 		}
 		l.value = strings.Join(parts, ", ")
+	case reflect.Slice:
+		if value.Len() == 0 {
+			l.value = "none"
+			break
+		}
+		parts := make([]string, value.Len())
+		for i := range value.Len() {
+			parts[i] = fmt.Sprint(value.Index(i).Interface())
+		}
+		l.value = strings.Join(parts, ", ")
 	case reflect.Float64:
 		l.value = formatPolicyNumber(value.Float())
 	default:

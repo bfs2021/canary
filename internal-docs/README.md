@@ -1,6 +1,6 @@
 # Internal docs index
 
-Updated: 2026-10-05 17:56 CEST
+Updated: 2026-10-14 07:36 CEST
 
 Reader's contract: **Current authority** binds today's behavior — read it before
 changing the surface it names. **Approved, not yet implemented** is operator-
@@ -27,6 +27,7 @@ and this index needs the fix.
 | [design/protective-stop-guard.md](design/protective-stop-guard.md) | Protective stock exit exemption from the notional and short gates, and the stop guard |
 | [design/regime-calibration.md](design/regime-calibration.md) | Regime indicator calibration and journal contract |
 | [design/tws-order-control.md](design/tws-order-control.md) | Cancelling and changing orders placed by hand in TWS over a one-request client-0 connection: the switch, the paper proof, the gates, the journal and the failure semantics |
+| [design/option-chain-recorder.md](design/option-chain-recorder.md) | Daily option-chain recorder: the switch, selection, schedule, line and pacing limits, coverage, `option-chains.db` data dictionary and read surfaces |
 | [design/regime-input-currency.md](design/regime-input-currency.md) | Regime input currency model (`regime-currency-v1`) |
 | [design/documentation-ia.md](design/documentation-ia.md) | Public handbook information architecture |
 | [guides/trading-harness-development.md](guides/trading-harness-development.md) | Risk-harness development guide |

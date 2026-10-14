@@ -1,0 +1,34 @@
+# canary chains recorded · COLUMNS=80 · colour off
+
+Option-chain recorder  OFF
+
+Recorder       off; turn it on with canary settings set
+               chains.recorder.enabled=true
+Symbols        SPX, SPY, QQQ (default) + held option underlyings, at most 12
+Plan           two nearest standard monthlies and the nearest weekly; strikes
+               within ±20% of spot, at most 40 per expiry, calls and puts; 30
+               min before the close
+Lines          at most 4 at once; 20 kept free for the live display and orders
+Store          none yet; created by the first run
+
+No runs recorded for this selection.
+
+Market-data reads only; nothing here is an order. --csv exports the rows; empty
+cells were not observed.
+# canary chains recorded · COLUMNS=80 · colour on, ESC written as \x1b
+
+Option-chain recorder  \x1b[2m\x1b[1mOFF\x1b[0m\x1b[0m
+
+\x1b[2mRecorder      \x1b[0m off; turn it on with canary settings set
+               chains.recorder.enabled=true
+\x1b[2mSymbols       \x1b[0m SPX, SPY, QQQ (default) + held option underlyings, at most 12
+\x1b[2mPlan          \x1b[0m two nearest standard monthlies and the nearest weekly; strikes
+               within ±20% of spot, at most 40 per expiry, calls and puts; 30
+               min before the close
+\x1b[2mLines         \x1b[0m at most 4 at once; 20 kept free for the live display and orders
+\x1b[2mStore         \x1b[0m none yet; created by the first run
+
+\x1b[2mNo runs recorded for this selection.\x1b[0m
+
+\x1b[2mMarket-data reads only; nothing here is an order. --csv exports the rows; empty\x1b[0m
+\x1b[2mcells were not observed.\x1b[0m

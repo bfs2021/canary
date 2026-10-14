@@ -65,6 +65,7 @@ type PlatformSettings struct {
 	AutoTrade  PlatformAutoTradeSettings `json:"auto_trade"`
 	Regime     PlatformRegimeSettings    `json:"regime"`
 	Stress     PlatformStressSettings    `json:"stress"`
+	Chains     PlatformChainsSettings    `json:"chains"`
 	History    PlatformHistorySettings   `json:"history"`
 	MarketData PlatformMarketDataSetting `json:"market_data"`
 	Build      PlatformBuildSettings     `json:"build"`
@@ -106,6 +107,27 @@ type PlatformStressSettings struct {
 // daemon.db, mirroring RegimeJournalSettings.
 type StressJournalSettings struct {
 	Enabled SettingsBool `json:"enabled"`
+}
+
+// PlatformChainsSettings holds the option-chain recorder's preferences.
+type PlatformChainsSettings struct {
+	Recorder ChainRecorderSettings `json:"recorder"`
+}
+
+// ChainRecorderSettings is the recorder's switch (off by default) and its
+// explicit underlyings; held option underlyings are added at run time.
+type ChainRecorderSettings struct {
+	Enabled SettingsBool       `json:"enabled"`
+	Symbols SettingsStringList `json:"symbols"`
+}
+
+// SettingsStringList is a string list annotated with access and source
+// authority.
+type SettingsStringList struct {
+	Value  []string `json:"value"`
+	Access string   `json:"access"`
+	Source string   `json:"source"`
+	Reason string   `json:"reason,omitempty"`
 }
 
 // PlatformHistorySettings is retained to preserve the settings response wire
@@ -268,6 +290,9 @@ const (
 	SettingsKindDateFormat SettingsKeyKind = "date-format"
 	// SettingsKindCashSweepPriority accepts one closed currency ordering value or null.
 	SettingsKindCashSweepPriority SettingsKeyKind = "cash-sweep-priority"
+	// SettingsKindSymbolList accepts a list of underlying symbols (the CLI
+	// takes them comma-separated, [] for none) or null to restore the default.
+	SettingsKindSymbolList SettingsKeyKind = "symbol-list"
 )
 
 // Writability classes the daemon enforces beyond per-kind parsing.
@@ -326,6 +351,14 @@ func SettingsKeys() []SettingsKeySpec {
 		{
 			Key: "stress.journal.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
 			Doc: "Turns forward portfolio-stress decision-event collection in daemon.db on, mirroring regime.journal.enabled (default true).",
+		},
+		{
+			Key: "chains.recorder.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Doc: "Records a daily option-chain snapshot (quotes, sizes, IV, greeks, open interest) 30 minutes before the US close into option-chains.db beside daemon.db; market-data reads only, within a line reserve for the live display (default false).",
+		},
+		{
+			Key: "chains.recorder.symbols", Kind: SettingsKindSymbolList, Class: SettingsClassRuntime,
+			Doc: "Underlyings the option-chain recorder covers besides held option underlyings, at most 12; null restores SPX, SPY, QQQ.",
 		},
 	}
 }

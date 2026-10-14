@@ -246,6 +246,9 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "trading_status", argv: []string{"trading", "status"}, conn: goldenConn{rpc.MethodTradingStatus: readyTrading}},
 		{name: "trading_status_blocked", argv: []string{"trading", "status"}, conn: goldenConn{rpc.MethodTradingStatus: blockedTrading}, exit: 1},
 		{name: "settings_show", argv: []string{"settings", "show"}, conn: goldenConn{rpc.MethodSettingsGet: goldenSettings()}},
+		{name: "chains_recorded", argv: []string{"chains", "recorded"}, conn: goldenConn{rpc.MethodChainsRecorded: goldenChainsRecorded()}},
+		{name: "chains_recorded_off", argv: []string{"chains", "recorded"}, conn: goldenConn{rpc.MethodChainsRecorded: goldenChainsOff()}},
+		{name: "chains_recorded_csv", argv: []string{"chains", "recorded", "--date", "2026-10-14", "--csv"}, conn: goldenChainsCSV()},
 		{name: "technical", argv: []string{"technical", "SYNA,SYNB,SYNC"}, conn: goldenConn{rpc.MethodTechnical: goldenTechnical()}},
 		{name: "proposals_list_empty", argv: []string{"proposals", "list"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: rpc.TradeProposalSnapshot{Revision: "rev-0000", PolicyID: "protection", PolicyVersion: 1, Proposals: []rpc.TradeProposal{}}}},
 		{name: "proposals_list_one", argv: []string{"proposals", "list"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: goldenProposals()}},
@@ -473,6 +476,8 @@ func goldenSettings() rpc.PlatformSettings {
 	st.Features.StockProtection.Enabled = rpc.SettingsBool{Value: true, Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime}
 	st.Features.Rulebook.Enabled = rpc.SettingsBool{Value: true, Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceConfig}
 	st.Features.Rulebook.EarningsOverrides = rpc.SettingsStringMap{Value: map[string]string{"SYNA": "2026-10-20"}, Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime}
+	st.Chains.Recorder.Enabled = rpc.SettingsBool{Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime}
+	st.Chains.Recorder.Symbols = rpc.SettingsStringList{Value: []string{"SPX", "SPY", "QQQ"}, Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime}
 	st.Trading.Freeze = rpc.SettingsBool{Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime}
 	st.Trading.TWSOrderControl = rpc.TWSOrderControlSettings{
 		Enabled:       rpc.SettingsBool{Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime},
