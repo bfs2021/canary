@@ -84,6 +84,11 @@ type BondContractDetails struct {
 	Exchange   string
 	Currency   string
 	MarketName string
+	// LocalSymbol is the venue's own ticker, as an ordinary contractData
+	// frame sends it; PrimaryExch the listing venue, kept on a Complete
+	// one. A bondContractData frame carries neither.
+	LocalSymbol string
+	PrimaryExch string
 	// TradingClass and MinTick are the venue's; MinTick is in the quote's
 	// price convention.
 	TradingClass string
@@ -645,13 +650,14 @@ func stampAsked(lines []BondContractDetails, asked Contract) []BondContractDetai
 // (API 10.37, version 8) send it: the contract id, symbol, security type,
 // exchange, currency and secIdType/secId as the form names them and every
 // other field empty (includeExpired false, which the encoder sends as 0).
-// Unlike the discovery request it adds no SMART default and no primary
-// exchange, so a form can ask with no exchange.
+// Unlike the discovery request it adds no SMART default, so a form can ask
+// with no exchange. A bond form names no primary exchange; a listing form
+// (listing.go) may.
 func (c *Connection) bondContractDetailsRequestMessage(ctx context.Context, contract Contract, reqID int) []byte {
 	c.registerReqAlias(ctx, reqID, contract)
 	return c.encodeMsg(reqContractData, 8, reqID, contract.ConID, contract.Symbol, contract.SecType,
 		"", "", "", "", // lastTradeDateOrContractMonth, strike, right, multiplier
-		contract.Exchange, "", // exchange, primaryExchange
+		contract.Exchange, contract.PrimaryExch, // exchange, primaryExchange
 		contract.Currency, "", "", // currency, localSymbol, tradingClass
 		0,                                      // includeExpired
 		contract.SecIDType, contract.SecID, "") // secIdType, secId, issuerId

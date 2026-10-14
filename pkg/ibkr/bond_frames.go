@@ -422,7 +422,7 @@ func decodeContractDataLine(fields []string, reqID int, layout bondFrameLayout) 
 	r.str("right")
 	d.Exchange = strings.ToUpper(r.str("exchange"))
 	d.Currency = strings.ToUpper(r.str("currency"))
-	r.str("local symbol")
+	d.LocalSymbol = r.str("local symbol")
 	d.MarketName = r.str("market name")
 	d.TradingClass = r.str("trading class")
 	d.ConID = r.integer("contract id")
@@ -448,7 +448,7 @@ func decodeContractDataLine(fields []string, reqID int, layout bondFrameLayout) 
 	}
 	if version >= 5 {
 		tail.LongName = r.str("long name")
-		r.str("primary exchange")
+		tail.PrimaryExch = strings.ToUpper(r.str("primary exchange"))
 	}
 	if version >= 6 {
 		for _, name := range []string{"contract month", "industry", "category", "subcategory"} {
