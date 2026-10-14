@@ -177,6 +177,9 @@ func (s *Server) previewStrategyOrder(ctx context.Context, p rpc.StrategyPreview
 	if brake, _ := s.riskPolicyBrake(draft, position); brake != nil {
 		return nil, refusePreview(errBadRequest(brake.Message), *brake)
 	}
+	if blocker := s.mandateBudgetGate(draft, position); blocker != nil {
+		return nil, refusePreview(errBadRequest(blocker.Message), *blocker)
+	}
 	whatIf, err := s.fetchPreviewWhatIfBound(ctx, status, draft, timeout, previewAuthority)
 	if err != nil {
 		return nil, err

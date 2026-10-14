@@ -421,6 +421,9 @@ func (s *Server) brokerWireGuard(binding brokerWriteTransactionBinding, status r
 			if err := s.riskPolicyBrakeError(binding.riskDraft, current.Impact); err != nil {
 				return err
 			}
+			if err := s.mandateBudgetGateError(binding.riskDraft, current.Impact); err != nil {
+				return err
+			}
 		}
 		if binding.exerciseBound {
 			current, err := s.captureWireOrderPositionAuthority(binding, status, binding.exerciseDraft)

@@ -560,6 +560,9 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	if brake != nil {
 		return nil, refusePreview(errBadRequest(brake.Message), *brake)
 	}
+	if blocker := s.mandateBudgetGate(draft, position); blocker != nil {
+		return nil, refusePreview(errBadRequest(blocker.Message), *blocker)
+	}
 	var whatIf rpc.OrderWhatIfResult
 	if scope == rpc.OrderTokenScopeModify {
 		whatIf, err = s.fetchModifyPreviewWhatIfBound(ctx, status, replaceView, draft, timeout, previewAuthority)

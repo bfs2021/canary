@@ -820,6 +820,9 @@ func (s *Server) bindPreviewOrderRiskAuthority(ctx context.Context, binding *bro
 	if err := s.riskPolicyBrakeError(draft, current.Impact); err != nil {
 		return err
 	}
+	if err := s.mandateBudgetGateError(draft, current.Impact); err != nil {
+		return err
+	}
 	if s.stockAddRequired(draft, current.Impact) {
 		if draft.Add == nil {
 			return fmt.Errorf("%w: equity Add policy now applies; preview again", ErrTradingDisabled)
