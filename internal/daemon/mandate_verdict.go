@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"strings"
@@ -37,18 +39,69 @@ type mandateVerdictCache struct {
 	input       *mandate.Input
 	evaluatedAt time.Time
 	fingerprint string
+	// overStreak counts consecutive evaluations reading over or reduce,
+	// each within mandateVerdictMaxAge of the one before and under the same
+	// policy; the forced reduction starts on an over verdict at two
+	// (mandate_reduction.go). Any other reading resets it.
+	overStreak int
+}
+
+// mandateVerdictKept is one read of the cache.
+type mandateVerdictKept struct {
+	result      *rpc.MandateRiskResult
+	input       *mandate.Input
+	evaluatedAt time.Time
+	fingerprint string
+	overStreak  int
 }
 
 func (c *mandateVerdictCache) current() (*rpc.MandateRiskResult, *mandate.Input, time.Time, string) {
+	k := c.kept()
+	return k.result, k.input, k.evaluatedAt, k.fingerprint
+}
+
+func (c *mandateVerdictCache) kept() mandateVerdictKept {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.result, c.input, c.evaluatedAt, c.fingerprint
+	return mandateVerdictKept{result: c.result, input: c.input, evaluatedAt: c.evaluatedAt, fingerprint: c.fingerprint, overStreak: c.overStreak}
 }
 
 func (c *mandateVerdictCache) set(result *rpc.MandateRiskResult, input *mandate.Input, at time.Time, fingerprint string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.result, c.input, c.evaluatedAt, c.fingerprint = result, input, at, fingerprint
+	streak := 0
+	if result != nil && result.Verdict != nil && (result.Verdict.Status == mandate.StatusOver || result.Verdict.Status == mandate.StatusReduce) {
+		streak = 1
+		if c.overStreak > 0 && fingerprint == c.fingerprint && !c.evaluatedAt.IsZero() && at.Sub(c.evaluatedAt) <= mandateVerdictMaxAge {
+			streak = c.overStreak + 1
+		}
+	}
+	c.result, c.input, c.evaluatedAt, c.fingerprint, c.overStreak = result, input, at, fingerprint, streak
+}
+
+// mandateVerdictFingerprint names one verdict for the rows sized on it: the
+// evaluation time, the status, the risk and budget figures, the policy and
+// the book's leg quantities. Two evaluations of the same book at the same
+// instant share it; any other reading has its own.
+func mandateVerdictFingerprint(res *rpc.MandateRiskResult) string {
+	if res == nil || res.Verdict == nil {
+		return ""
+	}
+	v := res.Verdict
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s|%s|", v.AsOf.UTC().Format(time.RFC3339Nano), v.Status)
+	if v.Risk != nil {
+		fmt.Fprintf(&b, "%.6f|", v.Risk.SDAnnualBase)
+	}
+	fmt.Fprintf(&b, "%.6f|", v.Capital.BudgetAnnualSD)
+	if res.PolicyFingerprint != nil {
+		b.WriteString(res.PolicyFingerprint.Key)
+	}
+	for _, l := range v.Legs {
+		fmt.Fprintf(&b, "|%s=%g", l.ID, l.Quantity)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:6])
 }
 
 // mandateInactiveResult is the payload while the constitution carries no
@@ -97,9 +150,12 @@ func (s *Server) handleMandateRisk(ctx context.Context, req *rpc.Request) (*rpc.
 	if result, _, at, fp := s.mandateVerdicts.current(); !p.Refresh && result != nil && fp == mgr.policy.FingerprintKey() && now.Sub(at) < mandateVerdictServeWithin {
 		out := *result
 		out.Gate = s.mandateGateView(&out, now)
+		out.Reduction = s.mandateReductionView()
 		return &out, nil
 	}
-	return s.evaluateMandate(ctx, true), nil
+	res := s.evaluateMandate(ctx, true)
+	res.Reduction = s.mandateReductionView()
+	return res, nil
 }
 
 // evaluateMandate runs one evaluation and keeps it. With refreshAccount the
@@ -199,12 +255,7 @@ func mandateLegsFromPositions(pos *rpc.PositionsResult, base string, now time.Ti
 			fxNow[ccy] = rate
 		}
 	}
-	legID := func(row rpc.PositionView) string {
-		if row.ConID > 0 {
-			return fmt.Sprintf("con:%d", row.ConID)
-		}
-		return "sym:" + normSym(row.Symbol) + ":" + normCcy(row.Currency) + ":" + row.Expiry + ":" + row.Right + ":" + fmt.Sprint(row.Strike)
-	}
+	legID := mandateLegID
 	for _, row := range pos.Stocks {
 		secType := strings.ToUpper(strings.TrimSpace(row.SecType))
 		switch {
@@ -246,6 +297,15 @@ func mandateLegsFromPositions(pos *rpc.PositionsResult, base string, now time.Ti
 			TimeToExpiryYears: mandateYearsToExpiry(row.Expiry, now), IV: row.IV})
 	}
 	return legs, notModelled, fxNow, reasons
+}
+
+// mandateLegID identifies a position row as the evaluator's leg: the exact
+// contract id, or the identity fields when the row carries none.
+func mandateLegID(row rpc.PositionView) string {
+	if row.ConID > 0 {
+		return fmt.Sprintf("con:%d", row.ConID)
+	}
+	return "sym:" + normSym(row.Symbol) + ":" + normCcy(row.Currency) + ":" + row.Expiry + ":" + row.Right + ":" + fmt.Sprint(row.Strike)
 }
 
 // mandateYearsToExpiry measures to the close of the expiry day in New York;
