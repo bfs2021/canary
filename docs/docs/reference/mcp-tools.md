@@ -4,7 +4,7 @@
 
 These are the tools `canary mcp` exposes to MCP clients (Claude Code, Claude Desktop, or any other MCP host). Every public tool uses the canonical `canary_*` namespace. Each entry lists the tool name an LLM picks against, the description the LLM reads to decide whether to invoke, and the parameter schema the LLM binds against.
 
-**37 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
+**38 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
 
 ## `canary_add`
 
@@ -274,6 +274,17 @@ Call with no arguments after canary_brief for an automatic one-year review of hi
 | `limit` | integer | no | maximum findings; default 3 |
 | `option_id` | string | no | optional opaque option ID returned by a prior canary_edge call |
 | `window` | string | no | optional review override; default 365d |
+
+## `canary_scorecard`
+
+Read the daemon's decision scorecard: one ledger row per past position change (open, add, trim, exit) per sleeve, each scored at 5, 10 and 21 sessions after entry as the underlying's market-adjusted move in units of its own pre-decision noise (z), plus, for options, the realised-vs-implied move and the option's P&L against the delta-equivalent stock position. Per sleeve it carries the sequential evidence: entry-week clusters counted once, a posterior on IC with P(IC > 0.05) and P(IC > 0.10), the mixture e-value and the gate (established, futile or accruing) with every component disclosed. Use for the question whether a strategy's decisions carry information and how far the evidence is from a decision; quote figures with their sample and never call a sleeve skilled before its gate reads established. Not for price consequences in money (use canary_edge), current risk (canary_stress) or holdings (canary_positions). Unknown scores stay unknown with a reason. Read-only; the daemon evaluates, the read cannot refresh history.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `limit` | integer | no | decisions to return, newest first; default 50. The sleeve evidence always covers every decision. |
+| `sleeve` | string | no | optional sleeve name, lower case, for example owner; omitted returns every sleeve |
 
 ## `canary_lending_market`
 

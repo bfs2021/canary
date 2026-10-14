@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,7 +68,13 @@ type groupedTrade struct {
 	multiplier            *float64
 	directCostsBase       *float64
 	executionNotionalBase *float64
+	executionFX           *float64
+	closePrice            *float64
 	recordIDs             []string
+	executionIDs          []string
+	orderIDs              []string
+	underlyingConID       int64
+	underlyingSymbol      string
 	queryComplete         bool
 	costFXMissing         bool
 }
@@ -431,14 +438,24 @@ func groupTrades(trades []flexstmt.Trade, baseCurrency string, fxRates []flexstm
 		rows := groups[key]
 		sort.Slice(rows, func(i, j int) bool { return rows[i].RecordID < rows[j].RecordID })
 		first := rows[0]
-		g := groupedTrade{key: key, account: first.AccountID, conid: first.ConID, symbol: first.Symbol, assetClass: first.AssetClass, currency: first.Currency, side: strings.ToUpper(first.Side), executedAt: first.ExecutedAt, queryComplete: true}
+		g := groupedTrade{key: key, account: first.AccountID, conid: first.ConID, symbol: first.Symbol, assetClass: first.AssetClass, currency: first.Currency, side: strings.ToUpper(first.Side), executedAt: first.ExecutedAt, queryComplete: true,
+			underlyingConID: first.UnderlyingConID, underlyingSymbol: first.UnderlyingSymbol, closePrice: cloneFloat(first.ClosePrice)}
 		var weighted, weight, costs, executionNotional float64
 		notionalKnown := true
 		haveCost := true
 		var multiplier *float64
 		for _, row := range rows {
 			g.recordIDs = append(g.recordIDs, row.RecordID)
+			if row.ExecutionID != "" {
+				g.executionIDs = append(g.executionIDs, row.ExecutionID)
+			}
+			if row.OrderID != "" && !slices.Contains(g.orderIDs, row.OrderID) {
+				g.orderIDs = append(g.orderIDs, row.OrderID)
+			}
 			executionFX := baseConversionFX(row.Currency, baseCurrency, row.ExecutedAt, row.FXRateToBase, fxRates)
+			if g.executionFX == nil && executionFX != nil {
+				g.executionFX = cloneFloat(executionFX)
+			}
 			if row.Quantity == nil || row.Price == nil || row.Multiplier == nil || executionFX == nil || *row.Price <= 0 || *row.Multiplier <= 0 {
 				notionalKnown = false
 			} else {

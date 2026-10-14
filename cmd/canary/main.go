@@ -229,6 +229,8 @@ func cliInvocationTiming(cmd string, rest []string) ([]string, time.Duration, ti
 		return []string{rpc.MethodRegimeSnapshot}, ordinaryHeadroom, ordinaryFloor
 	case "stress":
 		return []string{rpc.MethodStressSnapshot}, ordinaryHeadroom, ordinaryFloor
+	case "scorecard":
+		return []string{rpc.MethodScorecardRead}, ordinaryHeadroom, ordinaryFloor
 	case "brief":
 		return []string{rpc.MethodBriefSnapshot}, 15 * time.Second, longFloor
 	case "rules":

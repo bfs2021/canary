@@ -472,6 +472,12 @@ type Server struct {
 	edgeFetchMarketBarsFn func(context.Context, string, int) ([]ibkrlib.HistoricalBar, error)
 	edgeFlexFetchRangeFn  func(context.Context, time.Time, time.Time) (flexFetchOutcome, error)
 	edgeScheduleRebuildFn func(time.Duration)
+	// scorecardWake drives the single-worker decision scorecard pass
+	// (internal-docs/design/decision-scorecard.md): the ledger append, the
+	// bounded history fetch and the evaluation the read serves.
+	scorecardWake     chan struct{}
+	scorecardWorkerWG sync.WaitGroup
+	scorecardBusy     atomic.Bool
 	// earnings backs the trading rulebook's catalyst rules (6-8); LKG cache,
 	// async refresh only — never fetched on a snapshot or preview path.
 	earnings *earningsCache
@@ -1548,6 +1554,7 @@ func (s *Server) Start(ctx context.Context) error {
 	go s.runFlexFetchLoop(serverCtx)
 	go s.runSetupMarkoutLoop(serverCtx)
 	s.startEdgeWorker(serverCtx)
+	s.startScorecardWorker(serverCtx)
 	s.startFXWorker(serverCtx)
 	s.startStressEvaluationLoop(serverCtx)
 	if s.tradeProposals != nil {
@@ -2830,6 +2837,8 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleRegimeSnapshot(ctx, req) })
 	case rpc.MethodStressSnapshot:
 		s.unary(req, enc, func() (any, error) { return s.handleStressSnapshot(ctx, req) })
+	case rpc.MethodScorecardRead:
+		s.unary(req, enc, func() (any, error) { return s.handleScorecardRead(ctx, req) })
 	case rpc.MethodAlertCandidates:
 		s.unary(req, enc, func() (any, error) { return s.handleAlertCandidates(ctx, req) })
 	case rpc.MethodAlertStatus:
@@ -3171,6 +3180,9 @@ func (s *Server) backgroundTasks() []rpc.BackgroundTaskStatus {
 	}
 	if s.edgeBusy.Load() {
 		tasks = append(tasks, rpc.BackgroundTaskStatus{Name: "canary-edge", Status: "backfilling"})
+	}
+	if s.scorecardBusy.Load() {
+		tasks = append(tasks, rpc.BackgroundTaskStatus{Name: "canary-scorecard", Status: "scoring"})
 	}
 	if scoped, total, err := s.openBrokerOrderCounts(); err != nil && !errors.Is(err, ErrTradingDisabled) {
 		// A configured journal that cannot be read is unknown order

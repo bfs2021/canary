@@ -1,0 +1,12 @@
+# canary scorecard · COLUMNS=80 · colour off
+Decision scorecard  BACKFILLING
+Scored · 5 Sep 14:00 TZ · history backfill pending
+Price history is still being fetched within the broker's budget; scores appear
+  as names arrive.
+Read-only review of past fills; it places no orders.
+# canary scorecard · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mDecision scorecard\x1b[0m  \x1b[33m\x1b[1mBACKFILLING\x1b[0m\x1b[0m
+Scored · 5 Sep 14:00 TZ · history backfill pending
+Price history is still being fetched within the broker's budget; scores appear
+  as names arrive.
+Read-only review of past fills; it places no orders.

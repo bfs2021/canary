@@ -116,6 +116,8 @@ var methodTimings = []MethodTiming{
 	{Method: MethodReportingPerformance, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},
 	{Method: MethodReportingValidate, Lifetime: MethodLifetimeUnary, DaemonTimeout: 9 * time.Minute},
 	{Method: MethodEdgeSnapshot, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
+	// A read of the saved scorecard publication; the worker evaluates it.
+	{Method: MethodScorecardRead, Lifetime: MethodLifetimeUnary, DaemonTimeout: 10 * time.Second},
 	{Method: MethodLendingMarket, Lifetime: MethodLifetimeUnary, DaemonTimeout: 20 * time.Second},
 	{Method: MethodShortInterestScreen, Lifetime: MethodLifetimeUnary, DaemonTimeout: 20 * time.Second},
 	{Method: MethodLendingScreen, Lifetime: MethodLifetimeUnary, DaemonTimeout: 20 * time.Second},

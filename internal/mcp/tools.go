@@ -10,6 +10,7 @@ import (
 
 	"github.com/osauer/canary/v2/internal/dial"
 	"github.com/osauer/canary/v2/internal/rpc"
+	"github.com/osauer/canary/v2/internal/scorecard"
 	"github.com/osauer/canary/v2/internal/stress"
 )
 
@@ -540,6 +541,28 @@ var Tools = []Tool{
 			}
 			if err := rpc.ValidateEdgeResult(res); err != nil {
 				return nil, fmt.Errorf("invalid Edge result: %w", err)
+			}
+			return json.Marshal(res)
+		},
+	},
+	{
+		Name:         "canary_scorecard",
+		Title:        "Canary Decision Scorecard",
+		Description:  "Read the daemon's decision scorecard: one ledger row per past position change (open, add, trim, exit) per sleeve, each scored at 5, 10 and 21 sessions after entry as the underlying's market-adjusted move in units of its own pre-decision noise (z), plus, for options, the realised-vs-implied move and the option's P&L against the delta-equivalent stock position. Per sleeve it carries the sequential evidence: entry-week clusters counted once, a posterior on IC with P(IC > 0.05) and P(IC > 0.10), the mixture e-value and the gate (established, futile or accruing) with every component disclosed. Use for the question whether a strategy's decisions carry information and how far the evidence is from a decision; quote figures with their sample and never call a sleeve skilled before its gate reads established. Not for price consequences in money (use canary_edge), current risk (canary_stress) or holdings (canary_positions). Unknown scores stay unknown with a reason. Read-only; the daemon evaluates, the read cannot refresh history.",
+		ReadOnlyHint: new(true),
+		RPCMethods:   []string{rpc.MethodScorecardRead},
+		JSONSchema: schemaObject(map[string]json.RawMessage{
+			"sleeve": schemaString("optional sleeve name, lower case, for example owner; omitted returns every sleeve"),
+			"limit":  json.RawMessage(`{"type":"integer","minimum":1,"maximum":2000,"description":"decisions to return, newest first; default 50. The sleeve evidence always covers every decision."}`),
+		}, nil),
+		Handler: func(ctx context.Context, conn *dial.Conn, args json.RawMessage) (json.RawMessage, error) {
+			var in rpc.ScorecardReadParams
+			if err := unmarshalArgs(args, &in); err != nil {
+				return nil, err
+			}
+			res, err := scorecard.Fetch(ctx, conn, in)
+			if err != nil {
+				return nil, err
 			}
 			return json.Marshal(res)
 		},
