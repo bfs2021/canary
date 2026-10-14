@@ -67,7 +67,9 @@ type ConstitutionMandateCore struct {
 	// holds the core on a rule it does not carry.
 	Rule string `toml:"rule" json:"rule,omitempty"`
 	// ISIN, ConID, Exchange and Currency pin the instrument: the IBKR
-	// contract id written after resolving the ISIN, on its listing venue.
+	// contract id written after resolving the ISIN (`canary core resolve`),
+	// on its listing venue. 0 is accepted and holds the core until the owner
+	// writes the resolved id.
 	ISIN     string `toml:"isin" json:"isin,omitempty"`
 	ConID    *int   `toml:"con_id" json:"con_id,omitempty"`
 	Exchange string `toml:"exchange" json:"exchange,omitempty"`
@@ -137,8 +139,8 @@ func (c *ConstitutionMandateCore) validate() error {
 	if v := c.MaxValuePct; v != nil && (!finite(*v) || *v <= 0 || *v > 100) {
 		return fmt.Errorf("mandate.core.max_value_pct must be in (0, 100]")
 	}
-	if v := c.ConID; v != nil && *v <= 0 {
-		return fmt.Errorf("mandate.core.con_id must be a positive IBKR contract id")
+	if v := c.ConID; v != nil && *v < 0 {
+		return fmt.Errorf("mandate.core.con_id must be an IBKR contract id, or 0 until it is resolved")
 	}
 	if s := c.ISIN; s != "" && !isinShape(s) {
 		return fmt.Errorf("mandate.core.isin %q must be twelve upper-case letters and digits", s)

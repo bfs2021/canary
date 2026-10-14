@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -73,6 +74,9 @@ type coreTargetStore struct {
 	frozen    map[string]*coreFrozenTarget
 	revisions map[string]int64
 	loaded    map[string]bool
+	// pin is the last resolution of the pinned contract id
+	// (core_resolve.go).
+	pin corePin
 }
 
 func coreTargetScope(scope string) string {
@@ -296,8 +300,11 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 		Policy:            corePolicyView(c.Mandate),
 		Instrument:        &rpc.CoreInstrument{Symbol: core.Symbol, ISIN: core.ISIN, Exchange: core.Exchange, Currency: core.Currency}}
 	hold := func(reason string) { res.Reasons = append(res.Reasons, reason) }
-	if keys := c.Mandate.CoreUnapprovedKeys(); len(keys) > 0 {
+	if keys := slices.DeleteFunc(c.Mandate.CoreUnapprovedKeys(), func(k string) bool { return k == "mandate.core.con_id" }); len(keys) > 0 {
 		hold("core keys are unwritten: " + strings.Join(keys, ", "))
+	}
+	if p.ConID == nil || *p.ConID <= 0 {
+		hold("the core's contract is not pinned: run `canary core resolve` and write the con_id of its Xetra listing into [mandate.core] with a higher policy_version")
 	}
 	if p.Rule != "" && p.Rule != core.RuleID {
 		hold(fmt.Sprintf("the policy names rule %q; this daemon carries %s", p.Rule, core.RuleID))
@@ -333,6 +340,8 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 		}
 		res.Evidence = ev
 		switch {
+		case series == nil && s.corePinReason(need.Contract.ConID) != "":
+			hold(fmt.Sprintf("the pinned contract %d did not resolve on %s: %s; check it with `canary core resolve`", need.Contract.ConID, need.Contract.Exchange, s.corePinReason(need.Contract.ConID)))
 		case series == nil:
 			hold("no " + core.Symbol + " daily history yet; the desk reads it from Xetra on the background lane")
 		case series.Contract.ConID > 0 && series.Contract.ConID != need.Contract.ConID:
@@ -424,7 +433,7 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	res.Holding = &rpc.CoreHolding{Shares: held, Price: price, ValueBase: float64(held) * price, PriceSource: priceSource}
 
 	// The size: frozen at the decision, lowered to today's capital.
-	if sig.Status == core.StatusOK && verdict != nil && verdict.Capital.Known && len(c.Mandate.CoreUnapprovedKeys()) == 0 {
+	if sig.Status == core.StatusOK && verdict != nil && verdict.Capital.Known && len(c.Mandate.CoreUnapprovedKeys()) == 0 && *p.ConID > 0 {
 		on := core.Sizing{CoreVolPct: *c.Mandate.Sleeves.CoreVolPct, ScalePct: *p.ScalePct, MaxValuePct: *p.MaxValuePct, BudgetBase: verdict.Capital.BudgetBase, Room: verdict.Capital.Room}
 		current := core.SizeTarget(sig, on)
 		scope := coreScope(s.currentBrokerStateScope(), p)

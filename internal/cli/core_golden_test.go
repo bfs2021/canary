@@ -60,3 +60,52 @@ func goldenCoreTrendOff() rpc.CoreTargetResult {
 	res.Action = &core.Decision{Kind: core.ActionSellAll, Quantity: 640, Why: "the trend is off: sell every share; the band and the minimum do not apply", Diff: -640, OrderValue: 53952}
 	return res
 }
+
+// goldenCoreResolve lists two synthetic listings of the rule's ISIN, none
+// pinned, with every form's answer.
+func goldenCoreResolve() rpc.CoreResolveResult {
+	return rpc.CoreResolveResult{AsOf: goldenAt, ISIN: core.ISIN, ISINSource: "rule",
+		Listings: []rpc.CoreListing{
+			{ConID: 900001, Symbol: "IBCF", LocalSymbol: "IBCF", SecType: "STK", Exchange: "SMART", PrimaryExch: "IBIS", Currency: "EUR", TradingClass: "IBCF", LongName: "Synthetic Index Fund IBCF", ISIN: core.ISIN, Forms: []string{"STK by ISIN on SMART", "STK IBCF on IBIS"}},
+			{ConID: 900002, Symbol: "IUSE", LocalSymbol: "IUSE", SecType: "STK", Exchange: "SMART", PrimaryExch: "LSEETF", Currency: "EUR", TradingClass: "IUSE", LongName: "Synthetic Index Fund IUSE", ISIN: core.ISIN, Forms: []string{"STK by ISIN on SMART"}},
+		},
+		Attempts: []rpc.CoreResolveAttempt{
+			{Form: "STK by ISIN on SMART", Outcome: "line", Lines: 2},
+			{Form: "STK by ISIN, no exchange", Outcome: "rejected", Code: 321, Message: "Error validating request: exchange required"},
+			{Form: "STK IBCF on IBIS", Outcome: "line", Lines: 1},
+			{Form: "STK IBCF on IBIS2", Outcome: "rejected", Code: 200, Message: "No security definition has been found for the request"},
+			{Form: "STK IBCF on SMART (primary IBIS)", Outcome: "no_line", Message: "the 1 lines IBKR answered name another ISIN"},
+		},
+		Message: "2 listings match; none is chosen for you. Write the con_id of the line you trade on IBIS (Xetra) into [mandate.core] with a higher policy_version."}
+}
+
+// goldenCoreResolvePinned is the same lookup with the policy's con_id among
+// the listings.
+func goldenCoreResolvePinned() rpc.CoreResolveResult {
+	res := goldenCoreResolve()
+	res.ISINSource = "policy"
+	res.PinnedConID, res.PinnedFound = new(900001), true
+	res.Listings[0].Pinned = true
+	res.Message = "[mandate.core] con_id 900001 is among the listings; nothing to write."
+	return res
+}
+
+// goldenCoreResolveNone found nothing.
+func goldenCoreResolveNone() rpc.CoreResolveResult {
+	return rpc.CoreResolveResult{AsOf: goldenAt, ISIN: "IE00B5BMR087", ISINSource: "flag", Currency: "EUR", Listings: []rpc.CoreListing{},
+		Attempts: []rpc.CoreResolveAttempt{
+			{Form: "STK by ISIN on SMART", Outcome: "rejected", Code: 200, Message: "No security definition has been found for the request"},
+			{Form: "STK by ISIN, no exchange", Outcome: "no_line", Message: "the search ended without a line"},
+		},
+		Message: "IBKR found no listing for IE00B5BMR087; every form's answer is listed. Check the ISIN, or ask again with --currency."}
+}
+
+// goldenCoreUnpinned holds until the owner writes the resolved con_id.
+func goldenCoreUnpinned() rpc.CoreTargetResult {
+	res := goldenCoreHold()
+	res.Reasons = []string{"the core's contract is not pinned: run `canary core resolve` and write the con_id of its Xetra listing into [mandate.core] with a higher policy_version"}
+	res.Instrument.ConID = 0
+	res.Policy.ConID = new(0)
+	res.Evidence = nil
+	return res
+}

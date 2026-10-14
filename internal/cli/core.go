@@ -16,6 +16,9 @@ import (
 // would take. The daemon evaluates; this renders. Read-only: the core
 // proposes nothing and places no order in this phase.
 func runCore(ctx context.Context, env *Env, args []string) int {
+	if idx := firstPositionalIndex(args); idx >= 0 && args[idx] == "resolve" {
+		return runCoreResolve(ctx, env, append(append([]string{}, args[:idx]...), args[idx+1:]...))
+	}
 	fs := flagSet(env, "core")
 	jsonOut := fs.Bool("json", false, "emit the typed core target")
 	refresh := fs.Bool("refresh", false, "measure the mandate again before deciding")
@@ -193,4 +196,96 @@ func fmtPctNum(v float64) string {
 		return fmt.Sprintf("%.0f", v)
 	}
 	return fmt.Sprintf("%g", v)
+}
+
+// runCoreResolve lists every listing IBKR knows for the core's ISIN (the
+// flag's, else the one [mandate.core] pins, else the compiled rule's) so
+// the owner can write its contract id. Read-only: it never chooses a
+// listing and never writes the policy.
+func runCoreResolve(ctx context.Context, env *Env, args []string) int {
+	fs := flagSet(env, "core resolve")
+	jsonOut := fs.Bool("json", false, "emit the typed listings")
+	isin := fs.String("isin", "", "the ISIN to resolve (default: [mandate.core] isin, else the rule's)")
+	currency := fs.String("currency", "", "ask only for listings in this currency")
+	if err := fs.Parse(args); err != nil {
+		return parseExit(err)
+	}
+	if fs.NArg() != 0 {
+		return failUnexpectedArgs(env, fs)
+	}
+	res, err := rpc.FetchCoreResolve(ctx, env.Conn, rpc.CoreResolveParams{ISIN: *isin, Currency: *currency})
+	if err != nil {
+		return fail(env, "core resolve: %v", err)
+	}
+	if *jsonOut {
+		return printJSON(env, res)
+	}
+	renderCoreResolve(env, res)
+	return 0
+}
+
+func renderCoreResolve(env *Env, res rpc.CoreResolveResult) {
+	source := map[string]string{"flag": "asked", "policy": "from [mandate.core]", "rule": "the rule's instrument"}[res.ISINSource]
+	headline, tone := fmt.Sprintf("%d %s", len(res.Listings), pluralWord(len(res.Listings), "LISTING", "LISTINGS")), "green"
+	switch {
+	case len(res.Listings) == 0:
+		headline, tone = "NO LISTING", "red"
+	case len(res.Listings) > 1 && !res.PinnedFound:
+		tone = "yellow"
+	}
+	riskDisplayLine(env, env.bold("Core resolve")+"  ", headline+" for "+res.ISIN, func(s string) string { return riskTone(env, tone, env.bold(s)) })
+	riskReadLine(env, "ISIN", res.ISIN, source, nonEmpty(res.Currency, "every currency"))
+	for _, l := range res.Listings {
+		parts := []string{fmt.Sprintf("con_id %d", l.ConID), l.Symbol}
+		if l.LocalSymbol != "" && l.LocalSymbol != l.Symbol {
+			parts[1] += " (local " + l.LocalSymbol + ")"
+		}
+		venue := nonEmpty(l.Exchange, "no exchange")
+		if l.PrimaryExch != "" {
+			venue += ", primary " + l.PrimaryExch
+		}
+		parts = append(parts, venue, l.Currency)
+		if l.TradingClass != "" {
+			parts = append(parts, "class "+l.TradingClass)
+		}
+		parts = append(parts, l.LongName)
+		switch {
+		case l.ISIN == "":
+			parts = append(parts, "ISIN not named by IBKR")
+		case l.ISIN != res.ISIN:
+			parts = append(parts, "ISIN "+l.ISIN)
+		}
+		parts = append(parts, "found by "+strings.Join(l.Forms, ", "))
+		style := func(s string) string { return s }
+		if l.Pinned {
+			parts = append(parts, "PINNED")
+			style = env.green
+		}
+		riskDisplayLine(env, "  ", briefJoin(parts...), style)
+	}
+	pinned := "not written"
+	if res.PinnedConID != nil {
+		pinned = fmt.Sprintf("%d", *res.PinnedConID)
+		if !res.PinnedFound {
+			pinned += ", not among these listings"
+		}
+	}
+	riskReadLine(env, "Pinned", "[mandate.core] con_id "+pinned)
+	riskReadLine(env, "Next", res.Message)
+	fmt.Fprintln(env.Stdout, "\n"+env.bold("Asked"))
+	for _, a := range res.Attempts {
+		answer := a.Outcome
+		switch a.Outcome {
+		case "line":
+			answer = fmt.Sprintf("%d %s", a.Lines, pluralWord(a.Lines, "listing", "listings"))
+		case "rejected":
+			answer = fmt.Sprintf("IBKR %d \"%s\"", a.Code, a.Message)
+		case "no_line":
+			answer = nonEmpty(a.Message, "no line")
+		case "failed":
+			answer = "failed: " + a.Message
+		}
+		riskReadLine(env, "  "+a.Form, answer)
+	}
+	riskReadLine(env, "", "Read-only: nothing is chosen for you and the policy is not written.")
 }

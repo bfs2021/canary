@@ -443,13 +443,18 @@ Guard `read-only`. Also available as an MCP tool.
 
 ```text
 canary core [--refresh] [--json]
+canary core resolve [--isin ISIN] [--currency CCY] [--json]
 ```
+
+Subcommands: `resolve`.
 
 **Flags**
 
 | Flag | Takes a value | Allowed values |
 |------|---------------|----------------|
 | `--refresh` | no | - |
+| `--isin` | yes | - |
+| `--currency` | yes | - |
 | `--json` | no | - |
 
 ## `canary brief`

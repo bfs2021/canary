@@ -274,6 +274,13 @@ func TestMandateCoreTable(t *testing.T) {
 			}
 		})
 	}
+	// con_id 0 is "not resolved yet": accepted, and the core holds.
+	version++
+	writePolicyTestFile(t, path, strings.Replace(strings.Replace(written, "policy_version = 7", fmt.Sprintf("policy_version = %d", version), 1), "con_id = 9030", "con_id = 0", 1))
+	m.reload()
+	if got := m.snapshot(); got.status != rpc.RiskPolicyStatusActive || *got.policy.Mandate.Core.ConID != 0 {
+		t.Fatalf("con_id 0: %s %q", got.status, got.message)
+	}
 	// Scale 0 is the suspension the kill rule names, not an error.
 	version++
 	writePolicyTestFile(t, path, strings.Replace(strings.Replace(written, "policy_version = 7", fmt.Sprintf("policy_version = %d", version), 1), "scale_pct = 25.0", "scale_pct = 0.0", 1))

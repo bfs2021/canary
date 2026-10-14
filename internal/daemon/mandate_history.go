@@ -372,8 +372,14 @@ func (s *Server) refreshMandateHistoryOnce(ctx context.Context) {
 		base = pos.Portfolio.BaseCurrency
 	}
 	needs := s.mandateHistoryNeedsWithRequests(pos, base, s.nowUTC())
-	if need, ok := coreHistoryNeed(s.riskPolicies.snapshot().policy); ok {
-		needs = append(needs, need)
+	if policy := s.riskPolicies.snapshot().policy; policy != nil {
+		if need, ok := coreHistoryNeed(policy); ok {
+			// Asked by contract id first, so the read names the contract as
+			// IBKR does (core_resolve.go).
+			if need, ok = s.coreResolvedNeed(ctx, policy, need); ok {
+				needs = append(needs, need)
+			}
+		}
 	}
 	for _, need := range needs {
 		if ctx.Err() != nil {

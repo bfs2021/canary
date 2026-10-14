@@ -157,3 +157,75 @@ func FetchCoreTarget(ctx context.Context, conn interface {
 	}
 	return out, nil
 }
+
+// MethodCoreResolve lists every listing IBKR knows for an ISIN (by default
+// the one [mandate.core] pins, else the compiled rule's), so the owner can
+// write the contract id into [mandate.core]. Read-only: it never chooses a
+// listing and never writes the policy.
+const MethodCoreResolve = "core.resolve"
+
+// CoreResolveParams is the input for MethodCoreResolve. ISIN overrides the
+// default; Currency, when set, narrows every request form to it.
+type CoreResolveParams struct {
+	ISIN     string `json:"isin,omitempty"`
+	Currency string `json:"currency,omitempty"`
+}
+
+// CoreResolveResult is the core.resolve payload: every listing found, the
+// contract id the policy pins (nil while unwritten or 0), and every
+// request form with IBKR's answer.
+type CoreResolveResult struct {
+	AsOf time.Time `json:"as_of"`
+	ISIN string    `json:"isin"`
+	// ISINSource is "flag", "policy" or "rule": where the ISIN came from.
+	ISINSource string        `json:"isin_source"`
+	Currency   string        `json:"currency,omitempty"`
+	Listings   []CoreListing `json:"listings"`
+	// PinnedConID is [mandate.core] con_id when written and positive;
+	// PinnedFound says a listing carries it.
+	PinnedConID *int                 `json:"pinned_con_id,omitempty"`
+	PinnedFound bool                 `json:"pinned_found,omitempty"`
+	Attempts    []CoreResolveAttempt `json:"attempts"`
+	// Message says what the owner does next.
+	Message string `json:"message"`
+}
+
+// CoreListing is one listing IBKR answered for the ISIN.
+type CoreListing struct {
+	ConID        int    `json:"con_id"`
+	Symbol       string `json:"symbol"`
+	LocalSymbol  string `json:"local_symbol,omitempty"`
+	SecType      string `json:"sec_type,omitempty"`
+	Exchange     string `json:"exchange,omitempty"`
+	PrimaryExch  string `json:"primary_exchange,omitempty"`
+	Currency     string `json:"currency,omitempty"`
+	TradingClass string `json:"trading_class,omitempty"`
+	LongName     string `json:"long_name,omitempty"`
+	// ISIN is the one IBKR's frame named; empty when it named none.
+	ISIN  string   `json:"isin,omitempty"`
+	Forms []string `json:"forms"`
+	// Pinned says [mandate.core] con_id names this listing.
+	Pinned bool `json:"pinned,omitempty"`
+}
+
+// CoreResolveAttempt is one request form and IBKR's answer: line (with how
+// many listings it kept), no_line, rejected (with IBKR's code and text) or
+// failed.
+type CoreResolveAttempt struct {
+	Form    string `json:"form"`
+	Outcome string `json:"outcome"`
+	Lines   int    `json:"lines,omitempty"`
+	Code    int    `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+// FetchCoreResolve asks the daemon for the listings of an ISIN.
+func FetchCoreResolve(ctx context.Context, conn interface {
+	Call(context.Context, string, any, any) error
+}, params CoreResolveParams) (CoreResolveResult, error) {
+	var out CoreResolveResult
+	if err := conn.Call(ctx, MethodCoreResolve, params, &out); err != nil {
+		return CoreResolveResult{}, err
+	}
+	return out, nil
+}

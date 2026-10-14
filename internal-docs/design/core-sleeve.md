@@ -452,6 +452,18 @@ Phase 1, read-only, no change to the write path, built on Canary branch
 | 5 | Scorecard resolver: the core instrument's fills and `proposal:core_rebalance` go to sleeve `core`, reported, never gated (S1) | Moved to phase 2 |
 | 6 | Desk: the core's line on Risk › Mandate (target, holding, trend, next decision), with no IC, e-value or "established" (S1) | Moved to phase 2 (Desk) |
 
+Resolution (2026-10-14, branch `core-resolve`): the live daemon could not
+resolve Xetra funds by symbol (`symbol_inactive: no security definition`
+for IBCF, SXR8, EUNL and IUSE on IBIS, IBIS2 and SMART). The owner pins the
+core by contract id, found by ISIN with `canary core resolve`, which lists
+every listing and every form's answer and chooses none; `con_id = 0`
+holds the core with that instruction. The series read asks the pinned id
+first with no symbol and then reads history for the contract as IBKR
+names it (IBKR's symbol, IBIS, the listing's primary exchange), because a
+contract id sent with a symbol IBKR does not use for it is refused. Why
+the symbol lookups fail is for the live check: the resolver's trace shows
+IBKR's answer per form.
+
 Phase 1 knows its limits: the ISIN is checked against the compiled rule
 and the contract id against the series' echo, not yet against IBKR's
 contract details (W1); the decision needs the decision day's own bar and

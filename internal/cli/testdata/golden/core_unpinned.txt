@@ -1,0 +1,36 @@
+# canary core · COLUMNS=80 · colour off
+Core  HOLD
+Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IBCF IE00B3ZW0K18 on
+  IBIS
+Action · the core holds: buys stop, and a sale the rule wants goes to you for
+  review
+
+Why it holds
+  the core's contract is not pinned: run `canary core resolve` and write the
+  con_id of its Xetra listing into [mandate.core] with a higher policy_version
+Holding · 0 shares (0 EUR) · price 96.10 last close
+Mandate · within · risk 3,267 EUR a year of the budget 34,500 EUR
+Next decision · 2026-09-30 after the Xetra close
+
+Evidence
+  Mandate verdict · 13:59:00 TZ
+Read-only: the core proposes nothing and places no order in this phase. It is
+  a beta allocation with a drawdown filter that you chose, not an edge claim.
+# canary core · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mCore\x1b[0m  \x1b[33m\x1b[1mHOLD\x1b[0m\x1b[0m
+Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IBCF IE00B3ZW0K18 on
+  IBIS
+Action · the core holds: buys stop, and a sale the rule wants goes to you for
+  review
+
+\x1b[1mWhy it holds\x1b[0m
+  the core's contract is not pinned: run `canary core resolve` and write the
+  con_id of its Xetra listing into [mandate.core] with a higher policy_version
+Holding · 0 shares (0 EUR) · price 96.10 last close
+Mandate · within · risk 3,267 EUR a year of the budget 34,500 EUR
+Next decision · 2026-09-30 after the Xetra close
+
+\x1b[1mEvidence\x1b[0m
+  Mandate verdict · 13:59:00 TZ
+Read-only: the core proposes nothing and places no order in this phase. It is
+  a beta allocation with a drawdown filter that you chose, not an edge claim.

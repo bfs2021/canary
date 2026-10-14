@@ -1,0 +1,42 @@
+# canary core resolve · COLUMNS=80 · colour off
+Core resolve  2 LISTINGS for IE00B3ZW0K18
+ISIN · IE00B3ZW0K18 · the rule's instrument · every currency
+  con_id 900001 · IBCF · SMART, primary IBIS · EUR · class IBCF · Synthetic
+  Index Fund IBCF · found by STK by ISIN on SMART, STK IBCF on IBIS
+  con_id 900002 · IUSE · SMART, primary LSEETF · EUR · class IUSE · Synthetic
+  Index Fund IUSE · found by STK by ISIN on SMART
+Pinned · [mandate.core] con_id not written
+Next · 2 listings match; none is chosen for you. Write the con_id of the line
+  you trade on IBIS (Xetra) into [mandate.core] with a higher policy_version.
+
+Asked
+  STK by ISIN on SMART · 2 listings
+  STK by ISIN, no exchange · IBKR 321 "Error validating request: exchange
+    required"
+  STK IBCF on IBIS · 1 listing
+  STK IBCF on IBIS2 · IBKR 200 "No security definition has been found for the
+    request"
+  STK IBCF on SMART (primary IBIS) · the 1 lines IBKR answered name another
+    ISIN
+Read-only: nothing is chosen for you and the policy is not written.
+# canary core resolve · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mCore resolve\x1b[0m  \x1b[33m\x1b[1m2 LISTINGS for IE00B3ZW0K18\x1b[0m\x1b[0m
+ISIN · IE00B3ZW0K18 · the rule's instrument · every currency
+  con_id 900001 · IBCF · SMART, primary IBIS · EUR · class IBCF · Synthetic
+  Index Fund IBCF · found by STK by ISIN on SMART, STK IBCF on IBIS
+  con_id 900002 · IUSE · SMART, primary LSEETF · EUR · class IUSE · Synthetic
+  Index Fund IUSE · found by STK by ISIN on SMART
+Pinned · [mandate.core] con_id not written
+Next · 2 listings match; none is chosen for you. Write the con_id of the line
+  you trade on IBIS (Xetra) into [mandate.core] with a higher policy_version.
+
+\x1b[1mAsked\x1b[0m
+  STK by ISIN on SMART · 2 listings
+  STK by ISIN, no exchange · IBKR 321 "Error validating request: exchange
+    required"
+  STK IBCF on IBIS · 1 listing
+  STK IBCF on IBIS2 · IBKR 200 "No security definition has been found for the
+    request"
+  STK IBCF on SMART (primary IBIS) · the 1 lines IBKR answered name another
+    ISIN
+Read-only: nothing is chosen for you and the policy is not written.

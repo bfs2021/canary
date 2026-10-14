@@ -1,0 +1,24 @@
+# canary core resolve --isin IE00B5BMR087 --currency EUR · COLUMNS=80 · colour off
+Core resolve  NO LISTING for IE00B5BMR087
+ISIN · IE00B5BMR087 · asked · EUR
+Pinned · [mandate.core] con_id not written
+Next · IBKR found no listing for IE00B5BMR087; every form's answer is listed.
+  Check the ISIN, or ask again with --currency.
+
+Asked
+  STK by ISIN on SMART · IBKR 200 "No security definition has been found for
+    the request"
+  STK by ISIN, no exchange · the search ended without a line
+Read-only: nothing is chosen for you and the policy is not written.
+# canary core resolve --isin IE00B5BMR087 --currency EUR · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mCore resolve\x1b[0m  \x1b[31m\x1b[1mNO LISTING for IE00B5BMR087\x1b[0m\x1b[0m
+ISIN · IE00B5BMR087 · asked · EUR
+Pinned · [mandate.core] con_id not written
+Next · IBKR found no listing for IE00B5BMR087; every form's answer is listed.
+  Check the ISIN, or ask again with --currency.
+
+\x1b[1mAsked\x1b[0m
+  STK by ISIN on SMART · IBKR 200 "No security definition has been found for
+    the request"
+  STK by ISIN, no exchange · the search ended without a line
+Read-only: nothing is chosen for you and the policy is not written.
