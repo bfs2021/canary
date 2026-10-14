@@ -638,6 +638,25 @@
       }
     },
     {
+      "name": "canary_scorecard",
+      "description": "Read the daemon's decision scorecard: one ledger row per past position change (open, add, trim, exit) per sleeve, each scored at 5, 10 and 21 sessions after entry as the underlying's market-adjusted move in units of its own pre-decision noise (z), plus, for options, the realised-vs-implied move and the option's P\u0026L against the delta-equivalent stock position. Per sleeve it carries the sequential evidence: entry-week clusters counted once, a posterior on IC with P(IC \u003e 0.05) and P(IC \u003e 0.10), the mixture e-value and the gate (established, futile or accruing) with every component disclosed. Use for the question whether a strategy's decisions carry information and how far the evidence is from a decision; quote figures with their sample and never call a sleeve skilled before its gate reads established. Not for price consequences in money (use canary_edge), current risk (canary_stress) or holdings (canary_positions). Unknown scores stay unknown with a reason. Read-only; the daemon evaluates, the read cannot refresh history.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000,
+            "description": "decisions to return, newest first; default 50. The sleeve evidence always covers every decision."
+          },
+          "sleeve": {
+            "type": "string",
+            "description": "optional sleeve name, lower case, for example owner; omitted returns every sleeve"
+          }
+        }
+      }
+    },
+    {
       "name": "canary_lending_market",
       "description": "Compare prices and liquidity for 1-100 named USD stocks from the US borrowing feed. Returns cached market context and queues bounded background acquisition, one stock at a time: last completed close or recent trade with feed/date, day change, session shares, 20-completed-session average dollar turnover and YTD completed-close price return excluding dividends. Exact feed contract identity is required. Missing history stays absent; pending rows fill on later reads. Five-minute context receipts; no synchronous per-symbol scan. Use canary_lending_screen to discover names, canary_lending_rates for fees, and canary_market_history for charts. Filters over these values are research, not liquidity guarantees, orders or lending enrollment. Read-only.",
       "inputSchema": {

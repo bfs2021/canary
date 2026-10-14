@@ -238,6 +238,8 @@ func renderGoldenCases() []renderGoldenCase {
 		// runStress derives its result from account, positions, regime and
 		// rulebook reads; the golden pins the renderer it hands the result to.
 		{name: "stress", argv: []string{"stress"}, render: func(env *Env) { renderStress(env, goldenStress(), false) }},
+		{name: "scorecard", argv: []string{"scorecard"}, conn: goldenConn{rpc.MethodScorecardRead: goldenScorecard()}},
+		{name: "scorecard_backfilling", argv: []string{"scorecard"}, conn: goldenConn{rpc.MethodScorecardRead: goldenScorecardBackfilling()}},
 		{name: "stress_details", argv: []string{"stress", "--details"}, render: func(env *Env) { renderStress(env, goldenStress(), true) }},
 		{name: "status", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: goldenHealthReady(readyTrading), rpc.MethodAlertCandidates: goldenAlerts(3)}},
 		{name: "status_attention", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: goldenHealthAttention(), rpc.MethodAlertCandidates: goldenAlerts(2)}},

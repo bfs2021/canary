@@ -106,6 +106,9 @@ func (s *Server) startEdgeWorker(ctx context.Context) {
 				s.publishEdgeUnavailable(context.WithoutCancel(ctx), "authority_unavailable")
 			}
 			s.edgeBusy.Store(false)
+			// The scorecard reads the same statements; it scores after Edge
+			// has seen the new evidence.
+			s.kickScorecardRebuild()
 			select {
 			case <-ctx.Done():
 				return

@@ -89,13 +89,16 @@ func TestOnlyTheDaemonEvaluates(t *testing.T) {
 		"stress": {"Compose": true, "ComputeStress": true},
 		"rpc": {"BuildRegimeClusterBands": true, "BuildRegimePosture": true, "BuildRegimeLifecycle": true,
 			"RegimeHeadline": true, "CompactPositionsRisk": true},
+		"scorecard": {"Evaluate": true, "BuildLedger": true, "PosteriorAbove": true, "EValue": true, "ImpliedVol": true},
+		"edge":      {"PositionChanges": true},
 	}
 	allowed := map[string]bool{
-		filepath.Join("internal", "daemon"): true,
-		filepath.Join("internal", "stress"): true,
-		filepath.Join("internal", "rpc"):    true,
-		"regimelab":                         true,
-		"tmp":                               true,
+		filepath.Join("internal", "daemon"):    true,
+		filepath.Join("internal", "stress"):    true,
+		filepath.Join("internal", "rpc"):       true,
+		filepath.Join("internal", "scorecard"): true,
+		"regimelab":                            true,
+		"tmp":                                  true,
 	}
 	checked := 0
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {

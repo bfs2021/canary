@@ -17,6 +17,8 @@ Account, positions, orders and risk
   stress          Check portfolio risks and the evidence behind them
   brief           Portfolio summary, urgent items first; more with --details
   edge            Review past trading decisions using broker records
+  scorecard       Score past decisions per strategy, with the evidence and its
+                  gates
   short-interest  Screen FINRA short positions across US equities
   lending         Read lending income, borrowing fees and stock market context
   rules           Check trading rules, biggest breaches first; set limits with
@@ -82,6 +84,8 @@ Start: canary status — check the broker connection
   \x1b[36mstress          \x1b[0mCheck portfolio risks and the evidence behind them
   \x1b[36mbrief           \x1b[0mPortfolio summary, urgent items first; more with --details
   \x1b[36medge            \x1b[0mReview past trading decisions using broker records
+  \x1b[36mscorecard       \x1b[0mScore past decisions per strategy, with the evidence and its
+                  gates
   \x1b[36mshort-interest  \x1b[0mScreen FINRA short positions across US equities
   \x1b[36mlending         \x1b[0mRead lending income, borrowing fees and stock market context
   \x1b[36mrules           \x1b[0mCheck trading rules, biggest breaches first; set limits with
