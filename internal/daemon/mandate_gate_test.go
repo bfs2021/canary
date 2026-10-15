@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -300,6 +302,50 @@ func TestMandateGateMeasuresANameTheBookDoesNotHold(t *testing.T) {
 	// A request lapses after a day.
 	if got := srv.mandateHistoryRequests(mandateTestNow.Add(25 * time.Hour)); len(got) != 0 {
 		t.Fatalf("requests outlived a day: %+v", got)
+	}
+}
+
+// Once the drawdown reaches the maximum loss the budget is zero and the
+// ratio unbounded: mandate.risk still answers at the daemon wire, with the
+// ratio null, so readers see the reduce instead of an encoding failure.
+func TestMandateRoomZeroVerdictCrossesTheWire(t *testing.T) {
+	c := testMandateConstitution()
+	srv, st := mandateTestServer(t, c)
+	// The high is 300,000 equity (230,000 after the reserve); 220,000 is a
+	// market loss of 80,000 the day's P&L explains, past 30% of 230,000.
+	observeWithPnL(st, c, 300000, 0, mandateTestNow.Add(-90*time.Second))
+	observeWithPnL(st, c, 220000, -80000, mandateTestNow.Add(-time.Minute))
+	seedMandateHistory(t, srv, 0)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
+	res := srv.evaluateMandate(t.Context(), false)
+	v := res.Verdict
+	if v == nil || v.Status != mandate.StatusReduce || v.Capital.Room != 0 || v.Capital.BudgetAnnualSD != 0 || v.Risk == nil || v.Risk.SDAnnualBase <= 0 || !math.IsInf(v.Risk.RatioToBudget, 1) {
+		t.Fatalf("room 0 verdict %+v", v)
+	}
+	if !res.Gate.RefusesAdditions || !strings.Contains(res.Gate.Reason, "the loss has reached the mandate's maximum") {
+		t.Fatalf("gate %+v", res.Gate)
+	}
+
+	var out bytes.Buffer
+	srv.dispatch(t.Context(), &rpc.Request{ID: "room-0", Method: rpc.MethodMandateRisk, Params: json.RawMessage(`{}`)}, json.NewEncoder(&out), bufio.NewReader(strings.NewReader("")))
+	var response rpc.Response
+	if err := json.Unmarshal(out.Bytes(), &response); err != nil {
+		t.Fatalf("mandate.risk: %s: %v", out.Bytes(), err)
+	}
+	if !response.Ok || response.Error != nil || !bytes.Contains(response.Result, []byte(`"ratio_to_budget":null`)) {
+		t.Fatalf("mandate.risk at room 0: ok %v error %+v", response.Ok, response.Error)
+	}
+	var got rpc.MandateRiskResult
+	if err := json.Unmarshal(response.Result, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Verdict == nil || got.Verdict.Status != mandate.StatusReduce || got.Verdict.Risk == nil || !math.IsInf(got.Verdict.Risk.RatioToBudget, 1) ||
+		got.Verdict.Risk.SDAnnualBase != v.Risk.SDAnnualBase || got.Gate == nil || got.Gate.Reason != res.Gate.Reason {
+		t.Fatalf("served %+v", got)
+	}
+	// The MCP tool and `canary mandate --json` encode the result again.
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatalf("re-encode: %v", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -246,6 +247,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "mandate_reduce", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateReducing()}},
 		{name: "mandate_unknown", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateUnknown()}},
 		{name: "mandate_unknown_held", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateHeld()}},
+		{name: "mandate_no_room", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateNoRoom()}},
 		{name: "mandate_inactive", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: rpc.MandateRiskResult{AsOf: goldenAt, Message: "the risk constitution carries no [mandate] table; the mandate budget is inactive", Gate: &rpc.MandateGateView{}}}},
 		{name: "core", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCore()}},
 		{name: "core_hold", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreHold()}},
@@ -475,6 +477,24 @@ func goldenMandateReducing() rpc.MandateRiskResult {
 			{Rank: 2, Key: "mandate_reduction:0002", Contract: rpc.ContractParams{Symbol: "SYNB", SecType: "STK"}, Action: rpc.OrderActionSell, Quantity: 1200,
 				Phase: rpc.MandatePhaseRisk, ContributionPct: 33.1, Automatic: rpc.TradeProposalAutomaticPending, SubmitAt: goldenAt.Add(30 * time.Minute)},
 		}}
+	return res
+}
+
+// goldenMandateNoRoom is the reduce at room 0: the loss from the high has
+// passed the maximum, so the budget and the gap caps are zero and the ratio
+// is unbounded (null on the wire, read back as +Inf through goldenConn).
+func goldenMandateNoRoom() rpc.MandateRiskResult {
+	res := goldenMandate(mandate.StatusWithin)
+	v := res.Verdict
+	v.Status = mandate.StatusReduce
+	c := &v.Capital
+	c.EquityBase, c.RiskBase, c.DrawdownBase, c.DrawdownPct, c.Room, c.BudgetAnnualSD = 225000, 155000, 75000, 31.91, 0, 0
+	v.Risk.RatioToBudget = math.Inf(1)
+	v.Stresses.GapCapBase, v.Stresses.GapBreaches = 0, []string{"SYNA", "SYNB"}
+	for i := range v.Underlyings {
+		v.Underlyings[i].GapCapBase, v.Underlyings[i].GapBreach = 0, true
+	}
+	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "the mandate risk 23,970 EUR a year is over the budget 0 EUR (the loss has reached the mandate's maximum, so no risk is in budget); a gap in SYNA, SYNB would lose more than the gap cap 0 EUR"}
 	return res
 }
 

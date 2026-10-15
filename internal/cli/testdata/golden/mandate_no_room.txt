@@ -1,0 +1,80 @@
+# canary mandate · COLUMNS=80 · colour off
+Mandate  REDUCE
+Risk · 23,970 EUR a year · 1-day 1,510 EUR · 99% expected shortfall 4,120 EUR
+  · budget 0
+Budget · 15% × 230,000 EUR at room 0% · loss 32% of the 30% maximum from the
+  high-water mark 235,000 EUR
+Risk base · 155,000 EUR = equity 225,000 EUR − tax reserve 70,000 EUR · flows
+  since 2026-09-01 −5,000 EUR
+Additions · refused · the mandate risk 23,970 EUR a year is over the budget 0
+            EUR (the loss has reached the mandate's maximum, so no risk is in
+            budget); a gap in SYNA, SYNB would lose more than the gap cap 0 EUR
+
+Contributions  share of the risk · beta to SPY · one-name gap against its cap
+  SYNA · 66.9% · beta 1.12 · gap −25% loses 22,100 EUR, +25% loses 6,200 EUR
+  (cap 0) · BREACH
+  SYNB · 33.1% · beta 0.64 · gap −25% loses 10,000 EUR (cap 0) · BREACH
+
+Positions
+  SYNA · 71.4% · 90,000 EUR
+  SYNB · 33.1% · 40,000 EUR
+  SYNA 20261218 110 C · −4.5% · −540 EUR
+
+Stresses
+  Index −10% through beta · gains 9,870 EUR
+  Gap cap per name · 0 EUR · breaches: SYNA, SYNB
+  Currency share of the risk · 11%
+Not modelled · SYNT (bill, no equity risk modelled)
+
+Evidence
+  Verdict · 14:00:00 TZ
+  Equity · 13:58:00 TZ
+  Positions · 13:59:00 TZ
+  Scenarios · 252 daily returns, 2025-09-05 to 2026-09-04
+  fx:USD · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
+The mandate refuses risk-adding orders. Its reduction is a set of proposals
+  (canary proposals); the daemon places them itself only when mandate_reduction
+  is pre-authorised, after the veto window.
+# canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mMandate\x1b[0m  \x1b[31m\x1b[1mREDUCE\x1b[0m\x1b[0m
+Risk · 23,970 EUR a year · 1-day 1,510 EUR · 99% expected shortfall 4,120 EUR
+  · budget 0
+Budget · 15% × 230,000 EUR at room 0% · loss 32% of the 30% maximum from the
+  high-water mark 235,000 EUR
+Risk base · 155,000 EUR = equity 225,000 EUR − tax reserve 70,000 EUR · flows
+  since 2026-09-01 −5,000 EUR
+Additions · \x1b[31mrefused · the mandate risk 23,970 EUR a year is over the budget 0\x1b[0m
+            \x1b[31mEUR (the loss has reached the mandate's maximum, so no risk is in\x1b[0m
+            \x1b[31mbudget); a gap in SYNA, SYNB would lose more than the gap cap 0 EUR\x1b[0m
+
+\x1b[1mContributions\x1b[0m  share of the risk · beta to SPY · one-name gap against its cap
+  \x1b[31mSYNA · 66.9% · beta 1.12 · gap −25% loses 22,100 EUR, +25% loses 6,200 EUR\x1b[0m
+  \x1b[31m(cap 0) · BREACH\x1b[0m
+  \x1b[31mSYNB · 33.1% · beta 0.64 · gap −25% loses 10,000 EUR (cap 0) · BREACH\x1b[0m
+
+\x1b[1mPositions\x1b[0m
+  SYNA · 71.4% · 90,000 EUR
+  SYNB · 33.1% · 40,000 EUR
+  SYNA 20261218 110 C · −4.5% · −540 EUR
+
+\x1b[1mStresses\x1b[0m
+  Index −10% through beta · gains 9,870 EUR
+  Gap cap per name · 0 EUR · breaches: SYNA, SYNB
+  Currency share of the risk · 11%
+Not modelled · SYNT (bill, no equity risk modelled)
+
+\x1b[1mEvidence\x1b[0m
+  Verdict · 14:00:00 TZ
+  Equity · 13:58:00 TZ
+  Positions · 13:59:00 TZ
+  Scenarios · 252 daily returns, 2025-09-05 to 2026-09-04
+  fx:USD · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
+The mandate refuses risk-adding orders. Its reduction is a set of proposals
+  (canary proposals); the daemon places them itself only when mandate_reduction
+  is pre-authorised, after the veto window.

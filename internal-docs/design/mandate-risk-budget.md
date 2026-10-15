@@ -1,6 +1,6 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-14 16:48 CEST
+Updated: 2026-10-15 07:41 CEST
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
 gate); increment 2 implemented 2026-10-14 (forced reduction, below). The
 feature is inactive until the owner writes `[mandate]` into
@@ -521,8 +521,11 @@ binding.riskBound` was reviewed as the riskiest integration point.
   the table unchanged) and the policy check rules.
 - Property/invariant tests: contributions sum to 100%; room in [0, 1];
   budget 0 at room 0; the gate never refuses a close or reduce.
-- Cross-surface parity checks: `canary mandate` golden render; the MCP tool
-  `canary_mandate`; `TestOnlyTheDaemonEvaluates` lists `mandate.Evaluate`.
+- Cross-surface parity checks: `canary mandate` golden render (room 0:
+  `mandate_no_room`); the MCP tool `canary_mandate`;
+  `TestOnlyTheDaemonEvaluates` lists `mandate.Evaluate`. A room-0 verdict
+  with risk crosses the daemon's `mandate.risk` writer with the ratio null
+  (`TestMandateRoomZeroVerdictCrossesTheWire`, added 2026-10-15 07:41 CEST).
 - Redacted before/after artifact: none against a live gateway (fixtures
   only, by instruction).
 - Residual risk accepted: the measurement is historical (one year of
