@@ -34,7 +34,7 @@ func TestQuoteHistoryBarsAreReadOncePerContractUntilTheNextClose(t *testing.T) {
 	if _, _ = s.quoteHistoryBars(spy, marketcal.MarketUSEquity, mondayOpen, fetch); reads != 2 {
 		t.Fatalf("completed sessions stay current through the next session: reads=%d", reads)
 	}
-	amd := quoteLiquidityKey{symbol: "AMD", exchange: "SMART", currency: "USD"}
+	amd := quoteLiquidityKey{symbol: "SYW", exchange: "SMART", currency: "USD"}
 	if _, _ = s.quoteHistoryBars(amd, marketcal.MarketUSEquity, mondayOpen, fetch); reads != 3 {
 		t.Fatalf("a contract first read during a session is read: reads=%d", reads)
 	}

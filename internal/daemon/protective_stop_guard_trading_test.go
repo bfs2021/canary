@@ -42,7 +42,7 @@ func newStopGuardRig(t *testing.T, trading config.Trading) *stopGuardRig {
 		defer r.mu.Unlock()
 		orders := append([]ibkrlib.OrderLifecycleEvent{{
 			Type: ibkrlib.OrderLifecycleEventOpenOrder, OrderID: 1002, ClientID: 31, ClientIDPresent: true, Account: "DU1234567",
-			Symbol: "AMD", SecType: "STK", ConID: 4391, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
+			Symbol: "SYW", SecType: "STK", ConID: 4391, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
 			TIF: rpc.OrderTIFGTC, TotalQuantity: 100, Remaining: 100, Status: "Submitted",
 		}}, r.hand...)
 		return ibkrlib.OpenOrderSnapshot{Complete: true, AsOf: r.now, Orders: orders}, scope, nil
@@ -54,7 +54,7 @@ func newStopGuardRig(t *testing.T, trading config.Trading) *stopGuardRig {
 			return nil, false
 		}
 		return []*ibkrlib.RawPosition{{Account: "DU1234567", Position: r.position,
-			Contract: ibkrlib.Contract{ConID: 4391, Symbol: "AMD", SecType: "STK", Currency: "USD"}}}, true
+			Contract: ibkrlib.Contract{ConID: 4391, Symbol: "SYW", SecType: "STK", Currency: "USD"}}}, true
 	}
 	srv.orderPreviewPositionImpact = func(_ context.Context, _ rpc.ContractParams, action string, qty int) (rpc.OrderPositionImpact, error) {
 		r.mu.Lock()
@@ -262,7 +262,7 @@ func TestProtectiveStopGuardLeavesHandOrdersAlone(t *testing.T) {
 	r := newStopGuardRig(t, config.Trading{})
 	r.hand = []ibkrlib.OrderLifecycleEvent{{
 		Type: ibkrlib.OrderLifecycleEventOpenOrder, PermID: 7777, ClientID: 0, ClientIDPresent: true, Account: "DU1234567",
-		Symbol: "AMD", SecType: "STK", ConID: 4391, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
+		Symbol: "SYW", SecType: "STK", ConID: 4391, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
 		TotalQuantity: 300, Remaining: 300, Status: "Submitted",
 	}}
 	r.set(150, true)

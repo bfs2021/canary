@@ -55,10 +55,10 @@ const (
 
 func closeLinkContract(option bool) rpc.ContractParams {
 	if option {
-		return rpc.ContractParams{ConID: closeLinkOptionConID, Symbol: "AMD", SecType: "OPT", Exchange: "SMART", Currency: "USD",
+		return rpc.ContractParams{ConID: closeLinkOptionConID, Symbol: "SYW", SecType: "OPT", Exchange: "SMART", Currency: "USD",
 			Expiry: "20261218", Strike: 150, Right: "C", Multiplier: 100}
 	}
-	return rpc.ContractParams{ConID: closeLinkStockConID, Symbol: "AMD", SecType: "STK", Exchange: "SMART", Currency: "USD"}
+	return rpc.ContractParams{ConID: closeLinkStockConID, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD"}
 }
 
 // seedCanarySellStop journals Canary's own working sell stop, acknowledged
@@ -547,7 +547,7 @@ func TestCloseWithoutCanarysOwnStopIsSentPlain(t *testing.T) {
 		r.mu.Lock()
 		r.hand = []ibkrlib.OrderLifecycleEvent{{
 			Type: ibkrlib.OrderLifecycleEventOpenOrder, PermID: 7777, ClientID: 0, ClientIDPresent: true, Account: "DU1234567",
-			Symbol: "AMD", SecType: "STK", ConID: closeLinkStockConID, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
+			Symbol: "SYW", SecType: "STK", ConID: closeLinkStockConID, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
 			TotalQuantity: 70, Remaining: 70, Status: "Submitted", OcaGroup: "owner-group", OcaType: 1,
 		}}
 		r.mu.Unlock()
@@ -626,7 +626,7 @@ func TestProtectiveStopGuardCountsAnUnlinkedCanarySale(t *testing.T) {
 			t.Parallel()
 			r := newCloseLinkRig(t, false, "canary-oca-ord-prot")
 			sale := orderJournalEvent{At: r.now, Type: orderJournalEventBrokerAcknowledged, OrderRef: "ord-sale", PreviewTokenID: "tok-sale",
-				ReservedOrderID: 1003, ClientID: 31, Account: "DU1234567", Endpoint: "127.0.0.1:4002", Mode: "paper", Symbol: "AMD", SecType: "STK",
+				ReservedOrderID: 1003, ClientID: 31, Account: "DU1234567", Endpoint: "127.0.0.1:4002", Mode: "paper", Symbol: "SYW", SecType: "STK",
 				ConID: closeLinkStockConID, Exchange: "SMART", Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay,
 				Quantity: 30, Remaining: 30, LimitPrice: 101, Status: "Submitted", SendState: orderSendStateBrokerAcknowledged, OCAGroup: tc.group}
 			if tc.group != "" {
@@ -638,7 +638,7 @@ func TestProtectiveStopGuardCountsAnUnlinkedCanarySale(t *testing.T) {
 			r.mu.Lock()
 			r.hand = []ibkrlib.OrderLifecycleEvent{{
 				Type: ibkrlib.OrderLifecycleEventOpenOrder, OrderID: 1003, ClientID: 31, ClientIDPresent: true, Account: "DU1234567",
-				Symbol: "AMD", SecType: "STK", ConID: closeLinkStockConID, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeLMT,
+				Symbol: "SYW", SecType: "STK", ConID: closeLinkStockConID, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeLMT,
 				TotalQuantity: 30, Remaining: 30, Status: "Submitted", OcaGroup: tc.group, OcaType: sale.OCAType,
 			}}
 			r.mu.Unlock()

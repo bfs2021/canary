@@ -277,7 +277,7 @@ func seedProtectiveTrailJournal(t *testing.T, srv *Server, now time.Time) {
 		Mode:            "paper",
 		Source:          proposalOrderSource,
 		OpenClose:       "C",
-		Symbol:          "AMD",
+		Symbol:          "SYW",
 		SecType:         "STK",
 		ConID:           4391,
 		Exchange:        "SMART",
@@ -299,7 +299,7 @@ func protectiveReduceDraft(quantity int) rpc.OrderDraft {
 	amount := 8.5
 	return rpc.OrderDraft{
 		Action:    rpc.OrderActionSell,
-		Contract:  rpc.ContractParams{ConID: 4391, Symbol: "AMD", SecType: "STK", Exchange: "SMART", Currency: "USD"},
+		Contract:  rpc.ContractParams{ConID: 4391, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD"},
 		Quantity:  quantity,
 		OrderType: rpc.OrderTypeTRAIL,
 		TIF:       rpc.OrderTIFGTC,
@@ -321,7 +321,7 @@ func protectiveViewForToken(quantity float64) rpc.OrderView {
 		Mode:            "paper",
 		Source:          proposalOrderSource,
 		OpenClose:       "C",
-		Symbol:          "AMD",
+		Symbol:          "SYW",
 		SecType:         "STK",
 		ConID:           4391,
 		Exchange:        "SMART",

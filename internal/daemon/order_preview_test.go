@@ -600,7 +600,7 @@ func seedReconcileGhostRow(t *testing.T, srv *Server, ref string, permID int, at
 		Account:         "DU1234567",
 		Endpoint:        "127.0.0.1:4001",
 		Mode:            "paper",
-		Symbol:          "AMD",
+		Symbol:          "SYW",
 		SecType:         "STK",
 		Action:          rpc.OrderActionSell,
 		OrderType:       rpc.OrderTypeTRAIL,
