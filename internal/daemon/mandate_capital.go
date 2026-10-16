@@ -275,7 +275,11 @@ func mandatePolicyNumbers(c *risk.Constitution) mandate.Policy {
 
 // MandateCapitalForScope evaluates the mandate's capital state from the
 // persisted equity observation, the flows and the high-water mark of the
-// selected account, and the realised figures from its daily samples.
+// selected account, and the realised figures from its daily samples. It is
+// judged at now or, if later, at the store's clock once it holds the state:
+// an observation that landed after the caller read its clock (its own
+// account read, or one the store was persisting) is current evidence, not
+// one from the future.
 func (st *riskCapitalStore) MandateCapitalForScope(c *risk.Constitution, scope brokerStateScope, now time.Time) (mandate.Capital, mandateRealised) {
 	policy := mandatePolicyNumbers(c)
 	if st == nil || c == nil || c.Mandate == nil {
@@ -291,6 +295,9 @@ func (st *riskCapitalStore) MandateCapitalForScope(c *risk.Constitution, scope b
 		if err := st.selectScopeLocked(scope); err != nil {
 			return mandate.Capital{Reasons: []string{riskCapitalPublicScopeReason(err)}}, mandateRealised{}
 		}
+	}
+	if at := st.now().UTC(); at.After(now) {
+		now = at
 	}
 	// The read pairs the bound document's own persisted equity with its own
 	// high-water mark, self-consistent for the bound account whatever the

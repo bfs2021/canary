@@ -205,11 +205,10 @@ func (s *Server) handleMandateRisk(ctx context.Context, req *rpc.Request) (*rpc.
 // read's evaluation. Without it, the evaluation is the scheduled one, the
 // only kind the forced reduction's streak counts.
 func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.MandateRiskResult {
-	now := s.nowUTC()
 	mgr := s.riskPolicies.snapshot()
 	c := mgr.policy
 	if !c.MandateActive() {
-		res := mandateInactiveResult(now, mgr)
+		res := mandateInactiveResult(s.nowUTC(), mgr)
 		s.mandateVerdicts.set(nil, nil, time.Time{}, "", !refreshAccount)
 		return res
 	}
@@ -220,7 +219,10 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	}
 	scope := s.currentBrokerStateScope()
 	base := normCcy(c.Capital.BaseCurrency)
-	capital, _ := s.riskCapital.MandateCapitalForScope(c, scope, now)
+	// The verdict's clock is read once the capital state is in hand, so it is
+	// never older than the equity observation it is judged on.
+	capital, _ := s.riskCapital.MandateCapitalForScope(c, scope, s.nowUTC())
+	now := s.nowUTC()
 	in := mandate.Input{Now: now, BaseCurrency: base, Policy: mandatePolicyNumbers(c), Capital: capital,
 		Series: map[string]mandate.Series{}, FX: map[string]mandate.Series{}, FXNow: map[string]float64{}}
 	if unapproved := c.Mandate.UnapprovedKeys(); len(unapproved) > 0 {

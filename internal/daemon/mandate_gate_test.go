@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -156,6 +157,49 @@ func TestMandateGateRefusesAdditionsOverBudget(t *testing.T) {
 	hedge := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 1, Contract: rpc.ContractParams{Symbol: srv.rulebookPolicy().HedgeSymbols[0], SecType: "OPT", Right: "P", Currency: "USD"}}
 	if blocker := srv.mandateBudgetGate(hedge, mandateOpen); blocker != nil {
 		t.Fatalf("hedge put over budget: %+v, want allowed", blocker)
+	}
+}
+
+// An account read that lands just after a scheduled evaluation read its
+// clock is that evaluation's evidence, not an observation from the future:
+// the capital is judged once the store holds it, so the verdict is measured
+// on that equity, stamped no earlier than it, and counts for the forced
+// reduction.
+func TestMandateScheduledVerdictCountsAnObservationLandingAsItStarts(t *testing.T) {
+	c := testMandateConstitution()
+	srv, st := mandateTestServer(t, c)
+	seedMandateHistory(t, srv, 0)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(3000), nil }
+	var mu sync.Mutex
+	clock := mandateTestNow
+	landed := mandateTestNow.Add(50 * time.Millisecond)
+	accountRead := func() {
+		mu.Lock()
+		clock = landed
+		mu.Unlock()
+		st.Observe(300000, landed, c, testLiveObserveScope, true)
+	}
+	srv.now = func() time.Time {
+		mu.Lock()
+		now, read := clock, accountRead
+		accountRead = nil
+		mu.Unlock()
+		if read != nil {
+			read()
+		}
+		return now
+	}
+	st.now = srv.now
+
+	res := srv.evaluateMandate(t.Context(), false)
+	if res.Verdict == nil || res.Verdict.Status != mandate.StatusReduce || !res.Verdict.Capital.Known {
+		t.Fatalf("verdict %+v, want reduce on known capital", res.Verdict)
+	}
+	if !res.Verdict.Capital.EquityAsOf.Equal(landed) || res.AsOf.Before(landed) {
+		t.Fatalf("equity as of %s, verdict as of %s; want the observation at %s and a verdict no earlier", res.Verdict.Capital.EquityAsOf, res.AsOf, landed)
+	}
+	if got := srv.mandateVerdicts.kept().overStreak; got != 1 {
+		t.Fatalf("over streak %d, want the scheduled verdict counted", got)
 	}
 }
 

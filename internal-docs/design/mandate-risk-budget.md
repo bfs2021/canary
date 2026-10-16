@@ -186,6 +186,11 @@ proposal the owner confirms by writing it into the policy file.
   an equity move the book's P&L does not explain suggests an undeclared
   cash flow (see Forced reduction).
   Every reason is named on the verdict. Nil is unavailable, never zero.
+  The verdict is judged at a clock read once the capital state is in hand,
+  so an equity observation that lands while the evaluation starts (its own
+  account read, or another the store was persisting) is current, never one
+  from the future (2026-10-16: scheduled verdicts read unknown while
+  reads measured).
 
 ## Forced reduction
 
