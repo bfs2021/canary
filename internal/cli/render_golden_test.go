@@ -31,10 +31,22 @@ var updateGolden = flag.Bool("update", false, "rewrite internal/cli/testdata/gol
 
 const goldenDir = "testdata/golden"
 
-// goldenAt anchors every synthetic timestamp. It is built in the local zone so
-// renderers that print .Local() wall-clock time show the same hours in every
-// zone; goldenText then writes the zone abbreviation as "TZ".
-var goldenAt = time.Date(2026, 9, 5, 14, 0, 0, 0, time.Local)
+// goldenZone is the local zone of every test in this package: a fixed zone
+// with the offset and abbreviation the goldens were recorded in. The machine's
+// zone would move the hours a renderer prints in UTC and, through the
+// abbreviation's width, where lines wrap; CI runs in UTC.
+var goldenZone = time.FixedZone("CEST", 2*60*60)
+
+// goldenAt anchors every synthetic timestamp; goldenText writes the zone
+// abbreviation as "TZ".
+var goldenAt = time.Date(2026, 9, 5, 14, 0, 0, 0, goldenZone)
+
+// TestMain pins time.Local before any test starts, so no goroutine reads it
+// while it changes.
+func TestMain(m *testing.M) {
+	time.Local = goldenZone
+	os.Exit(m.Run())
+}
 
 // goldenConn answers each daemon method with one fixed synthetic result,
 // round-tripped through JSON as the daemon socket delivers it. A method
