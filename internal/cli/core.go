@@ -177,9 +177,9 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	if e := res.Evidence; e != nil {
 		switch {
 		case e.Missing:
-			riskReadLine(env, "  "+e.SeriesKey, env.yellow("no history yet"))
+			riskWarnReadLine(env, "  "+e.SeriesKey, "no history yet")
 		case e.Stale:
-			riskReadLine(env, "  "+e.SeriesKey, env.yellow(fmt.Sprintf("stale: %d closes to %s", e.Closes, e.LastClose)), "read "+formatTimeShort(e.FetchedAt.Local()), "Xetra calendar")
+			riskWarnReadLine(env, "  "+e.SeriesKey, fmt.Sprintf("stale: %d closes to %s", e.Closes, e.LastClose), "read "+formatTimeShort(e.FetchedAt.Local()), "Xetra calendar")
 		default:
 			riskReadLine(env, "  "+e.SeriesKey, fmt.Sprintf("%d closes to %s", e.Closes, e.LastClose), "read "+formatTimeShort(e.FetchedAt.Local()), "Xetra calendar")
 		}

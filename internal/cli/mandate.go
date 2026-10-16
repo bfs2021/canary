@@ -187,9 +187,9 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 		for _, s := range e.Series {
 			switch {
 			case s.Missing:
-				riskReadLine(env, "  "+s.Key, env.yellow("no history yet"))
+				riskWarnReadLine(env, "  "+s.Key, "no history yet")
 			case s.Stale:
-				riskReadLine(env, "  "+s.Key, env.yellow(fmt.Sprintf("stale: %d closes to %s", s.Closes, s.LastClose)), "read "+formatTimeShort(s.FetchedAt.Local()))
+				riskWarnReadLine(env, "  "+s.Key, fmt.Sprintf("stale: %d closes to %s", s.Closes, s.LastClose), "read "+formatTimeShort(s.FetchedAt.Local()))
 			default:
 				riskReadLine(env, "  "+s.Key, fmt.Sprintf("%d closes to %s", s.Closes, s.LastClose), "read "+formatTimeShort(s.FetchedAt.Local()))
 			}

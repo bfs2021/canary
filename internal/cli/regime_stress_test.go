@@ -200,3 +200,28 @@ func TestRegimeMonitorCLIUsesSharedAuthorityProjection(t *testing.T) {
 		t.Fatal("CLI monitor invented or dropped authority")
 	}
 }
+
+// TestRiskWarnReadLineKeepsItsColour pins the stale-evidence warning: its
+// yellow survives sanitising, escape bytes in the data do not, and colour
+// leaves the wrap where it is without colour.
+func TestRiskWarnReadLineKeepsItsColour(t *testing.T) {
+	t.Setenv("COLUMNS", "80")
+	render := func(color bool) string {
+		var out bytes.Buffer
+		riskWarnReadLine(&Env{Stdout: &out, Color: color}, "  u:SYN\x1b]0;x\x07", "stale: 3 closes\x1b[2J to 2026-09-01", "read 05:00:00 CEST", strings.Repeat("word ", 12))
+		return out.String()
+	}
+	on, off := render(true), render(false)
+	if !strings.Contains(on, ansiYellow+"stale: 3 closes[2J to 2026-09-01"+ansiReset) {
+		t.Fatalf("colour-on line lost its yellow warning:\n%q", on)
+	}
+	if n := strings.Count(on, "\x1b"); n != 2 {
+		t.Fatalf("colour-on line carries %d escape bytes, want the warning's 2:\n%q", n, on)
+	}
+	if strings.Contains(off, "\x1b") {
+		t.Fatalf("colour-off line carries an escape byte:\n%q", off)
+	}
+	if plain := strings.NewReplacer(ansiYellow, "", ansiReset, "").Replace(on); plain != off || strings.Count(off, "\n") < 2 {
+		t.Fatalf("colour moved the wrap:\n on: %q\noff: %q", plain, off)
+	}
+}

@@ -262,8 +262,23 @@ func renderStress(env *Env, res rpc.StressResult, details bool) {
 }
 
 func riskReadLine(env *Env, label string, values ...string) {
+	riskWrapLine(env, label, sanitizeRunText(briefJoin(append([]string{label}, values...)...)))
+}
+
+// riskWarnReadLine is riskReadLine with a yellow warning as its first value.
+// The colour goes on after sanitising, which would strip its escape bytes.
+func riskWarnReadLine(env *Env, label, warning string, values ...string) {
+	parts := []string{sanitizeRunText(label), env.yellow(sanitizeRunText(warning))}
+	for _, value := range values {
+		parts = append(parts, sanitizeRunText(value))
+	}
+	riskWrapLine(env, label, briefJoin(parts...))
+}
+
+// riskWrapLine prints sanitised text wrapped under label's indent, with
+// continuation lines two cells deeper.
+func riskWrapLine(env *Env, label, text string) {
 	indent := label[:len(label)-len(strings.TrimLeft(label, " "))]
-	text := sanitizeRunText(briefJoin(append([]string{label}, values...)...))
 	width := briefProseWidth(env.Stdout)
 	for i, line := range wrapVisibleText(text, width-len(indent)-2) {
 		if i == 0 {

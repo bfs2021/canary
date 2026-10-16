@@ -33,8 +33,8 @@ Mandate · within · risk 3,267 EUR a year of the budget 34,500 EUR
 Next decision · 2026-09-30 after the Xetra close
 
 \x1b[1mEvidence\x1b[0m
-  core:con:9030 · [33mstale: 320 closes to 2026-09-04[0m · read 05:00:00 TZ
-    · Xetra calendar
+  core:con:9030 · \x1b[33mstale: 320 closes to 2026-09-04\x1b[0m · read 05:00:00 TZ · Xetra
+    calendar
   Mandate verdict · 13:59:00 TZ
 Read-only: the core proposes nothing and places no order in this phase. It is
   a beta allocation with a drawdown filter that you chose, not an edge claim.
