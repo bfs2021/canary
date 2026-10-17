@@ -8,7 +8,7 @@ import (
 func ocaTestOrder() IBKROrder {
 	return IBKROrder{
 		OrderID: 7, ClientID: 31, Account: "DU1234567",
-		ConID: 4391, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD",
+		ConID: 910001, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD",
 		Action: "SELL", TotalQty: 70, OrderType: "LMT", LmtPrice: 100, TIF: "DAY", Transmit: true,
 	}
 }

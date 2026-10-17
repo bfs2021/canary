@@ -14,7 +14,7 @@ var ocaTestScope = brokerStateScope{Account: "DU1234567", Mode: rpc.AccountModeP
 
 func ocaTestStopView(ref string, orderID int, qty float64, group string, updated time.Time) rpc.OrderView {
 	v := rpc.OrderView{OrderRef: ref, PreviewTokenID: "tok-" + ref, ReservedOrderID: orderID, ClientID: 31, Account: "DU1234567",
-		Endpoint: "127.0.0.1:4002", Mode: "paper", Symbol: "SYW", SecType: "STK", ConID: 4391, Currency: "USD", Action: rpc.OrderActionSell,
+		Endpoint: "127.0.0.1:4002", Mode: "paper", Symbol: "SYW", SecType: "STK", ConID: 910001, Currency: "USD", Action: rpc.OrderActionSell,
 		OrderType: rpc.OrderTypeTRAIL, TIF: rpc.OrderTIFGTC, Quantity: qty, Remaining: qty, Status: "Submitted",
 		LifecycleStatus: rpc.OrderLifecycleSubmitted, SendState: orderSendStateBrokerAcknowledged, UpdatedAt: updated, Open: true, OCAGroup: group}
 	if group != "" {
@@ -25,13 +25,13 @@ func ocaTestStopView(ref string, orderID int, qty float64, group string, updated
 
 func ocaTestStopOrder(orderID int, remaining float64, group string, typ int) ibkrlib.OrderLifecycleEvent {
 	return ibkrlib.OrderLifecycleEvent{Type: ibkrlib.OrderLifecycleEventOpenOrder, OrderID: orderID, ClientID: 31, ClientIDPresent: true,
-		Account: "DU1234567", Symbol: "SYW", SecType: "STK", ConID: 4391, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
+		Account: "DU1234567", Symbol: "SYW", SecType: "STK", ConID: 910001, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
 		TotalQuantity: remaining, Remaining: remaining, Status: "Submitted", OcaGroup: group, OcaType: typ}
 }
 
 func ocaTestSale(qty int) rpc.OrderDraft {
 	return rpc.OrderDraft{Action: rpc.OrderActionSell, Quantity: qty, OrderType: rpc.OrderTypeLMT, LimitPrice: 100, OrderRef: "ord-sale",
-		Contract: rpc.ContractParams{ConID: 4391, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD"}}
+		Contract: rpc.ContractParams{ConID: 910001, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD"}}
 }
 
 // The planner: what a sale beside Canary's own stops does, from the
@@ -119,7 +119,7 @@ func TestOCAMembershipSurvivesJournalReplay(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 12, 15, 40, 0, 0, time.UTC)
 	base := orderJournalEvent{OrderRef: "ord-close", PreviewTokenID: "tok-close", ReservedOrderID: 1003, ClientID: 31,
-		Account: "DU1234567", Endpoint: "127.0.0.1:4002", Mode: "paper", Symbol: "SYW", SecType: "STK", ConID: 4391,
+		Account: "DU1234567", Endpoint: "127.0.0.1:4002", Mode: "paper", Symbol: "SYW", SecType: "STK", ConID: 910001,
 		Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, Quantity: 70, LimitPrice: 100}
 	sent := base
 	sent.At, sent.Type, sent.SendState = now, orderJournalEventSendAttempted, orderSendStateSendAttempted
@@ -134,13 +134,13 @@ func TestOCAMembershipSurvivesJournalReplay(t *testing.T) {
 	}
 
 	echo, ok := orderJournalEventFromLifecycle(ibkrlib.OrderLifecycleEvent{Type: ibkrlib.OrderLifecycleEventOpenOrder, OrderID: 1003, ClientID: 31,
-		ClientIDPresent: true, Symbol: "SYW", SecType: "STK", ConID: 4391, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeLMT,
+		ClientIDPresent: true, Symbol: "SYW", SecType: "STK", ConID: 910001, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeLMT,
 		TotalQuantity: 70, LimitPrice: 100, TIF: rpc.OrderTIFDay, Status: "Submitted", OcaGroup: "canary-oca-ord-prot", OcaType: 2}, now)
 	if !ok || echo.OCAGroup != "canary-oca-ord-prot" || echo.OCAType != 2 {
 		t.Fatalf("journal event from the broker's openOrder = %+v (ok %v), want the echoed membership", echo, ok)
 	}
 	if view := untrackedOrderView(ibkrlib.OrderLifecycleEvent{Type: ibkrlib.OrderLifecycleEventOpenOrder, OrderID: 9, Symbol: "SYW", SecType: "STK",
-		ConID: 4391, Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL, TotalQuantity: 70, Remaining: 70, Status: "Submitted",
+		ConID: 910001, Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL, TotalQuantity: 70, Remaining: 70, Status: "Submitted",
 		OcaGroup: "owner-group", OcaType: 1}, brokerStateScope{Account: "DU1234567", Mode: rpc.AccountModePaper}, now); view.OCAGroup != "owner-group" || view.OCAType != 1 {
 		t.Fatalf("untracked view = %+v, want the hand order's group reported", view)
 	}

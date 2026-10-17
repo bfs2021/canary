@@ -49,7 +49,7 @@ type closeLinkRig struct {
 }
 
 const (
-	closeLinkStockConID  = 4391
+	closeLinkStockConID  = 910001
 	closeLinkOptionConID = 9001
 )
 

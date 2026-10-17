@@ -162,7 +162,7 @@ func TestOrderCancelAuthorityFailureAfterStageMakesZeroBrokerCalls(t *testing.T)
 		At: srv.orderNow().Add(-time.Minute), Type: orderJournalEventBrokerAcknowledged,
 		OrderRef: "authority-cancel", ReservedOrderID: 1001, ClientID: 31,
 		Account: "DU1234567", Endpoint: "127.0.0.1:4002", Mode: rpc.AccountModePaper,
-		Symbol: "AAPL", SecType: "STK", Action: rpc.OrderActionBuy,
+		Symbol: "SYNTHB", SecType: "STK", Action: rpc.OrderActionBuy,
 		OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, Quantity: 1,
 		LimitPrice: 100, Status: "Submitted", SendState: orderSendStateBrokerAcknowledged,
 	}); err != nil {
@@ -279,7 +279,7 @@ func seedProtectiveTrailJournal(t *testing.T, srv *Server, now time.Time) {
 		OpenClose:       "C",
 		Symbol:          "SYW",
 		SecType:         "STK",
-		ConID:           4391,
+		ConID:           910001,
 		Exchange:        "SMART",
 		Currency:        "USD",
 		Action:          rpc.OrderActionSell,
@@ -299,7 +299,7 @@ func protectiveReduceDraft(quantity int) rpc.OrderDraft {
 	amount := 8.5
 	return rpc.OrderDraft{
 		Action:    rpc.OrderActionSell,
-		Contract:  rpc.ContractParams{ConID: 4391, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD"},
+		Contract:  rpc.ContractParams{ConID: 910001, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD"},
 		Quantity:  quantity,
 		OrderType: rpc.OrderTypeTRAIL,
 		TIF:       rpc.OrderTIFGTC,
@@ -323,7 +323,7 @@ func protectiveViewForToken(quantity float64) rpc.OrderView {
 		OpenClose:       "C",
 		Symbol:          "SYW",
 		SecType:         "STK",
-		ConID:           4391,
+		ConID:           910001,
 		Exchange:        "SMART",
 		Currency:        "USD",
 		Action:          rpc.OrderActionSell,

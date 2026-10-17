@@ -103,7 +103,7 @@ func TestOrderTokenSignerBindsDraft(t *testing.T) {
 	}
 	draft := rpc.OrderDraft{
 		Action:     rpc.OrderActionBuy,
-		Contract:   rpc.ContractParams{Symbol: "AAPL", SecType: "STK", Exchange: "SMART", Currency: "USD"},
+		Contract:   rpc.ContractParams{Symbol: "SYNTHB", SecType: "STK", Exchange: "SMART", Currency: "USD"},
 		Quantity:   10,
 		OrderType:  rpc.OrderTypeLMT,
 		LimitPrice: 100.12,
@@ -117,7 +117,7 @@ func TestOrderTokenSignerBindsDraft(t *testing.T) {
 		Endpoint:     "127.0.0.1:4002",
 		ClientID:     31,
 		Draft:        draft,
-		Quote:        rpc.OrderQuoteSnapshot{Symbol: "AAPL"},
+		Quote:        rpc.OrderQuoteSnapshot{Symbol: "SYNTHB"},
 		Position:     rpc.OrderPositionImpact{Before: 0, After: 10, Effect: rpc.OrderPositionEffectOpen},
 		Notional:     1001.20,
 		WhatIf:       previewWhatIfUnavailable(),
@@ -144,17 +144,17 @@ func TestOrderTokenSignerBindsDraft(t *testing.T) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if payload.TokenID != tokenID || payload.Draft.Contract.Symbol != "AAPL" || payload.Draft.LimitPrice != 100.12 {
+	if payload.TokenID != tokenID || payload.Draft.Contract.Symbol != "SYNTHB" || payload.Draft.LimitPrice != 100.12 {
 		t.Fatalf("payload did not bind draft/token: %+v", payload)
 	}
-	if payload.Quote.Symbol != "AAPL" || payload.Position.Effect != rpc.OrderPositionEffectOpen || payload.Notional != 1001.20 || payload.WhatIf.Status != rpc.OrderWhatIfStatusUnavailable {
+	if payload.Quote.Symbol != "SYNTHB" || payload.Position.Effect != rpc.OrderPositionEffectOpen || payload.Notional != 1001.20 || payload.WhatIf.Status != rpc.OrderWhatIfStatusUnavailable {
 		t.Fatalf("payload did not bind preview evidence: %+v", payload)
 	}
 	verified, err := signer.verify(token)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if verified.TokenID != tokenID || verified.Draft.Contract.Symbol != "AAPL" {
+	if verified.TokenID != tokenID || verified.Draft.Contract.Symbol != "SYNTHB" {
 		t.Fatalf("verified payload mismatch: %+v", verified)
 	}
 }
@@ -216,7 +216,7 @@ func TestOrderPreviewRejectsMaxNotional(t *testing.T) {
 	limit := 100.0
 	_, err := srv.previewOrder(context.Background(), rpc.OrderPreviewParams{
 		Action:     "buy",
-		Contract:   rpc.ContractParams{Symbol: "AAPL", SecType: "STK"},
+		Contract:   rpc.ContractParams{Symbol: "SYNTHB", SecType: "STK"},
 		Quantity:   6,
 		LimitPrice: &limit,
 	})
@@ -305,7 +305,7 @@ func fixedPreviewQuote(bid, ask float64) func(context.Context, rpc.ContractParam
 	return func(context.Context, rpc.ContractParams, time.Duration) (rpc.OrderQuoteSnapshot, error) {
 		mid := (bid + ask) / 2
 		return rpc.OrderQuoteSnapshot{
-			Symbol:       "AAPL",
+			Symbol:       "SYNTHB",
 			Bid:          &bid,
 			Ask:          &ask,
 			Midpoint:     &mid,
@@ -328,7 +328,7 @@ func mintPreviewTokenForConfirmTest(t *testing.T, srv *Server, whatIf rpc.OrderW
 	}
 	draft := rpc.OrderDraft{
 		Action:     rpc.OrderActionBuy,
-		Contract:   rpc.ContractParams{Symbol: "AAPL", SecType: "STK", Exchange: "SMART", Currency: "USD"},
+		Contract:   rpc.ContractParams{Symbol: "SYNTHB", SecType: "STK", Exchange: "SMART", Currency: "USD"},
 		Quantity:   1,
 		OrderType:  rpc.OrderTypeLMT,
 		LimitPrice: 100,
@@ -342,7 +342,7 @@ func mintPreviewTokenForConfirmTest(t *testing.T, srv *Server, whatIf rpc.OrderW
 		Endpoint: "127.0.0.1:4002",
 		ClientID: 31,
 		Draft:    draft,
-		Quote:    rpc.OrderQuoteSnapshot{Symbol: "AAPL"},
+		Quote:    rpc.OrderQuoteSnapshot{Symbol: "SYNTHB"},
 		Position: rpc.OrderPositionImpact{
 			Before: 0,
 			After:  1,
@@ -813,7 +813,7 @@ func TestReduceSweep100PercentDoesNotFullyCloseWithHedgePresent(t *testing.T) {
 	hedgeUnderlying := 100.0
 	pos := reduceTestPortfolio(
 		[]rpc.PositionView{
-			{Symbol: "AAPL", SecType: "STOCK", ConID: 1, Currency: "USD", Quantity: 1000, Mark: 50},
+			{Symbol: "SYNTHB", SecType: "STOCK", ConID: 1, Currency: "USD", Quantity: 1000, Mark: 50},
 		},
 		[]rpc.PositionView{
 
@@ -835,10 +835,10 @@ func TestReduceSweep100PercentDoesNotFullyCloseWithHedgePresent(t *testing.T) {
 	}
 	stock, ok := reduceFindCandidate(cands, 1)
 	if !ok {
-		t.Fatalf("AAPL should be a candidate")
+		t.Fatalf("SYNTHB should be a candidate")
 	}
 	if stock.qty != 800 {
-		t.Fatalf("AAPL qty=%d, want 800 — NOT the full 1000 held, because the hedge already absorbs part of net risk", stock.qty)
+		t.Fatalf("SYNTHB qty=%d, want 800 — NOT the full 1000 held, because the hedge already absorbs part of net risk", stock.qty)
 	}
 	if stock.qty >= 1000 {
 		t.Fatalf("100%% must not mean \"close everything eligible\" when a hedge offsets net exposure")
