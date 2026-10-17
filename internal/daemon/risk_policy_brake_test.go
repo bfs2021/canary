@@ -63,6 +63,12 @@ func TestDrawdownBrakeRefusesRiskAddingOrders(t *testing.T) {
 	if err := srv.riskPolicyBrakeError(draft, rpc.OrderPositionImpact{Before: 0, After: 100, Effect: rpc.OrderPositionEffectOpen}); err == nil || !errors.Is(err, ErrTradingDisabled) || !strings.Contains(err.Error(), "Drawdown brake on") {
 		t.Fatalf("admission under a latched brake: %v, want a trading-disabled refusal", err)
 	}
+	// A bill purchase is refused too: only the mandate gate passes it
+	// (mandateBillBuy).
+	bill := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 10000, Contract: rpc.ContractParams{ConID: 9003, Symbol: "SYNT", SecType: "BILL", Currency: "EUR"}}
+	if err := srv.riskPolicyBrakeError(bill, rpc.OrderPositionImpact{Before: 0, After: 10000, Effect: rpc.OrderPositionEffectOpen}); err == nil || !errors.Is(err, ErrTradingDisabled) || !strings.Contains(err.Error(), "Drawdown brake on") {
+		t.Fatalf("bill buy under a latched brake: %v, want a trading-disabled refusal", err)
+	}
 
 	// A reduction and a close pass the brake.
 	for _, effect := range []string{rpc.OrderPositionEffectReduce, rpc.OrderPositionEffectClose} {

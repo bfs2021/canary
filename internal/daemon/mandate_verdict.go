@@ -15,6 +15,7 @@ import (
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 // The mandate verdict (internal-docs/design/mandate-risk-budget.md): the
@@ -420,7 +421,8 @@ func mandateMoney(v float64, ccy string) string {
 // riskAddingOrder is the one classification the drawdown brake and the
 // mandate gate share: a close or reduce never adds risk, and a BUY of a put
 // on a Rulebook hedge symbol is a hedge entry that stays open; everything
-// else adds risk. Cancels never reach either gate.
+// else adds risk. Cancels never reach either gate. The mandate gate alone
+// also passes a bill purchase (mandateBillBuy).
 func (s *Server) riskAddingOrder(draft rpc.OrderDraft, position rpc.OrderPositionImpact) bool {
 	switch position.Effect {
 	case rpc.OrderPositionEffectClose, rpc.OrderPositionEffectReduce:
@@ -433,18 +435,29 @@ func (s *Server) riskAddingOrder(draft rpc.OrderDraft, position rpc.OrderPositio
 	return true
 }
 
+// mandateBillBuy reports a BUY of a government bill (security type BILL).
+// The mandate measures a held bill as carrying no equity or volatility
+// risk, so buying one moves cash into a cash-like line and adds none the
+// budget counts (owner, 2026-10-17 06:47 CEST). A bond stays risk-adding:
+// its interest-rate risk is not measured, so a long bond could carry real
+// risk counted as zero. The drawdown brake does not read this.
+func mandateBillBuy(draft rpc.OrderDraft) bool {
+	return strings.EqualFold(strings.TrimSpace(draft.Action), rpc.OrderActionBuy) &&
+		strings.EqualFold(strings.TrimSpace(draft.Contract.SecType), ibkrlib.SecTypeBill)
+}
+
 // mandateBudgetGate is the additions gate at every enforcement point the
 // drawdown brake has. While the constitution carries no [mandate] table it
-// refuses nothing. Otherwise a risk-adding order is refused unless a kept
-// verdict no older than mandateVerdictMaxAge reads within, and the order
-// itself, re-evaluated on the same book, keeps the risk inside the budget.
-// Cheap by construction: the kept verdict and a simulation of milliseconds,
-// never a broker read.
+// refuses nothing. Otherwise a risk-adding order other than a bill purchase
+// is refused unless a kept verdict no older than mandateVerdictMaxAge reads
+// within, and the order itself, re-evaluated on the same book, keeps the
+// risk inside the budget. Cheap by construction: the kept verdict and a
+// simulation of milliseconds, never a broker read.
 func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPositionImpact) *rpc.TradingBlocker {
 	if s == nil || s.riskPolicies == nil || s.riskCapital == nil {
 		return nil
 	}
-	if !s.riskAddingOrder(draft, position) {
+	if !s.riskAddingOrder(draft, position) || mandateBillBuy(draft) {
 		return nil
 	}
 	c := s.riskPolicies.snapshot().policy

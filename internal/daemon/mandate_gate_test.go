@@ -970,3 +970,91 @@ func TestMandateGateFailsClosedOnUnpricedOptions(t *testing.T) {
 		t.Fatalf("a closing sale: %+v", blocker)
 	}
 }
+
+// A bill purchase passes the mandate gate whatever the verdict reads, as the
+// mandate measures a held bill as carrying no equity or volatility risk
+// (owner, 2026-10-17 06:47 CEST: "If cash like investments do not count
+// against it, I'm fine with 15/30"). A bond purchase, whose interest-rate
+// risk is not measured, a stock purchase and a sale that opens a short bill
+// are refused as before.
+func TestMandateGatePassesBillPurchasesOnly(t *testing.T) {
+	bill := func(action string) rpc.OrderDraft {
+		return rpc.OrderDraft{Action: action, Quantity: 10000, LimitPrice: 99, Contract: rpc.ContractParams{ConID: 9006, Symbol: "SYNU", SecType: "BILL", Currency: "EUR"}}
+	}
+	bond := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 10000, LimitPrice: 99, Contract: rpc.ContractParams{ConID: 9007, Symbol: "SYNL", SecType: "BOND", Currency: "EUR"}}
+	heldBill := rpc.OrderPositionImpact{Before: 10000, After: 20000, Effect: rpc.OrderPositionEffectIncrease}
+	for _, tc := range []struct {
+		status  string
+		shares  float64
+		gapRoom float64
+		lag     int
+	}{
+		{mandate.StatusOver, 1300, 100, 0},
+		{mandate.StatusReduce, 3000, 33.3, 0},
+		{mandate.StatusUnknown, 100, 33.3, 3},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			c := testMandateConstitution()
+			c.Mandate.GapRoomPct = new(tc.gapRoom)
+			srv, _ := mandateTestServer(t, c)
+			seedMandateHistory(t, srv, tc.lag)
+			srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(tc.shares), nil }
+			if res := srv.evaluateMandate(t.Context(), false); res.Verdict.Status != tc.status || !res.Gate.RefusesAdditions {
+				t.Fatalf("fixture verdict %s %v gate %+v, want %s refusing additions", res.Verdict.Status, res.Verdict.Reasons, res.Gate, tc.status)
+			}
+			for name, impact := range map[string]rpc.OrderPositionImpact{"new": mandateOpen, "held": heldBill} {
+				if blocker := srv.mandateBudgetGate(bill(rpc.OrderActionBuy), impact); blocker != nil {
+					t.Fatalf("%s bill buy: %+v, want allowed", name, blocker)
+				}
+				if err := srv.mandateBudgetGateError(bill(rpc.OrderActionBuy), impact); err != nil {
+					t.Fatalf("%s bill buy at admission: %v, want allowed", name, err)
+				}
+			}
+			for name, draft := range map[string]rpc.OrderDraft{"bond buy": bond, "stock buy": mandateBuy(10), "bill sale to open": bill(rpc.OrderActionSell)} {
+				if blocker := srv.mandateBudgetGate(draft, mandateOpen); blocker == nil || blocker.Code != mandateBudgetCode {
+					t.Fatalf("%s: %+v, want mandate_budget", name, blocker)
+				}
+				if err := srv.mandateBudgetGateError(draft, mandateOpen); err == nil || !errors.Is(err, ErrTradingDisabled) {
+					t.Fatalf("%s at admission: %v, want a trading-disabled refusal", name, err)
+				}
+			}
+		})
+	}
+}
+
+// The order preview passes a bill bought by identifier while the verdict
+// reads reduce, as the broker's line names it a BILL, and refuses a
+// Treasury note, which the broker names a BOND, with mandate_budget.
+func TestMandateGatePreviewPassesABillAndRefusesABond(t *testing.T) {
+	rig := newBondRequestRig(t)
+	c := testMandateConstitution()
+	c.Capital.BaseCurrency = "USD" // the rig's account base
+	rig.srv.riskPolicies.active = c
+	st := newTestRiskCapitalStore(t)
+	st.now = rig.srv.now
+	reconcileNow(t, st)
+	st.Observe(300000, rig.now.Add(-2*time.Minute), c, testLiveObserveScope, true)
+	rig.srv.riskCapital = st
+	verdict := &mandate.Verdict{Status: mandate.StatusReduce, BaseCurrency: "USD"}
+	rig.srv.mandateVerdicts.set(&rpc.MandateRiskResult{AsOf: rig.now, Active: true, Verdict: verdict}, &mandate.Input{}, rig.now, c.FingerprintKey(), false)
+
+	billLine := synthBondLine(8201, synthCUSIP35, "USD", cashSweepDay(rig.now).AddDate(0, 0, 120))
+	rig.setLine(synthCUSIP35, billLine)
+	maturity := cashSweepDay(rig.now).AddDate(0, 0, 120).Format(time.DateOnly) + "T00:00:00"
+	rig.treasury[synthCUSIP35] = []treasuryDirectSecurity{{CUSIP: synthCUSIP35, SecurityType: "Bill", Type: "Bill", MaturityDate: maturity}}
+	res, err := rig.preview(rpc.OrderActionBuy, synthCUSIP35, "BILL", "USD", 5000)
+	if err != nil {
+		t.Fatalf("bill buy under a reduce verdict: %v (%v), want a preview", err, refusalCodes(err))
+	}
+	if res.Draft.Contract.SecType != "BILL" || !res.TokenMinted {
+		t.Fatalf("bill draft %+v minted %v", res.Draft.Contract, res.TokenMinted)
+	}
+
+	note := syntheticCUSIP(t, "91282CZZ")
+	rig.line(note, "USD", 8202)
+	rig.treasury[note] = []treasuryDirectSecurity{{CUSIP: note, SecurityType: "Note", Type: "Note", MaturityDate: cashSweepDay(rig.now).AddDate(7, 0, 0).Format(time.DateOnly) + "T00:00:00", InterestRate: "5.000000"}}
+	_, err = rig.preview(rpc.OrderActionBuy, note, "BOND", "USD", 5000)
+	if codes := refusalCodes(err); err == nil || !slices.Equal(codes, []string{mandateBudgetCode}) {
+		t.Fatalf("note buy under a reduce verdict: %v (%v), want mandate_budget", err, codes)
+	}
+}

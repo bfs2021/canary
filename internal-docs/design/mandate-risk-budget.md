@@ -1,6 +1,6 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-15 07:41 CEST
+Updated: 2026-10-17 07:30 CEST
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
 gate); increment 2 implemented 2026-10-14 (forced reduction, below). The
 feature is inactive until the owner writes `[mandate]` into
@@ -143,9 +143,17 @@ proposal the owner confirms by writing it into the policy file.
 - Enforcement class: pre-trade hard gate for additions (`mandate_budget`
   blocker), at the same four enforcement points as the drawdown brake
   (order preview, strategy preview, admission, the final wire guard), with
-  exactly the brake's risk-adding classification: a close or reduce passes,
-  a BUY of a put on a Rulebook hedge symbol passes, cancels never reach it.
-  The exemption is not widened. Release is automatic: the moment a fresh
+  the brake's risk-adding classification: a close or reduce passes, a BUY
+  of a put on a Rulebook hedge symbol passes, cancels never reach it. One
+  exemption is the mandate's alone: a BUY of a bill (security type `BILL`,
+  as IBKR names the line) passes whatever the verdict reads, as a held bill
+  is measured as carrying no equity or volatility risk (2026-10-17 06:47
+  CEST, owner: "If cash like investments do not count against it, I'm fine
+  with 15/30"). A bond (`BOND`, including a bill IBKR lists as a bond) stays
+  refused, because its interest-rate risk is not measured and a long bond
+  could carry real risk counted as zero; a bond fund (`STK`) is measured as
+  before; the drawdown brake keeps refusing a bill purchase while engaged.
+  The exemption is not widened further. Release is automatic: the moment a fresh
   verdict reads `within`, additions pass; there is no latch and no reset.
   The incremental pre-trade check re-evaluates the book with the proposed
   leg added and refuses an addition that would take the annualised risk
