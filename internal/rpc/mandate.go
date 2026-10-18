@@ -152,6 +152,9 @@ type MandateSleevesView struct {
 	OwnerVolPct   *float64 `json:"owner_vol_pct,omitempty"`
 	CoreVolPct    *float64 `json:"core_vol_pct,omitempty"`
 	OverlayVolPct *float64 `json:"overlay_vol_pct,omitempty"`
+	// OwnerStopPct is the owner sleeve's drawdown stop; nil while unwritten,
+	// when the sleeve has no stop of its own (verdict.owner_stop is absent).
+	OwnerStopPct *float64 `json:"owner_stop_pct,omitempty"`
 }
 
 // MandateEvidence is every clock behind the verdict.

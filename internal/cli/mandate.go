@@ -133,6 +133,7 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 		}
 		riskReadLine(env, "Risk base", mandateAmount(c.RiskBase, ccy)+" = equity "+mandateAmount(c.EquityBase, ccy)+" − tax reserve "+mandateAmount(c.TaxReserveBase, ccy), flows)
 	}
+	renderMandateOwnerStop(env, v.OwnerStop, ccy)
 	if res.Gate != nil {
 		if res.Gate.RefusesAdditions {
 			riskDisplayLine(env, "Additions · ", briefJoin("refused", res.Gate.Reason), env.red)
@@ -219,6 +220,38 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 		}
 	}
 	riskReadLine(env, "", "The mandate refuses risk-adding orders. Its reduction is a set of proposals (canary proposals); the daemon places them itself only when mandate_reduction is pre-authorised, after the veto window.")
+}
+
+// renderMandateOwnerStop prints the owner sleeve's drawdown stop
+// (mandate-risk-budget.md, "The forced reduction"; owner delegation
+// 2026-10-18 21:41 CEST): the sleeve's fall from its own high-water mark
+// against the stop, and, engaged, the risk the reduction cuts it to.
+func renderMandateOwnerStop(env *Env, s *mandate.SleeveStop, ccy string) {
+	if s == nil {
+		return
+	}
+	engaged := ""
+	if s.Engaged {
+		engaged = "STOP ENGAGED since " + s.EngagedAt.Local().Format("Mon 2 Jan 15:04 MST")
+	}
+	if !s.Known {
+		why := "unknown"
+		if len(s.Reasons) > 0 {
+			why = s.Reasons[0]
+		}
+		riskDisplayLine(env, "Owner sleeve · ", briefJoin(engaged, "stop state held: "+why), env.yellow)
+		return
+	}
+	line := briefJoin(engaged, fmt.Sprintf("%s below its high-water mark %s", mandatePct(s.DrawdownPct), mandateAmount(s.HWMRiskBase, ccy)), "stop "+mandatePct(s.StopPct))
+	if s.MachinePnLBase != 0 {
+		line = briefJoin(line, "machine P&L since the start "+mandateAmount(s.MachinePnLBase, ccy)+" set aside")
+	}
+	if s.Engaged {
+		line = briefJoin(line, fmt.Sprintf("reduce-only to %s a year, half its risk %s at the stop", mandateAmount(s.TargetUseBase, ccy), mandateAmount(s.UseAtStopBase, ccy)), "risk now "+mandateAmount(s.UseBase, ccy))
+		riskDisplayLine(env, "Owner sleeve · ", line, env.red)
+		return
+	}
+	riskDisplayLine(env, "Owner sleeve · ", briefJoin(line, "risk "+mandateAmount(s.UseBase, ccy)+" a year"), nil)
 }
 
 // renderMandateReduction prints the forced reduction under the gate: its
@@ -353,6 +386,8 @@ func mandatePhaseWords(phase string) string {
 		return "gap over its cap"
 	case rpc.MandatePhaseRisk:
 		return "largest risk"
+	case rpc.MandatePhaseStop:
+		return "owner sleeve stop"
 	}
 	return phase
 }

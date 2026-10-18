@@ -250,6 +250,10 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	v := res.Verdict
 	ccy := nonEmptyString(v.BaseCurrency, st.BaseCurrency)
 	st.VerdictStatus, st.VerdictAt, st.VerdictFingerprint, st.ConsecutiveOver = v.Status, v.AsOf, mandateVerdictFingerprint(res), in.OverStreak
+	// The owner sleeve's drawdown stop acts through this same batch: engaged
+	// with risk to cut, it is a breach reading whatever the book reads
+	// (mandate_sleeve_stop.go).
+	stopOver := mandateStopOver(*v)
 	if v.Capital.Known {
 		st.BudgetAnnualSD = v.Capital.BudgetAnnualSD
 		st.TargetAnnualSD = mandateReductionTargetFactor * v.Capital.BudgetAnnualSD
@@ -267,12 +271,21 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 		return hold(rpc.MandateReductionUnknown, why)
 	case in.EvaluatedAt.IsZero() || age > mandateVerdictMaxAge:
 		return hold(rpc.MandateReductionUnknown, fmt.Sprintf("the verdict is %s old; the batch trusts one up to %s", formatQuoteAge(age), mandateVerdictMaxAge))
-	case v.Status == mandate.StatusWithin:
+	case v.Status == mandate.StatusWithin && !stopOver:
 		// The brake releases when the risk is back in budget: the episode
 		// ends and every standing row leaves the set, so a waiting automatic
-		// record is superseded. Nothing is cancelled at the broker.
-		st.State, st.Withdrawn, st.Episode = rpc.MandateReductionWithin, len(standing), ""
+		// record is superseded. Nothing is cancelled at the broker. An owner
+		// sleeve stop still engaged keeps the episode open: the sleeve is at
+		// its stop target, reduce-only until its drawdown is back under the
+		// stop, and a rise in its risk is sized again inside the episode.
+		st.State, st.Withdrawn = rpc.MandateReductionWithin, len(standing)
 		st.Reason = fmt.Sprintf("the mandate risk %s a year is within the budget %s", mandateMoney(st.RiskAnnualBase, ccy), mandateMoney(st.BudgetAnnualSD, ccy))
+		if stop := v.OwnerStop; stop != nil && stop.Engaged {
+			st.Reason += fmt.Sprintf("; %s, and the sleeve's risk %s a year is at or under its stop target %s: the sleeve stays reduce-only until its drawdown is back under the stop",
+				mandateOwnerStopSentence(stop, ccy), mandateMoney(stop.UseBase, ccy), mandateMoney(stop.TargetUseBase, ccy))
+		} else {
+			st.Episode = ""
+		}
 		if st.Withdrawn > 0 {
 			st.Reason += fmt.Sprintf("; %d standing %s withdrawn, orders already at the broker are untouched", st.Withdrawn, pluralNoun(st.Withdrawn, "row"))
 		}
@@ -285,8 +298,7 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	}
 	if in.Episode == "" && in.OverStreak < mandateReductionOverReadings {
 		st.State = rpc.MandateReductionWatching
-		st.Reason = fmt.Sprintf("the verdict reads %s (%s of the budget %s); a confirming scheduled verdict at least %s later starts the batch",
-			v.Status, mandatePctOfBudget(v), mandateMoney(st.BudgetAnnualSD, ccy), mandateStreakSpacing)
+		st.Reason = fmt.Sprintf("%s; a confirming scheduled verdict at least %s later starts the batch", mandateBreachSentence(v, st.BudgetAnnualSD, ccy), mandateStreakSpacing)
 		return nil, st
 	}
 	if st.Episode == "" {
@@ -300,7 +312,7 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	st.TargetReached = batch.reached
 	if len(batch.cuts) == 0 {
 		st.State = rpc.MandateReductionNothingReducible
-		st.Reason = fmt.Sprintf("the verdict reads %s (%s of the budget), but no held leg can be reduced", v.Status, mandatePctOfBudget(v))
+		st.Reason = fmt.Sprintf("%s, but no held leg can be reduced", mandateBreachSentence(v, batch.budget, ccy))
 		if len(batch.leftOut) > 0 {
 			st.Reason += ": " + strings.Join(batch.leftOut, "; ")
 		}
@@ -328,17 +340,28 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	}
 	st.Rows = len(out)
 	st.State = rpc.MandateReductionReducing
-	st.Reason = fmt.Sprintf("the verdict reads %s (%s of the budget %s); %d %s sized to take the risk to %s a year", v.Status, mandatePctOfBudget(v), mandateMoney(batch.budget, ccy),
-		len(batch.cuts), pluralNoun(len(batch.cuts), "cut"), mandateMoney(batch.riskAfter, ccy))
-	if batch.reached {
+	st.Reason = fmt.Sprintf("%s; %d %s sized to take the risk to %s a year", mandateBreachSentence(v, batch.budget, ccy), len(batch.cuts), pluralNoun(len(batch.cuts), "cut"), mandateMoney(batch.riskAfter, ccy))
+	switch {
+	case batch.reached && v.Status == mandate.StatusWithin && stopOver:
+		st.Reason += fmt.Sprintf(", the sleeve's risk to its stop target %s", mandateMoney(v.OwnerStop.TargetUseBase, ccy))
+	case batch.reached:
 		st.Reason += fmt.Sprintf(", inside the %s target", mandateMoney(batch.target, ccy))
-	} else {
+	default:
 		st.Reason += fmt.Sprintf("; the batch does not reach the %s target, nothing reduces further", mandateMoney(batch.target, ccy))
 		if len(covered) > 0 {
 			st.Reason += "; a covered position needs your hand: " + strings.Join(covered, "; ")
 		}
 	}
 	return out, st
+}
+
+// mandateBreachSentence says what the batch answers: the book over budget,
+// or, inside the budget, the owner sleeve's stop with risk still to cut.
+func mandateBreachSentence(v *mandate.Verdict, budget float64, ccy string) string {
+	if v.Status == mandate.StatusWithin && mandateStopOver(*v) {
+		return fmt.Sprintf("the book is within the budget, but %s (risk %s a year, over its stop target %s)", mandateOwnerStopSentence(v.OwnerStop, ccy), mandateMoney(v.OwnerStop.UseBase, ccy), mandateMoney(v.OwnerStop.TargetUseBase, ccy))
+	}
+	return fmt.Sprintf("the verdict reads %s (%s of the budget %s)", v.Status, mandatePctOfBudget(v), mandateMoney(budget, ccy))
 }
 
 // mandateAction is the reducing side of a held line.
@@ -829,16 +852,23 @@ func (z *mandateSizer) sizeMain() {
 			}
 			continue
 		}
-		if mandateRisk(v) <= z.target+mandateReductionEpsilon {
+		// The book at its target: only the owner sleeve's stop can be left,
+		// and it is cut in its own sleeve alone, nothing of the machine's.
+		stopPhase := mandateRisk(v) <= z.target+mandateReductionEpsilon
+		if stopPhase && !mandateStopOver(v) {
 			return
 		}
 		contribution := map[string]float64{}
 		for _, rep := range v.Legs {
 			contribution[rep.ID] = rep.ContributionPct
 		}
+		order := mandateAllocationOrder(v)
+		if stopPhase {
+			order = []string{v.OwnerStop.Sleeve}
+		}
 		var top *mandateCut
 		var allocation mandate.AllocationReport
-		for _, sleeve := range mandateAllocationOrder(v) {
+		for _, sleeve := range order {
 			for _, id := range z.ids {
 				c := z.candidates[id]
 				if z.in.Allocations.SleeveOf(c.id) != sleeve || c.units >= c.full || exhausted[c.id] || contribution[c.id] <= mandateReductionEpsilon {
@@ -856,6 +886,19 @@ func (z *mandateSizer) sizeMain() {
 		}
 		if top == nil {
 			return
+		}
+		if stopPhase {
+			// The stop's cut: the smallest step that takes the sleeve's use to
+			// its stop target, half its risk at the stop (the owner's words
+			// of 2026-10-18 21:41 CEST: "reduce-only to half the sleeve's
+			// risk").
+			units, ok := z.move(top, func(over map[string]int) float64 { return mandateSleeveUseOf(z.eval(over), v.OwnerStop.Sleeve) }, v.OwnerStop.TargetUseBase)
+			if !ok {
+				exhausted[top.id] = true
+				continue
+			}
+			z.commit(top, units, rpc.MandatePhaseStop)
+			continue
 		}
 		units, ok := z.move(top, func(over map[string]int) float64 { return mandateRisk(z.eval(over)) }, z.target)
 		if !ok {
@@ -883,6 +926,18 @@ func (z *mandateSizer) sizeMain() {
 			top.allocationExcess = &allocation.ExcessBase
 		}
 	}
+}
+
+// mandateSleeveUseOf is one sleeve's use on a verdict: its allocation's use,
+// or, with every leg in one sleeve, the book's risk; +Inf unmeasured.
+func mandateSleeveUseOf(v mandate.Verdict, sleeve string) float64 {
+	if risk := mandateRisk(v); math.IsInf(risk, 0) {
+		return risk
+	}
+	if a, ok := v.Allocation(sleeve); ok {
+		return a.UseBase
+	}
+	return v.Risk.SDAnnualBase
 }
 
 // mandateAllocationOrder lists the sleeves furthest over their allocations first (use
@@ -1000,9 +1055,10 @@ func mandateRisk(v mandate.Verdict) float64 {
 }
 
 // mandateTargetReached reports a verdict at or under the target with no gap
-// breach: the book the next verdict reads within.
+// breach and the owner sleeve's stop, when engaged, with nothing left to
+// cut: the book the next verdict reads within and sizes nothing on.
 func mandateTargetReached(v mandate.Verdict, target float64) bool {
-	return mandateRisk(v) <= target+mandateReductionEpsilon && (v.Stresses == nil || len(v.Stresses.GapBreaches) == 0)
+	return mandateRisk(v) <= target+mandateReductionEpsilon && (v.Stresses == nil || len(v.Stresses.GapBreaches) == 0) && !mandateStopOver(v)
 }
 
 // mandateOverBudget reports a verdict over the budget or with a gap breach.
@@ -1316,6 +1372,9 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 			capBase = *c.gapCap
 		}
 		why = fmt.Sprintf("a gap in %s would lose %s, over the cap %s", c.leg.Underlying, mandateMoney(loss, ccy), mandateMoney(capBase, ccy))
+	case c.phase == rpc.MandatePhaseStop && v.OwnerStop != nil:
+		why = fmt.Sprintf("%s: the largest risk contributor left in %s, cut to half the sleeve's risk at the stop (%s a year) (%.0f%% of the risk)",
+			mandateOwnerStopSentence(v.OwnerStop, ccy), mandateSleeveName(c.sleeve), mandateMoney(v.OwnerStop.TargetUseBase, ccy), c.contribution)
 	default:
 		why = fmt.Sprintf("the largest risk contributor left in %s", mandateSleeveName(c.sleeve))
 		switch {
@@ -1336,8 +1395,12 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 		fmt.Sprintf("risk %s a year · budget %s · target %s (%.0f%% of the budget, so the next verdict reads within)", mandateMoney(batch.riskBefore, ccy), mandateMoney(batch.budget, ccy), mandateMoney(batch.target, ccy), mandateReductionTargetFactor*100),
 		fmt.Sprintf("order %d of %d in the batch, sent in this order; this cut takes %s a year off the risk", c.rank, len(batch.cuts), mandateMoney(c.riskCut, ccy)),
 	}
-	if c.phase != rpc.MandatePhaseRisk {
+	if c.phase != rpc.MandatePhaseRisk && c.phase != rpc.MandatePhaseStop {
 		details = append(details, fmt.Sprintf("%.0f%% of the risk on the verdict", c.contribution))
+	}
+	if stop := v.OwnerStop; stop != nil && stop.Engaged {
+		details = append(details, fmt.Sprintf("owner sleeve stop: %.0f%% below its high-water mark %s, stop %g%%; engaged since %s, reduce-only to %s a year, half its risk %s at the stop",
+			stop.DrawdownPct, mandateMoney(stop.HWMRiskBase, ccy), stop.StopPct, mandateClock(stop.EngagedAt), mandateMoney(stop.TargetUseBase, ccy), mandateMoney(stop.UseAtStopBase, ccy)))
 	}
 	details = append(details, fmt.Sprintf("sized on the %s verdict of %s (%s), afresh at every verdict", v.Status, mandateClock(v.AsOf), st.VerdictFingerprint))
 	if qty < c.units {

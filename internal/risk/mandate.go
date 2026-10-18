@@ -211,6 +211,14 @@ type ConstitutionMandateSleeves struct {
 	OwnerVolPct   *float64 `toml:"owner_vol_pct" json:"owner_vol_pct"`
 	CoreVolPct    *float64 `toml:"core_vol_pct" json:"core_vol_pct"`
 	OverlayVolPct *float64 `toml:"overlay_vol_pct" json:"overlay_vol_pct"`
+	// OwnerStopPct is the owner sleeve's drawdown stop: the fall of the
+	// sleeve's own equity-like measure from its high-water mark, in percent
+	// of the mark, at which the forced reduction cuts the sleeve, reduce-only,
+	// to half its risk, until the drawdown is back under it (the owner's
+	// delegation of 2026-10-18 21:41 CEST, "Need your judgement, be on the
+	// aggressive side"; the agent set 25). Optional: absent, nothing changes
+	// and a file without it keeps its fingerprint.
+	OwnerStopPct *float64 `toml:"owner_stop_pct" json:"owner_stop_pct,omitempty"`
 }
 
 // MandateStartLayout is the date form started_at is written in.
@@ -255,10 +263,13 @@ func (m *ConstitutionMandate) validate(semantics ConstitutionSemantics) error {
 		for _, k := range []struct {
 			key string
 			v   *float64
-		}{{"sleeves.owner_vol_pct", sl.OwnerVolPct}, {"sleeves.core_vol_pct", sl.CoreVolPct}, {"sleeves.overlay_vol_pct", sl.OverlayVolPct}} {
+		}{{"sleeves.owner_vol_pct", sl.OwnerVolPct}, {"sleeves.core_vol_pct", sl.CoreVolPct}, {"sleeves.overlay_vol_pct", sl.OverlayVolPct}, {"sleeves.owner_stop_pct", sl.OwnerStopPct}} {
 			if err := pct(k.key, k.v); err != nil {
 				return err
 			}
+		}
+		if s, d := sl.OwnerStopPct, m.MaxLossPct; s != nil && d != nil && *s >= *d {
+			return fmt.Errorf("mandate.sleeves.owner_stop_pct (%g) must be below mandate.max_loss_pct (%g): the whole book's maximum loss is the backstop behind the sleeve's stop", *s, *d)
 		}
 	}
 	return m.validateRegister()
@@ -290,6 +301,15 @@ func (m *ConstitutionMandate) UnapprovedKeys() []string {
 		out = append(out, "mandate.gap_room_pct")
 	}
 	return out
+}
+
+// OwnerStopPct is the owner sleeve's drawdown stop in percent, or false
+// while the owner has not written mandate.sleeves.owner_stop_pct.
+func (m *ConstitutionMandate) OwnerStopPct() (float64, bool) {
+	if m == nil || m.Sleeves == nil || m.Sleeves.OwnerStopPct == nil {
+		return 0, false
+	}
+	return *m.Sleeves.OwnerStopPct, true
 }
 
 // MandateActive reports whether the constitution carries a [mandate] table:

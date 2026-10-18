@@ -109,6 +109,10 @@ type Input struct {
 	NotModelled []string
 	// Allocations is the allocation plan; nil measures no allocations.
 	Allocations *AllocationPlan
+	// OwnerStop is the owner sleeve's drawdown stop as the daemon keeps it;
+	// nil while the policy writes none. Evaluate reads the sleeve's use
+	// against it (sleevestop.go).
+	OwnerStop *SleeveStop
 	// Reasons are the daemon's own grounds for an unknown verdict (a stale
 	// positions read, an unproven base currency); any makes it unknown.
 	Reasons []string
@@ -241,6 +245,9 @@ type Verdict struct {
 	// Allocations is each sleeve's allocation and use, owner first; nil while the risk
 	// is not measured or the input carries no allocation plan.
 	Allocations []AllocationReport `json:"allocations,omitempty"`
+	// OwnerStop is the owner sleeve's drawdown stop with the sleeve's use on
+	// this verdict; nil while the policy writes none.
+	OwnerStop *SleeveStop `json:"owner_stop,omitempty"`
 }
 
 // Evaluate runs the historical simulation and judges the book against the
@@ -315,6 +322,7 @@ func Evaluate(in Input) Verdict {
 		for _, l := range legs {
 			v.Legs = append(v.Legs, LegReport{ID: l.ID, Symbol: l.Symbol, Underlying: l.Underlying, Kind: l.Kind, Quantity: l.Quantity, Unknown: firstNonEmpty(legUnknown(l), "not simulated")})
 		}
+		ApplySleeveStop(&v, in.OwnerStop)
 		return v
 	}
 	v.Scenarios, v.ScenariosFrom, v.ScenariosTo = Scenarios, from, to
@@ -334,6 +342,7 @@ func Evaluate(in Input) Verdict {
 	default:
 		v.Status = StatusWithin
 	}
+	ApplySleeveStop(&v, in.OwnerStop)
 	return v
 }
 

@@ -1,12 +1,15 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-18 16:35 CEST
+Updated: 2026-10-19 00:40 CEST
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
 gate); increment 2 implemented 2026-10-14 (forced reduction, below);
-increment 3 implemented 2026-10-18 (allocations, below). The
-feature is inactive until the owner writes `[mandate]` into
-`risk-policy.toml`; the forced reduction places nothing by itself until the
-owner lists `mandate_reduction` under `[authority].pre_authorised`.
+increment 3 implemented 2026-10-18 (allocations, below); increment 4
+implemented 2026-10-19 (the owner sleeve's drawdown stop, "Risk allocations"
+and "The forced reduction" below). The feature is inactive until the owner
+writes `[mandate]` into `risk-policy.toml`; the forced reduction places
+nothing by itself until the owner lists `mandate_reduction` under
+`[authority].pre_authorised`; the owner sleeve's stop runs only once
+`[mandate.sleeves] owner_stop_pct` is written.
 
 This record follows `.agents/docs/risk-policy-contract.md` and the
 daemon/CLI trading contract. It records human policy decisions; it creates
@@ -480,6 +483,23 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   not clear it before the statement does. One unit of an order may exceed
   a cap, judged by the order gate as for the governor. After any fill the
   batch waits for the next verdict (at most two minutes).
+- **Verification of the owner sleeve's stop** (synthetic books,
+  `internal/daemon/mandate_sleeve_stop_test.go`, `internal/mandate/sleevestop_test.go`,
+  CLI golden `mandate_owner_stop`): no key, nothing changes (no stop on the
+  verdict, no state, no streak, additions open); the measure follows the
+  book's adjusted risk base less the machine's marked P&L, seeded from the
+  book's mark, a spike never raising it and a confirmed high doing so; at the
+  stop the gate refuses the owner's additions and passes the core's and a
+  reduction, the within verdict counts toward the streak, the target is
+  pinned through a deeper fall, a stale capital state holds the stop as it
+  was and resets the streak, and a recovered drawdown releases it; inside the
+  budget the batch cuts the owner's sleeve alone to half its use by the
+  smallest lots, nothing of the core's fund, every row reduce-only and
+  lowering the risk, the same book without the stop proposing nothing; over
+  budget and stopped the batch meets both targets; at the target the rows are
+  withdrawn and the episode kept, released it ends, unknown holds the rows;
+  the key is optional, out of the fingerprint projection while absent,
+  adopted and shown when written, refused at or above `max_loss_pct`.
 - **Verification** (synthetic books;
   `internal/daemon/mandate_reduction_test.go`,
   `mandate_reduction_review_test.go`, `mandate_reduction_automatic_test.go`,
@@ -600,6 +620,69 @@ take them away.
   stage, not a holding. The core out of the market (trend off) keeps its
   allocation empty. The owner's room shrinks the day a machine stage rises:
   the core at 25 takes 1.5 of the 15 points, a tenth of the budget.
+
+### The owner sleeve's allocation and stop
+
+Owner delegation, 2026-10-18 21:41 CEST, to the question how large the
+owner's own allocation should be and where its stop sits: "Need your
+judgement, be on the aggressive side". The agent set, and the owner's
+strategy-engine map (Desk `docs/strategy-engine.md`, "The owner's answers,
+2026-10-18 21:41 CEST") records: the owner sleeve's allocation is the whole
+remainder of the budget after the machine's reservations, no haircut (what
+the register computes above); its drawdown stop is 25% of the owner sleeve's
+own high-water mark, acting reduce-only to half the sleeve's risk, with the
+whole book's 30% maximum loss unchanged as the backstop; reviewed when the
+scorecard holds 100 entry weeks. Built 2026-10-19 (increment 4).
+
+- **The key**: `[mandate.sleeves] owner_stop_pct` (percent of the sleeve's
+  high-water mark; the owner writes 25). Optional: absent, nothing changes and
+  a file without it keeps both fingerprints; written, it must be below
+  `max_loss_pct`, the backstop. No number acts by default.
+- **The sleeve's measure** (`mandate_sleeve_stop.go`): the owner's sleeve has
+  no account of its own, so its equity-like measure is derived from what the
+  capital state already keeps: the book's cash-flow-adjusted equity (the
+  series behind the whole-book high-water mark, observed with every account
+  read) less the machine sleeves' marked P&L since the start, read from the
+  verdict's legs: for every leg placed in a machine sleeve, the units held at
+  the last reading times the move of its unit value in base currency since
+  that reading, at the evaluator's own prices (spot and FX for a stock,
+  Black-Scholes at the position's IV for an option). The tax reserve is
+  subtracted at read time, as the book's is, so a changed reserve never
+  creates a drawdown. With the machine holding nothing, as today, the measure
+  is the book's risk base and its high-water mark the book's: the 25% stop
+  sits inside the 30% maximum loss exactly as the owner's words place it. The
+  series counts from `mandate.started_at` and seeds from the book's
+  high-water mark, so a key written after the start inherits the history the
+  book has; the machine's P&L is tracked from the first reading with the key
+  written. A new high counts once a second reading at least five minutes
+  later confirms it, at the lower of the two (the book's glitch rule). The
+  statement and the broker's daily P&L were not chosen: the statement arrives
+  a day late and carries no sleeve, the broker's figure is whole-account, and
+  both would need the same split by placement the verdict already gives from
+  the legs it prices anyway. The state lives in the `risk_capital` document
+  beside the book's mark (`mandate_owner_sleeve`), journaled as
+  `mandate_owner_stop_started`, `mandate_owner_hwm_advanced`,
+  `mandate_owner_stop_engaged` and `mandate_owner_stop_released`.
+- **Engaged and released**: the stop engages on the reading at which the
+  sleeve's drawdown from its high-water mark reaches `owner_stop_pct`, and
+  pins the sleeve's use on that verdict and half of it as the target; it
+  releases on the reading at which the drawdown is back under the stop. While
+  engaged the owner's sleeve is reduce-only: a risk-adding order in it is
+  refused (`mandate_budget`: "your sleeve is 27% below its high-water mark
+  240,000 EUR, past its 25% stop; the sleeve is reduce-only until its drawdown
+  is back under the stop"), inside the budget or over it; reductions,
+  closes, cancels and hedges pass, and the machine sleeves are untouched.
+- **While the measure cannot be read** (the capital state unknown or stale, a
+  suspected flow, the book unmeasured) the series holds, the stop keeps its
+  last state (`known: false` with the reason) and sizes nothing new; the
+  verdict is unknown then anyway, so standing rows are held as before.
+- **Surfaces**: the verdict carries `verdict.owner_stop` (the measure, the
+  high-water mark, the drawdown, the machine's P&L set aside, engaged since,
+  the use at the stop and the target, the use now and `over`); `canary
+  mandate` prints the "Owner sleeve" line (drawdown against the stop, STOP
+  ENGAGED with the target, or the hold) and the "Additions" line names the
+  stop; the forced reduction's rows and status say "owner sleeve stop"
+  (`phase: stop`); the policy view echoes `owner_stop_pct`.
 
 ### Placement
 
@@ -746,8 +829,33 @@ rule are unchanged. Only the risk phase changes:
   core's fund leaves protection's automatic sales (the owner's third clause of
   2026-10-18 08:06 CEST, built separately); the mandate's forced reduction
   still covers it, as the review recommended.
+- **The owner sleeve's stop** (owner delegation 2026-10-18 21:41 CEST, "be on
+  the aggressive side"; the agent's setting above, built 2026-10-19): the stop
+  acts through this same batch, episode, veto window and pre-authorisation.
+  A verdict whose owner stop is engaged with the sleeve's use above its target
+  (`owner_stop.over`) is a breach reading whatever the book reads: two
+  scheduled readings start the batch, inside the budget or over it. The
+  sizing runs as above until the book is at its target in the allocations'
+  order (the sleeve furthest over its allocation first); then, with the book
+  at or under the target, only the owner's sleeve is cut, its largest Euler
+  contributor by the smallest whole step that takes the sleeve's use to the
+  target pinned at the stop (half its use on the engaging verdict), rows in
+  phase `stop`. Nothing of the machine sleeves is cut for the stop; the
+  owner's hand sales count, since the use is measured afresh at every
+  verdict, and a sleeve cut to half is not cut again, because the target is
+  pinned for the engagement. The target is reached only when the book's
+  target and the stop's are both met. A verdict within the budget with the
+  stop engaged and the use at or under its target withdraws the rows and
+  keeps the episode open (the sleeve stays reduce-only); a rise in the
+  sleeve's risk is then sized again inside the episode, with its veto clocks.
+  The episode ends when the book reads within and the stop has released. The
+  whole-book line is unchanged: at the maximum loss the batch still reduces
+  to the hedges.
 
 ### Policy keys
+
+`[mandate.sleeves] owner_stop_pct` is the owner sleeve's drawdown stop
+(above); optional, no default acts.
 
 The stage lives in the strategy register (owner decision 2026-10-18 09:01
 CEST; [strategy-register.md](strategy-register.md)): `[mandate.core]` is its
@@ -855,6 +963,7 @@ documents are neither read nor written.
 | Verdict | daemon-owned evaluation (`mandate.risk`) | `rpc.MandateRiskResult` | refreshed every two minutes and on every read; the gate reads a verdict no older than five minutes | older ⇒ unknown ⇒ additions refused |
 | Blocker | `mandateBudgetGate` | `TradingBlocker{Code: "mandate_budget"}` | per order, at four points | — |
 | Allocations and placement | the verdict (`verdict.allocations`), from `[mandate.sleeves]`, `[mandate.core] scale_pct` and the core's contract, and this build's order paths | `mandate.AllocationReport` | with the verdict | unknown ⇒ additions refused; the batch sizes in the whole book's order |
+| Owner sleeve's stop | `[mandate.sleeves] owner_stop_pct`; the sleeve's series in the `risk_capital` document (`mandate_owner_sleeve`), from the capital state's adjusted equity and the verdict's machine legs | `mandate.SleeveStop` (`verdict.owner_stop`) | updated with every measured verdict; holds while the capital state or the book is unknown | key absent ⇒ no stop; unknown ⇒ the stop keeps its last state, the verdict is unknown and the batch holds |
 
 The exercise path binds its own position authority and never binds risk
 (`exerciseBound`); an exercise is reduce-only by the opportunity policy and
@@ -945,6 +1054,8 @@ internal/daemon/mandate_verdict.go     evaluation cache, RPC handler, mandate_bu
 internal/daemon/mandate_status.go      when the verdict's status last changed (status_since)
 internal/daemon/mandate_reduction.go   forced reduction: sizing, hold, release, rows
 internal/daemon/mandate_allocations.go       allocation plan and placement, the allocation check
+internal/daemon/mandate_sleeve_stop.go  the owner sleeve's measure, high-water mark and drawdown stop
+internal/mandate/sleevestop.go         the stop on the evaluation: the sleeve's use against its target
 internal/cli/mandate.go                canary mandate [--json]
 internal/mcp/tools.go                  canary_mandate
 ```

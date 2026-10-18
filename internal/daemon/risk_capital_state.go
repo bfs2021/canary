@@ -80,6 +80,10 @@ type riskCapitalStateFileV1 struct {
 	// Mandate is the mandate risk budget's high-water mark and samples
 	// (mandate_capital.go); nil until the constitution carries [mandate].
 	Mandate *mandateCapitalStateV1 `json:"mandate,omitempty"`
+	// OwnerSleeve is the owner sleeve's drawdown-stop series
+	// (mandate_sleeve_stop.go); nil until the owner writes
+	// [mandate.sleeves] owner_stop_pct.
+	OwnerSleeve *mandateOwnerSleeveStateV1 `json:"mandate_owner_sleeve,omitempty"`
 }
 
 type capitalEventV1 struct {

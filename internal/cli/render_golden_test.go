@@ -260,6 +260,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "mandate", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandate(mandate.StatusWithin)}},
 		{name: "mandate_reduce", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateReducing()}},
 		{name: "mandate_allocations", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateAllocations()}},
+		{name: "mandate_owner_stop", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateOwnerStop()}},
 		{name: "reporting_costs", argv: []string{"reporting", "costs"}, conn: goldenConn{rpc.MethodReportingCosts: goldenReportingCosts()}},
 		{name: "reporting_costs_empty", argv: []string{"reporting", "costs", "--month", "2026-08"}, conn: goldenConn{rpc.MethodReportingCosts: goldenReportingCostsEmpty()}},
 		{name: "mandate_register", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateRegister()}},
@@ -447,6 +448,29 @@ func goldenMandateAllocations() rpc.MandateRiskResult {
 	}
 	res.Verdict = &v
 	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "your sleeve carries 23,970 EUR a year, over its allocation 19,230 EUR (the budget less the machine's allocations of 12,820 EUR)"}
+	return res
+}
+
+// goldenMandateOwnerStop is a verdict within the budget whose owner sleeve
+// stop is engaged (owner_stop_pct 25): the sleeve 27% below its own
+// high-water mark, the reduction cutting it to half its risk at the stop.
+func goldenMandateOwnerStop() rpc.MandateRiskResult {
+	res := goldenMandate(mandate.StatusWithin)
+	v := *res.Verdict
+	v.Allocations = []mandate.AllocationReport{
+		{Sleeve: mandate.SleeveOwner, AllocationPct: 15, AllocationBase: 32050, UseBase: 23970, ContributionPct: 100, StandaloneBase: 23970, ExcessBase: -8080, Legs: 3},
+		{Sleeve: mandate.SleeveCore, TargetPct: 6, Note: "no [mandate.core]: the core is inactive"},
+		{Sleeve: mandate.SleeveOverlay, TargetPct: 4, Note: "no strategy registered in the overlay yet"},
+	}
+	v.OwnerStop = &mandate.SleeveStop{Sleeve: mandate.SleeveOwner, StopPct: 25, Known: true, StartedAt: "2026-09-01", RiskBase: 175000, HWMRiskBase: 240000, HWMAsOf: goldenAt.Add(-72 * time.Hour),
+		DrawdownBase: 65000, DrawdownPct: 27.08, Engaged: true, EngagedAt: goldenAt.Add(-30 * time.Minute), UseAtStopBase: 31200, TargetUseBase: 15600, UseBase: 23970, Over: true}
+	res.Verdict = &v
+	res.Policy.Sleeves = &rpc.MandateSleevesView{OwnerVolPct: new(7.0), CoreVolPct: new(6.0), OverlayVolPct: new(4.0), OwnerStopPct: new(25.0)}
+	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "your sleeve is 27% below its high-water mark 240,000 EUR, past its 25% stop; the sleeve is reduce-only until its drawdown is back under the stop"}
+	res.Reduction = &rpc.MandateReductionView{State: rpc.MandateReductionReducing, Rows: 1, PreAuthorised: true, Pending: 1, VetoUntil: goldenAt.Add(28 * time.Minute),
+		Reason: "the book is within the budget, but your sleeve is 27% below its high-water mark 240,000 EUR, past its 25% stop (risk 23,970 EUR a year, over its stop target 15,600 EUR); 1 cut sized to take the risk to 15,100 EUR a year, the sleeve's risk to its stop target 15,600 EUR",
+		Orders: []rpc.MandateReductionOrder{{Rank: 1, Key: "mandate_reduction:SELL:STK:9001", Contract: rpc.ContractParams{ConID: 9001, Symbol: "SYNA", SecType: "STK"}, Action: rpc.OrderActionSell, Quantity: 300,
+			Phase: rpc.MandatePhaseStop, ContributionPct: 71.4, Automatic: rpc.TradeProposalAutomaticPending, SubmitAt: goldenAt.Add(28 * time.Minute)}}}
 	return res
 }
 

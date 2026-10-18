@@ -721,6 +721,10 @@ const (
 	MandatePhaseGap = "gap"
 	// MandatePhaseRisk: the largest contributor to the simulated variance.
 	MandatePhaseRisk = "risk"
+	// MandatePhaseStop: the largest contributor left in the owner's sleeve,
+	// cut for the sleeve's own drawdown stop while the book is inside the
+	// budget (mandate-risk-budget.md, "The forced reduction").
+	MandatePhaseStop = "stop"
 )
 
 // TradeProposalMandateStatus is the mandate's forced reduction, one

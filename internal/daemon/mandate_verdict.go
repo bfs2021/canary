@@ -88,7 +88,9 @@ func (c *mandateVerdictCache) kept() mandateVerdictKept {
 func (c *mandateVerdictCache) set(result *rpc.MandateRiskResult, input *mandate.Input, at time.Time, fingerprint string, scheduled bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	breach := result != nil && result.Verdict != nil && (result.Verdict.Status == mandate.StatusOver || result.Verdict.Status == mandate.StatusReduce)
+	// A breach reading: the book over or reduce, or the owner sleeve's stop
+	// engaged with risk still to cut (mandate_sleeve_stop.go).
+	breach := result != nil && result.Verdict != nil && (result.Verdict.Status == mandate.StatusOver || result.Verdict.Status == mandate.StatusReduce || mandateStopOver(*result.Verdict))
 	switch {
 	case !breach || (c.overStreak > 0 && fingerprint != c.streakFP):
 		c.overStreak, c.streakAt, c.streakFP = 0, time.Time{}, ""
@@ -275,6 +277,14 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	resolved := s.resolvedRegister(c)
 	in.Allocations = mandateAllocationPlan(c, resolved, s.mandateCoreContracts(ctx, c), in.Legs)
 	verdict := mandate.Evaluate(in)
+	// The owner sleeve's drawdown stop reads this verdict's legs and use, and
+	// the kept input carries it, so every evaluation sized or judged on this
+	// book (the forced reduction, the gate) reads the same stop.
+	if stopPct, ok := c.Mandate.OwnerStopPct(); ok {
+		stop := s.riskCapital.ObserveOwnerSleeveStop(c, scope, stopPct, capital, &verdict, in.Allocations, now)
+		in.OwnerStop = &stop
+		mandate.ApplySleeveStop(&verdict, in.OwnerStop)
+	}
 	fp := c.FingerprintKey()
 	res := &rpc.MandateRiskResult{AsOf: now, Active: true, Verdict: &verdict, Evidence: evidence,
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: fp},
@@ -293,7 +303,7 @@ func mandatePolicyView(m *risk.ConstitutionMandate) *rpc.MandatePolicyView {
 	v := &rpc.MandatePolicyView{MaxLossPct: policyCheckDeref(m.MaxLossPct), VolTargetPct: policyCheckDeref(m.VolTargetPct), TaxReserveBase: policyCheckDeref(m.TaxReserveBase),
 		StartedAt: m.StartedAt, GapShockPct: policyCheckDeref(m.GapShockPct), IndexGapShockPct: m.IndexGapShockPct, GapRoomPct: policyCheckDeref(m.GapRoomPct), Unapproved: m.UnapprovedKeys()}
 	if m.Sleeves != nil {
-		v.Sleeves = &rpc.MandateSleevesView{OwnerVolPct: m.Sleeves.OwnerVolPct, CoreVolPct: m.Sleeves.CoreVolPct, OverlayVolPct: m.Sleeves.OverlayVolPct}
+		v.Sleeves = &rpc.MandateSleevesView{OwnerVolPct: m.Sleeves.OwnerVolPct, CoreVolPct: m.Sleeves.CoreVolPct, OverlayVolPct: m.Sleeves.OverlayVolPct, OwnerStopPct: m.Sleeves.OwnerStopPct}
 	}
 	return v
 }
@@ -398,9 +408,16 @@ func (s *Server) mandateGateView(res *rpc.MandateRiskResult, now time.Time) *rpc
 		if why := mandateOverBudgetHolds(res.Verdict, mandate.SleeveOwner, ccy); why != "" {
 			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, ccy) + "; " + why}
 		}
+		if why := mandateOwnerStopHolds(res.Verdict, mandate.SleeveOwner, ccy); why != "" {
+			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, ccy) + "; " + why}
+		}
 		return &rpc.MandateGateView{Reason: mandateStatusSentence(res.Verdict, ccy) + ", but your sleeve is inside its allocation: an addition that keeps it there passes"}
 	default:
 		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, ccy)}
+	}
+	// Your sleeve's own drawdown stop holds your additions while engaged.
+	if why := mandateOwnerStopHolds(res.Verdict, mandate.SleeveOwner, ccy); why != "" {
+		return &rpc.MandateGateView{RefusesAdditions: true, Reason: why}
 	}
 	// Within the budget, your additions still stop at your allocation.
 	if allocation, ok := res.Verdict.Allocation(mandate.SleeveOwner); ok {
@@ -519,6 +536,12 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		overBudget = true
 	default:
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + mandateStatusSentence(result.Verdict, ccy) + "; this order adds risk." + open, Action: action}
+	}
+	// The owner sleeve's drawdown stop: while engaged the sleeve is
+	// reduce-only, inside the budget or over it (mandate_sleeve_stop.go).
+	if why := mandateOwnerStopHolds(result.Verdict, sleeve, ccy); why != "" {
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + why + "; this order adds risk." + open,
+			Action: "Reduce or close instead; the stop releases when the sleeve's drawdown is back under it. `canary mandate` has the sleeve's drawdown and high-water mark."}
 	}
 	// A name or currency the book does not hold yet has no decision-grade
 	// history in the verdict: the order is measured on the series the store

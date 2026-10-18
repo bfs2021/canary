@@ -1347,6 +1347,15 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # owner_vol_pct = 0.0
 # core_vol_pct = 0.0
 # overlay_vol_pct = 0.0
+# Optional: your sleeve's own drawdown stop, in percent of the sleeve's
+# high-water mark (its equity-like measure: the book's cash-flow-adjusted
+# risk base less the machine's P&L). At the stop the forced reduction cuts
+# your sleeve, reduce-only, to half its risk, and your sleeve adds nothing
+# until the drawdown is back under the stop; the whole book's max_loss_pct
+# stays the backstop. 25 is the setting you delegated on 2026-10-18 21:41
+# CEST ("be on the aggressive side"), reviewed when the scorecard holds 100
+# entry weeks. Absent, nothing changes.
+# owner_stop_pct = 25.0
 # Optional core sleeve (design internal-docs/design/core-sleeve.md). Absent,
 # the core is inactive. Written, the daemon decides the core's target each
 # month under the compiled rule and shows it in canary core; in this
