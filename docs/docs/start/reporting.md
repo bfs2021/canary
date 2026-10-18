@@ -247,7 +247,9 @@ the command line or history.
 )
 ```
 
-Open `~/.config/ibkr/config.toml` in an editor and add:
+Open the configuration file selected by `CANARY_CONFIG`, when set. Otherwise
+use `${XDG_CONFIG_HOME:-$HOME/.config}/ibkr/config.toml`. A relative
+`CANARY_CONFIG` is relative to the directory where you launch Canary. Add:
 
 ```toml
 [flex]
@@ -257,7 +259,9 @@ token_path = "~/.config/ibkr/flex-token"
 ```
 
 The Query ID selects a saved report. The token authorizes statement retrieval.
-Only the token belongs in the protected token file.
+Only the token belongs in the protected token file. The manual token file above
+intentionally stays at `~/.config/ibkr/flex-token`, even when the configuration
+file uses another directory; `token_path` points to it.
 
 ## 6. Check reporting, Recon, and Edge
 

@@ -96,8 +96,8 @@ type mandateFlowSuspect struct {
 	Unexplained float64         `json:"unexplained_base"`
 	ThresholdAt float64         `json:"threshold_base"`
 	// MoveBase is the equity move, net of declared flows, of the reading that
-	// raised the suspicion: always beyond the threshold since 2026-10-18, as
-	// a flow moves equity. Zero marks a record raised before that rule.
+	// raised the suspicion. This is diagnostic only: a real flow may be
+	// offset by market P&L, and older records may omit the field.
 	MoveBase float64 `json:"move_base,omitempty"`
 }
 
@@ -113,35 +113,16 @@ func mandateFlowThreshold(equityBase float64) float64 {
 	return math.Max(0.01*equityBase, mandateFlowFloorBase)
 }
 
-// mandatePnLResetBand is how near zero the broker's daily P&L must sit, and
-// how little the equity may have moved beyond it, for a reading to be the
-// first of a new broker day: a quarter of the flow threshold, so a reading
-// misjudged either way can never raise a suspicion by itself.
-func mandatePnLResetBand(equityBase float64) float64 {
-	return mandateFlowThreshold(equityBase) / 4
-}
-
-// mandatePnLStep is the broker's P&L between two consecutive readings: the
-// difference of the two daily figures within one broker day, the new day's
-// own figure across the broker's daily reset (the old day's last reading
-// taken as its close). The reset is read from the figures themselves, not
-// from the calendar alone: IBKR starts its day at its own hour, before the
-// New York midnight the session date turns at, so on 2026-10-16 a reading at
-// 23:59:59 New York still carried the trading day's session while the
-// broker's figure was already the new day's zero, and the difference charged
-// a whole down day to a cash flow. A reading whose figure sits within
-// band of zero while the equity moved by no more than that figure (move is
-// the equity move net of flows since the last reading) is the first of a
-// new broker day, and so is one in a new session date. Without the figure
-// on the readings it needs, the step counts zero: the whole move is
-// unexplained.
-func mandatePnLStep(last mandateFlowBase, pnl mandatePnLReading, move, band float64) float64 {
+// mandatePnLStep is the within-session difference of the broker's daily P&L,
+// or the new session's own figure after its date changes. A near-zero value
+// with flat equity is not proof of a reset: a cash flow can offset a market
+// return. Without both same-session readings the step counts zero, leaving
+// the equity move unexplained.
+func mandatePnLStep(last mandateFlowBase, pnl mandatePnLReading) float64 {
 	switch {
 	case pnl.DailyBase == nil:
 		return 0
 	case last.Session != pnl.Session:
-		return *pnl.DailyBase
-	case math.Abs(*pnl.DailyBase) <= band && math.Abs(move-*pnl.DailyBase) <= band:
 		return *pnl.DailyBase
 	case last.DailyPnL == nil:
 		return 0
@@ -169,39 +150,31 @@ func mandatePnLStep(last mandateFlowBase, pnl mandatePnLReading, move, band floa
 // covers it.
 func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *risk.Constitution, equityBase float64, pnl mandatePnLReading, asOf time.Time, flows float64, now time.Time) {
 	threshold := mandateFlowThreshold(equityBase)
-	band := mandatePnLResetBand(equityBase)
 	if s := m.FlowSuspect; s != nil {
 		if m.Last != nil {
-			s.PnLSince += mandatePnLStep(*m.Last, pnl, equityBase-m.Last.EquityBase-(flows-m.Last.FlowsBase), band)
+			s.PnLSince += mandatePnLStep(*m.Last, pnl)
 		}
 		moveSince := equityBase - s.Base.EquityBase - (flows - s.Base.FlowsBase)
 		s.Unexplained = moveSince - s.PnLSince
 		explained := math.Abs(s.Unexplained) <= threshold
 		statement := !st.state.StatementCoverageTo.IsZero() && mandateSessionDate(s.At) <= st.state.StatementCoverageTo.UTC().Format(time.DateOnly)
-		// A record raised before 2026-10-18 21:30 CEST could come from the
-		// broker's P&L figure alone, with the equity standing still (a daemon
-		// restart or the weekend reset moved the figure by a day's P&L while
-		// equity moved by nothing): where the equity has not moved beyond the
-		// threshold since the base, no flow happened and the record clears.
-		legacy := s.MoveBase == 0 && math.Abs(moveSince) <= threshold
-		if explained || statement || legacy {
+		// Flat equity and absent legacy metadata cannot explain a cash flow.
+		if explained || statement {
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_cleared",
 				"suspected_at": s.At.UTC(), "unexplained_base": s.Unexplained, "equity_base": equityBase, "flows_base": flows, "by_statement": statement && !explained,
-				"equity_move_base": moveSince, "legacy_flat_equity": legacy && !explained && !statement,
+				"equity_move_base":   moveSince,
 				"policy_fingerprint": constitutionFingerprint(c),
 			})
 			m.FlowSuspect = nil
 		}
 	} else if m.Last != nil {
 		move := equityBase - m.Last.EquityBase - (flows - m.Last.FlowsBase)
-		step := mandatePnLStep(*m.Last, pnl, move, band)
-		// A deposit or withdrawal moves the equity by at least the threshold;
-		// a P&L figure that jumps while the equity stands still is the
-		// broker's P&L clock (a reset, a reconnect), never money (2026-10-18:
-		// two readings with the equity unchanged to the euro and the figure a
-		// day's P&L apart read as flows and held the room for days).
-		if unexplained := move - step; math.Abs(move) > threshold && math.Abs(unexplained) > threshold {
+		step := mandatePnLStep(*m.Last, pnl)
+		// A market loss or gain can offset a real flow. Judge the residual,
+		// not the net equity move; neither flat equity nor a reconnect proves
+		// that the broker reset its P&L basis.
+		if unexplained := move - step; math.Abs(unexplained) > threshold {
 			m.FlowSuspect = &mandateFlowSuspect{At: asOf, Base: *m.Last, PnLSince: step, Unexplained: unexplained, ThresholdAt: threshold, MoveBase: move}
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_suspected",

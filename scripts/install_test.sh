@@ -57,16 +57,21 @@ EOF
 cat > "$fake_bin/gpg" <<'EOF'
 #!/bin/sh
 set -eu
-[ "${CANARY_INSTALL_FIXTURE_OS:-Darwin}" != Darwin ] || [ "${#GNUPGHOME}" -lt 60 ] || { echo "gpg socket path too long" >&2; exit 1; }
 case "$*" in
-	*--with-colons*--fingerprint*)
-		printf '%s\n' 'fpr:::::::::D98426D48FED85EFA33904694D922A4F922B7D7D:'
-		;;
-	*--import*)
-		cat >/dev/null
-		;;
-	*--verify*) ;;
-	*) exit 2 ;;
+ *--show-keys*)
+  printf '%s\n' 'pub:::::::::' 'fpr:::::::::D98426D48FED85EFA33904694D922A4F922B7D7D:'
+  if [ "${CANARY_INSTALL_FIXTURE_EXTRA_KEY:-0}" = 1 ]; then
+   printf '%s\n' 'pub:::::::::' 'fpr:::::::::UNPINNED:'
+  fi
+  ;;
+ *--dearmor*)
+  while [ "$#" -gt 0 ]; do
+   if [ "$1" = --output ]; then : > "$2"; break; fi
+   shift
+  done
+  ;;
+ *--verify*) ;;
+ *) exit 2 ;;
 esac
 EOF
 
@@ -429,3 +434,65 @@ if command -v zsh >/dev/null; then
  HOME="$zsh_home" ZDOTDIR="$zsh_config" PATH=/usr/bin:/bin zsh -d -ic 'command -v canary' | grep -Fx "$zsh_home/.local/bin/canary"
 fi
 echo "install shell and temporary-directory regressions: OK"
+
+# Comments and examples do not activate PATH. Probe cold interactive shells.
+comment_home="$test_root/bash-commented"
+mkdir -p "$comment_home"
+printf '%s\n' '# export PATH="$HOME/.local/bin:$PATH"' 'echo "$HOME/.local/bin" >/dev/null' > "$comment_home/.bashrc"
+for attempt in 1 2; do run_installer v9.9.9 env HOME="$comment_home" SHELL=/bin/bash; done
+[ "$(grep -c '^export PATH=' "$comment_home/.bashrc")" = 1 ]
+HOME="$comment_home" PATH=/usr/bin:/bin bash --noprofile --rcfile "$comment_home/.bashrc" -ic 'command -v canary' 2>/dev/null | grep -Fx "$comment_home/.local/bin/canary"
+
+if command -v zsh >/dev/null; then
+ zsh_home="$test_root/zsh-unexported"
+ zsh_config="$test_root/unexported zsh config"
+ mkdir -p "$zsh_home" "$zsh_config"
+ printf 'ZDOTDIR="%s"\n' "$zsh_config" > "$zsh_home/.zshenv"
+ for attempt in 1 2; do run_installer v9.9.9 env -u ZDOTDIR HOME="$zsh_home" SHELL="$(command -v zsh)"; done
+ [ "$(grep -c '^export PATH=' "$zsh_config/.zshrc")" = 1 ]
+ [ ! -e "$zsh_home/.zshrc" ]
+ env -u ZDOTDIR HOME="$zsh_home" PATH=/usr/bin:/bin zsh -d -ic 'command -v canary' | grep -Fx "$zsh_home/.local/bin/canary"
+fi
+
+# Multiple primary keys cannot expand the pinned signer set.
+extra_key_target="$test_root/extra-key/bin"
+if run_installer v9.9.9 env CANARY_INSTALL_DIR="$extra_key_target" CANARY_INSTALL_FIXTURE_EXTRA_KEY=1 2>/dev/null; then
+ echo "install test: accepted additional unpinned signing key" >&2; exit 1
+fi
+[ ! -e "$extra_key_target/canary" ]
+
+# A staged executable failing on the destination filesystem preserves old bytes.
+mkdir -p "$test_root/failed-probe/bin" "$test_root/install-failure-shim"
+printf '%s\n' 'original installation' > "$test_root/failed-probe/bin/canary"
+cp "$test_root/failed-probe/bin/canary" "$test_root/original-installation"
+real_install=$(command -v install)
+cat > "$test_root/install-failure-shim/install" <<'SHIM'
+#!/bin/sh
+"$REAL_INSTALL" "$@" || exit $?
+for dest do :; done
+case "$dest" in
+ */.canary-install.*) chmod 0600 "$dest" ;;
+esac
+SHIM
+chmod 0755 "$test_root/install-failure-shim/install"
+if CANARY_INSTALL_TEST_PATH_PREFIX="$test_root/install-failure-shim:" run_installer v9.9.9 env REAL_INSTALL="$real_install" CANARY_INSTALL_DIR="$test_root/failed-probe/bin" 2>/dev/null; then
+ echo "install test: unusable staged candidate reported success" >&2; exit 1
+fi
+cmp "$test_root/original-installation" "$test_root/failed-probe/bin/canary"
+
+# A failed backup copy cannot replace a good canonical with a partial backup.
+cat > "$test_root/install-failure-shim/install" <<'SHIM'
+#!/bin/sh
+for dest do :; done
+case "$dest" in
+ */.canary-pre-install.*) printf 'partial' > "$dest"; exit 42 ;;
+esac
+exec "$REAL_INSTALL" "$@"
+SHIM
+if CANARY_INSTALL_TEST_PATH_PREFIX="$test_root/install-failure-shim:" run_installer v9.9.9 env REAL_INSTALL="$real_install" CANARY_INSTALL_DIR="$test_root/failed-probe/bin" 2>/dev/null; then
+ echo "install test: partial backup failure reported success" >&2; exit 1
+fi
+cmp "$test_root/original-installation" "$test_root/failed-probe/bin/canary"
+echo "install validation and activation regressions: OK"
+
+python3 "$repo_root/scripts/install_signature_test.py"

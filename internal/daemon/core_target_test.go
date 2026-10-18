@@ -121,7 +121,7 @@ func coreTestSeriesOn(t *testing.T, l ibkrlib.Listing, market marketcal.Market, 
 	t.Helper()
 	r := rand.New(rand.NewPCG(31, 32))
 	s := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: coreSeriesKey(l.ConID), Dates: dates, FetchedAt: mandateTestNow.Add(-time.Hour), Source: "test", Market: market,
-		Contract: rpc.ContractParams{ConID: l.ConID, Symbol: l.Symbol, Currency: l.Currency, Exchange: l.PrimaryExch}}
+		Contract: rpc.ContractParams{ConID: l.ConID, Symbol: l.Symbol, SecType: "STK", Currency: l.Currency, Exchange: l.PrimaryExch, PrimaryExch: l.PrimaryExch}}
 	price := 80.0
 	for range dates {
 		s.Closes = append(s.Closes, math.Round(price*100)/100)

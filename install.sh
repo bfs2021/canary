@@ -97,8 +97,7 @@ TARBALL="${archive_product}-${VERSION}-${PLATFORM}.tar.gz"
 TARBALL_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
 SUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
 
-# gpg-agent creates Unix sockets here; macOS TMPDIR paths can exceed
-# the socket path limit. mktemp creates a private directory on both platforms.
+# mktemp creates a private directory. Verification below never starts gpg-agent.
 case "$os" in
  darwin) tmp=$(mktemp -d /tmp/canary.XXXXXX) ;;
  *) tmp=$(mktemp -d "${TMPDIR:-/tmp}/canary.XXXXXX") ;;
@@ -128,7 +127,7 @@ rollback_install() {
 	[ "$install_rolled_back" = "0" ] || return 0
 	install_rolled_back=1
 
-	if [ "$canonical_published" = "1" ]; then
+	if [ "$canonical_published" = "1" ] && [ -z "$canonical_retired" ]; then
 		rm -f "$canonical"
 	fi
 	if [ -n "$canonical_retired" ] && [ -e "$canonical_retired" ]; then
@@ -198,24 +197,26 @@ if [ -s "$tmp/SHA256SUMS.asc" ]; then
 		step "Verifying PGP signature on SHA256SUMS..."
 		# Fetch the release-signing public key from the tagged source tree, then
 		mkdir -p "$tmp/gnupg" && chmod 700 "$tmp/gnupg"
-		if curl -fsSL "$KEY_URL" | GNUPGHOME="$tmp/gnupg" gpg --batch --quiet --import 2>"$tmp/gpg-import.err"; then
-			got_fp=$(GNUPGHOME="$tmp/gnupg" gpg --batch --with-colons --fingerprint 2>/dev/null \
-				| awk -F: '/^fpr:/{print $10; exit}')
-			if [ "$got_fp" != "$EXPECTED_FP" ]; then
-				fail "release-signing key fingerprint $got_fp != expected $EXPECTED_FP — aborting (SECURITY.md has the canonical fingerprint)"
-			fi
-			if GNUPGHOME="$tmp/gnupg" gpg --batch --verify "$tmp/SHA256SUMS.asc" "$tmp/SHA256SUMS" 2>/dev/null; then
-				info "PGP signature OK (maintainer key $EXPECTED_FP)"
-			else
-				fail "PGP signature on SHA256SUMS did not verify — aborting (tarball may be tampered)"
-			fi
-		else
-			if [ "$require_sig" = "1" ]; then
-				cat "$tmp/gpg-import.err" >&2
-				fail "could not fetch/import release-signing key for $VERSION — aborting"
-			fi
-			warn "Couldn't fetch maintainer key; skipping PGP verification for pre-v1 release"
-		fi
+        if ! curl -fsSL -o "$tmp/release-key.asc" "$KEY_URL"; then
+            fail "could not fetch release-signing key for $VERSION"
+        fi
+        key_info=$(GNUPGHOME="$tmp/gnupg" gpg --batch --no-autostart --with-colons --show-keys "$tmp/release-key.asc" 2>"$tmp/gpg-key.err") || {
+            cat "$tmp/gpg-key.err" >&2
+            fail "could not inspect release-signing key for $VERSION"
+        }
+        # Accept exactly one primary key. Additional keys must never expand
+        # the set of signers trusted by the pinned fingerprint.
+        got_fp=$(printf '%s\n' "$key_info" | awk -F: '
+            $1 == "pub" { count++; primary=1; next }
+            $1 == "fpr" && primary { fp=$10; primary=0 }
+            END { if (count == 1) print fp; else print "invalid-primary-key-count" }')
+        [ "$got_fp" = "$EXPECTED_FP" ] || fail "release-signing key fingerprint $got_fp != expected $EXPECTED_FP — aborting (SECURITY.md has the canonical fingerprint)"
+        GNUPGHOME="$tmp/gnupg" gpg --batch --no-autostart --dearmor --output "$tmp/release-key.gpg" "$tmp/release-key.asc" || fail "could not prepare pinned release-signing key"
+        if GNUPGHOME="$tmp/gnupg" gpg --batch --no-autostart --no-default-keyring --keyring "$tmp/release-key.gpg" --verify "$tmp/SHA256SUMS.asc" "$tmp/SHA256SUMS" 2>/dev/null; then
+            info "PGP signature OK (maintainer key $EXPECTED_FP)"
+        else
+            fail "PGP signature on SHA256SUMS did not verify — aborting (tarball may be tampered)"
+        fi
 	fi
 fi
 
@@ -301,31 +302,52 @@ if [ -e "$pre_upgrade" ]; then
 fi
 rm -f "$INSTALL_DIR/canary.bak" "$INSTALL_DIR/ibkr.bak"
 
-# Stage the candidate in the destination directory. Existing public paths move
-# to transaction-only hidden names and are restored only if canonical
-# publication fails. They are made non-executable and deleted after success.
+# Stage and execute the candidate on the destination filesystem first. Keep
+# canonical available until its atomic replacement; retain a transaction-only
+# copy until publication is verified, then delete the retired files.
 canonical_stage="$INSTALL_DIR/.canary-install.$$"
 canonical_retired="$INSTALL_DIR/.canary-pre-install.$$"
 pre_upgrade_retired="$INSTALL_DIR/.ibkr-pre-upgrade.$$"
 rm -f "$canonical_stage" "$canonical_retired" "$pre_upgrade_retired"
 copy_executable "$extracted_dir/$archive_binary" "$canonical_stage"
-install_started=1
+verify_installed_binary() {
+    if installed_version=$("$1" version 2>"$tmp/version.err"); then
+        installed_first_line=$(printf '%s\n' "$installed_version" | sed -n '1p')
+        case "$installed_first_line" in
+            "Canary CLI  $VERSION"|"Canary CLI  $VERSION "*|"canary $VERSION"|"canary $VERSION "*|"canary  $VERSION"|"canary  $VERSION "*) return 0 ;;
+            "ibkr $VERSION"|"ibkr $VERSION "*|"ibkr  $VERSION"|"ibkr  $VERSION "*) [ "$VERSION" = "v2.3.1" ] && return 0 ;;
+        esac
+        warn "candidate reports unexpected version: $installed_version"
+    else
+        version_status=$?
+        cat "$tmp/version.err" >&2
+        warn "candidate cannot execute from $INSTALL_DIR (exit $version_status)"
+    fi
+    return 1
+}
+xattr -d com.apple.quarantine "$canonical_stage" 2>/dev/null || true
+verify_installed_binary "$canonical_stage" || fail "candidate verification failed; prior installation is unchanged"
 if [ -e "$canonical" ]; then
-	mv -f "$canonical" "$canonical_retired"
+	copy_executable "$canonical" "$canonical_retired"
 else
 	canonical_retired=""
 fi
 if [ -e "$pre_upgrade" ]; then
-	mv -f "$pre_upgrade" "$pre_upgrade_retired"
+	copy_executable "$pre_upgrade" "$pre_upgrade_retired"
 else
 	pre_upgrade_retired=""
 fi
+install_started=1
 canonical_published=1
 if ! mv -f "$canonical_stage" "$canonical"; then
 	rollback_install || fail "canonical publish failed and automatic rollback was incomplete"
 	fail "could not publish the canonical executable; restored the prior installation"
 fi
 canonical_stage=""
+verify_installed_binary "$canonical" || fail "published binary verification failed; restoring prior installation"
+if [ -n "$pre_upgrade_retired" ]; then
+ rm -f "$pre_upgrade" || fail "could not retire prior executable; restoring prior installation"
+fi
 # Once both prior paths are non-executable there is no runnable rollback
 # authority. Removal is best-effort only after that invariant is established.
 for retired in "$canonical_retired" "$pre_upgrade_retired"; do
@@ -367,7 +389,11 @@ if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
 				line="set -gx PATH \$HOME/.local/bin \$PATH"
 				;;
 			*/zsh)
-				rc="${ZDOTDIR:-$HOME}/.zshrc"
+				zsh_dir=$("$SHELL" -c 'printf "\n__CANARY_ZDOTDIR__%s\n" "${ZDOTDIR:-$HOME}"' 2>/dev/null | sed -n 's/^__CANARY_ZDOTDIR__//p')
+                case "$zsh_dir" in
+                    /*) rc="$zsh_dir/.zshrc" ;;
+                    *) rc=""; warn "Could not resolve Zsh startup directory; add $INSTALL_DIR to PATH in your active .zshrc" ;;
+                esac
 				line='export PATH="$HOME/.local/bin:$PATH"'
 				;;
 			*/bash)
@@ -382,7 +408,8 @@ if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
 
 		add_path_to_rc() {
 			rc="$1"
-			if [ -f "$rc" ] && grep -Fq '$HOME/.local/bin' "$rc" 2>/dev/null; then
+			[ -n "$rc" ] || return 0
+			if [ -f "$rc" ] && grep -Fxq "$line" "$rc" 2>/dev/null; then
 				info "$INSTALL_DIR already referenced in $rc — leaving it alone"
 			else
 				mkdir -p "$(dirname "$rc")"
@@ -401,7 +428,7 @@ if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
 				add_path_to_rc "$login_rc"
 				;;
 		esac
-		warn "Open a new terminal for canary to be on PATH, or add $INSTALL_DIR to this shell's PATH"
+		warn "Open a new terminal and check command -v canary; if your startup files override PATH, add $INSTALL_DIR after those overrides"
 	fi
 else
 	# Custom install dir: don't touch rc files; just tell the user.
@@ -412,21 +439,7 @@ else
 fi
 
 # --- verify install ----------------------------------------------------------
-step "Verifying..."
-installed_version=$("$canonical" version 2>/dev/null | head -n1 || true)
-case "$installed_version" in
-	"Canary CLI  $VERSION"*|"canary $VERSION"*|"canary  $VERSION"*)
-		info "Installed: $BOLD$installed_version$RESET"
-		;;
-	"ibkr $VERSION"*|"ibkr  $VERSION"*)
-		if [ "$VERSION" = "v2.3.1" ]; then
-			info "Installed the version-bounded $VERSION bootstrap at $canonical"
-		else
-			warn "Installed binary reports retired product identity: $installed_version"
-		fi
-		;;
-	*)                warn "Installed binary reports unexpected version: $installed_version" ;;
-esac
+info "Installed: $BOLD$installed_version$RESET"
 [ ! -e "$pre_upgrade" ] && [ ! -L "$pre_upgrade" ] || \
 	fail "pre-upgrade executable path still exists after canonical install: $pre_upgrade"
 

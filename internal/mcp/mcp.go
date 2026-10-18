@@ -438,6 +438,9 @@ func (s *Server) handleToolsCall(ctx context.Context, id, params json.RawMessage
 		s.writeToolError(id, err)
 		return
 	}
+	if p.Name == "canary_status" {
+		out = s.statusWithActivation(callCtx, conn, out)
+	}
 	payload := toolResultPayload{
 		Content: []contentBlock{{Type: "text", Text: string(out)}},
 	}

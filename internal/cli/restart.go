@@ -920,7 +920,7 @@ func supervisorParseFailure(sup appSupervisor) string {
 	return "ProgramArguments is not a Canary app server command"
 }
 
-func restartFlagWasSet(fs *flag.FlagSet, name string) bool {
+func restartFlagWasSet(fs *commandFlagSet, name string) bool {
 	seen := false
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == name {

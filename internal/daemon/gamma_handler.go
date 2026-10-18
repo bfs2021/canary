@@ -474,14 +474,14 @@ func lastCompletedMarketSessionWindow(now time.Time, market marketcal.Market) (m
 	if err != nil || current.State == marketcal.StateUnknown {
 		return marketcal.Session{}, current, false
 	}
-	ny, err := time.LoadLocation("America/New_York")
+	loc, err := time.LoadLocation(current.Timezone)
 	if err != nil {
 		return marketcal.Session{}, current, false
 	}
-	local := now.In(ny)
+	local := now.In(loc)
 	for offset := range 10 {
 		day := local.AddDate(0, 0, -offset)
-		at := time.Date(day.Year(), day.Month(), day.Day(), 12, 0, 0, 0, ny)
+		at := time.Date(day.Year(), day.Month(), day.Day(), 12, 0, 0, 0, loc)
 		session, sessionErr := cal.SessionAt(market, at)
 		if sessionErr != nil || session.State == marketcal.StateUnknown {
 			return marketcal.Session{}, current, false

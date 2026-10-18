@@ -638,7 +638,7 @@ func (s *Server) coreLastDecision(ctx context.Context, scope string) *rpc.CoreDe
 		Window: slices.Clone(r.Window), RowKey: r.RowKey, Outcome: rpc.CoreDecisionOutcome{Served: r.Served}}
 	if e := s.tradeProposals; e != nil && e.store != nil && r.RowKey != "" {
 		for _, ev := range e.store.eventsSince(r.DecidedAt) {
-			if ev.Key != r.RowKey {
+			if ev.Key != r.RowKey || !coreDecisionEventMatchesScope(ev, scope) {
 				continue
 			}
 			switch ev.Type {
@@ -650,4 +650,10 @@ func (s *Server) coreLastDecision(ctx context.Context, scope string) *rpc.CoreDe
 		}
 	}
 	return out
+}
+
+func coreDecisionEventMatchesScope(ev proposalEvent, scope string) bool {
+	parts := strings.SplitN(scope, "|", 3)
+	return len(parts) == 3 && brokerScopeAccountConcrete(parts[0]) &&
+		sameBrokerScope(brokerStateScope{Account: parts[0], Mode: parts[1]}, brokerStateScope{Account: ev.AccountID, Mode: ev.AccountMode})
 }

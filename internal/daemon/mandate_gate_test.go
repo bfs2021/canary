@@ -72,6 +72,24 @@ func mandateTestSeries(key string, vol float64, seed uint64, lag int) *mandateHi
 	dates = dates[:len(dates)-lag]
 	r := rand.New(rand.NewPCG(seed, seed+1))
 	s := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: key, Dates: dates, FetchedAt: mandateTestNow.Add(-time.Hour), Source: "test"}
+	switch key {
+	case "u:SPY":
+		s.Contract = mandateIndexHistoryNeed().Contract
+	case "u:SYNA":
+		s.Contract = rpc.ContractParams{ConID: 9001, Symbol: "SYNA", SecType: "STK", Currency: "USD", Exchange: "SMART"}
+	case "u:SYNC":
+		s.Contract = rpc.ContractParams{ConID: 9100, Symbol: "SYNC", SecType: "STK", Currency: "EUR", Exchange: "SMART"}
+	case "u:SYND":
+		s.Contract = rpc.ContractParams{ConID: 9100, Symbol: "SYND", SecType: "STK", Currency: "CHF", Exchange: "SMART"}
+	case "fx:CHF":
+		s.Contract = rpc.ContractParams{Symbol: "EUR", SecType: "CASH", Currency: "CHF", Exchange: "IDEALPRO"}
+	case "u:SXR8":
+		s.Contract = rpc.ContractParams{Symbol: "SXR8", SecType: "STK", Currency: "EUR", Exchange: "SMART"}
+	case "u:SYNB":
+		s.Contract = rpc.ContractParams{ConID: 9002, Symbol: "SYNB", SecType: "STK", Currency: "EUR", Exchange: "SMART"}
+	case "fx:USD":
+		s.Contract = rpc.ContractParams{Symbol: "EUR", SecType: "CASH", Currency: "USD", Exchange: "IDEALPRO"}
+	}
 	price := 100.0
 	for range dates {
 		s.Closes = append(s.Closes, price)
@@ -297,7 +315,7 @@ func TestMandateGateMeasuresANameTheBookDoesNotHold(t *testing.T) {
 	requested := func() []string {
 		var keys []string
 		for _, need := range srv.mandateHistoryRequests(mandateTestNow) {
-			keys = append(keys, need.Key)
+			keys = append(keys, mandateHistoryLogicalKey(need.Key))
 		}
 		return keys
 	}
@@ -313,7 +331,7 @@ func TestMandateGateMeasuresANameTheBookDoesNotHold(t *testing.T) {
 	}
 	needs := srv.mandateHistoryNeedsWithRequests(t.Context(), mandateTestPositions(100), "EUR", mandateTestNow)
 	if !slices.ContainsFunc(needs, func(n mandateHistoryNeed) bool {
-		return n.Key == "u:SYNC" && n.Contract.Symbol == "SYNC" && n.Contract.ConID == 9100
+		return mandateHistoryLogicalKey(n.Key) == "u:SYNC" && n.Contract.Symbol == "SYNC" && n.Contract.ConID == 9100
 	}) {
 		t.Fatalf("the background pass does not read the request: %+v", needs)
 	}
@@ -652,18 +670,11 @@ func TestMandateUnexplainedEquityMoveHoldsTheRoom(t *testing.T) {
 	})
 }
 
-// The broker's daily P&L starts anew at the broker's own hour, before the
-// New York midnight the session date turns at. On the evening of 2026-10-16
-// a reading at 23:59:59 New York (03:59:59 UTC the next day) still carried
-// the trading day's session date while the broker's figure had already gone
-// back to zero: the within-session step charged a whole down day to
-// a cash flow, and the room was held from Friday night until a statement
-// covering the day was reconciled. The weekend below is that incident on a
-// synthetic book; the reading is explained by the figures themselves (the
-// figure near zero, the equity unmoved), a flow landing in the same reading
-// is still caught, and the Friday statement covers a suspicion raised after
-// UTC midnight but before the New York date turned.
-func TestMandateFlowCheckSurvivesTheBrokerDailyPnLReset(t *testing.T) {
+// A broker reset before the session date changes is observationally
+// indistinguishable from a cash flow offset by a market return. Keep that
+// ambiguity held until reconciliation. A covering statement uses the New
+// York date, including readings after UTC midnight.
+func TestMandateFlowCheckRequiresEvidenceForBrokerDailyPnLReset(t *testing.T) {
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Fatal(err)
@@ -699,12 +710,20 @@ func TestMandateFlowCheckSurvivesTheBrokerDailyPnLReset(t *testing.T) {
 		return st, c, read, known
 	}
 	t.Run("the figure goes back to zero before the New York date turns", func(t *testing.T) {
-		_, _, read, known := weekend(t)
+		st, c, read, known := weekend(t)
 		read(fridayNight, 264000, 0)
-		known("the reading at 23:59:59 New York")
-		read(utc(17, 10, 0), 264000, 0) // Saturday
+		if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, fridayNight.Add(time.Second)); got.Known {
+			t.Fatal("an ambiguous same-session P&L reset cleared the hold")
+		}
+		read(utc(17, 10, 0), 264000, 0) // Saturday alone cannot reconcile Friday.
+		if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, utc(17, 10, 1)); got.Known {
+			t.Fatal("the calendar change cleared an unresolved prior suspicion")
+		}
+		st.mu.Lock()
+		st.state.StatementCoverageTo = utc(16, 0, 0)
+		st.mu.Unlock()
 		read(utc(19, 14, 0), 270000, 6000)
-		known("Monday")
+		known("Monday after Friday's statement")
 	})
 	t.Run("a flow in the same reading is still caught", func(t *testing.T) {
 		st, c, read, _ := weekend(t)
@@ -836,7 +855,7 @@ func TestMandateHistoryRefreshOncePerSessionAndFreshness(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv.mandateHistory = mandateHistoryStore{}
-	if loaded := srv.mandateHistorySeries(t.Context(), "u:SYNA"); loaded == nil || len(loaded.Closes) != mandateHistoryKeep || !loaded.FetchedAt.Equal(fresh.FetchedAt) {
+	if loaded := srv.mandateHistoryForNeed(t.Context(), need); loaded == nil || len(loaded.Closes) != mandateHistoryKeep || !loaded.FetchedAt.Equal(fresh.FetchedAt) {
 		t.Fatalf("reloaded series %+v", loaded)
 	}
 }
@@ -1137,13 +1156,10 @@ func TestMandateGatePreviewPassesABillAndRefusesABond(t *testing.T) {
 	}
 }
 
-// A deposit or withdrawal moves the equity; the broker's daily P&L figure can
-// jump by a day's P&L while the equity stands still (a daemon reconnect on a
-// Sunday, the reset at the broker's own hour). On 2026-10-18 two such jumps
-// read as cash flows and held the room for days. The check now needs an
-// equity move beyond the threshold to suspect anything, and still catches a
-// flow that moves the equity.
-func TestMandateFlowCheckIgnoresAPnLJumpWhileEquityStandsStill(t *testing.T) {
+// A nonzero P&L jump with flat equity is ambiguous: a real deposit and a
+// market loss can produce exactly these observations. Keep the hold until
+// existing flow or statement reconciliation explains the residual.
+func TestMandateFlowCheckHoldsAmbiguousPnLJumpWhileEquityStandsStill(t *testing.T) {
 	utc := func(day, hour, minute int) time.Time { return time.Date(2026, 10, day, hour, minute, 0, 0, time.UTC) }
 	clock := utc(18, 14, 0)
 	st := newTestRiskCapitalStore(t)
@@ -1156,12 +1172,12 @@ func TestMandateFlowCheckIgnoresAPnLJumpWhileEquityStandsStill(t *testing.T) {
 	}
 	read(utc(18, 14, 0), 300000, 15000) // Sunday afternoon: the figure still carries Friday's P&L
 	read(utc(18, 17, 54), 300000, 5000) // the daemon reconnects: the figure is a day's P&L lower, the equity unchanged
-	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); !got.Known {
-		t.Fatalf("a P&L jump with the equity unchanged read as a flow: %v", got.Reasons)
+	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known {
+		t.Fatalf("an ambiguous P&L jump silently cleared the capital hold: %v", got.Reasons)
 	}
 	read(utc(18, 18, 0), 300000, -5000)
-	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); !got.Known {
-		t.Fatalf("a second jump with the equity unchanged read as a flow: %v", got.Reasons)
+	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known {
+		t.Fatalf("a second ambiguous jump silently cleared the capital hold: %v", got.Reasons)
 	}
 	read(utc(18, 18, 10), 320000, -5000) // a deposit: the equity moves with no P&L
 	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known || len(got.Reasons) == 0 || !strings.Contains(got.Reasons[0], "a cash flow is suspected") {
@@ -1169,17 +1185,15 @@ func TestMandateFlowCheckIgnoresAPnLJumpWhileEquityStandsStill(t *testing.T) {
 	}
 }
 
-// A suspicion raised before the equity-move rule, with the equity never moved
-// beyond the threshold since its base, was the broker's figure alone and
-// clears on the next reading; a suspicion raised by a real equity move stays
-// even when the market later moves the equity back.
-func TestMandateLegacyFlatEquitySuspicionClears(t *testing.T) {
+// Missing legacy diagnostics do not prove that a suspicion was false.
+// Both old and new records retain the hold when the residual is unresolved.
+func TestMandateLegacyFlatEquitySuspicionRemainsHeld(t *testing.T) {
 	utc := func(day, hour, minute int) time.Time { return time.Date(2026, 10, day, hour, minute, 0, 0, time.UTC) }
 	for _, tc := range []struct {
 		name     string
 		moveBase float64
 		cleared  bool
-	}{{"legacy record, equity flat", 0, true}, {"real move, equity back at the base", 20000, false}} {
+	}{{"legacy record, equity flat", 0, false}, {"real move, equity back at the base", 20000, false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			clock := utc(18, 14, 0)
 			st := newTestRiskCapitalStore(t)

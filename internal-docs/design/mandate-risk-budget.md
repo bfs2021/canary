@@ -394,32 +394,19 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   P&L over the same span: the difference of the two daily figures within
   one broker day, the new day's own figure across the broker's daily reset
   (the old day's last reading taken as its close); zero where the broker
-  reports none, so without P&L the whole move counts. The reset is read
-  from the figures themselves and from the session date, never from the
-  calendar alone: IBKR starts its day at its own hour, before the New York
-  midnight the session date turns at, so a reading whose daily figure sits
-  within a quarter of the flow threshold of zero while the equity moved by
-  no more than that figure is the first of a new broker day, and so is a
-  reading in a new session date (2026-10-18 after the 2026-10-16 incident:
-  a reading at 23:59:59 New York still carried the trading day's session
-  while the broker's figure was already the new day's zero, and the
-  difference charged a whole down day to a flow; every machine sleeve was
-  refused from Friday night on, and Saturday's statement did not clear it,
-  below). A flow moves the equity: only a reading whose equity move, net of
-  declared flows, is itself beyond the threshold can raise a suspicion
-  (2026-10-18 21:30 CEST: two readings with the equity unchanged to the euro
-  and the broker's figure a day's P&L apart, one at a daemon reconnect on a
-  Sunday, read as flows and held the room for days; a record raised before
-  this rule clears on the next reading when the equity has not moved beyond
-  the threshold since its base, `legacy_flat_equity` in the journal). More
-  than max(1% of equity, 1,000 in base currency) unexplained, on such a
-  move, is a suspected flow (`flow_suspect`, journaled
-  `mandate_flow_suspected` with `equity_move_base`). The price of the rule: a
-  flow that lands in the same reading as an opposite market move of about the
-  same size, netting under the threshold, is not suspected until the next
-  statement incorporates it; readings run every two minutes in the session, so
-  the exposure is a gap, overnight or a weekend, and one statement long. The
-  legacy clearing rule can go once no record from before it remains; the
+  reports none, so without P&L the whole move counts. A new session date
+  uses the new day's own figure. Within a session, a near-zero P&L value
+  and small equity move do not establish a reset: they can also represent
+  a cash flow offset by a market return. A broker reset before the session
+  date changes therefore stays ambiguous until reconciliation.
+  Net equity movement cannot rule out a flow: a market loss can
+  offset a deposit, or a gain a withdrawal. More than max(1% of equity,
+  1,000 in base currency) unexplained is a suspected flow (`flow_suspect`,
+  journaled `mandate_flow_suspected` with `equity_move_base`). The equity
+  move is diagnostic only, including zero or absent legacy values. A
+  P&L jump after reconnect may therefore hold the room until the
+  residual is explained or a statement covers its day; the available
+  observations do not prove a P&L basis reset. The
   floor stands for the accruals a broker posts to cash that its daily P&L
   may not carry (interest, a dividend, a fee), and a flow that small moves
   the budget by under 150 a year at the 15% target. While suspected the

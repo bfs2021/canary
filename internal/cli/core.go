@@ -271,7 +271,9 @@ func runStrategy(ctx context.Context, env *Env, args []string) int {
 		return parseExit(err)
 	}
 	if fs.NArg() != 1 {
-		return printCommandUsage(env, "strategy")
+		fmt.Fprintln(env.Stderr, "canary strategy: exactly one strategy ID is required")
+		fs.Usage()
+		return 2
 	}
 	res, err := rpc.FetchStrategyTarget(ctx, env.Conn, fs.Arg(0), *refresh)
 	if err != nil {

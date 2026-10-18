@@ -315,9 +315,13 @@ func StripQuarantine(path string) error {
 }
 
 // InstallCanonical installs srcBinary only as the canonical canary executable.
-// hidden paths and restored only if canonical publication fails. After success,
-// is retained because daemon state migrations are forward-only.
+// Publication atomically replaces the canonical path; an interruption leaves
+// either the old or new binary available. Retired aliases are removed afterward.
 func InstallCanonical(srcBinary, installDir string) error {
+	return installCanonical(srcBinary, installDir, os.Rename)
+}
+
+func installCanonical(srcBinary, installDir string, publish func(string, string) error) error {
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", installDir, err)
 	}
@@ -344,77 +348,18 @@ func InstallCanonical(srcBinary, installDir string) error {
 	if err != nil {
 		return err
 	}
-	canonicalInstalled := false
-	defer func() {
-		if !canonicalInstalled {
-			_ = os.Remove(staged)
-		}
-	}()
-
-	canonicalStage := ""
-	preUpgradeStage := ""
-	published := false
-	defer func() {
-		if published {
-			_ = discardRetiredExecutable(canonicalStage)
-			_ = discardRetiredExecutable(preUpgradeStage)
-			return
-		}
-		if canonicalStage != "" {
-			_ = os.Rename(canonicalStage, canonical)
-		}
-		if preUpgradeStage != "" {
-			_ = os.Rename(preUpgradeStage, preUpgrade)
-		}
-	}()
-
-	if exists[canonical] {
-		canonicalStage, err = stageExistingExecutable(canonical, installDir, ".canary-pre-install-*")
-		if err != nil {
-			return err
-		}
-	}
-	if exists[preUpgrade] {
-		preUpgradeStage, err = stageExistingExecutable(preUpgrade, installDir, ".ibkr-pre-upgrade-*")
-		if err != nil {
-			return err
-		}
-	}
-	if err := os.Rename(staged, canonical); err != nil {
+	defer os.Remove(staged)
+	// Rename over the old executable on the same filesystem. At every
+	// interruption point the canonical path contains a complete old or new file.
+	if err := publish(staged, canonical); err != nil {
 		return fmt.Errorf("install %s -> %s: %w", staged, canonical, err)
 	}
-	canonicalInstalled = true
-	published = true
-	if err := discardRetiredExecutable(canonicalStage); err != nil {
-		return fmt.Errorf("installed %s but could not remove transaction staging: %w", canonical, err)
-	}
-	canonicalStage = ""
-	if preUpgradeStage != "" {
-		if err := discardRetiredExecutable(preUpgradeStage); err != nil {
-			return fmt.Errorf("installed %s but could not remove transaction staging: %w", canonical, err)
+	if exists[preUpgrade] {
+		if err := discardRetiredExecutable(preUpgrade); err != nil {
+			return fmt.Errorf("installed %s but could not remove retired executable: %w", canonical, err)
 		}
-		preUpgradeStage = ""
 	}
 	return nil
-}
-
-func stageExistingExecutable(path, installDir, pattern string) (string, error) {
-	f, err := os.CreateTemp(installDir, pattern)
-	if err != nil {
-		return "", fmt.Errorf("create transaction staging path: %w", err)
-	}
-	staged := f.Name()
-	if err := f.Close(); err != nil {
-		_ = os.Remove(staged)
-		return "", fmt.Errorf("close transaction staging path: %w", err)
-	}
-	if err := os.Remove(staged); err != nil {
-		return "", fmt.Errorf("prepare transaction staging path: %w", err)
-	}
-	if err := os.Rename(path, staged); err != nil {
-		return "", fmt.Errorf("stage existing executable %s: %w", path, err)
-	}
-	return staged, nil
 }
 
 func discardRetiredExecutable(path string) error {
@@ -455,6 +400,10 @@ func copyBinaryIntoDir(srcBinary, destDir string) (string, error) {
 	if err := out.Chmod(0o755); err != nil {
 		_ = out.Close()
 		return "", fmt.Errorf("chmod staging binary: %w", err)
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return "", fmt.Errorf("sync staging binary: %w", err)
 	}
 	if err := out.Close(); err != nil {
 		return "", fmt.Errorf("close staging binary: %w", err)
@@ -558,7 +507,8 @@ func PlanFor(rel *Release) (*Plan, error) {
 // release: download → verify → extract → quarantine-strip → atomic
 // install. Holds an exclusive flock for the duration. Cleans up
 // tempfiles on success, error, and SIGINT/SIGTERM. Returns nil on
-// success; the prior binary is intact on every error path.
+// success. Errors before publication preserve the old binary; post-publication
+// retirement failures explicitly report that the new binary was installed.
 func RunInstall(ctx context.Context, plan *Plan) error {
 	if err := os.MkdirAll(plan.CacheDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir cache: %w", err)
@@ -602,6 +552,9 @@ func RunInstall(ctx context.Context, plan *Plan) error {
 	// MUST strip quarantine BEFORE rename: strip-after-rename leaves
 	// fails. See StripQuarantine doc.
 	if err := StripQuarantine(binPath); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := InstallCanonical(binPath, plan.InstallDir); err != nil {

@@ -68,9 +68,10 @@ type mandateHistorySeries struct {
 // the broker is asked for and, for the core's series, the calendar of its
 // listing exchange.
 type mandateHistoryNeed struct {
-	Key      string
-	Contract rpc.ContractParams
-	Market   marketcal.Market
+	Key       string
+	Contract  rpc.ContractParams
+	Market    marketcal.Market
+	Ambiguous bool
 }
 
 type mandateHistoryAttempt struct {
@@ -127,6 +128,7 @@ func (s *Server) requestMandateHistory(needs ...mandateHistoryNeed) {
 	}
 	now := s.nowUTC()
 	for _, need := range needs {
+		need = bindMandateHistoryNeed(need)
 		if _, ok := st.requested[need.Key]; !ok {
 			st.requested[need.Key] = mandateHistoryRequest{need: need, at: now}
 		}
@@ -156,7 +158,9 @@ func (s *Server) mandateHistoryRequests(now time.Time) []mandateHistoryNeed {
 func (s *Server) mandateHistoryNeedsWithRequests(ctx context.Context, pos *rpc.PositionsResult, base string, now time.Time) []mandateHistoryNeed {
 	needs := mandateHistoryNeeds(pos, base, s.registerFundLines(ctx))
 	for _, req := range s.mandateHistoryRequests(now) {
-		if !slices.ContainsFunc(needs, func(n mandateHistoryNeed) bool { return n.Key == req.Key }) {
+		if !slices.ContainsFunc(needs, func(n mandateHistoryNeed) bool {
+			return bindMandateHistoryNeed(n).Key == bindMandateHistoryNeed(req).Key
+		}) {
 			needs = append(needs, req)
 		}
 	}
@@ -177,12 +181,22 @@ func mandateHistoryNeeds(pos *rpc.PositionsResult, base string, lines map[string
 	base = normCcy(base)
 	needs := map[string]mandateHistoryNeed{}
 	add := func(need mandateHistoryNeed) {
-		if existing, ok := needs[need.Key]; ok && existing.Contract.ConID > 0 {
-			return
+		if existing, ok := needs[need.Key]; ok {
+			if existing.Ambiguous || mandateHistoryContractsConflict(existing.Contract, need.Contract) {
+				existing.Ambiguous = true
+				needs[need.Key] = existing
+				return
+			}
+			if existing.Contract.ConID > 0 {
+				return
+			}
+			if need.Contract.PrimaryExch == "" {
+				need.Contract.PrimaryExch = existing.Contract.PrimaryExch
+			}
 		}
 		needs[need.Key] = need
 	}
-	add(mandateHistoryNeed{Key: "u:" + mandate.IndexSymbol, Contract: rpc.ContractParams{Symbol: mandate.IndexSymbol, SecType: "STK", Currency: "USD", Exchange: "SMART", PrimaryExch: "ARCA"}})
+	add(mandateIndexHistoryNeed())
 	currencies := map[string]bool{}
 	if pos != nil {
 		for _, row := range pos.Stocks {
@@ -437,9 +451,13 @@ type mandateHistorySession interface {
 }
 
 func (s *Server) refreshMandateSeries(ctx context.Context, c mandateHistorySession, need mandateHistoryNeed) {
+	if need.Ambiguous {
+		return
+	}
+	need = bindMandateHistoryNeed(need)
 	now := s.nowUTC()
-	series := s.mandateHistorySeries(ctx, need.Key)
-	if !mandateSeriesDue(series, now) && (need.Market == "" || series.Market == need.Market) {
+	series := s.mandateHistoryForNeed(ctx, need)
+	if !mandateSeriesDue(series, now) {
 		return
 	}
 	session, ok := c.CaptureHistoricalSession()
@@ -472,7 +490,7 @@ func (s *Server) refreshMandateSeries(ctx context.Context, c mandateHistorySessi
 	if !s.readMandateSeries(ctx, need, now) {
 		return
 	}
-	refreshed := s.mandateHistorySeries(ctx, need.Key)
+	refreshed := s.mandateHistoryForNeed(ctx, need)
 	complete := refreshed != nil && len(refreshed.Dates) > 0 && refreshed.Dates[len(refreshed.Dates)-1] >= completed
 	st.mu.Lock()
 	attempt = st.attempts[need.Key]
@@ -486,6 +504,7 @@ func (s *Server) refreshMandateSeries(ctx context.Context, c mandateHistorySessi
 // the series' last failure (the broker's answer, for a hold to name) until
 // a read succeeds.
 func (s *Server) readMandateSeries(ctx context.Context, need mandateHistoryNeed, now time.Time) bool {
+	need = bindMandateHistoryNeed(need)
 	readCtx, cancel := context.WithTimeout(ibkrlib.WithRequestPriority(ctx, ibkrlib.PriorityBackground), mandateHistoryRefreshWindow)
 	fresh, err := s.fetchMandateSeries(readCtx, need, now)
 	cancel()
@@ -526,6 +545,10 @@ func (s *Server) mandateSeriesFailure(key string) (string, time.Time) {
 // fetchMandateSeries reads mandateHistoryFetchDays of daily closes through
 // the charts' broker fetch helper and keeps the newest mandateHistoryKeep.
 func (s *Server) fetchMandateSeries(ctx context.Context, need mandateHistoryNeed, now time.Time) (*mandateHistorySeries, error) {
+	need = bindMandateHistoryNeed(need)
+	if need.Ambiguous {
+		return nil, errors.New("history identity is ambiguous")
+	}
 	fetch := s.fetchMarketHistoryDays
 	if s.mandateHistoryFetchForTest != nil {
 		fetch = s.mandateHistoryFetchForTest
@@ -536,6 +559,9 @@ func (s *Server) fetchMandateSeries(ctx context.Context, need mandateHistoryNeed
 	}
 	if res == nil || len(res.Points) == 0 {
 		return nil, errors.New("no daily bars")
+	}
+	if !mandateHistoryContractMatches(res.Contract, need.Contract) {
+		return nil, errors.New("daily history belongs to a different or unproven contract")
 	}
 	if res.Interval != "1 day" {
 		return nil, fmt.Errorf("broker answered with %s bars, not daily", res.Interval)

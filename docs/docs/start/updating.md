@@ -215,7 +215,19 @@ To update a Claude Desktop MCPB install, download the latest bundle and reinstal
 
 <https://github.com/osauer/canary/releases/latest/download/canary.mcpb>
 
-After reinstalling, fully quit Claude Desktop and reopen it so it respawns the MCP server from the updated bundle.
+After reinstalling, fully quit Claude Desktop and reopen it so it respawns the MCP server from the updated bundle. Then call `canary_status`: compare `mcp_client.version` with `daemon_version`. A surviving shared daemon keeps its old version until explicitly restarted.
+
+If `mcp_client.activation_required` is true, follow its guidance. When supplied,
+copy `mcp_client.restart_command` into your terminal. It uses the absolute
+embedded executable path and preserves the MCP process's custom configuration
+and socket paths, so a shell-installed `canary` is not required. It restarts the
+shared daemon and any app already running in that scope. Call `canary_status`
+again and confirm the versions agree.
+
+If the shared daemon is a trading build while the bundle is standard read-only,
+update and restart it from the matching trading installation instead. Status
+withholds the bundle restart command when capabilities differ or cannot be
+verified. The MCP host never performs an automatic restart.
 
 ## Updating the S&P 500 list: automatic
 
