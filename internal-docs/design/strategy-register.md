@@ -146,7 +146,7 @@ the owner wrote them, and no migration rewrites the owner's file. A
 | `spec_hash` | The lab registry's hash of the spec the rule implements, as the owner cites it | optional while not live; required to go live | required |
 | sleeve | Where its positions count | `core`, implied | `sleeve`, required: lower-case, at most 24, unique, never `owner`, `rule` or `core` |
 | risk allocation | Percent a year of the budget base | `[mandate.sleeves] core_vol_pct` (as today) | `risk_allocation_pct`, required; for `sleeve = "overlay"`, `[mandate.sleeves] overlay_vol_pct` instead, and `risk_allocation_pct` is refused |
-| `stage` | `shadow`, `live` or `suspended` | optional: absent reads `shadow` (below) | required |
+| `stage` | `shadow`, `live` or `suspended` | optional: absent reads `shadow` (below), the technical state of an entry not yet written live, never a required step (owner, 2026-10-18 21:05 CEST: "we NEVER want shadow") | required |
 | `scale_pct` | The scale the rule sizes at: 25 (small), 50 (larger), 100 (full), the lab's R3, R4 and established; reserved only while live | as today in [0, 100], 0 suspending, while `stage` is unwritten; once `stage` is written, 25, 50 or 100, and a suspension is `stage = "suspended"` | required in `shadow` and `live`, 25, 50 or 100; not read while `suspended` |
 
 A compiled instance's parameters (the core's ten months, span 63, the 15%

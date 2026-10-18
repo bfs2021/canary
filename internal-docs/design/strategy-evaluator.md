@@ -24,7 +24,7 @@ Sources read: Canary main `73577985` (`internal/core`, `internal/register`,
 - Protected behaviour: the core's verdict is unchanged (its goldens and the
   parity fixture prove it); no entry adds risk, reserves allocation, creates
   a proposal or places an order: every entry rule sends nothing, so every
-  entry runs in shadow at most. The one order path is untouched.
+  entry runs in shadow at most in this build. That is the build's reach, not a step the owner wants: on 2026-10-18 21:05 CEST the owner decided "we NEVER want shadow, it's useless", so an entry goes live on the owner's word and the rows for entries other than the core are the next build (Desk docs/strategy-engine.md, build 6). The one order path is untouched.
 - Policy owner: the desk owner, who writes every entry, promotion and number;
   this build proposes keys only (§2). Status: built; the second entry (the
   trend fund) waits on the owner's decisions (§7).
@@ -157,7 +157,7 @@ fixture per filter; Canary pins each.
 - Protection's automatic sales leave out the core's contract (D5). Whether a
   second entry's contract leaves them too is the owner's; not extended here.
 - No rows, no proposal, no exception: `timed-holding-v1` sends nothing, so
-  every entry runs as shadow at most and the shadow record is all it writes.
+  every entry runs as shadow at most and the shadow record is all it writes; shadow is the technical state of an entry not yet written live, never a required step (owner, 2026-10-18 21:05 CEST).
 
 ## 6. Surfaces
 

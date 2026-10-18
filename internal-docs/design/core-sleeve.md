@@ -578,7 +578,7 @@ Phase 2, option A (built 2026-10-18, branch `core-rows`; the section
 | 12a | Items 5 and 6 above; the contract-details check of the core's line at preview (the line IBKR lists under the ISIN, EUR, its primary exchange, STK) | Item 5 built (the scorecard's `core` sleeve). Item 6 (Desk's core line) and the contract-details check are not built; the row's contract is the one the six-hourly lookup pinned and the exception binds the preview to its id, type and currency |
 | 12b | D5, decided 2026-10-18: the core's contract is outside protection's automatic sales | Built, `core-venue` |
 
-Then witnesses W1 (paper) and W2 (live ramp).
+Then, optionally, the plumbing witnesses W1 and W2 below. Owner, 2026-10-18 21:05 CEST: "we NEVER want shadow, it's useless": no witness is a step the core must pass; the core is written live (risk policy v14, 21:18 CEST) and its verdict is its backtest and one look.
 
 ### Phase 2 as built (2026-10-18)
 
@@ -960,7 +960,10 @@ the target and to free USD cash; a working CASH order holds; USD bill buys
 hold while over the cap; no row when USD securities alone cause the
 excess.
 
-Live witness, each step only after the one before:
+Live witness, each step only after the one before. These are optional
+plumbing checks the agent may run beside the live core, never gates: the owner
+decided on 2026-10-18 21:05 CEST that there is no shadow step ("we NEVER want
+shadow, it's useless"), and the core went live at 21:18 CEST (policy v14).
 
 - **W0, shadow.** At least one month-end, two preferred, with the verdict
   served read-only in the live account and compared with the lab's
