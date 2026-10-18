@@ -101,7 +101,7 @@ func TestDeskExecutionLookupFailsWithoutJournal(t *testing.T) {
 func TestDeskExecutionCapabilitiesListOnlyServedMethods(t *testing.T) {
 	s, _ := deskExecutionTestServer(t)
 	got := s.handleDeskExecutionCapabilities()
-	if got.Version != rpc.DeskExecutionContractVersion || len(got.Methods) != 2 || len(got.Authorities) != 0 {
+	if got.Version != rpc.DeskExecutionContractVersion || len(got.Methods) != 3 || len(got.Authorities) != 1 || got.Authorities[0] != "automatic" {
 		t.Fatalf("capabilities %+v", got)
 	}
 }

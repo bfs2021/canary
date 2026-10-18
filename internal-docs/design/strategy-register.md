@@ -446,9 +446,10 @@ a rule bucket, or the journal origin is `daemon-preauthorised` or
 `daemon-protective-guard`, or the transmit origin is `daemon_internal`;
 otherwise the owner's.
 
-- **Entry rules today.** Desk cannot arm them and `desk.execution.submit` is
-  not served, so no entry rule sends anything; the owner's console Adds are
-  the owner's. The decision ("its fills count in the owner's sleeve") holds
+- **Entry rules today.** Desk cannot arm them, and `desk.execution.submit`
+  (served since 2026-10-19 for proposal rows under the standing mandate)
+  refuses an entry-rule addition `intent_not_served`, so no entry rule sends
+  anything; the owner's console Adds are the owner's. The decision ("its fills count in the owner's sleeve") holds
   today. The live scorecard (2026-10-18) counts 518 owner entries and tags
   only 26 lifecycle fills as `rule`, none by proposal or origin.
 - **What is not settled.** The review traced journaled fill events to an

@@ -9,12 +9,14 @@ the core's venue and on D5 (sections 1, 3 and 7), built on Canary branch
 strategy evaluator's arithmetic and the core its first instance
 (`strategy-evaluator.md`); the core's verdict, goldens and parity fixture
 are unchanged. Revised 2026-10-18 18:55 CEST: phase 2 built on Canary
-branch `core-rows` (section "Phase 2 as built").
-Status: phases 1 and 2 built. Phase 1 serves the target read-only; phase 2
-serves each month's decision as one proposal row the owner confirms on a
-device while `[mandate.core]` is live (option A). The live policy runs the
-core in shadow until the owner writes `stage = "live"` with `spec_hash`.
-Phase 3 (option B, automatic submission) is design.
+branch `core-rows` (section "Phase 2 as built"). Revised 2026-10-19: phase
+3's daemon half built on branch `phase-b` (section "Phase 3 as built").
+Status: phases 1 and 2 built; phase 3's daemon half built. Phase 1 serves
+the target read-only; phase 2 serves each month's decision as one proposal
+row the owner confirms on a device while `[mandate.core]` is live (option
+A); phase 3 lets Desk's controller send that row under the owner's standing
+Fully armed mandate (option B) once Desk presents it (Desk's half is not
+built). The live policy runs the core live since 21:18 CEST (v14).
 
 Sources read, read-only: Canary main `761a1c31` (mandate increment 1, Desk
 authority and execution groundwork), Canary `integration-2` `e4df5eeb`
@@ -652,10 +654,10 @@ steps, plus the core's own items:
 
 | # | Item (step) | State today | Size |
 |---|---|---|---|
-| 12 | Serve `desk.execution.submit` with the automatic authorisation and construct the wire fence on that path (1, 2) | Capabilities list only `capabilities` and `lookup`; no production dispatcher sets `binding.deskAuthority` | L |
+| 12 | Serve `desk.execution.submit` with the automatic authorisation and construct the wire fence on that path (1, 2) | Built 2026-10-19, `desk_execution_submit.go` (section "Phase 3 as built") | L |
 | 13 | One admission for funds and commitments across manual, automatic and pre-authorised work, enforcing AUTO's priority there; overlap with the protection scheduler and queued reductions (2) | Not built | M |
-| 14 | Pin lookup's ID-only `absent` receipt in handler tests (the contract edge Desk recorded on 2026-10-10) | Open | S |
-| 15 | Contract: a proposal item may carry class `add` only for `core_rebalance`; fence action `entry` (full scope) for its buys, `reduction` (Protection) for its sales | `Validate` refuses proposal additions | S |
+| 14 | Pin lookup's ID-only `absent` receipt in handler tests (the contract edge Desk recorded on 2026-10-10) | Built: `TestDeskExecutionSubmitRefusesWithoutStandingAuthority` reads `absent` after an authority refusal | S |
+| 15 | Contract: a proposal item may carry class `add` only for `core_rebalance`; fence action `entry` (full scope) for its buys, `reduction` (Protection) for its sales | Built: `Validate` accepts the class, the daemon classifies the row itself (`deskExecutionClass`) and refuses any other buy `class_mismatch` | S |
 | 16 | Desk snapshot and executor adapters over the Go client with the private capability (3) | Interfaces and tests only | M |
 | 17 | Torok lifecycle: the controller in the operating coordinator, reconciliation at startup and reconnect, controls through the daemon generation, the 15:45 due time (4) | Not registered | M |
 | 18 | Device-confirmed arming in Desk (prepare, confirm) (4) | Arming refused | M |
@@ -663,6 +665,85 @@ steps, plus the core's own items:
 | 20 | Contract and recovery witnesses with a simulated daemon (5) | Not built | M |
 
 Then witness W3.
+
+### Phase 3 as built (2026-10-19, the daemon's half)
+
+The owner's decision of 2026-10-18 21:05 CEST ("when I arm the system, our
+strategies must be live") makes option B the target: Fully armed submits
+the live strategies' rows with no tap per order. The daemon now serves the
+path; Desk's controller does not present the mandate yet, so until it does
+every row still waits for the owner's tap (option A stands unchanged).
+
+What `desk.execution.submit` with `automatic` does (`desk_execution_submit.go`):
+
+- Verifies the standing mandate against the daemon's own record under
+  `deskAuthorityMu`: the terms the owner confirmed on a device
+  (`handleDeskAuthorityConfirm`), the controller's private capability by
+  its hash, the generation and preferences hash the controller reconciled
+  against, the controller confirmed running in this daemon process, an
+  armed scope and this account. A mismatch refuses every item
+  `authority_changed` before any journaling (a lookup answers `absent`);
+  the daemon invents no authority and a saved AUTO bit, a policy line or
+  the register's `stage = "live"` arms nothing.
+- Classifies the row itself (`deskExecutionClass`, mirroring Desk's batch
+  groups): a `core_rebalance` BUY is the one `add`, its SELL a `reduce`, a
+  stop or trail `protect`; a buy outside a strategy row, a sweep or a
+  conversion has no class and is refused `class_mismatch`. An `add` under
+  Protection is refused `authority_changed` and recorded; an entry-rule
+  addition (`intent.add`) is not served (`intent_not_served`).
+- Binds a strategy row's item to the row's session episode,
+  `<terms.episode>:<session>` (`core:<account>:<mode>:<YYYY-MM>:<session>`),
+  refusing another episode `episode_mismatch`. The journal records every
+  request with its episode before anything can reach the broker, so one
+  decision yields at most one request a session: a refused row is recorded
+  with its reason and not retried that session, whatever the controller
+  retains; the next session's row is a new episode.
+- Sends through the one order path: `brokerWriteMu`, a request-scoped grant
+  (`deskExecutionGrant`, like the scheduler's), the proposal engine's
+  revalidation (never the cached fast path), the preview with every gate
+  (risk limits, the drawdown brake, the mandate gate, the stock Add
+  admission, the close-reduce check with the core's typed exception), the
+  origin gate for `desk-automatic` (a grant whose fence has not expired) and
+  the wire guard, which carries the mandate's fence (`binding.deskAuthority`)
+  and re-reads the record under the wire lock before the first byte:
+  an `entry` fence needs scope `full`, so a downgrade, disarm, brake hold,
+  stop or generation change between admission and transmit refuses the
+  send (`lockDeskAuthorityForWire`).
+- Decides the outcome from the order journal: the engine's acceptance is
+  `accepted` with the order reference; otherwise no staged attempt or a
+  provably unsent one is `refused` with the gate's blockers, a staged
+  attempt without a known outcome is `unknown` (resolved only by lookup),
+  and a send the journal shows reached the broker is `accepted`. The
+  receipt's message and the journal's request row name the mandate (and,
+  for a strategy row, the register entry and sleeve); the order journal's
+  origin is `desk-automatic`, journaled, read and settled as the machine's
+  own.
+
+Capabilities list `submit` with authority `automatic`; the manual batch is
+still not served. The Go client gains `SubmitDeskExecution`, private like
+the authority methods and outside the MCP catalogue.
+
+Tests (`desk_execution_submit_test.go`, `desk_execution_submit_trading_test.go`):
+no mandate, another capability, a stale generation, other preferences, not
+running and disarmed each refuse before journaling; a core buy under
+Protection is refused and recorded once per episode, a second request
+`episode_consumed`; under Fully armed the buy meets the gates and a retry
+answers from the journal without a second attempt; the classification and
+the episode; the origin gate needs a live grant and human origins never see
+it; a served row is sent exactly once through the production write path to
+the fake broker socket with the `desk-automatic` origin, the grant cleared,
+a retry and a consumed episode send nothing, a wrong class is refused and
+recorded, a stopped controller refuses before journaling; the binding
+carries the fence to the wire and the guard refuses an `entry` fence once
+the mandate reads Protection.
+
+Not built, Desk's half (items 16 to 18 and 20): the snapshot and executor
+adapters over the Go client, the controller in Torok's operating
+coordinator, device-confirmed arming in Desk, the controller's recovery
+witnesses; item 19 (Adaptive for IBCF) stays at D2's plain limit. Desk is
+pinned to a Canary module without `SubmitDeskExecution` and its item
+validator refuses a proposal `add`, so the Desk work starts with a re-pin
+after this release.
 
 ## 3. The mandate
 
@@ -857,7 +938,8 @@ Invariants, each with a synthetic test in section 6:
 6. The core never sells more than it holds and never shorts.
 7. `core_rebalance` is never pre-authorisable. It reaches the broker only
    through the owner's device confirmation (A) or the Fully armed
-   mandate's wire fence (B).
+   mandate's wire fence (B, served since 2026-10-19; Desk does not present
+   the mandate yet).
 8. Missing, stale or suspect data holds. Nothing is guessed and no series
    is substituted.
 9. Restrictive controls stop new core buys at the final gate and cancel

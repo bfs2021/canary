@@ -111,3 +111,19 @@ func DeskIntentDigest(item DeskExecutionItem) string { return rpc.DeskIntentDige
 func ValidateAutomaticOrder(items []DeskExecutionItem) error {
 	return rpc.ValidateAutomaticOrder(items)
 }
+
+// SubmitDeskExecution sends items under exactly one authorisation. Since
+// 2026-10-18 the daemon serves the automatic authorisation: the standing
+// mandate the owner confirmed on a device, presented by Desk's controller
+// with its private capability, generation and preferences hash. Every item is
+// journaled before dispatch and answered with its own receipt; a retry of a
+// journaled request returns the original receipt and sends nothing. An
+// error from this call never means that nothing happened: resolve the request
+// IDs with LookupDeskExecution.
+func (c *Client) SubmitDeskExecution(ctx context.Context, in DeskExecutionSubmitParams) (*DeskExecutionSubmitResult, error) {
+	var out DeskExecutionSubmitResult
+	if err := c.callPrivate(ctx, rpc.MethodDeskExecutionSubmit, in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

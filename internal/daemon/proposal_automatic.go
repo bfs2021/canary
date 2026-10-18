@@ -1032,7 +1032,7 @@ func latestOrderRequestAt(events []rpc.OrderEvent) time.Time {
 // agent-origin order counts as the gate's.
 func automaticSettlingMachineOrigin(origin string) bool {
 	switch origin {
-	case rpc.OrderOriginDaemonPreAuthorised, rpc.OrderOriginDaemonOwnerQueued, rpc.OrderOriginAgent, rpc.OrderOriginDaemonProtectiveGuard:
+	case rpc.OrderOriginDaemonPreAuthorised, rpc.OrderOriginDaemonOwnerQueued, rpc.OrderOriginAgent, rpc.OrderOriginDaemonProtectiveGuard, rpc.OrderOriginDeskAutomatic:
 		return true
 	default:
 		return false

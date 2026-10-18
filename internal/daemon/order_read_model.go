@@ -1370,7 +1370,7 @@ func orderJournalEventPlacesWithOrigin(ev orderJournalEvent) bool {
 func orderOriginForRead(origin string) string {
 	switch origin {
 	case rpc.OrderOriginAgent, rpc.OrderOriginHumanTTY, rpc.OrderOriginPairedDevice, rpc.OrderOriginDaemonPreAuthorised, rpc.OrderOriginDaemonOwnerQueued,
-		rpc.OrderOriginDaemonProtectiveGuard:
+		rpc.OrderOriginDaemonProtectiveGuard, rpc.OrderOriginDeskAutomatic:
 		return origin
 	default:
 		return ""

@@ -116,6 +116,11 @@ type proposalSubmitOptions struct {
 	bounded      *rpc.OrderBoundedLimit
 	beforePlace  func(preview *rpc.OrderPreviewResult) error
 	placeRefused func(err error)
+	// desk is Desk's controller sending one row under the standing mandate
+	// (desk_execution_submit.go); deskEpisode the item's episode, which a
+	// strategy row binds to its session.
+	desk        *deskExecutionGrant
+	deskEpisode string
 }
 
 type cachedStockTrailVolatility struct {
@@ -2476,6 +2481,14 @@ func (e *proposalEngine) submit(ctx context.Context, p rpc.TradeProposalSubmitPa
 		// A queued send carries the owner's signature for this record; it
 		// needs the executor's grant and proposal submit still enabled.
 		if blockers := e.queuedSubmitBlockers(prop, opts.queued); len(blockers) > 0 {
+			e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
+			return rpc.TradeProposalSubmitResult{Proposal: prop, Blockers: blockers, AsOf: now}, nil
+		}
+	} else if opts.desk != nil {
+		// Desk's controller under the standing mandate: always revalidated,
+		// never the cached fast path; the grant must name this row and
+		// Canary's own class of it, and the wire guard re-reads the mandate.
+		if blockers := e.deskSubmitBlockers(prop, opts.desk, opts.deskEpisode); len(blockers) > 0 {
 			e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
 			return rpc.TradeProposalSubmitResult{Proposal: prop, Blockers: blockers, AsOf: now}, nil
 		}

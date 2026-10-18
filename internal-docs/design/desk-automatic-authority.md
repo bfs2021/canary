@@ -69,8 +69,12 @@ only through the Go client (`DeskAuthority`, `PrepareDeskAuthority`,
 `ConfirmDeskAuthority`, `ControlDeskAuthority`), like the cash policy methods:
 outside the MCP catalogue and the CLI, so the controller capability never
 appears in argv. A daemon without them answers unknown-method, which Desk
-reads as automatic trading unavailable. No production order dispatcher
-constructs the wire fence yet; that arrives with `desk.execution.submit`.
+reads as automatic trading unavailable. Since 2026-10-19
+`desk.execution.submit` with the automatic authorisation constructs the wire
+fence on the production write path (`desk_execution_submit.go`,
+`binding.deskAuthority`): the controller's submission holds a grant under
+`brokerWriteMu`, and the wire guard re-reads the mandate under the wire lock
+before the first byte (`desk-execution.md`).
 
 Before connection: persist episode consumption and pre-dispatch commitments;
 reconcile attempts against the existing order journal; attach the authority to

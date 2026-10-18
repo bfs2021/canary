@@ -112,6 +112,8 @@ func (s *Server) brokerWriteOriginBlockers(status rpc.TradingStatus, origin stri
 		originBlockers = s.daemonOwnerQueuedOriginBlockers()
 	case rpc.OrderOriginDaemonProtectiveGuard:
 		originBlockers = s.protectiveStopGuardOriginBlockers()
+	case rpc.OrderOriginDeskAutomatic:
+		originBlockers = s.deskAutomaticOriginBlockers()
 	}
 	for _, blocker := range originBlockers {
 		blockers = appendTradingBlockerOnce(blockers, blocker)
@@ -220,6 +222,16 @@ func (s *Server) authorizeBrokerWriteTransaction(origin string, cancel bool) (br
 		clientID:                 status.ClientID,
 		origin:                   origin,
 		tradingControlGeneration: controlGenerationAfter,
+	}
+	// Desk's controller writes carry the mandate's fence to the wire guard,
+	// which re-reads the mandate under the wire lock before the first byte.
+	if origin == rpc.OrderOriginDeskAutomatic {
+		grant := s.deskExecutionGrant.Load()
+		if grant == nil {
+			return auth, brokerWriteTransactionBinding{}, brokerWriteTransactionDriftError()
+		}
+		fence := grant.Fence
+		binding.deskAuthority = &fence
 	}
 
 	// Tests use explicit broker-call hooks instead of a live socket. The

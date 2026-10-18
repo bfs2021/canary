@@ -2607,6 +2607,13 @@ const (
 	// only while the guard holds a grant for that exact order and change;
 	// every other gate applies unchanged.
 	OrderOriginDaemonProtectiveGuard = "daemon-protective-guard"
+	// OrderOriginDeskAutomatic marks a broker write the daemon's Desk
+	// execution handler issues for one served proposal row under the owner's
+	// standing automatic mandate (desk.execution.submit with the automatic
+	// authorisation). The write gate accepts it only while that submission
+	// holds a grant for the exact row, and the wire guard re-reads the
+	// mandate under the wire lock; every other gate applies unchanged.
+	OrderOriginDeskAutomatic = "desk-automatic"
 	// OrderOriginPairedDevice identifies an audited request origin; it does not grant authority by itself.
 	OrderOriginPairedDevice = "human-paired-device"
 

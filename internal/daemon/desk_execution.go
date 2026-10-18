@@ -164,10 +164,11 @@ func (s *Server) deskExecutionReceipt(ctx context.Context, scope brokerStateScop
 }
 
 func (s *Server) handleDeskExecutionCapabilities() rpc.DeskExecutionCapabilitiesResult {
-	// Submit and batch preparation are listed only once they are served;
-	// Desk treats their absence as automatic and batch sending unavailable.
+	// Submit is served for the automatic authorisation only (desk_execution_
+	// submit.go); the manual batch is not, so "batch" is not listed and Desk
+	// treats batch sending as unavailable.
 	return rpc.DeskExecutionCapabilitiesResult{Version: rpc.DeskExecutionContractVersion,
-		Methods: []string{rpc.MethodDeskExecutionCapabilities, rpc.MethodDeskExecutionLookup}, Authorities: []string{}, AsOf: s.orderNow()}
+		Methods: []string{rpc.MethodDeskExecutionCapabilities, rpc.MethodDeskExecutionLookup, rpc.MethodDeskExecutionSubmit}, Authorities: []string{"automatic"}, AsOf: s.orderNow()}
 }
 
 func (s *Server) handleDeskExecutionLookup(ctx context.Context, req *rpc.Request) (rpc.DeskExecutionLookupResult, error) {

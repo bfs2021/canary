@@ -31,7 +31,6 @@ func TestDeskExecutionItemValidate(t *testing.T) {
 		"no episode":      func(it *DeskExecutionItem) { it.EpisodeID = "" },
 		"two sources":     func(it *DeskExecutionItem) { it.Intent.Add = deskItem(DeskClassAdd).Intent.Add },
 		"no source":       func(it *DeskExecutionItem) { it.Intent.Proposal = nil },
-		"proposal as add": func(it *DeskExecutionItem) { it.Intent.Class = DeskClassAdd },
 		"unknown class":   func(it *DeskExecutionItem) { it.Intent.Class = "hedge" },
 		"proposal no rev": func(it *DeskExecutionItem) { it.Intent.Proposal.Revision = "" },
 	}
@@ -41,6 +40,13 @@ func TestDeskExecutionItemValidate(t *testing.T) {
 		if it.Validate() == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// A proposal item may carry class add: a strategy row's buy, which the
+	// daemon classifies itself (desk_execution_submit.go).
+	strategyBuy := deskItem(DeskClassReduce)
+	strategyBuy.Intent.Class = DeskClassAdd
+	if err := strategyBuy.Validate(); err != nil {
+		t.Fatalf("a strategy row's buy was refused: %v", err)
 	}
 	add := deskItem(DeskClassAdd)
 	add.Intent.Class = DeskClassProtect

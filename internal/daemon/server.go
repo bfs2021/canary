@@ -107,6 +107,11 @@ type Server struct {
 	// submitting right now; it is set and cleared under brokerWriteMu and is
 	// what lets the write gate accept the daemon-preauthorised origin.
 	automaticGrant atomic.Pointer[automaticWriteGrant]
+	// deskExecutionGrant names the one proposal Desk's controller is sending
+	// under the standing mandate right now, with the mandate's fence; set and
+	// cleared under brokerWriteMu, it lets the write gate accept the
+	// desk-automatic origin (desk_execution_submit.go).
+	deskExecutionGrant atomic.Pointer[deskExecutionGrant]
 	// queuedGrant names the one queued authorisation the executor is sending
 	// right now, under brokerWriteMu; it lets the write gate accept the
 	// daemon-owner-queued origin.
@@ -3023,6 +3028,8 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleDeskExecutionCapabilities(), nil })
 	case rpc.MethodDeskExecutionLookup:
 		s.unary(req, enc, func() (any, error) { return s.handleDeskExecutionLookup(ctx, req) })
+	case rpc.MethodDeskExecutionSubmit:
+		s.unary(req, enc, func() (any, error) { return s.handleDeskExecutionSubmit(ctx, req) })
 	case rpc.MethodDeskAuthorityStatus:
 		s.unary(req, enc, func() (any, error) { return s.handleDeskAuthorityStatus(ctx) })
 	case rpc.MethodDeskAuthorityPrepare:

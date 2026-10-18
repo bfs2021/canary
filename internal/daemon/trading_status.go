@@ -315,7 +315,7 @@ func (s *Server) brokerWriteAuthorizationWithControls(status rpc.TradingStatus, 
 // every origin.
 func normalizedWriteOrigin(origin string) string {
 	if originIsHuman(origin) || origin == rpc.OrderOriginDaemonPreAuthorised || origin == rpc.OrderOriginDaemonOwnerQueued ||
-		origin == rpc.OrderOriginDaemonProtectiveGuard {
+		origin == rpc.OrderOriginDaemonProtectiveGuard || origin == rpc.OrderOriginDeskAutomatic {
 		return origin
 	}
 	return rpc.OrderOriginAgent

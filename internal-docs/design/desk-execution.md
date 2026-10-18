@@ -55,18 +55,41 @@ Capacity is shared because both pass the same serialized admission.
 methods and served authorisations. A daemon that does not report them is
 unavailable to Desk; there is no fallback to another write path.
 
+## Submit with the automatic authorisation (served since 2026-10-19)
+
+`desk.execution.submit` with `automatic` is served (`desk_execution_submit.go`;
+Canary `core-sleeve.md`, "Phase 3 as built"). The daemon verifies the
+standing mandate against its own record (terms, the controller's capability
+by hash, generation, preferences hash, running in this process, an armed
+scope, this account) and refuses every item `authority_changed` before any
+journaling when it does not match. It classifies each row itself
+(`class_mismatch` otherwise); a proposal item may carry class `add` only for
+a strategy row's buy (the core's `core_rebalance`), which needs scope `full`
+and fence action `entry`; its sale is a reduction. A strategy row's item
+names the row's session episode, `<terms.episode>:<session>`. The send runs
+the one order path under a request-scoped grant with the `desk-automatic`
+origin, and the wire guard re-reads the mandate under the wire lock. The
+outcome is decided from the order journal: refused when no attempt was
+staged or the attempt provably sent nothing, unknown when an attempt was
+staged without a known outcome, accepted when the journal shows the send
+reached the broker. The manual batch (`batch`) is still not served, and an
+entry-rule addition (`intent.add`) is refused `intent_not_served`.
+
 ## Journal (served since 2026-10-10)
 
 Every item is journaled in the core store's append-only event log before
 anything can reach the broker. The request row and the episode row commit
 together under unique keys scoped to account and mode, so a retry finds its
 request, a reused ID with another intent is refused, and an episode yields at
-most one request across restarts. Outcome rows follow: accepted and refused
-are final, unknown can later be resolved by either. `lookup` reads this
-journal: no request row answers `absent`; a request row without an outcome
-answers `unknown`; an unreadable journal fails the call. Capabilities list
-`capabilities` and `lookup` only, with no authorisations, until submit is
-served.
+most one request across restarts: a journaled request consumes its episode
+whatever its outcome, so a refused row is recorded with its reason and not
+retried under a new request ID (the controller's retained refusal and the
+daemon's journal agree). Outcome rows follow: accepted and refused are
+final, unknown can later be resolved by either. `lookup` reads this journal:
+no request row answers `absent`; a request row without an outcome answers
+`unknown`; an unreadable journal fails the call. Capabilities list
+`capabilities`, `lookup` and `submit` with the authority `automatic`; `batch`
+is listed once the manual batch is served.
 
 ## Reductions of a held long
 

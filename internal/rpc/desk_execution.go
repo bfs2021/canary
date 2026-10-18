@@ -18,9 +18,10 @@ import (
 // receipts are the same machinery. Every item is sent on its own: a refusal
 // never holds the others, and nothing is all-or-nothing.
 //
-// Contract only (2026-10-10): no handler dispatches these methods yet. A
-// daemon that does not list them in DeskExecutionCapabilities is unavailable
-// to Desk, never a silent fallback to another write path.
+// Served since 2026-10-18: capabilities, lookup and submit with the automatic
+// authorisation (the standing mandate); the manual batch is still contract
+// only. A daemon that does not list a method in DeskExecutionCapabilities is
+// unavailable to Desk for it, never a silent fallback to another write path.
 const (
 	MethodDeskExecutionCapabilities = "desk.execution.capabilities"
 	MethodDeskExecutionPrepareBatch = "desk.execution.prepare_batch"
@@ -275,8 +276,11 @@ func (it DeskExecutionItem) Validate() error {
 	switch {
 	case (in.Proposal == nil) == (in.Add == nil):
 		return fmt.Errorf("desk execution item %s needs exactly one source", it.RequestID)
-	case in.Proposal != nil && (in.Class != DeskClassProtect && in.Class != DeskClassReduce || in.Proposal.Key == "" || in.Proposal.Revision == ""):
-		return fmt.Errorf("desk execution item %s: a proposal is a protection or reduction with key and revision", it.RequestID)
+	case in.Proposal != nil && (in.Class != DeskClassProtect && in.Class != DeskClassReduce && in.Class != DeskClassAdd || in.Proposal.Key == "" || in.Proposal.Revision == ""):
+		// A proposal item carries class add only for a strategy row's buy
+		// (the core's core_rebalance); the daemon classifies the row itself
+		// and refuses any other buy with DeskBlockerClassMismatch.
+		return fmt.Errorf("desk execution item %s: a proposal is a protection, reduction or strategy addition with key and revision", it.RequestID)
 	case in.Add != nil && (in.Class != DeskClassAdd || in.Add.ConID <= 0 || in.Add.Symbol == "" || in.Add.Currency == "" ||
 		in.Add.RuleID == "" || in.Add.RuleRevision == 0 || in.Add.EvidenceID == ""):
 		return fmt.Errorf("desk execution item %s: an addition needs the exact stock, rule revision and evidence", it.RequestID)
