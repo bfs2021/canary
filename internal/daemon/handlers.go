@@ -2134,8 +2134,20 @@ func normaliseStockQuoteContract(in rpc.ContractParams) (ibkrlib.Contract, rpc.C
 			exchange = "SMART"
 			primary = "IBIS"
 		}
+	case "uk", "london", "lse":
+		// The London line (the core's fund on LSEETF, core_rebalance.go
+		// coreContractMarket): its row names market "uk", and until
+		// 2026-10-18 every preview of it was refused here as unsupported,
+		// found by the first behavioural test of the core's buy.
+		if currency == "" {
+			currency = "GBP"
+		}
+		if exchange == "" && primary == "" {
+			exchange = "SMART"
+			primary = "LSE"
+		}
 	default:
-		return ibkrlib.Contract{}, rpc.ContractParams{}, false, errBadRequest(fmt.Sprintf("unsupported quote market %q (supported: us, de)", in.Market))
+		return ibkrlib.Contract{}, rpc.ContractParams{}, false, errBadRequest(fmt.Sprintf("unsupported quote market %q (supported: us, de, uk)", in.Market))
 	}
 	if routed && exchange == "" {
 		exchange = "SMART"
@@ -2710,6 +2722,16 @@ func quoteHistoricalContract(q *rpc.Quote) ibkrlib.Contract {
 		}
 		if c.Currency == "" {
 			c.Currency = "EUR"
+		}
+	case "uk", "london", "lse":
+		if c.Exchange == "" {
+			c.Exchange = "SMART"
+		}
+		if c.PrimaryExch == "" {
+			c.PrimaryExch = "LSE"
+		}
+		if c.Currency == "" {
+			c.Currency = "GBP"
 		}
 	}
 	return c

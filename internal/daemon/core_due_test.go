@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
@@ -99,5 +100,48 @@ func TestCoreRowReadinessWaitsForTheDueTime(t *testing.T) {
 				t.Fatalf("the opening window does not say why: %+v", r)
 			}
 		})
+	}
+}
+
+// A frozen month another writer kept first is not served from memory: the
+// conflict drops the in-memory copy and the next read re-reads the store.
+func TestFreezeCoreConflictRereadsTheStore(t *testing.T) {
+	store := openMarketTestCoreStore(t)
+	scope := "DU1234567|paper|900001"
+	other := &Server{coreStore: store, now: func() time.Time { return mandateTestNow }}
+	first := &coreFrozenTarget{Version: coreTargetDocVer, Scope: scope, Decision: "2026-09-30", Digest: "theirs", FrozenAt: mandateTestNow, Signal: core.Signal{Decision: "2026-09-30"}}
+	srv := &Server{coreStore: store, now: func() time.Time { return mandateTestNow }}
+	if got := srv.coreFrozen(t.Context(), scope); got != nil {
+		t.Fatalf("a month before any write: %+v", got)
+	}
+	if err := other.freezeCore(t.Context(), first); err != nil {
+		t.Fatal(err)
+	}
+	mine := &coreFrozenTarget{Version: coreTargetDocVer, Scope: scope, Decision: "2026-09-30", Digest: "mine", FrozenAt: mandateTestNow.Add(time.Minute), Signal: core.Signal{Decision: "2026-09-30"}}
+	if err := srv.freezeCore(t.Context(), mine); err == nil {
+		t.Fatal("a stale revision was accepted")
+	}
+	if got := srv.coreFrozen(t.Context(), scope); got == nil || got.Digest != "theirs" {
+		t.Fatalf("after the conflict the month reads %+v, want the store's", got)
+	}
+}
+
+// The London line's quote contract: the core's row names market "uk"
+// (coreContractParams), which the quote normaliser refused as unsupported
+// until 2026-10-18, so no preview of the row could run. It now routes
+// SMART with the line's own venue and currency, and defaults a bare London
+// request to LSE in GBP.
+func TestNormaliseStockQuoteContractAcceptsTheLondonMarket(t *testing.T) {
+	line := coreDueRow(coreDueMonday).Contract
+	contract, echo, routed, err := normaliseStockQuoteContract(line)
+	if err != nil || !routed || contract.Exchange != "SMART" || contract.PrimaryExch != "LSEETF" || contract.Currency != "EUR" || contract.ConID != line.ConID || echo.Market != "uk" {
+		t.Fatalf("the core's London line: %+v echo %+v routed %v err %v", contract, echo, routed, err)
+	}
+	bare, _, _, err := normaliseStockQuoteContract(rpc.ContractParams{Symbol: "SYNX", Market: "london"})
+	if err != nil || bare.Exchange != "SMART" || bare.PrimaryExch != "LSE" || bare.Currency != "GBP" {
+		t.Fatalf("a bare London request: %+v %v", bare, err)
+	}
+	if _, _, _, err := normaliseStockQuoteContract(rpc.ContractParams{Symbol: "SYNX", Market: "mars"}); err == nil || !strings.Contains(err.Error(), "supported: us, de, uk") {
+		t.Fatalf("an unknown market: %v", err)
 	}
 }

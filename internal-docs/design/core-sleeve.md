@@ -342,6 +342,15 @@ restated for London, on the embedded calendars for 2026 to 2028.
   the row with `core_before_due_time`, the standing-mandate controller
   refuses it before journaling and sends at its first ready read after it,
   and `canary proposals` prints "opening window · default send 15:45 CET".
+  The first behavioural test of the core's buy through the production write
+  path (`TestDeskExecutionSubmitSendsTheCoreBuyUnderItsTypedException`,
+  trading build, 2026-10-18 23:40 CEST) found the quote normaliser refusing
+  the London line's row outright ("unsupported quote market uk"): the row
+  names its market `uk` (`coreContractMarket`) and `normaliseStockQuoteContract`
+  knew `us` and `de` only, so no preview, prepare or send of the core's row
+  could have run on 2 November. It accepts `uk`, `london` and `lse` now
+  (SMART with the line's venue; a bare London request defaults to LSE in
+  GBP).
 - Early close (review S8): on Xetra the send time is clamped to an hour
   before an early close. London's early closes end at 12:30 London (24
   and 31 December 2026 and 2027, 22 and 29 December 2028), before the US
@@ -733,7 +742,12 @@ What `desk.execution.submit` with `automatic` does (`desk_execution_submit.go`):
   `ready` (its exchange closed, the opening window, a stale quote, the broker
   link down) is refused with that readiness code before journaling, so the
   session's episode stays free and the controller sends the row once it
-  reads ready, at the live mid, inside the window. The core's row reads the
+  reads ready, at the live mid, inside the window. The served row's
+  readiness answers the first three; a stale, delayed or missing quote and a
+  spread the preview refuses are read by a preview run before the journal
+  write (`deskExecutionStrategyNotReady`, 2026-10-18 23:30 CEST; until then
+  that refusal was journaled and consumed the episode). A hard refusal (the
+  row withdrawn, its revision stale) is journaled as before. The core's row reads the
   opening window until its due time, fifteen minutes after the US cash open
   of its session (`core_due.go`, "Due time" above), so the first ready read
   is at or after 15:45 Europe/Berlin. The controller never uses

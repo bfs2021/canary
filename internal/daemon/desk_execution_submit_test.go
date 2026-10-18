@@ -350,3 +350,47 @@ func TestDeskExecutionSubmitWaitsForTheCoreRowsDueTime(t *testing.T) {
 		t.Fatalf("at the due time the row did not reach the gate: %+v %v", got, err)
 	}
 }
+
+// A strategy row that reads ready on its served snapshot but whose preview
+// refuses on a transient readiness (a stale quote here) is refused with that
+// readiness code before journaling, so the episode stays free; a hard
+// refusal (the row withdrawn) is journaled as before.
+func TestDeskExecutionSubmitRefusesAStaleQuoteBeforeJournaling(t *testing.T) {
+	s, scope := deskExecutionTestServer(t)
+	s.now = func() time.Time { return utc(2026, 11, 2, 15, 0) }
+	s.gatewayReadyForTrading = func() bool { return true }
+	e := notFoundEngine(s)
+	s.tradeProposals = e
+	row := rpc.TradeProposal{Key: "core_rebalance:syn", Revision: "r1", Bucket: rpc.TradeProposalBucketCoreRebalance, Action: rpc.OrderActionBuy, OrderType: rpc.OrderTypeLMT,
+		Core: &rpc.TradeProposalCore{Session: "2026-11-02", Sleeve: "core", Terms: rpc.CoreRowTerms{Episode: "core:DU1234567:paper:2026-10"}}}
+	e.snapshot = rpc.TradeProposalSnapshot{Kind: rpc.TradeProposalSnapshotKind, Revision: "r1", AccountID: scope.Account, AccountMode: scope.Mode, Proposals: []rpc.TradeProposal{row}}
+	stale := []rpc.TradingBlocker{{Code: previewQuoteStaleCode, Message: "the quote is older than the preview accepts"}}
+	e.revalidateForTest = func(context.Context, string, string) (rpc.TradeProposal, []rpc.TradingBlocker, error) {
+		return row, stale, nil
+	}
+	full := installDeskMandate(t, s, scope, "full", true)
+	item := deskExecutionStrategyItem("req-stale", "core:DU1234567:paper:2026-10:2026-11-02", rpc.DeskClassAdd)
+	if ready := e.snapshotForRead(false, false).Proposals[0].Readiness; ready == nil || ready.Code != rpc.ReadinessReady {
+		t.Fatalf("the served row reads %+v, want ready", ready)
+	}
+	got, err := deskExecutionSubmit(t, s, rpc.DeskExecutionSubmitParams{Automatic: &full, Items: []rpc.DeskExecutionItem{item}})
+	if err != nil || got.Receipts[0].Outcome != rpc.DeskOutcomeRefused || got.Receipts[0].Blockers[0].Code != rpc.ReadinessQuoteUnusable || !strings.Contains(got.Receipts[0].Message, "nothing was journaled") {
+		t.Fatalf("stale quote: %+v %v", got, err)
+	}
+	if r := deskExecutionLookup(t, s, item.RequestID)[0]; r.Outcome != rpc.DeskOutcomeAbsent {
+		t.Fatalf("a stale-quote refusal was journaled: %+v", r)
+	}
+	// The episode is free: the next pass, with the row withdrawn, reaches the
+	// gate and that refusal is journaled.
+	e.revalidateForTest = func(context.Context, string, string) (rpc.TradeProposal, []rpc.TradingBlocker, error) {
+		return rpc.TradeProposal{}, []rpc.TradingBlocker{{Code: "proposal_not_found", Message: "the row was withdrawn by the last refresh"}}, nil
+	}
+	next := deskExecutionStrategyItem("req-stale-2", item.EpisodeID, rpc.DeskClassAdd)
+	got, err = deskExecutionSubmit(t, s, rpc.DeskExecutionSubmitParams{Automatic: &full, Items: []rpc.DeskExecutionItem{next}})
+	if err != nil || got.Receipts[0].Outcome != rpc.DeskOutcomeRefused || got.Receipts[0].Blockers[0].Code != "proposal_not_found" {
+		t.Fatalf("the episode after a stale quote: %+v %v", got, err)
+	}
+	if r := deskExecutionLookup(t, s, next.RequestID)[0]; r.Outcome != rpc.DeskOutcomeRefused {
+		t.Fatalf("the gate's refusal is not journaled: %+v", r)
+	}
+}

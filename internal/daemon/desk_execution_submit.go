@@ -265,7 +265,7 @@ func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateS
 	// One that is not ready now (its exchange closed, the opening window, a
 	// stale quote) is refused before journaling, so the session's episode
 	// stays free for the controller's next pass while the row is ready.
-	if blocker := s.deskExecutionStrategyNotReady(item.Intent.Proposal.Key); blocker != nil {
+	if blocker := s.deskExecutionStrategyNotReady(ctx, item.Intent.Proposal.Key, item.Intent.Proposal.Revision); blocker != nil {
 		return deskExecutionRefusal(item, now, *blocker)
 	}
 	prior, refusal, err := s.recordDeskExecutionRequest(ctx, scope, item, "automatic:"+authority.Terms.ID)
@@ -306,21 +306,44 @@ func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateS
 	return rpc.DeskExecutionReceipt{RequestID: item.RequestID, EpisodeID: item.EpisodeID, Digest: rpc.DeskIntentDigest(item), Class: class, Outcome: outcome.Outcome, OrderRef: outcome.OrderRef, Blockers: outcome.Blockers, Message: outcome.Message, AsOf: s.orderNow()}
 }
 
-// deskExecutionStrategyNotReady reads the served strategy row's readiness:
-// a strategy row not ready now is refused with the readiness code, and
-// nothing is journaled. Rows outside a strategy and rows the engine does
-// not serve pass to the gate, which decides.
-func (s *Server) deskExecutionStrategyNotReady(key string) *rpc.TradingBlocker {
+// deskExecutionStrategyNotReady reads a strategy row's readiness before
+// anything is journaled: first the served row's (its exchange closed, the
+// opening window, the broker link down, a freeze), then a preview's (a
+// stale or delayed quote, a spread too wide, a session the preview refuses),
+// which only a quote read can tell. A row not ready now is refused with the
+// readiness code and nothing is journaled, so the session's episode stays
+// free for the controller's next pass. A hard refusal (the row withdrawn,
+// its revision stale) passes to the attempt, which journals it. Rows outside
+// a strategy pass to the gate, which decides. The preview reads the broker
+// and sends nothing; the quote-stale half was added 2026-10-18 23:30 CEST
+// after the review found the stale-quote refusal journaled and the episode
+// consumed, against the design's "refused before journaling".
+func (s *Server) deskExecutionStrategyNotReady(ctx context.Context, key, revision string) *rpc.TradingBlocker {
 	engine := s.tradeProposals
 	if engine == nil {
 		return nil
 	}
 	prop, ok := servedProposal(engine.snapshotForRead(false, false), key)
-	if !ok || deskExecutionStrategyEpisode(prop) == "" || prop.Readiness == nil || prop.Readiness.Code == rpc.ReadinessReady {
+	if !ok || deskExecutionStrategyEpisode(prop) == "" {
 		return nil
 	}
-	return &rpc.TradingBlocker{Code: nonEmptyString(prop.Readiness.Code, rpc.ReadinessNotExecutable),
-		Message: fmt.Sprintf("the strategy row is not ready now (%s): it is sent in session at the live mid, inside its window; nothing was journaled, so the controller may send it once it reads ready", nonEmptyString(prop.Readiness.Message, prop.Readiness.Code))}
+	notReady := func(r *rpc.TradeProposalReadiness) *rpc.TradingBlocker {
+		if r == nil || r.Code == rpc.ReadinessReady || r.Code == rpc.ReadinessNotExecutable {
+			return nil
+		}
+		return &rpc.TradingBlocker{Code: nonEmptyString(r.Code, rpc.ReadinessNotExecutable),
+			Message: fmt.Sprintf("the strategy row is not ready now (%s): it is sent in session at the live mid, inside its window; nothing was journaled, so the controller may send it once it reads ready", nonEmptyString(r.Message, r.Code))}
+	}
+	if prop.Readiness != nil && prop.Readiness.Code != rpc.ReadinessReady {
+		// Served not ready: a hard code here is the row's own blocker, which
+		// the attempt journals as before.
+		return notReady(prop.Readiness)
+	}
+	res, err := engine.Preview(ctx, rpc.TradeProposalPreviewParams{Key: key, Revision: revision})
+	if err != nil || res.Readiness == nil {
+		return nil
+	}
+	return notReady(res.Readiness)
 }
 
 // deskExecutionAttempt is one attempt under brokerWriteMu: the grant with

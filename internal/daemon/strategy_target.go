@@ -163,7 +163,13 @@ func (s *Server) freezeCore(ctx context.Context, f *coreFrozenTarget) error {
 	if err != nil {
 		var conflict *corestore.RevisionConflictError
 		if errors.As(err, &conflict) && conflict.Exists {
+			// Another writer kept the month first: the store's document is
+			// the month, so the in-memory copy is dropped and the next read
+			// re-reads the store instead of serving a month the store never
+			// kept (quality loop review, 2026-10-18).
 			st.revisions[f.Scope] = conflict.Actual
+			delete(st.frozen, f.Scope)
+			st.loaded[f.Scope] = false
 		}
 		return err
 	}
