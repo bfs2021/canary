@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.24.1 — 2026-10-18 23:25 CEST
+
+### What's new
+
+Three corrections to what v3.24.0 shipped the same evening: the owner
+sleeve's stop releases with hysteresis so a drawdown oscillating around it
+cuts the sleeve once, the scorecard reads the statement's trade times on the
+broker's Eastern clock so each decision meets the quote retained at its fill,
+and the core's monthly row waits for the US cash open plus fifteen minutes
+before it is ready to send.
+
+### Changed
+
+- `canary proposals` says "earliest send" for a row only a hand would send and "default send" where a queue, a pre-authorisation or the standing mandate sends it.
+- The owner sleeve's drawdown stop releases with hysteresis: engaged, it holds its pinned target (half the sleeve's risk at the stop) until the drawdown is back under the stop's release, five points under the stop (`verdict.owner_stop.release_pct`; a 25% stop releases under 20%), so a drawdown oscillating around the stop cuts the sleeve once instead of re-engaging at half of the halved use; a new engagement after a release pins anew, the journal records the hold, and `canary mandate` and the gate name the release.
+- Scorecard: the placebo also requires the shuffled spread within 1.2 of the assumed noise, so an understated null no longer establishes; a half-spread without an FX rate is reported under `fx_unavailable`; index-stream units overlap fully; one retained quote binds to one decision; `canary scorecard` shows the placebo spread on its consistency line.
+
+### Fixed
+
+- The core's row is ready only from its due time, fifteen minutes after the US cash open of its session, computed from the US calendar; before it, readiness reads `opening_window` with that time as `default_send_at`, the preview, the prepared submit and the standing-mandate controller hold the row with `core_before_due_time`, and a row served on a London session the US does not trade waits for its own session. Before, a confirmation at the London open sent the row at the live mid of the pre-US-open spread.
+- `canary core` reads a core row's send that landed before the month's record was re-stamped; the record then reads submitted and is final.
+- Scorecard: statement trade times are read on the broker's Eastern clock, as the statement writes them, so the fill-quote match within five minutes meets the retained record instead of missing it by hours and labelling decisions `execution_not_observed`; decision ids are unchanged.
+- The CLI's `canary scorecard` golden fixture is arithmetically consistent with the method it shows.
+
 ## v3.24.0 — 2026-10-18 22:45 CEST
 
 ### What's new
