@@ -1,8 +1,9 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-17 07:30 CEST
+Updated: 2026-10-18 09:10 CEST
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
-gate); increment 2 implemented 2026-10-14 (forced reduction, below). The
+gate); increment 2 implemented 2026-10-14 (forced reduction, below);
+increment 3 implemented 2026-10-18 (seats, below). The
 feature is inactive until the owner writes `[mandate]` into
 `risk-policy.toml`; the forced reduction places nothing by itself until the
 owner lists `mandate_reduction` under `[authority].pre_authorised`.
@@ -33,9 +34,14 @@ proposal the owner confirms by writing it into the policy file.
     budget, largest risk contributor first, pre-authorised with the
     30-minute veto; release when risk is back in budget, not when P&L
     recovers. Built in increment 2 ("Forced reduction" below) on the
-    measurement and the additions gate of increment 1.
+    measurement and the additions gate of increment 1. The order of the
+    cuts was replaced on 2026-10-18 08:06 CEST (seats, below): the sleeve
+    furthest over its seat first, within it the largest contributor.
   - Sleeve volatility shares of the 15%: owner 7, core 6, overlay 4. Recorded
-    here as `[mandate.sleeves]`; enforcement per sleeve comes later.
+    here as `[mandate.sleeves]`; enforcement per sleeve comes later. Since
+    2026-10-18 the machine's shares size its seats ("Seats" below); the
+    owner's seat is the rest of the budget, and `owner_vol_pct` is recorded
+    and not read.
 - Departure from risk-policy.md decision 3 ("No auto-increase: deposits,
   profits, and live events never raise declared risk capital"): the
   mandate's budget follows the high-water mark of the cash-flow-adjusted
@@ -51,9 +57,9 @@ proposal the owner confirms by writing it into the policy file.
   `internal/risk/mandate.go` (schema), `internal/mandate` (the pure
   evaluator), `internal/daemon/mandate_*.go` (capital state, history store,
   verdict, gate).
-- Status: implemented (increments 1 and 2). Active only with `[mandate]`
-  written; the forced reduction is automatic only with `mandate_reduction`
-  pre-authorised.
+- Status: implemented (increments 1, 2 and 3, seats). Active only with
+  `[mandate]` written; the forced reduction is automatic only with
+  `mandate_reduction` pre-authorised.
 
 ## Meaning
 
@@ -132,7 +138,8 @@ proposal the owner confirms by writing it into the policy file.
   `gap_shock_pct` (percent; the proposal is 25), `gap_room_pct` (percent of
   the remaining loss room one name may lose in a gap; the proposal is
   33.3), `[mandate.sleeves]` `owner_vol_pct`, `core_vol_pct`,
-  `overlay_vol_pct` (percent a year; recorded, not enforced). The
+  `overlay_vol_pct` (percent a year; the machine's two size its seats, the
+owner's is recorded and not read: "Seats" below). The
   proposals are written into the file by the owner; the code carries no
   default that acts. A `[mandate]` table missing a material key is active
   and unknown: the verdict names the unapproved keys and additions are
@@ -153,7 +160,9 @@ proposal the owner confirms by writing it into the policy file.
   refused, because its interest-rate risk is not measured and a long bond
   could carry real risk counted as zero; a bond fund (`STK`) is measured as
   before; the drawdown brake keeps refusing a bill purchase while engaged.
-  The exemption is not widened further. Release is automatic: the moment a fresh
+  The exemption is not widened further. Seats (2026-10-18, "Seats" below):
+  an addition passes only when its own sleeve is inside its seat and stays
+  there with the order added, on top of every whole-book check here. Release is automatic: the moment a fresh
   verdict reads `within`, additions pass; there is no latch and no reset.
   The incremental pre-trade check re-evaluates the book with the proposed
   leg added and refuses an addition that would take the annualised risk
@@ -211,6 +220,14 @@ Owner decisions, recorded verbatim:
   to all".
 - 2026-10-14 06:26 CEST: "The system should run by itself within risk
   boundaries."
+- 2026-10-18 08:06 CEST, replacing "largest risk contributor first" in
+  decision 3: "Accept all three: give the machine its own seat (replacing D1
+  and largest-contributor-first), put s1 into its six-month shadow test, and
+  go for the core venue fix with the core fund out of protection's automatic
+  sales." The recommendation accepted (mandate budget review, 2026-10-17,
+  decision 1): "When the book is over budget, the sleeve furthest over its
+  seat is cut first." The 30-minute veto and every other rule here are
+  unchanged ("Seats" below).
 - The bucket ships absent from the embedded default and inactive; the owner
   arms it by listing it under `[authority].pre_authorised`.
 
@@ -252,10 +269,13 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   carried forward as it was. Cut by cut, the book re-evaluated after each: a
   name over its gap cap has its largest gap loser cut until the name's gap
   loss is under the cap (a gap cut never leaves the book riskier); with no
-  breach left, the largest Euler contributor is cut by the smallest whole
-  step that reaches the target or, when no step on that line does, by the
-  step that takes the most risk off, and the next contributor follows only
-  when needed. Steps are contracts for options and share lots for stocks (1
+  breach left, the sleeve furthest over its seat is cut first and, within
+  it, its largest Euler contributor (2026-10-18, "Seats" below), by the
+  smallest whole step that reaches the target or, while another sleeve is
+  over its own seat, brings that sleeve to its seat, whichever comes first,
+  or, when no step on that line does, by the
+  step that takes the most risk off; the next cut is chosen afresh on the
+  book re-evaluated, and follows only when needed. Steps are contracts for options and share lots for stocks (1
   below 100 shares, 10 to 999, 100 from 1,000). Damping: a line whose
   position has not moved keeps the last generation's cut when the fresh cut
   is smaller by at most one step, so a steady risk does not re-size a row
@@ -436,6 +456,282 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   lines; order-cap carry-over; a gap breach cut to its cap; absent
   `[mandate]` changes nothing.
 
+## Seats
+
+Owner decision, verbatim, 2026-10-18 08:06 CEST: "Accept all three: give
+the machine its own seat (replacing D1 and largest-contributor-first), put
+s1 into its six-month shadow test, and go for the core venue fix with the
+core fund out of protection's automatic sales." The first clause accepts
+decision 1 of the mandate budget review of 2026-10-17: "seats inside the
+whole-book limits. The machine's seat is only as big as what it actually
+runs (each strategy's stage times its share; nothing today), and you have
+the rest. When the book is over budget, the sleeve furthest over its seat is
+cut first. Each position keeps the seat of whoever opened it. The 30%
+maximum loss, the budget and the gates still cover everything. This replaces
+D1 and "largest risk contributor first"."
+
+It replaces two records: D1 "No, whole book only" (`core-sleeve.md` §7),
+under which the machine had only the room the owner's book left and could
+never count on any; and "largest risk contributor first" in decision 3 of
+2026-10-14 06:26 CEST (Forced reduction, above). At 08:21 CEST the owner
+dropped s1 ("Stop the s1 shadow session and drop s1: its backtest misses its
+own bar"), so the overlay has no strategy.
+
+### Sleeves
+
+- **Owner**: the owner's own trading, by hand, in TWS or the console, and
+  anything the owner's own Rulebook rules open (the owner wrote the rule).
+- **Core**: the core rule (`core-ibcf-v1`, the lab's s0), `core-sleeve.md`.
+- **Overlay**: the seat for a lab strategy on index options. Its candidate,
+  s1, was dropped on 2026-10-18; no strategy runs in it.
+
+A machine sleeve is a lab strategy Canary runs at a live stage. Rule
+buckets that only reduce (protection, hygiene, the budget governor, the
+forced reduction, expiry closes) are no sleeve: they place no units, they
+take them away.
+
+### How a seat is measured
+
+- **Use**: a sleeve's use is the sum of its legs' Euler contributions,
+  `contribution_pct / 100 × sd_annual_base`, in base currency a year, the
+  budget's own unit. The contributions add up to the book's risk exactly, so
+  the uses do too; a hedge's negative contribution lowers its sleeve's use,
+  and an addition that diversifies the book can have a negative use.
+- **One contract, two sleeves**: the Euler contribution of a contract is
+  linear in its units (q × ∂σ/∂q), so a contract held by two sleeves splits
+  its contribution exactly in proportion to the units each holds.
+- **Seat**: a machine sleeve's seat is its stage times its share, in percent
+  a year of the budget base, scaled by the room exactly as the budget is:
+  `seat_base = stage_pct / 100 × share_pct / 100 × budget_base × room`. The
+  core's stage is `[mandate.core] scale_pct` and its share
+  `[mandate.sleeves] core_vol_pct`; a lab strategy's stage is the lab's
+  ladder (R3 25, R4 50, established 100) and the overlay's share
+  `overlay_vol_pct`. A sleeve that sends no orders runs nothing: its stage
+  is 0 whatever the policy says. In this build the core sends none (phase 1
+  is read-only; its rows are phase 2) and no strategy runs in the overlay,
+  so both stages are 0 and the machine's seat is zero, as the review said:
+  "nothing today".
+- **The owner's seat is the rest**: `budget − Σ machine seats`. The seats
+  add up to the budget, so the book is inside the budget exactly when the
+  uses do not exceed the seats in sum, and a book over budget always has a
+  sleeve over its seat. Today the owner's seat is the whole budget. The
+  constitution refuses machine shares (`core_vol_pct + overlay_vol_pct`)
+  above `vol_target_pct`, so the owner's seat is never negative; the
+  evaluator also floors it at zero.
+- **The owner's 7 is no longer read**: the shares of 2026-10-14 were
+  standalone figures whose sum (17) exceeded the target because the sleeves
+  are not perfectly correlated. Seats count use, which adds up, so the
+  owner's seat is the rest: 15 − 6 − 4 = 5 points once both machine sleeves
+  run at full stage, not 7. `owner_vol_pct` is recorded and not read.
+- **Use and standalone risk**: a sleeve's use is its standalone risk times
+  its correlation with the book, so it never exceeds its standalone risk;
+  others' holdings can raise it at most to that. A sleeve whose standalone
+  risk fits its seat is therefore inside its seat whatever the others hold.
+  The core sizes its volatility to its share on its own closes, the mandate
+  measures it on the index's returns, and every core buy is cut to its seat
+  on the mandate's measure (`coreHeadroomFits`); between decisions a smaller
+  room shrinks the seat and the core's standalone risk does not follow, so
+  correlated additions elsewhere can lift the core's use past its seat
+  (residual risk, below). The verdict serves each sleeve's standalone risk
+  beside its use.
+- **A flat sleeve keeps its seat**: the seat is a reservation by stage, not
+  a holding. The core out of the market (trend off) keeps its seat empty.
+  The owner's room shrinks the day a machine stage rises: the core at 25
+  takes 1.5 of the 15 points, a tenth of the budget.
+
+### Placement
+
+Each position keeps the seat of whoever opened it, fixed for its life.
+
+- **The core's contract is reserved to the core**: every unit, whoever
+  bought it (`core-sleeve.md`, "Adopting an existing IBCF holding"; the
+  build brief of 2026-10-18: "The core fund stays reserved to the core").
+  The core's contract is the pinned `[mandate.core] con_id`; with the venue
+  fix, the line Canary resolves for the ISIN. An order on it, the owner's
+  hand included, is the core's addition, judged against the core's seat.
+  While the core runs nothing that seat is zero, so a hand buy of the fund
+  is refused once the core's use would be above zero; a sale passes. While
+  no contract is resolved nothing is reserved: the core then runs nothing,
+  so it has no seat to keep, and a holding is adopted once its contract is
+  known.
+- **Orders are placed by contract id**, which the order path resolves before
+  every gate point (`resolvePreviewOrderContract`); a second listing of the
+  fund under another contract id is the owner's, and the core's target holds
+  while one is held.
+- **Everything else is the owner's**, until a machine sleeve's own order
+  path places units by its fills. In this build no path places units in a
+  machine sleeve, so placement is total: the core's contract or the owner.
+- **Split by fill lineage** (the rule the first machine order path that can
+  trade a contract the owner may also hold must journal; nothing here is
+  built before that path):
+  1. An opening fill (it raises the position's size in its direction)
+     places its units in the sleeve of the order's origin. The core's
+     reserved contract is the core's whatever the origin.
+  2. A closing fill of a sleeve's own order takes that sleeve's units. A
+     forced-reduction fill takes units of the sleeve its row was sized for
+     (the row names it, `mandate.sleeve`), and the row's cut is capped at
+     that sleeve's units on the contract. A fill of a row the same-contract
+     merge built from several buckets takes units in the order of the needs
+     merged, the mandate's first. A fill acting on the whole line
+     (protection, hygiene, an expiry, an exercise or assignment, another
+     broker lifecycle event) takes every sleeve's units in proportion. The
+     owner's hand sale takes the owner's units first, then the machine's in
+     proportion.
+  3. A position that crosses zero starts over: the new side belongs to the
+     origin of the fill that crossed.
+  4. The placed units of a contract always sum to the broker's position. A
+     machine sleeve placed more units than the line holds, or a fill the
+     journal cannot match while a machine order on the contract works or is
+     of unknown outcome, makes that contract's placement unknown, until the
+     order journal's reconciliation resolves the order or a statement
+     covering the day accounts for the units.
+  5. Placement is never edited: no tag and no re-placement. A position that
+     must move does so by a recorded owner instruction.
+  Before any machine order path exists, two gate gaps close: a combination
+  (BAG) order passes the mandate gate unmeasured while the verdict reads
+  within (`mandateUnpricedOrderGate`, an unmodelled security type), and a
+  BUY of a put on a Rulebook hedge symbol counts as a hedge whoever sends
+  it; a machine sleeve's order gets neither pass.
+- **Unknown placement never guesses**: while any contract's placement is
+  unknown the seats are unknown and the seat check refuses every risk-adding
+  order (the uses add up, so one unknown contract leaves every sleeve's use
+  unknown). The forced reduction does not hold for it: it sizes in the
+  whole book's order (largest contributor first) and says so, because a
+  protection that acts must not wait on bookkeeping. With placement total in
+  this build, the seats are unknown only when the verdict is.
+
+### The gate
+
+Every whole-book rule above is unchanged and binds first, at the same four
+points: the standing verdict must read `within` ("No addition by anyone
+while the whole book is over budget"), the book with the order must stay
+inside the budget, and the order must create or deepen no gap-cap breach;
+the bill and hedge exemptions stand. Then the seat: the order is placed
+(the core's contract the core's, anything else the owner's), and a
+risk-adding order is refused (`mandate_budget`) while its sleeve's use is
+over its seat, or when its sleeve's use with the order added would be. The
+owner's room is the owner's seat less the owner's use: the budget, less the
+machine's seats, less what the owner's book uses.
+
+- The check judges the order's own sleeve. By the bound above, an order can
+  raise another sleeve's use at most to that sleeve's standalone risk.
+- A sleeve over its seat adds nothing, even an order that would lower its
+  use, as the book over budget adds nothing.
+- An option buy the evaluator cannot price is judged by its volatility-free
+  bound (Enforcement class, above): its sleeve's standalone risk plus that
+  bound must fit the seat (use ≤ standalone, and the standalone risk grows
+  by at most the bound).
+- The gate view (`gate.refuses_additions`) reads the owner's additions: it
+  refuses while the verdict is not within, and also while the owner's seat
+  is over.
+- `canary core` reads "no buy: the core sends no orders yet, so it has no
+  seat" while the core runs nothing; once it runs, its buys are cut to its
+  seat as to the budget and the gap caps.
+
+### The forced reduction
+
+The trigger, the episode, the target (0.95 × budget), the gap phase, the
+expiry gate, covered and protected lines, the veto clock and every other
+rule are unchanged. Only the risk phase changes:
+
+- On the book re-evaluated after each cut, the sleeve furthest over its seat
+  (use less seat, in base currency; ties in the order owner, core, overlay)
+  is cut, and within it its largest Euler contributor. A sleeve with
+  nothing left to reduce passes the turn to the next one.
+- The cut is the smallest whole step that takes the book to the target or,
+  while another sleeve is over its own seat, that takes this sleeve inside
+  its seat, whichever comes first; when neither is reachable on that line,
+  the step that takes the most risk off. It is never more than the old rule
+  would cut on that line, so every sendable order still lowers the book's
+  risk. Once no other sleeve is over its seat, the sleeve chosen carries the
+  rest down to the target, the margin included.
+- So the owner's book is cut for the owner's excess and the machine's for
+  the machine's: while the machine's sleeves are inside their seats, the
+  batch cuts only the owner's lines; a machine sleeve over its seat is cut
+  before the owner's lines once it is the furthest over. With the machine
+  holding nothing, as today, the batch is the old one.
+- The seats' order never stops short where the old order reaches the
+  target: if it does, the batch is sized largest contributor first and says
+  so ("the seats' order stops short of the target").
+- Each row names its sleeve (`mandate.sleeve`) and why it was chosen ("the
+  largest risk contributor left in your seat, the seat furthest over").
+- A core holding while the core runs nothing (seat zero) is over its seat by
+  its whole use and is cut once it is the furthest over. The core's fund
+  leaves protection's automatic sales (the owner's third clause of
+  2026-10-18 08:06 CEST, built separately); the mandate's forced reduction
+  still covers it, as the review recommended.
+
+### Policy keys
+
+None in this build. The core's stage is its existing `scale_pct` and its
+share `core_vol_pct`; the owner's seat is the rest. For a lab strategy in the
+overlay, once its order path exists, proposed (the owner writes it; the
+daemon refuses the table as an unknown key until the code that reads it
+lands):
+
+```toml
+[mandate.overlay]               # absent: the overlay runs nothing
+spec      = ""                  # the lab spec that runs in the seat
+spec_hash = ""                  # the lab registry's hash of that spec
+stage     = "R3"                # R3 25%, R4 50%, established 100% of overlay_vol_pct
+```
+
+No key acts by default: absent, the overlay's stage is 0.
+
+### Surfaces
+
+`canary mandate` (and `--json`, MCP `canary_mandate`) lists each seat: its
+use against its seat, its standalone risk, and its stage and share or why
+it runs nothing; the verdict carries them as `verdict.seats`. Desk shows each
+seat's use against its seat on Risk › Mandate. A seat refusal names the
+sleeve, its use, its seat and, for the owner, the machine's seats.
+
+### Safety review (2026-10-18) and how it is folded in
+
+An independent review of this design and its first build found no blocker
+and four serious items.
+
+| # | Finding | Resolution |
+|---|---|---|
+| S1 | The core's reservation is not in the owner's quoted words; with the core's seat at zero a hand buy of the fund is refused and a held fund line is cut first in a breach | Kept: the build brief carries it ("The core fund stays reserved to the core"), and `core-sleeve.md` has reserved the instrument since 2026-10-14. Stated plainly in Placement and The gate as a consequence the owner sees; the core holds no fund today |
+| S2 | Seats key on `con_id` and the compiled symbol; the venue fix makes `con_id` optional and resolves the line by ISIN | Placement by contract id only, through one function (`mandateCoreContracts`) that takes the venue fix's resolved line when both land; the symbol rule is dropped, since the order path resolves a contract id before every gate point |
+| S3 | "Seats unknown ⇒ the batch holds" would stop a pre-authorised protection on bookkeeping | Unknown seats refuse additions only; the batch sizes in the whole book's order and says so; rule 4 gets its recovery (journal reconciliation or a statement) |
+| S4 | "A sleeve inside its seat stays there" holds only while its standalone risk on the mandate's measure fits its seat | Restated as use ≤ standalone; every core buy cut to its seat on the mandate's measure; the drift between decisions recorded as residual risk |
+| M1-M8 | s1 dropped; the owner's 7 no longer read; the gate's treatment of a sleeve already over; a guard against stopping short; overfull machine shares; lineage and gate gaps for later; stale lines; `canary core` copy | Each folded in above, with a test where it acts (Verification) |
+
+### Residual risk accepted
+
+A sleeve's use moves with the rest of the book by correlation, bounded by its
+standalone risk; the core's seat shrinks with the room between monthly
+decisions while its holding does not, so a correlated addition elsewhere can
+take the core over its seat, and the next breach then cuts the core first.
+Seats inherit every limit of the measurement. A machine seat that is empty
+stays reserved, so the owner's room is smaller than the budget while a
+machine stage is live. The split by lineage is specified, not built: it lands
+with the first machine order path that can share a contract with the owner.
+
+### Verification
+
+Synthetic books only. `internal/mandate` (`seats_test.go`): uses add up to
+the book's risk and seats to the budget, the core's seat is its stage times
+its share and the owner's the rest, a contract split by units splits its
+contribution in proportion, every seat is zero at room 0, an overfull
+machine leaves the owner a zero seat, a sleeve whose standalone risk fits its
+seat stays inside it whatever is added elsewhere. `internal/daemon`
+(`mandate_seats_test.go`): the seat plan gives the core no stage while it
+sends no orders and places its contract with it; with a live core seat the
+gate refuses an owner addition past the owner's seat that the whole budget
+would take, and passes one inside; with the core running nothing the same
+order passes; a hand buy of the core's contract is the core's and refused
+while its seat is zero, a sale passes; an unpriced option buy is judged by
+its sleeve's standalone risk plus the bound; the forced reduction cuts the
+sleeve furthest over first, leaves a sleeve inside its seat alone, stops a
+sleeve's cut at its seat while another is over, never stops short where the
+old order reaches the target, every row alone lowers the risk, and with the
+machine empty the batch is the old one; the constitution refuses machine
+shares above the target. Core: the headroom-cut buy passes the gate with the
+seat (`TestCoreTargetBuyCutToTheGapCapMargin`). CLI golden `mandate_seats`.
+
 ## Decision-grade history
 
 The chart-history store (`market_history_store.go`) is display-only: it
@@ -471,6 +767,7 @@ documents are neither read nor written.
 | Daily closes | `mandate_history` state documents | `mandateHistorySeries` | last close within one completed session | missing or stale ⇒ unknown |
 | Verdict | daemon-owned evaluation (`mandate.risk`) | `rpc.MandateRiskResult` | refreshed every two minutes and on every read; the gate reads a verdict no older than five minutes | older ⇒ unknown ⇒ additions refused |
 | Blocker | `mandateBudgetGate` | `TradingBlocker{Code: "mandate_budget"}` | per order, at four points | — |
+| Seats and placement | the verdict (`verdict.seats`), from `[mandate.sleeves]`, `[mandate.core] scale_pct` and the core's contract, and this build's order paths | `mandate.SeatReport` | with the verdict | unknown ⇒ additions refused; the batch sizes in the whole book's order |
 
 The exercise path binds its own position authority and never binds risk
 (`exerciseBound`); an exercise is reduce-only by the opportunity policy and
@@ -559,6 +856,7 @@ internal/daemon/mandate_capital.go     high-water mark, room, daily samples (ins
 internal/daemon/mandate_history.go     decision-grade daily closes, background refresh
 internal/daemon/mandate_verdict.go     evaluation cache, RPC handler, mandate_budget gate
 internal/daemon/mandate_reduction.go   forced reduction: sizing, hold, release, rows
+internal/daemon/mandate_seats.go       seat plan and placement, the seat check
 internal/cli/mandate.go                canary mandate [--json]
 internal/mcp/tools.go                  canary_mandate
 ```

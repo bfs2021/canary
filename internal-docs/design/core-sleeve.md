@@ -2,7 +2,8 @@
 
 Written: 2026-10-14 16:50 CEST. Revised 2026-10-14 18:30 CEST: the owner's
 answers to D1 to D4, the independent design review folded in (section
-"Design review"), and phase 1 built.
+"Design review"), and phase 1 built. Revised 2026-10-18: seats replace D1
+(§3, §7).
 Status: phase 1 built (read-only: the target is served, nothing is
 proposed or sent) with the two mandate-gate fixes the review requires;
 phases 2 and 3 are design. Buying stays off until the owner arms Fully
@@ -40,7 +41,7 @@ quoted):
 - **D1** "No, whole book only": the sleeve shares do not bind each sleeve;
   the whole-book mandate gate decides. The core gets the room the owner's
   sleeve leaves, and the forced reduction keeps "largest risk contributor
-  first".
+  first". Replaced 2026-10-18 08:06 CEST by seats (§7).
 - **D2** "Yes, for the core only": if IBKR refuses Adaptive for IBCF, core
   orders may use a plain DAY limit at the mid, never crossing it. The
   2026-10-09 "no fallback" rule stays for every other automatic order.
@@ -77,9 +78,9 @@ for one instrument.
    trades (about three a year). Ship option B next: the Desk controller
    names the same row under the Fully armed mandate. One row, two
    authorisations, as `desk-execution.md` already separates them.
-4. The whole-book mandate gate stays binding for every core buy (D1), and
-   a buy is sized to leave the book at most at 0.95 of the budget and the
-   core's gap loss at most at 0.95 of its cap, the forced reduction's own
+4. The whole-book mandate gate stays binding for every core buy, and so
+   does the core's own seat (2026-10-18, §3); a buy is sized to leave
+   the book at most at 0.95 of the budget and the core's gap loss at most at 0.95 of its cap, the forced reduction's own
    target, so a core buy can never set up a forced sale by itself.
 5. This is a beta allocation the owner chose, with a drawdown filter. It
    claims no alpha: the lab supplies the parity fixture and the kill rule,
@@ -114,7 +115,8 @@ Notes the review raised, with their rules:
   decision; above the target beyond the band, the rule sells the excess
   (under A, the owner confirms that row).
 - **The owner's hand IBCF orders.** They are the owner's call and change
-  the holding the next decision corrects. While any IBCF order works, the
+  the holding the next decision corrects. Since 2026-10-18 a hand buy is
+  the core's addition, judged against the core's seat. While any IBCF order works, the
   owner's included, no core row is served, and every core row is netted
   against working IBCF orders (phase 2).
 - **Option B's armed terms** name the rule, the spec hash, the scale and
@@ -513,9 +515,11 @@ preview, admission and the final wire guard. A risk-adding order (anything
 but a close or reduce, or a buy of a put on a hedge symbol) is refused
 unless the kept verdict for the policy in force is at most five minutes
 old and reads `within`, and the book with the order added stays within the
-whole budget and creates or deepens no gap-cap breach. The gate has no
-sleeves: a core buy competes with the
-owner's book for one budget.
+whole budget and creates or deepens no gap-cap breach. Since 2026-10-18 the
+order's sleeve, with the order added, must also stay inside its seat
+(`mandate-risk-budget.md`, "Seats"); every unit of the pinned contract is the
+core's, so a core buy, and an owner's hand buy of the core's fund, is judged
+against the core's seat.
 
 Two gaps mattered here; both are closed on this branch. A name without a
 decision-grade series now refuses the addition and fetches the series
@@ -541,13 +545,16 @@ US clock of the rest of the book (review S5); the headroom uses the
 mandate's measure. Phase 2 adds the core's standalone risk (the mandate's
 evaluator on the core leg alone) and its Euler contribution, which cannot
 exceed the standalone figure, to the target. A holding over its share at
-a decision is sold down by the rule; between decisions it is not.
+a decision is sold down by the rule; between decisions it is not. Since
+2026-10-18 the mandate verdict serves the core's standalone risk and its
+Euler use beside its seat (`verdict.seats`).
 
 ### Headroom: the core never pushes the book over budget
 
 A buy is the largest whole quantity, up to the funded D, for which the
 book with the buy measures at most 0.95 × budget, carries no gap-cap
-breach, and keeps the core's own gap loss at most at 0.95 × its cap,
+breach, keeps the core's own gap loss at most at 0.95 × its cap, and, since
+2026-10-18, keeps the core inside its seat,
 found by bisection on the daemon's evaluator (built: `core.Headroom`,
 `coreHeadroomFits`). 0.95 is the forced reduction's own
 `mandateReductionTargetFactor`, not a new number. The forced reduction
@@ -555,22 +562,35 @@ starts above 1.0 × budget on two scheduled readings, or on a gap-cap
 breach, and sizes back to 0.95, so a core buy can never start a forced
 sale by itself; only the market can.
 
-### When the owner's sleeve fills the budget
+### The core's seat (2026-10-18, replacing D1)
 
-Today the whole-book gate decides. While the verdict reads over, reduce
-or unknown, no core buy is admitted; while it reads within, the core gets
-only the room between the book and 0.95 × budget. In a book whose owner
-sleeve fills the budget, the core holds nothing. The core's sales
-(rebalance down, trend off) always pass.
+The core has its own seat inside the whole-book limits
+(`mandate-risk-budget.md`, "Seats"): its stage times its share,
+`scale_pct / 100 × core_vol_pct / 100 × budget base × room`, while the core
+runs, and nothing while it sends no orders, as in this build (phase 1 is
+read-only). The owner has the rest of the budget. Once the core runs, the
+owner's additions stop at the owner's seat, so the core's seat stays free for
+the core; a core buy needs the whole-book `within` and headroom above, and
+its own seat with the buy added. While the verdict reads over, reduce or
+unknown, no core buy is admitted, as before ("No addition by anyone while the
+whole book is over budget"). The core's sales (rebalance down, trend off)
+always pass.
 
-The whole-book gate stays binding for every core buy; it is the mandate's
-hard line and must not move. The shares do not bind each sleeve (D1, "No,
-whole book only"): the core gets the room the owner's sleeve leaves.
+A sleeve's Euler use never exceeds its own standalone risk, and every core
+buy is cut to the core's seat on the mandate's measure (`coreHeadroomFits`),
+so others' holdings can raise the core's use at most to its standalone risk.
+Between decisions a smaller room shrinks the seat while the holding stays;
+that drift is the seats' residual risk. While the core runs nothing,
+`canary core` reads "no buy: the core sends no orders yet, so it has no
+seat".
 
 ### With the forced reduction (on main since `9b10b9ca`)
 
-The reduction ranks lines by Euler contribution and treats IBCF as any
-other line. To coexist:
+Since 2026-10-18 the reduction cuts the sleeve furthest over its seat first,
+and within it the largest Euler contributor (`mandate-risk-budget.md`,
+"Seats"). A core inside its seat is not cut for the owner's excess; IBCF held
+while the core runs nothing (seat zero) is over its seat by its whole use and
+is cut once it is the furthest over. To coexist:
 
 - One row per contract and side: a reduction sale of IBCF and a core sale
   merge into one row sized by the larger need (the existing same-contract
@@ -583,8 +603,9 @@ other line. To coexist:
   reduction flattens to hedges. IBCF is not a hedge and is sold, which is
   also what the rule wants.
 
-The ranking stays "largest risk contributor first" (06:26 CEST); D1 kept
-it.
+The ranking "largest risk contributor first" (06:26 CEST), which D1 kept,
+was replaced on 2026-10-18 08:06 CEST: the sleeve furthest over its seat
+first.
 
 ### Drawdown brake and controls
 
@@ -665,7 +686,8 @@ Invariants, each with a synthetic test in section 6:
 9. Restrictive controls stop new core buys at the final gate and cancel
    nothing; an Auto lock on IBCF stops core sales too.
 10. A core buy never by itself takes the book over 0.95 of the budget or
-    any gap loss over 0.95 of its cap (property test, built).
+    any gap loss over 0.95 of its cap (property test, built), nor the core
+    over its seat (2026-10-18).
 
 | Failure | Guard |
 |---|---|
@@ -796,6 +818,17 @@ Decided 2026-10-14 (the questions as asked, the answers verbatim):
   and the forced reduction cuts the largest contributor whatever its
   sleeve. In a book whose owner sleeve fills the budget, the core holds
   nothing; the target shows it as a buy cut to no headroom.
+  **Replaced 2026-10-18 08:06 CEST.** The owner, verbatim: "Accept all
+  three: give the machine its own seat (replacing D1 and
+  largest-contributor-first), put s1 into its six-month shadow test, and go
+  for the core venue fix with the core fund out of protection's automatic
+  sales." Under D1 the machine had only the room the owner's book left, so
+  it could never count on any. Now: seats inside the whole-book limits; the
+  machine's seat is its stage times its share, nothing while it runs
+  nothing; the owner has the rest; over budget, the sleeve furthest over its
+  seat is cut first; each position keeps the seat of whoever opened it, and
+  the core's fund stays reserved to the core (`mandate-risk-budget.md`,
+  "Seats").
 - **D2. If IBKR refuses Adaptive for IBCF, may core orders use a plain
   DAY limit at the mid?** "Yes, for the core only." Tick-snapped, never
   crossing the mid against the owner, never repriced; the 2026-10-09 "no

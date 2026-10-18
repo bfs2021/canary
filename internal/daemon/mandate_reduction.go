@@ -195,10 +195,14 @@ type mandateCut struct {
 	row  rpc.PositionView
 	full int // the whole units held, the most the cut may reach
 	step int // the lot the cut moves in: 1 contract, or 1, 10 or 100 shares
-	// units is the cut; rank its place in the batch (1 = first); phase why.
-	units int
-	rank  int
-	phase string
+	// units is the cut; rank its place in the batch (1 = first); phase why;
+	// sleeve the seat the leg is placed in, and seatExcess that seat's use
+	// less its seat when a risk cut chose it.
+	units      int
+	rank       int
+	phase      string
+	sleeve     string
+	seatExcess *float64
 	// contribution is the leg's Euler share on the verdict; gapLoss and
 	// gapCap a gap row's figures; sessions an expiry row's sessions to
 	// expiry; riskCut the risk the cut removes in its place in the batch.
@@ -310,7 +314,7 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	for _, c := range batch.cuts {
 		qty, waits := mandateCycleQuantity(c, in, st.BaseCurrency)
 		st.Plan = append(st.Plan, rpc.TradeProposalMandatePlanOrder{Rank: c.rank, Contract: budgetDisplayContract(c.row), Action: mandateAction(c.row),
-			Units: c.units, Quantity: qty, Waits: waits, Phase: c.phase, ContributionPct: c.contribution, RiskCutAnnualBase: c.riskCut})
+			Units: c.units, Quantity: qty, Waits: waits, Phase: c.phase, ContributionPct: c.contribution, RiskCutAnnualBase: c.riskCut, Sleeve: c.sleeve})
 		if qty <= 0 {
 			continue
 		}
@@ -683,11 +687,33 @@ func (z *mandateSizer) move(c *mandateCut, f func(over map[string]int) float64, 
 	return mandateCutTo(c, c.units, func(u int) float64 { return f(map[string]int{c.id: u}) }, limit)
 }
 
-// mandateSizeBatch sizes the batch afresh on the verdict's book: cut by cut,
-// re-evaluating the book after each, the gap breaches and then the largest
-// Euler contributor; then the expiry gate, sizing again around any option it
-// cuts; then the damping against the standing batch.
+// mandateSizeBatch sizes the batch afresh on the verdict's book, the sleeve
+// furthest over its seat first. The seats' order never stops short where
+// the whole book's order (largest contributor first) reaches the target:
+// the reduction protects the whole book first, so it then takes that one.
 func mandateSizeBatch(verdictBook mandate.Input, candidates map[string]*mandateCut, standing []rpc.TradeProposal, now time.Time) mandateBatch {
+	for id, c := range candidates {
+		c.sleeve = verdictBook.Seats.SleeveOf(id)
+	}
+	batch := mandateSizeBatchBy(verdictBook, candidates, standing, now)
+	if batch.reached || verdictBook.Seats == nil {
+		return batch
+	}
+	whole := verdictBook
+	whole.Seats = nil
+	if alt := mandateSizeBatchBy(whole, candidates, standing, now); alt.reached {
+		alt.leftOut = append(alt.leftOut, "the seats' order stops short of the target, so this batch cuts the largest contributor first")
+		return alt
+	}
+	return mandateSizeBatchBy(verdictBook, candidates, standing, now)
+}
+
+// mandateSizeBatchBy sizes one batch on the verdict's book: cut by cut,
+// re-evaluating the book after each, the gap breaches and then the sleeve
+// furthest over its seat and its largest Euler contributor (every leg in
+// one seat without a seat plan); then the expiry gate, sizing again around
+// any option it cuts; then the damping against the standing batch.
+func mandateSizeBatchBy(verdictBook mandate.Input, candidates map[string]*mandateCut, standing []rpc.TradeProposal, now time.Time) mandateBatch {
 	in := verdictBook
 	in.Legs = mandateMergedLegs(verdictBook.Legs)
 	z := &mandateSizer{in: in, candidates: candidates, expiry: map[string]int{}, sessions: map[string]int{}}
@@ -769,7 +795,7 @@ func mandateKeepStanding(z *mandateSizer, standing []rpc.TradeProposal) {
 func (z *mandateSizer) reset() {
 	z.cuts, z.leftOut = nil, nil
 	for _, c := range z.candidates {
-		c.units, c.phase, c.gapLoss, c.gapCap, c.sessions = 0, "", nil, nil, nil
+		c.units, c.phase, c.gapLoss, c.gapCap, c.sessions, c.seatExcess = 0, "", nil, nil, nil, nil
 	}
 	ids := make([]string, 0, len(z.expiry))
 	for id := range z.expiry {
@@ -784,8 +810,10 @@ func (z *mandateSizer) reset() {
 	}
 }
 
-// sizeMain cuts gap breaches first, then the largest contributor, until the
-// book reaches the target or nothing reduces further.
+// sizeMain cuts gap breaches first, then the sleeve furthest over its seat
+// and, within it, the largest contributor, until the book reaches the target
+// or nothing reduces further (seats, 2026-10-18 08:06 CEST: "the sleeve
+// furthest over its seat is cut first").
 func (z *mandateSizer) sizeMain() {
 	skipped := map[string]bool{}
 	exhausted := map[string]bool{}
@@ -809,13 +837,21 @@ func (z *mandateSizer) sizeMain() {
 			share[rep.ID] = rep.ContributionPct
 		}
 		var top *mandateCut
-		for _, id := range z.ids {
-			c := z.candidates[id]
-			if c.units >= c.full || exhausted[c.id] || share[c.id] <= mandateReductionEpsilon {
-				continue
+		var seat mandate.SeatReport
+		for _, sleeve := range mandateSeatOrder(v) {
+			for _, id := range z.ids {
+				c := z.candidates[id]
+				if z.in.Seats.SleeveOf(c.id) != sleeve || c.units >= c.full || exhausted[c.id] || share[c.id] <= mandateReductionEpsilon {
+					continue
+				}
+				if top == nil || share[c.id] > share[top.id] {
+					top = c
+				}
 			}
-			if top == nil || share[c.id] > share[top.id] {
-				top = c
+			if top != nil {
+				seat, _ = v.Seat(sleeve)
+				seat.Sleeve = sleeve
+				break
 			}
 		}
 		if top == nil {
@@ -826,8 +862,43 @@ func (z *mandateSizer) sizeMain() {
 			exhausted[top.id] = true
 			continue
 		}
+		// A sleeve over its seat is cut to its seat, not past it for another
+		// sleeve's excess: while another sleeve is over its own seat, the
+		// smallest step that takes this one inside, when that comes before
+		// the step that reaches the target. Never more than the whole-book
+		// step, so the cut still lowers the book's risk.
+		if seat.Over && slices.ContainsFunc(v.Seats, func(s mandate.SeatReport) bool { return s.Sleeve != seat.Sleeve && s.Over }) {
+			for _, u := range mandateCutSteps(top, top.units) {
+				if u >= units {
+					break
+				}
+				if after, ok := z.eval(map[string]int{top.id: u}).Seat(seat.Sleeve); ok && !after.Over {
+					units = u
+					break
+				}
+			}
+		}
 		z.commit(top, units, rpc.MandatePhaseRisk)
+		if len(v.Seats) > 0 {
+			top.seatExcess = &seat.ExcessBase
+		}
 	}
+}
+
+// mandateSeatOrder lists the sleeves furthest over their seats first (use
+// less seat; ties in mandate.Sleeves order). A verdict without seats puts
+// every leg in the owner's, the order of the old rule.
+func mandateSeatOrder(v mandate.Verdict) []string {
+	if len(v.Seats) == 0 {
+		return []string{mandate.SleeveOwner}
+	}
+	seats := slices.Clone(v.Seats)
+	slices.SortStableFunc(seats, func(a, b mandate.SeatReport) int { return cmp.Compare(b.ExcessBase, a.ExcessBase) })
+	out := make([]string, len(seats))
+	for i, s := range seats {
+		out[i] = s.Sleeve
+	}
+	return out
 }
 
 // gapStep cuts the largest gap loser of one breached name, the losers tried
@@ -1246,7 +1317,14 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 		}
 		why = fmt.Sprintf("a gap in %s would lose %s, over the cap %s", c.leg.Underlying, mandateMoney(loss, ccy), mandateMoney(capBase, ccy))
 	default:
-		why = fmt.Sprintf("the largest risk contributor left (%.0f%% of the risk)", c.contribution)
+		why = fmt.Sprintf("the largest risk contributor left in %s", mandateSleeveName(c.sleeve))
+		switch {
+		case c.seatExcess != nil && *c.seatExcess > 0:
+			why += fmt.Sprintf(", the seat furthest over (%s over it)", mandateMoney(*c.seatExcess, ccy))
+		case c.seatExcess != nil:
+			why += ", the seat with the least room left"
+		}
+		why += fmt.Sprintf(" (%.0f%% of the risk)", c.contribution)
 	}
 	reason := fmt.Sprintf("%s; %s: %s; the batch takes the risk to %s", risk, why, order, mandateMoney(batch.riskAfter, ccy))
 	if batch.reached {
@@ -1287,7 +1365,7 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 		RiskAnnualBase: batch.riskBefore, BudgetAnnualSD: batch.budget, TargetAnnualSD: batch.target,
 		RiskCutAnnualBase: c.riskCut, RiskAfterAnnualBase: batch.riskAfter,
 		VerdictStatus: v.Status, VerdictAt: v.AsOf, VerdictFingerprint: st.VerdictFingerprint, Episode: st.Episode, BaseCurrency: ccy,
-		Lot: c.step, Session: mandateSessionDate(v.AsOf),
+		Lot: c.step, Session: mandateSessionDate(v.AsOf), Sleeve: c.sleeve,
 	}
 	if c.sessions != nil {
 		s := *c.sessions

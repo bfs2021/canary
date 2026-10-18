@@ -120,6 +120,7 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 		}
 	}
 	renderMandateReduction(env, res.Reduction, ccy)
+	renderMandateSeats(env, v, ccy)
 	if len(v.Reasons) > 0 {
 		fmt.Fprintln(env.Stdout, "\n"+env.bold("Why unknown"))
 		for _, reason := range v.Reasons {
@@ -241,6 +242,32 @@ func renderMandateReduction(env *Env, r *rpc.MandateReductionView, ccy string) {
 }
 
 // mandatePhaseWords names why a reduction row is in the batch.
+// renderMandateSeats lists each seat's use against its seat (seats,
+// 2026-10-18): yours, the rest of the budget, then the machine's, each its
+// stage times its share while it sends orders.
+func renderMandateSeats(env *Env, v *mandate.Verdict, ccy string) {
+	if len(v.Seats) == 0 {
+		return
+	}
+	fmt.Fprintln(env.Stdout, "\n"+env.bold("Seats")+"  each seat's use against its seat, a year · alone: its own risk")
+	for _, s := range v.Seats {
+		name, detail := strings.ToUpper(s.Sleeve[:1])+s.Sleeve[1:], s.Note
+		switch {
+		case s.Sleeve == mandate.SleeveOwner:
+			name, detail = "Yours", "the budget less the machine's seats"
+		case s.StagePct > 0:
+			detail = fmt.Sprintf("stage %s of the %s share", mandatePct(s.StagePct), mandatePct(s.SharePct))
+		}
+		line := briefJoin(name, mandateAmount(s.UseBase, ccy)+" of "+mandateAmount(s.SeatBase, ccy), "alone "+mandateAmount(s.StandaloneBase, ccy))
+		style := func(s string) string { return s }
+		if s.Over {
+			line += " · OVER by " + mandateAmount(s.ExcessBase, ccy)
+			style = env.red
+		}
+		riskDisplayLine(env, "  ", briefJoin(line, detail), style)
+	}
+}
+
 func mandatePhaseWords(phase string) string {
 	switch phase {
 	case rpc.MandatePhaseExpiry:

@@ -8,6 +8,14 @@ Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flow
   since 2026-09-01 −5,000 EUR
 Additions · open · reductions, closes, cancels and hedges always are
 
+Seats  each seat's use against its seat, a year · alone: its own risk
+  Yours · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
+  machine's seats
+  Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
+  monthly rows are phase 2), so it runs nothing
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
+  was dropped on 2026-10-18)
+
 Contributions  share of the risk · beta to SPY · one-name gap against its cap
   SYNA · 66.9% · beta 1.12 · gap −25% loses 22,100 EUR, +25% loses 6,200 EUR
   (cap 22,940)
@@ -45,6 +53,14 @@ Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
 Additions · \x1b[32mopen · reductions, closes, cancels and hedges always are\x1b[0m
+
+\x1b[1mSeats\x1b[0m  each seat's use against its seat, a year · alone: its own risk
+  Yours · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
+  machine's seats
+  Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
+  monthly rows are phase 2), so it runs nothing
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
+  was dropped on 2026-10-18)
 
 \x1b[1mContributions\x1b[0m  share of the risk · beta to SPY · one-name gap against its cap
   SYNA · 66.9% · beta 1.12 · gap −25% loses 22,100 EUR, +25% loses 6,200 EUR
