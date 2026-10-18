@@ -147,7 +147,7 @@ func TestShadowRecordNeverReachesAnOrderPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range []string{"shadowRecordType", "shadowScope(", "shadowRecords(", "coreShadowView(", "shadowView(", "recordCoreShadow(", "recordStrategyShadow(", "strategyKill(", "shadow.record.v1", `"shadow/`} {
+		for _, name := range []string{"shadowRecordType", "shadowScope(", "shadowRecords(", "shadowView(", "recordStrategyShadow(", "strategyKill(", "shadow.record.v1", `"shadow/`} {
 			if strings.Contains(string(raw), name) {
 				t.Errorf("%s names %s: only the recorder and the strategy verdicts read the shadow record", f, name)
 			}

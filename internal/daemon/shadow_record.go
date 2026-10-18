@@ -101,16 +101,6 @@ func (s *Server) appendShadowRecord(ctx context.Context, r rpc.ShadowRecord) err
 	return err
 }
 
-// recordCoreShadow writes the core's shadow records (recordStrategyShadow on
-// the register's first entry). res is the core's verdict of this refresh.
-func (s *Server) recordCoreShadow(ctx context.Context, res *rpc.CoreTargetResult, now time.Time) {
-	r, ok := resolvedCore(s.resolvedRegister(s.riskPolicies.snapshot().policy))
-	if !ok {
-		return
-	}
-	s.recordStrategyShadow(ctx, res, r, now)
-}
-
 // recordStrategyShadow writes a strategy's shadow records that are due while
 // it runs in shadow: the month's decision and intent once the month is
 // frozen, a hold when the decision was measured but not frozen, and the
@@ -272,12 +262,6 @@ func (s *Server) shadowDecide(res *rpc.StrategyTargetResult, r register.Resolved
 	return core.Decide(in)
 }
 
-// coreShadowBook is shadowBook for the core: the account's units of its
-// reserved contracts replaced by the paper position.
-func coreShadowBook(in *mandate.Input, k *coreContract, coreContracts []int, held int, price, scalePct float64) *mandate.Input {
-	return shadowBook(in, k, mandate.SleeveCore, coreContracts, held, price, scalePct)
-}
-
 // shadowBook is the book a live strategy would be judged on: a copy of the
 // kept book with the strategy's paper position in its sleeve, and its
 // allocation counted as if reserved at scalePct. The account's units of the
@@ -371,11 +355,6 @@ func coreNextSession(date string, market marketcal.Market, now time.Time) string
 	return ""
 }
 
-// coreShadowView is the core's shadow record as `canary core` serves it.
-func (s *Server) coreShadowView(ctx context.Context, state register.State) *rpc.ShadowView {
-	return s.shadowView(ctx, risk.CoreStrategyID, state)
-}
-
 // shadowView is a strategy's shadow record as a read serves it: the paper
 // position and the newest records. Nil while the strategy is not in shadow
 // and has no record.
@@ -458,12 +437,6 @@ func (s *Server) logShadowFailure(err error) {
 	if s.logger != nil {
 		s.logger.Warnf("shadow record: %v; the next refresh tries again under the same keys", err)
 	}
-}
-
-// coreShadowDue is shadowDue for the core.
-func (s *Server) coreShadowDue(ctx context.Context, latest string) bool {
-	r, ok := resolvedCore(s.resolvedRegister(s.riskPolicies.snapshot().policy))
-	return ok && s.shadowDue(ctx, r, latest)
 }
 
 // shadowDue reports whether a strategy in shadow has a record to write that

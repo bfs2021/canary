@@ -749,16 +749,6 @@ func digestLabel(r register.Resolved) string {
 	return e.Rule + "|" + e.SpecHash + "|" + e.Signal + "|" + e.ISIN + "|" + e.Currency
 }
 
-// coreHeadroomFits reports whether the book with q more shares of the core
-// stays at most at core.HeadroomFactor of the budget, carries no gap-cap
-// breach, keeps the core's own gap at most at that share of its cap, and
-// keeps the core inside its allocation: the forced reduction's target with
-// margin, so a core buy cannot set up a forced sale by itself (design §3;
-// review B1), and the gate's allocation check (allocations, 2026-10-18).
-func coreHeadroomFits(book *mandate.Input, k *coreContract, q int, price float64) bool {
-	return strategyHeadroomFits(book, k, mandate.SleeveCore, q, price)
-}
-
 // strategyLegID is a non-core strategy's own leg in a hypothetical book: its
 // units beside the owner's real units of the same contract, which stay the
 // owner's (strategy-evaluator.md §5).
@@ -766,10 +756,15 @@ func strategyLegID(sleeve string, conID int) string {
 	return "sleeve:" + sleeve + ":" + mandateConLegID(conID)
 }
 
-// strategyHeadroomFits is coreHeadroomFits for any sleeve: the leg is
-// judged in the strategy's sleeve, where the plan would place its units; a
-// non-core strategy's leg is its own, so the owner's real units of the
-// fund are never moved into its sleeve.
+// strategyHeadroomFits reports whether the book with q more shares of the
+// strategy's contract stays at most at core.HeadroomFactor of the budget,
+// carries no gap-cap breach, keeps the strategy's own gap at most at that
+// share of its cap, and keeps its sleeve inside its allocation: the forced
+// reduction's target with margin, so a buy cannot set up a forced sale by
+// itself (core-sleeve.md §3; review B1), and the gate's allocation check
+// (allocations, 2026-10-18). The leg is judged in the strategy's sleeve; a
+// non-core strategy's leg is its own, so the owner's real units of the fund
+// are never moved into its sleeve.
 func strategyHeadroomFits(book *mandate.Input, k *coreContract, sleeve string, q int, price float64) bool {
 	if book == nil || k == nil {
 		return false
