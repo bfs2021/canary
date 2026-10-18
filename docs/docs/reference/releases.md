@@ -6,6 +6,23 @@ Every release publishes two binaries per platform, under two different names. On
 
 [Updating](../start/updating.md) covers how to install a new version. This page covers what you are installing, how to check it is genuine, and how long it keeps getting fixes.
 
+## Moving to 3.23
+
+Nothing changes on upgrade until you write it. `[mandate.core]` keeps running
+in shadow. Writing `stage = "live"` in it turns each monthly decision into one
+`core_rebalance` proposal row for your device confirmation, bound to the
+core's contract and sized by the rule, the band, the minimum and the
+mandate's headroom; the daemon never sends it by itself and the bucket cannot
+be pre-authorised. A `[mandate.strategies.<id>]` entry names a fund, a signal
+from the compiled library and your numbers, and the evaluator runs it in
+shadow at most; `canary strategy ID` shows what it would trade. A register
+entry may write `kill_drawdown_k`, the drawdown bound in units of sleeve
+capital.
+
+Clients that read `canary core --json` or `strategy.target`: the sizing's
+allocation is named `allocation_pct` where `sizing.frozen_on` and
+`sizing.current_on` said `core_vol_pct`.
+
 ## Moving to 3.22
 
 Nothing changes on upgrade until you write it. The mandate (`[mandate]`), the

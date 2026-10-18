@@ -1,6 +1,16 @@
 # Canary full context
 
-Updated: 2026-10-18 17:00 CEST
+Updated: 2026-10-18 21:10 CEST
+
+Version 3.23 adds one strategy evaluator that runs every machine strategy in
+the risk policy's register: the core sleeve's rule is its first entry,
+unchanged, and a second strategy is a table naming its fund, a signal from the
+library and the owner's numbers (`canary strategy ID` shows what it would
+trade). The core sleeve can go live at a small stage: with its stage written,
+each monthly decision becomes one proposal row the owner confirms on their
+device, and the daemon never sends it by itself. Every entry runs in shadow
+until the owner writes its stage. Existing policies load unchanged; standard
+binaries and MCP remain read-only.
 
 Version 3.22 adds the owner's mandate: a whole-book risk budget measured by
 historical simulation, refusals of risk-adding orders while the book is over
