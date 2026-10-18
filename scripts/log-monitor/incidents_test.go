@@ -267,12 +267,16 @@ func TestDeclarationsSilenceOnlyWhatTheyName(t *testing.T) {
 	opts := testMonitorOptions(t)
 	opts.states = states
 	opts.staleAfter = time.Hour
-	old := time.Now().Add(-48 * time.Hour)
+	// The run reads a fixed clock, so the app log's age is set from that clock
+	// too: an age taken from the wall clock stopped reading as stale once the
+	// real date passed the fixed one (CI red from 2026-10-14).
+	now := time.Date(2026, 10, 12, 22, 0, 0, 0, time.UTC)
+	old := now.Add(-48 * time.Hour)
 	writeTestFile(t, opts.daemonLog, farmDay("2026-10-12"))
 	if err := os.Chtimes(opts.appLog, old, old); err != nil {
 		t.Fatal(err)
 	}
-	got, err := run(opts, time.Date(2026, 10, 12, 22, 0, 0, 0, time.UTC))
+	got, err := run(opts, now)
 	if err != nil {
 		t.Fatal(err)
 	}
