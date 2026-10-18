@@ -148,49 +148,47 @@ owner's is recorded and not read: "Seats" below). The
   budget), `reduce` (risk > 1.25 × budget, or any gap-cap breach),
   `unknown` (anything the measurement lacks).
 - Enforcement class: pre-trade hard gate for additions (`mandate_budget`
-  blocker), at the same four enforcement points as the drawdown brake
-  (order preview, strategy preview, admission, the final wire guard), with
-  the brake's risk-adding classification: a close or reduce passes, a BUY
-  of a put on a Rulebook hedge symbol passes, cancels never reach it. One
-  exemption is the mandate's alone: a BUY of a bill (security type `BILL`,
-  as IBKR names the line) passes whatever the verdict reads, as a held bill
-  is measured as carrying no equity or volatility risk (2026-10-17 06:47
-  CEST, owner: "If cash like investments do not count against it, I'm fine
-  with 15/30"). A bond (`BOND`, including a bill IBKR lists as a bond) stays
-  refused, because its interest-rate risk is not measured and a long bond
-  could carry real risk counted as zero; a bond fund (`STK`) is measured as
-  before; the drawdown brake keeps refusing a bill purchase while engaged.
-  The exemption is not widened further. Seats (2026-10-18, "Seats" below):
-  an addition passes only when its own sleeve is inside its seat and stays
-  there with the order added, on top of every whole-book check here. Release is automatic: the moment a fresh
-  verdict reads `within`, additions pass; there is no latch and no reset.
-  The incremental pre-trade check re-evaluates the book with the proposed
-  leg added and refuses an addition that would take the annualised risk
-  over the budget even while the standing verdict reads `within`, and one
+  blocker), at the same four enforcement points as the drawdown brake (order
+  preview, strategy preview, admission, the final wire guard), with the
+  brake's risk-adding classification: a close or reduce passes, a BUY of a put
+  on a Rulebook hedge symbol passes, cancels never reach it. One exemption is
+  the mandate's alone: a BUY of a bill (security type `BILL`, as IBKR names
+  the line) passes whatever the verdict reads, as a held bill is measured as
+  carrying no equity or volatility risk (2026-10-17 06:47 CEST, owner: "If
+  cash like investments do not count against it, I'm fine with 15/30"). A bond
+  (`BOND`, including a bill IBKR lists as a bond) stays refused, because its
+  interest-rate risk is not measured and a long bond could carry real risk
+  counted as zero; a bond fund (`STK`) is measured as before; the drawdown
+  brake keeps refusing a bill purchase while engaged. The exemption is not
+  widened further. Seats (2026-10-18, "Seats" below): an addition passes only
+  when its own sleeve is inside its seat and stays there with the order added,
+  on top of every whole-book check here. Release is automatic: the moment a
+  fresh verdict reads `within`, additions pass; there is no latch and no
+  reset. The incremental pre-trade check re-evaluates the book with the
+  proposed leg added and refuses an addition that would take the annualised
+  risk over the budget even while the standing verdict reads `within`, and one
   that would create a gap-cap breach or deepen one (2026-10-14, the core
-  sleeve's design review B1: an addition the gap caps refuse would
-  otherwise be admitted and then sold back by the forced reduction). An
-  option order the evaluator cannot price (no limit, a limit below
-  intrinsic value, an expiry reached, an implied volatility that does not
-  solve) fails closed (2026-10-14, the same review): a sale is refused, as
-  a short option's loss has no bound without a volatility; a buy is judged
-  by a volatility-free bound, its premium at the limit added to the
-  underlying's gap loss, and √252 × units × (the largest rate × the root
-  mean square of the underlying's daily moves × spot, plus the call's spot
-  or the put's strike × the rate's moves) added to the book's risk (a
-  vanilla option's price moves at most as much as its underlying, and the
-  decay shifts every scenario alike), and refused when either does not
-  fit or without a limit. A held contract with its IV is priced as
-  before. An
-  addition on a name or in a currency the book does not hold is measured on
-  the series the history store keeps for it (spot from its last close when
-  the book holds none); while none is fresh, the order is refused
-  (`mandate_budget`: "no daily history for X yet; the desk is fetching
+  sleeve's design review B1: an addition the gap caps refuse would otherwise
+  be admitted and then sold back by the forced reduction). An option order the
+  evaluator cannot price (no limit, a limit below intrinsic value, an expiry
+  reached, an implied volatility that does not solve) fails closed
+  (2026-10-14, the same review): a sale is refused, as a short option's loss
+  has no bound without a volatility; a buy is judged by a volatility-free
+  bound, its premium at the limit added to the underlying's gap loss, and √252
+  × units × (the largest rate × the root mean square of the underlying's daily
+  moves × spot, plus the call's spot or the put's strike × the rate's moves)
+  added to the book's risk (a vanilla option's price moves at most as much as
+  its underlying, and the decay shifts every scenario alike), and refused when
+  either does not fit or without a limit. A held contract with its IV is
+  priced as before. An addition on a name or in a currency the book does not
+  hold is measured on the series the history store keeps for it (spot from its
+  last close when the book holds none); while none is fresh, the order is
+  refused (`mandate_budget`: "no daily history for X yet; the desk is fetching
   it", or the base currency's exchange rate against the order's) and the
-  series is requested on the background lane under the same budget, so a
-  retry after the fetch is measured. A book that cannot be measured with
-  the order added refuses it too; nothing passes unmeasured (2026-10-14
-  16:57 CEST, from the core-sleeve design review).
+  series is requested on the background lane under the same budget, so a retry
+  after the fetch is measured. A book that cannot be measured with the order
+  added refuses it too; nothing passes unmeasured (2026-10-14 16:57 CEST, from
+  the core-sleeve design review).
 - Unknown, stale, partial, and unavailable-data posture: the verdict is
   `unknown`, and additions are refused, when the equity observation is
   missing or older than `capital.max_equity_age_minutes` (or that horizon
@@ -264,22 +262,22 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   every gap cap met, so the next verdict reads `within` rather than `over`
   by a hair; release is at `within` (risk ≤ budget, no gap breach). The 5%
   band is compiled (`mandateReductionTargetFactor`), not a policy key.
-- **Sizing, afresh at every verdict.** Greedy, with the daemon's own
-  evaluator on the book the verdict measured; a standing batch is never
-  carried forward as it was. Cut by cut, the book re-evaluated after each: a
-  name over its gap cap has its largest gap loser cut until the name's gap
-  loss is under the cap (a gap cut never leaves the book riskier); with no
-  breach left, the sleeve furthest over its seat is cut first and, within
-  it, its largest Euler contributor (2026-10-18, "Seats" below), by the
-  smallest whole step that reaches the target or, while another sleeve is
-  over its own seat, brings that sleeve to its seat, whichever comes first,
-  or, when no step on that line does, by the
-  step that takes the most risk off; the next cut is chosen afresh on the
-  book re-evaluated, and follows only when needed. Steps are contracts for options and share lots for stocks (1
-  below 100 shares, 10 to 999, 100 from 1,000). Damping: a line whose
-  position has not moved keeps the last generation's cut when the fresh cut
-  is smaller by at most one step, so a steady risk does not re-size a row
-  every verdict; a larger ease shrinks it, a rise grows it.
+- **Sizing, afresh at every verdict.** Greedy, with the daemon's own evaluator
+  on the book the verdict measured; a standing batch is never carried forward
+  as it was. Cut by cut, the book re-evaluated after each: a name over its gap
+  cap has its largest gap loser cut until the name's gap loss is under the cap
+  (a gap cut never leaves the book riskier); with no breach left, the sleeve
+  furthest over its seat is cut first and, within it, its largest Euler
+  contributor (2026-10-18, "Seats" below), by the smallest whole step that
+  reaches the target or, while another sleeve is over its own seat, brings
+  that sleeve to its seat, whichever comes first, or, when no step on that
+  line does, by the step that takes the most risk off; the next cut is chosen
+  afresh on the book re-evaluated, and follows only when needed. Steps are
+  contracts for options and share lots for stocks (1 below 100 shares, 10 to
+  999, 100 from 1,000). Damping: a line whose position has not moved keeps the
+  last generation's cut when the fresh cut is smaller by at most one step, so
+  a steady risk does not re-size a row every verdict; a larger ease shrinks
+  it, a rise grows it.
 - **Covered and protected shares.** The batch never buys a short option
   back and never sells the shares that cover short options of their own
   underlying (short calls over long shares, short puts over a short sale):

@@ -78,10 +78,11 @@ for one instrument.
    trades (about three a year). Ship option B next: the Desk controller
    names the same row under the Fully armed mandate. One row, two
    authorisations, as `desk-execution.md` already separates them.
-4. The whole-book mandate gate stays binding for every core buy, and so
-   does the core's own seat (2026-10-18, §3); a buy is sized to leave
-   the book at most at 0.95 of the budget and the core's gap loss at most at 0.95 of its cap, the forced reduction's own
-   target, so a core buy can never set up a forced sale by itself.
+4. The whole-book mandate gate stays binding for every core buy, and so does
+   the core's own seat (2026-10-18, §3); a buy is sized to leave the book at
+   most at 0.95 of the budget and the core's gap loss at most at 0.95 of its
+   cap, the forced reduction's own target, so a core buy can never set up a
+   forced sale by itself.
 5. This is a beta allocation the owner chose, with a drawdown filter. It
    claims no alpha: the lab supplies the parity fixture and the kill rule,
    nothing else, and no Sharpe, IC or e-value is a test of it.
@@ -114,10 +115,10 @@ Notes the review raised, with their rules:
   is reserved to the core. An existing holding is adopted at the first
   decision; above the target beyond the band, the rule sells the excess
   (under A, the owner confirms that row).
-- **The owner's hand IBCF orders.** They are the owner's call and change
-  the holding the next decision corrects. Since 2026-10-18 a hand buy is
-  the core's addition, judged against the core's seat. While any IBCF order works, the
-  owner's included, no core row is served, and every core row is netted
+- **The owner's hand IBCF orders.** They are the owner's call and change the
+  holding the next decision corrects. Since 2026-10-18 a hand buy is the
+  core's addition, judged against the core's seat. While any IBCF order works,
+  the owner's included, no core row is served, and every core row is netted
   against working IBCF orders (phase 2).
 - **Option B's armed terms** name the rule, the spec hash, the scale and
   core_vol_pct, so a policy edit cannot raise automatic buying under a
