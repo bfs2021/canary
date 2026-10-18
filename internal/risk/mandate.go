@@ -177,7 +177,7 @@ func isinShape(s string) bool {
 // 08:06 CEST (internal-docs/design/mandate-risk-budget.md, "Risk allocations") a
 // machine sleeve's allocation is reserved only as far as it runs: its stage
 // times its allocation, measured by Euler contributions, which add up: the
-// machine's shares together may not exceed vol_target_pct, and the owner's
+// machine's allocations together may not exceed vol_target_pct, and the owner's
 // allocation is the rest of the budget (at full stages 15 − 6 − 4 = 5 points),
 // so owner_vol_pct is recorded and not read.
 type ConstitutionMandateSleeves struct {

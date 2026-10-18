@@ -1003,7 +1003,7 @@ owner's 12, D4).
 
 Phase 2 adds the window keys (`window_sessions = 5`, `send_after =
 "15:45"` Europe/Berlin) with the rows that read them, and the cash rule's
-`[cash.currency_cap.USD]` (`max_target_pct = 20`, `target_target_pct =
+`[cash.currency_cap.USD]` (`max_share_pct = 20`, `target_share_pct =
 15`). An unknown key refuses the constitution, so neither is written
 before the code that reads it.
 
