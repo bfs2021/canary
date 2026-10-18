@@ -417,11 +417,16 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	if why != "" {
 		return
 	}
-	f := s.coreFrozen(ctx, frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID))
+	scope := frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID)
+	f := s.coreFrozen(ctx, scope)
 	decided := f != nil && f.Decision == latest
 	switch {
-	case decided && r.State == register.StateLive && f.Row != nil:
-		return // the month's decision is recorded; its row is sized by the proposal engine
+	case decided && r.State == register.StateLive && f.Row != nil && f.Row.Served && s.coreDecisionSubmitted(f.Row, scope):
+		// The month's row was sent: its record is final. Until then the
+		// evaluation runs on, so a row served later in the window (the
+		// verdict read reduce at the decision, within since) is recorded
+		// (core_rebalance.go, recordCoreDecision).
+		return
 	case decided && r.State != register.StateLive && !s.shadowDue(ctx, r, latest):
 		return
 	}

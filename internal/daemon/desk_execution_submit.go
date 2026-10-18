@@ -261,6 +261,13 @@ func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateS
 	if class == rpc.DeskClassAdd && *priorUnknown {
 		return deskExecutionRefusal(item, now, rpc.TradingBlocker{Code: rpc.DeskBlockerPriorUnknown, Message: "an earlier item of this submission ended unknown; additions after it are not sent"})
 	}
+	// A strategy row is sent in session at the live mid, inside its window.
+	// One that is not ready now (its exchange closed, the opening window, a
+	// stale quote) is refused before journaling, so the session's episode
+	// stays free for the controller's next pass while the row is ready.
+	if blocker := s.deskExecutionStrategyNotReady(item.Intent.Proposal.Key); blocker != nil {
+		return deskExecutionRefusal(item, now, *blocker)
+	}
 	prior, refusal, err := s.recordDeskExecutionRequest(ctx, scope, item, "automatic:"+authority.Terms.ID)
 	if err != nil {
 		return deskExecutionRefusal(item, now, rpc.TradingBlocker{Code: deskBlockerJournalUnavailable, Message: "the execution journal could not record the request, so nothing was sent: " + err.Error()})
@@ -297,6 +304,23 @@ func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateS
 		s.warnf("desk execution: %s not sent under mandate %s: %s: %s", item.Intent.Proposal.Key, authority.Terms.ID, outcome.Outcome, outcome.Message)
 	}
 	return rpc.DeskExecutionReceipt{RequestID: item.RequestID, EpisodeID: item.EpisodeID, Digest: rpc.DeskIntentDigest(item), Class: class, Outcome: outcome.Outcome, OrderRef: outcome.OrderRef, Blockers: outcome.Blockers, Message: outcome.Message, AsOf: s.orderNow()}
+}
+
+// deskExecutionStrategyNotReady reads the served strategy row's readiness:
+// a strategy row not ready now is refused with the readiness code, and
+// nothing is journaled. Rows outside a strategy and rows the engine does
+// not serve pass to the gate, which decides.
+func (s *Server) deskExecutionStrategyNotReady(key string) *rpc.TradingBlocker {
+	engine := s.tradeProposals
+	if engine == nil {
+		return nil
+	}
+	prop, ok := servedProposal(engine.snapshotForRead(false, false), key)
+	if !ok || deskExecutionStrategyEpisode(prop) == "" || prop.Readiness == nil || prop.Readiness.Code == rpc.ReadinessReady {
+		return nil
+	}
+	return &rpc.TradingBlocker{Code: nonEmptyString(prop.Readiness.Code, rpc.ReadinessNotExecutable),
+		Message: fmt.Sprintf("the strategy row is not ready now (%s): it is sent in session at the live mid, inside its window; nothing was journaled, so the controller may send it once it reads ready", nonEmptyString(prop.Readiness.Message, prop.Readiness.Code))}
 }
 
 // deskExecutionAttempt is one attempt under brokerWriteMu: the grant with

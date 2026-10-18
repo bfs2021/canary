@@ -719,11 +719,40 @@ What `desk.execution.submit` with `automatic` does (`desk_execution_submit.go`):
   origin is `desk-automatic`, journaled, read and settled as the machine's
   own.
 
+- Sends a strategy row in session only: a row whose live readiness is not
+  `ready` (its exchange closed, the opening window, a stale quote, the broker
+  link down) is refused with that readiness code before journaling, so the
+  session's episode stays free and the controller sends the row once it
+  reads ready, at the live mid, inside the window. The controller never uses
+  the owner-queue path; neither does the owner's hand under option A any
+  more: `prepareOwnerQueue` refuses the core's row
+  (`queue_bucket_not_queueable`, as its readiness already said), because a
+  queue to the open would cap the row at its reference price, the series'
+  last close, so a higher open leaves it unsent (found by the Desk quality
+  loop, 2026-10-19), and the queue's terms carry none of the row's typed buy
+  exception. Desk's closed-market routing of STK rows to the owner queue
+  (`execution_batch.go`, `views/ticket/proposal.js`) therefore shows this
+  refusal for a core row in the evening; the Strategies surface routes the
+  core's row to an in-session review instead (Desk's work). No row field
+  changes.
+- The month's decision record follows the row the window serves
+  (`recordCoreDecision`, found by the Canary quality loop, 2026-10-19): a
+  month first recorded as "no buy" (the verdict read reduce) is re-recorded
+  with the row's key when a later refresh inside the window serves the buy,
+  so `canary core` reads that row's outcome; the evaluation runs each
+  cadence until the recorded row was submitted, and a served row's record
+  stays, with the journal's outcome, when the row is later withdrawn or its
+  window ends. The sized quantity alone changes no record.
+
 Capabilities list `submit` with authority `automatic`; the manual batch is
 still not served. The Go client gains `SubmitDeskExecution`, private like
 the authority methods and outside the MCP catalogue.
 
-Tests (`desk_execution_submit_test.go`, `desk_execution_submit_trading_test.go`):
+Tests (`desk_execution_submit_test.go`, `desk_execution_submit_trading_test.go`,
+`core_rebalance_test.go`, `proposal_queue_test.go`): a strategy row not ready
+is refused unjournaled and a ready one reaches the gate; the record follows a
+buy served later in the window and an unchanged decision re-records nothing;
+the owner queue refuses the core's row;
 no mandate, another capability, a stale generation, other preferences, not
 running and disarmed each refuse before journaling; a core buy under
 Protection is refused and recorded once per episode, a second request

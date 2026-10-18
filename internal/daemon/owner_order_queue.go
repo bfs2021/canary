@@ -131,6 +131,15 @@ func (e *proposalEngine) prepareOwnerQueue(ctx context.Context, p rpc.TradePropo
 			out.Blockers = blockers
 			return out, nil
 		}
+		// The core's row is sent in session at the live mid, inside its
+		// window (core-sleeve.md, "Window and order terms"): a queue to the
+		// open would cap it at the row's reference price, the series' last
+		// close, and a higher open would leave it unsent, and the queue's
+		// terms carry none of the row's typed buy exception. Its readiness
+		// already says it is not queueable; this is the same answer here.
+		if prop.Bucket == rpc.TradeProposalBucketCoreRebalance {
+			return block("queue_bucket_not_queueable", "The core's row is sent in session at the live mid, inside its window; review it while its exchange is open.")
+		}
 		out.Proposal = &prop
 		quantity := prop.Quantity
 		if p.Quantity < 0 || p.Quantity > prop.Quantity {

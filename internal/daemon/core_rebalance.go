@@ -556,7 +556,7 @@ func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResu
 	}
 	scope := s.currentBrokerStateScope()
 	f := s.coreFrozen(ctx, coreScope(scope, contract.ConID))
-	if f == nil || f.Decision != res.Decision.Decision || f.Row != nil {
+	if f == nil || f.Decision != res.Decision.Decision {
 		return
 	}
 	plan := corePlanFor(coreRowInput{Active: true, Result: res, Contract: contract, State: reg.State, ScalePct: reg.ScalePct, Scope: scope}, now)
@@ -577,6 +577,17 @@ func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResu
 		}
 		row.Served, row.RowKey = true, proposalKey(rpc.TradeProposalBucketCoreRebalance, coreContractParams(contract), action)
 	}
+	// The record follows the row the window actually serves: a month first
+	// recorded as "no buy" (the verdict read reduce, a breach stood) is
+	// re-recorded when a later refresh inside the window serves a row, so
+	// `canary core` reads that row's outcome. A served row's record is
+	// final once the row was submitted, and stays when the row is later
+	// withdrawn or its window ends, with the journal's outcome on it. The
+	// sized quantity alone, which every generation re-sizes, changes no
+	// record.
+	if f.Row != nil && (!coreDecisionChanged(f.Row, row) || f.Row.Served && s.coreDecisionSubmitted(f.Row, coreScope(scope, contract.ConID))) {
+		return
+	}
 	// A copy replaces the kept month under the store's lock, so no reader
 	// of the frozen month sees a record half-written.
 	recorded := *f
@@ -584,6 +595,29 @@ func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResu
 	if err := s.freezeCore(ctx, &recorded); err != nil {
 		s.warnf("core decision %s: recorded in memory, the database save failed: %v", f.Decision, err)
 	}
+}
+
+// coreDecisionChanged reports whether a later refresh serves a row the
+// record does not have: a row where none was served, or another action's
+// row; the sized quantity alone does not count, and a record keeps its
+// served row when a later refresh serves none.
+func coreDecisionChanged(recorded, next *coreDecisionRow) bool {
+	return next.Served && (!recorded.Served || recorded.Kind != next.Kind || recorded.RowKey != next.RowKey)
+}
+
+// coreDecisionSubmitted reports whether the recorded row was submitted since
+// it was recorded, read from the proposal journal.
+func (s *Server) coreDecisionSubmitted(r *coreDecisionRow, scope string) bool {
+	e := s.tradeProposals
+	if e == nil || e.store == nil || r == nil || r.RowKey == "" {
+		return false
+	}
+	for _, ev := range e.store.eventsSince(r.DecidedAt) {
+		if ev.Key == r.RowKey && ev.Type == "submitted" && coreDecisionEventMatchesScope(ev, scope) {
+			return true
+		}
+	}
+	return false
 }
 
 // coreFinish attaches the live core's row and last decision to a verdict:

@@ -277,3 +277,40 @@ func TestDeskAutomaticOriginNeedsAGrant(t *testing.T) {
 		t.Fatal("the desk-automatic origin is not journaled, read and settled as the machine's own")
 	}
 }
+
+// A strategy row not ready now (here the broker link is down; a closed
+// exchange or the opening window read the same way) is refused with the
+// live readiness code before journaling, so the session's episode stays
+// free and the controller sends the row once it reads ready; a ready row
+// reaches the gate and is journaled.
+func TestDeskExecutionSubmitSendsAStrategyRowOnlyWhenReady(t *testing.T) {
+	s, scope := deskExecutionTestServer(t)
+	e := notFoundEngine(s)
+	s.tradeProposals = e
+	row := rpc.TradeProposal{Key: "core_rebalance:syn", Revision: "r1", Bucket: rpc.TradeProposalBucketCoreRebalance, Action: rpc.OrderActionBuy, OrderType: rpc.OrderTypeLMT,
+		Core: &rpc.TradeProposalCore{Session: "2026-10-01", Sleeve: "core", Terms: rpc.CoreRowTerms{Episode: "core:DU1234567:paper:2026-09"}}}
+	e.snapshot = rpc.TradeProposalSnapshot{Kind: rpc.TradeProposalSnapshotKind, Revision: "r1", AccountID: scope.Account, AccountMode: scope.Mode, Proposals: []rpc.TradeProposal{row}}
+	full := installDeskMandate(t, s, scope, "full", true)
+	item := deskExecutionStrategyItem("req-closed", "core:DU1234567:paper:2026-09:2026-10-01", rpc.DeskClassAdd)
+	if ready := e.snapshotForRead(false, false).Proposals[0].Readiness; ready == nil || ready.Code != rpc.ReadinessBrokerUnavailable {
+		t.Fatalf("the served row reads %+v, want broker_unavailable", ready)
+	}
+	got, err := deskExecutionSubmit(t, s, rpc.DeskExecutionSubmitParams{Automatic: &full, Items: []rpc.DeskExecutionItem{item}})
+	if err != nil || got.Receipts[0].Outcome != rpc.DeskOutcomeRefused || got.Receipts[0].Blockers[0].Code != rpc.ReadinessBrokerUnavailable || !strings.Contains(got.Receipts[0].Message, "in session") {
+		t.Fatalf("not ready: %+v %v", got, err)
+	}
+	if r := deskExecutionLookup(t, s, item.RequestID)[0]; r.Outcome != rpc.DeskOutcomeAbsent {
+		t.Fatalf("a not-ready refusal was journaled: %+v", r)
+	}
+	s.gatewayReadyForTrading = func() bool { return true }
+	if ready := e.snapshotForRead(false, false).Proposals[0].Readiness; ready == nil || ready.Code != rpc.ReadinessReady {
+		t.Fatalf("the served row reads %+v, want ready", ready)
+	}
+	got, err = deskExecutionSubmit(t, s, rpc.DeskExecutionSubmitParams{Automatic: &full, Items: []rpc.DeskExecutionItem{item}})
+	if err != nil || got.Receipts[0].Outcome != rpc.DeskOutcomeRefused || got.Receipts[0].Blockers[0].Code != "proposal_not_found" {
+		t.Fatalf("ready row at the gate: %+v %v", got, err)
+	}
+	if r := deskExecutionLookup(t, s, item.RequestID)[0]; r.Outcome != rpc.DeskOutcomeRefused {
+		t.Fatalf("the gate's refusal is not journaled: %+v", r)
+	}
+}

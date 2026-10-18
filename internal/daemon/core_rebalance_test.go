@@ -339,3 +339,37 @@ func TestScorecardSleeveResolverKeepsCoreFillsInTheCoreSleeve(t *testing.T) {
 		t.Fatalf("catalogue %+v", rule)
 	}
 }
+
+// The month's record follows the row the window serves: a decision first
+// recorded as "no buy" (the verdict read reduce) is re-recorded when a later
+// refresh inside the window serves the buy, with its key, so `canary core`
+// reads the row's outcome; a refresh that changes nothing re-records nothing.
+func TestCoreDecisionRecordFollowsTheRowServedLaterInTheWindow(t *testing.T) {
+	over := withIBCF(mandateTestPositions(3000), 100, 100)
+	srv, engine := coreRowServer(t, testCoreConstitution(), over, 0.25, coreDecisionNow)
+	srv.refreshCoreTarget(t.Context())
+	first := srv.evaluateCoreTarget(t.Context(), srv.now()).LastDecision
+	if first == nil || first.Kind != core.ActionWait || first.Outcome.Served || first.RowKey != "" {
+		t.Fatalf("first record %+v", first)
+	}
+	// The book comes back within budget inside the window: the buy is served.
+	pos := mandateTestPositions(100)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
+	srv.now = func() time.Time { return coreDecisionNow.Add(90 * time.Minute) }
+	if res := srv.evaluateMandate(t.Context(), false); res.Verdict == nil {
+		t.Fatal("no mandate verdict")
+	}
+	rows, _ := coreRows(t, srv, engine, pos)
+	if len(rows) != 1 || rows[0].Action != rpc.OrderActionBuy {
+		t.Fatalf("rows %+v, want the buy", rows)
+	}
+	srv.refreshCoreTarget(t.Context())
+	second := srv.evaluateCoreTarget(t.Context(), srv.now()).LastDecision
+	if second == nil || second.Kind != core.ActionBuy || !second.Outcome.Served || second.RowKey != rows[0].Key || !second.DecidedAt.After(first.DecidedAt) {
+		t.Fatalf("record after the buy is served %+v", second)
+	}
+	srv.refreshCoreTarget(t.Context())
+	if again := srv.evaluateCoreTarget(t.Context(), srv.now()).LastDecision; again == nil || !again.DecidedAt.Equal(second.DecidedAt) {
+		t.Fatalf("an unchanged decision was re-recorded: %+v", again)
+	}
+}

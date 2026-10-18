@@ -754,3 +754,25 @@ func TestPreAuthorisedDueWaitsForTheOpenPlusOffset(t *testing.T) {
 		t.Fatalf("attempts at the open plus the offset = %d, want 1", rig.revalidations)
 	}
 }
+
+// The core's row is not queued for the open: its readiness says so, and the
+// owner-queue preparation refuses it the same way, because a queue would cap
+// it at the row's reference price (the series' last close) and carry none
+// of its typed buy exception; the row is sent in session at the live mid.
+func TestOwnerQueueRefusesTheCoreRow(t *testing.T) {
+	t.Parallel()
+	rig := newAutomaticTestRig(t, `pre_authorised = []`)
+	p := rig.trimProposal(10)
+	p.Bucket, p.Action = rpc.TradeProposalBucketCoreRebalance, rpc.OrderActionBuy
+	p.Key = proposalKey(p.Bucket, p.Contract, p.Action)
+	p.Core = &rpc.TradeProposalCore{Kind: "buy", Session: "2026-09-22", DecisionClose: 25, ConID: p.Contract.ConID, Currency: p.Contract.Currency}
+	rev := rig.install(p)
+	scope := rig.engine.currentScope()
+	if snap := rig.engine.Snapshot(false); len(snap.Proposals) != 1 || snap.Proposals[0].Readiness != nil && snap.Proposals[0].Readiness.Queueable {
+		t.Fatalf("a core row reads queueable: %+v", snap.Proposals)
+	}
+	q, err := rig.engine.QueuePrepare(t.Context(), rpc.TradeProposalQueuePrepareParams{OwnerOrder: true, Key: p.Key, Revision: rev, AccountID: scope.Account, AccountMode: scope.Mode})
+	if err != nil || q.Accepted || len(q.Blockers) != 1 || q.Blockers[0].Code != "queue_bucket_not_queueable" || !strings.Contains(q.Blockers[0].Message, "in session") {
+		t.Fatalf("owner queue of the core row: %+v %v", q, err)
+	}
+}
