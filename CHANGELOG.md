@@ -2,7 +2,17 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## v3.22.1 — Unreleased
+## v3.22.1 — 2026-10-18 17:35 CEST
+
+### What's new
+
+A sleeve that is inside its own risk allocation keeps trading while the book
+is over budget, the way a pod inside its loss limit keeps trading while the
+risk desk cuts the pod that breached. Before, any sleeve over its allocation
+stopped every sleeve, so a machine strategy stood still whenever the owner's
+own book was over. The holds that protect the whole book stay: a verdict that
+cannot be measured, a gap-cap breach and the maximum loss still refuse every
+addition, and the forced reduction keeps cutting the sleeve furthest over.
 
 ### Changed
 
