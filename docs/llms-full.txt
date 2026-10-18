@@ -1,6 +1,19 @@
 # Canary full context
 
-Updated: 2026-10-11 09:10 CEST
+Updated: 2026-10-18 17:00 CEST
+
+Version 3.22 adds the owner's mandate: a whole-book risk budget measured by
+historical simulation, refusals of risk-adding orders while the book is over
+it, a pre-authorised forced reduction with a veto window, and risk
+allocations per sleeve. A decision scorecard scores every position change per
+sleeve with sequential evidence, and a quote kept at every fill measures the
+spread paid. A strategy register in the risk policy names each machine
+strategy; the core sleeve runs read-only in shadow; an option-chain recorder
+saves the desk's chains once a session. Hand orders in TWS can be cancelled or
+changed from Canary when the owner enables it, and two Canary orders never
+sell the same shares twice. Cash interest rates come from the broker's
+statement. Existing policies load unchanged; standard binaries and MCP remain
+read-only.
 
 Version 3.21 adds owner-confirmed order queues and whole-position stock trailing
 protection in trading builds. It fixes large volume readings and keeps explicitly

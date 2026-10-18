@@ -1,10 +1,35 @@
 # Releases and support
 
-Updated: 2026-10-11
+Updated: 2026-10-18
 
 Every release publishes two binaries per platform, under two different names. One is read-only. The other can send orders to your broker. That difference is compiled in rather than configured, so the filename you download decides it.
 
 [Updating](../start/updating.md) covers how to install a new version. This page covers what you are installing, how to check it is genuine, and how long it keeps getting fixes.
+
+## Moving to 3.22
+
+Nothing changes on upgrade until you write it. The mandate (`[mandate]`), the
+strategy register (`[mandate.core]`, `[mandate.strategies.<id>]`) and TWS
+order control (`trading.tws_order_control.enabled`, which waits for a paper
+proof) are optional; absent, the daemon measures nothing new and refuses
+nothing new.
+
+Two things change on their own. The option-chain recorder now runs without a
+switch and records the option chains of held option underlyings once a
+session, 30 minutes before the US close, inside the market-data line and
+pacing limits; `chains.recorder.enabled=false` stops it. Every runtime
+setting has a class the daemon enforces by the write's origin: the trading
+freeze and TWS order control take a human terminal only, the owner's settings
+a human terminal or the paired console, and an agent session may change only
+the research chain list.
+
+`cash_interest_rate_upper` and `cash_interest_valid_through` are retired; a
+sweep policy that still writes them loads, is named by `canary policy check`,
+and the broker's own rate from the Flex statement is used instead. Stops
+Canary places from this release on are born in a broker one-cancels-all
+group; a stop placed earlier is shrunk or cancelled before a sale of the same
+line sends. Canary now polls the account's executions once a minute and keeps
+a quote per fill in daemon.db; `canary reporting costs` reads them.
 
 ## Moving to 3.21
 

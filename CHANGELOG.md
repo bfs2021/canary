@@ -2,21 +2,50 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## v3.22.0 — Unreleased
+## v3.22.0 — 2026-10-18 17:00 CEST
 
 ### What's new
 
-Cash interest rates are the broker's own. Canary reads the Flex statement's
-"Interest Details (Tiers)" section and shows, per currency, the credit rate on
-the current cash balance and the debit rate on the amount borrowed, with every
-tier; the cash sweep's benefit estimate and the policy check use that rate and
-make no claim without it. The owner-entered `cash_interest_rate_upper` is
-retired. Held bills and bonds now show the price they trade at, their yield on
-a named basis, what a 25 bp move would cost, what they pay at maturity, and
-their gain since purchase split into carry, rates and spread.
+Canary now runs the owner's mandate. An optional `[mandate]` table in the risk
+policy sets a maximum loss after a tax reserve and a yearly volatility target;
+the daemon measures the book against that budget every two minutes by
+historical simulation with full revaluation of every stock, option and
+currency leg. While the book is over the budget, orders that add risk are
+refused at the preview, at admission and at the wire, and a pre-authorised
+forced reduction brings the book back inside it after a 30-minute veto
+window. The budget is divided into risk allocations, one for the owner's
+sleeve and one per machine strategy.
+
+Every decision is scored. The decision scorecard reads the account's
+statements, lists every position change per sleeve and scores it against the
+name's own history with sequential evidence, so neither the owner nor a
+strategy is called skilled before the evidence says so. A quote is kept at
+every order Canary previews, sends or fills and at every fill it finds on the
+account, and `canary reporting costs` shows the half-spread each fill paid.
+
+Machine strategies have one register. `[mandate.core]` and
+`[mandate.strategies.<id>]` in the risk policy name each strategy's compiled
+rule, the lab spec it implements, its sleeve, its allocation and its stage;
+the core sleeve's rule runs read-only in shadow (`canary core`), and the
+option-chain recorder saves the chains that holdings and registered
+strategies declare once a session.
+
+Hand orders placed in TWS can be cancelled or changed from Canary once the
+owner enables it. A sale of what you hold is admitted whatever else is
+working, two Canary orders never sell the same shares twice, and a reviewed
+reduction is placed at exactly its reviewed terms, Adaptive on a limit at the
+mid. Cash interest rates are the broker's own, read from the statement, and
+held bills and bonds show the price they trade at, their yield, what a rate
+move costs and their gain since purchase. Existing policy files load
+unchanged; standard binaries and MCP remain read-only.
 
 ### Added
 
+- Canary keeps the exact-contract quote (bid, ask, sizes, last, its time) at every order preview, send and fill it places, and at every fill it finds on the account by polling the broker's executions every minute, orders placed by hand in TWS included where the broker shows them to this client; quotes live in daemon.db keyed by execution id, and a quote that cannot be read in time is recorded as unavailable with the reason, never delaying an order (`internal-docs/design/fill-quotes.md`).
+- `canary reporting costs [--month YYYY-MM] [--json]` (`reporting.costs`, `canary_reporting_costs`) reports the half-spread each fill paid against the retained mid, in the contract's currency and in base at the fill's FX, with totals by month, source (Canary-placed or observed) and instrument class, coverage, and whether the broker shows other clients' executions to Canary's client (`observation.visibility`; the TWS setting that makes it so is the owner's: Global Configuration → API → Settings → Master API client ID).
+- `canary order preview` quotes carry the displayed bid and ask sizes.
+- `canary scorecard` lists the names whose history read last failed, with the broker's answer, the closes kept and the next retry time (`history.failures` in `--json`); the daemon log warns once per name per day.
+- `canary mandate` and `mandate.risk` carry `status_since`, when the verdict's status last changed, kept across restarts and journaled on every change.
 - The strategy register (owner decision 2026-10-18 09:01 CEST: "one register for all machine strategies, the ladder stage in Canary's risk policy, shadow on the production path, and strategies declaring the data Canary collects"; `internal-docs/design/strategy-register.md`). Every machine strategy is one owner-written entry in `risk-policy.toml`: `[mandate.core]` is the first, kept under its name, and every later one a `[mandate.strategies.<id>]` table naming its compiled rule, the lab spec hash it implements, its sleeve, its risk allocation, its stage (`shadow`, `live` or `suspended`) and the scale it sizes at (25, 50 or 100). A missing key holds that strategy and names the key; a rule this Canary does not carry, or a spec hash that is not the rule's, holds it; a file that contradicts itself (two entries for one sleeve or rule, allocations above `vol_target_pct`) is refused and the last good policy stays. A machine sleeve's risk allocation is reserved only while its entry is live and its rule sends orders, at its scale; a live entry on hold keeps its reservation while its sleeve holds positions. `[mandate.core]` takes two optional keys, `spec_hash` and `stage`: unwritten, the core runs in shadow as before and the compiled rule's spec stands, so a file written before them keeps its behaviour and its fingerprints; the core goes live only with both written. `canary mandate` lists the register (`register` in `--json` and `canary_mandate`), and `canary core` shows the core's stage.
 - `canary core resolve [--isin ISIN] [--currency CCY] [--json]` (`core.resolve`) lists every listing IBKR knows for the core's ISIN, by ISIN on SMART and with no exchange and by symbol on IBIS, IBIS2 and SMART with Xetra as the primary exchange: contract id, symbol, local symbol, venue, primary exchange, currency, trading class, long name and the forms that found it, with each form's answer from IBKR. It never chooses a listing and writes nothing; it marks the line the core uses, and `con_id` is needed only to choose among several.
 - The core sleeve's target, read-only (`canary core`, `canary_core`, `core.target`; design `internal-docs/design/core-sleeve.md`). An optional `[mandate.core]` table names the compiled rule (`core-ibcf-v1`: the EUR-hedged S&P 500 fund, ISIN IE00B3ZW0K18, held while its month-end close is above its 10-month average, sized at `[mandate.sleeves]` `core_vol_pct` of the budget base × room over the larger of its 63-day EWMA, its 252-day and a 15% volatility, capped at `max_value_pct`), the fund by ISIN and currency, the scale ramp, the no-trade band and the minimum order; the core also needs `index_gap_shock_pct` and holds without it. The daemon keeps the fund's own closes (the line IBKR lists under the ISIN, read on its primary exchange, fresh on that exchange's calendar, never read by the book's verdict), decides each month at that exchange's last session's close on a fixed 253-session window, freezes the month with the digest of its inputs (a later reading that differs holds), cuts a buy to the mandate's headroom (the book at most at 95% of the budget, the core's gap at most at 95% of its cap) and shows what the rule would trade and why. It creates no proposal and places no order. The rule is parity-tested against the lab's implementation on a shared synthetic fixture. Absent the table nothing changes.
@@ -32,6 +61,8 @@ their gain since purchase split into carry, rates and spread.
 
 ### Changed
 
+- A decision whose statement names no underlying contract reads `underlying_unknown` in the scorecard instead of `history_unavailable`.
+- `canary recon status` names what holds the automatic extension (`evaluation.detail`; `report_stale` for a statement past `recon.max_report_age_days`, `evaluation_pending` for a clean report not yet judged) instead of a bare `evaluation_failed`, and a revised policy or a dismissed exception is judged again at once.
 - The option-chain recorder runs without a switch and records what holdings and registered strategies declare (owner decision 2026-10-18 09:01 CEST; `internal-docs/design/strategy-register.md`, section 4): held option underlyings first, then the chains registered strategies declare, then research names (`chains.recorder.symbols`, which any origin may change, an agent session included), at most 12, each with its source. `chains.recorder.enabled` is now the owner's off switch: unset runs, `false` stops it. The research list's default is empty, where it was SPX, SPY and QQQ (s1's names; s1 was dropped). After installing this release the recorder records the held option underlyings once a session, 30 minutes before the US close, inside its line and pacing limits; with nothing declared and no option held it opens nothing. `canary chains recorded` lists the declarations.
 - The mandate gives each sleeve a risk allocation inside the whole-book budget (owner decision 2026-10-18 08:06 CEST: "give the machine its own seat (replacing D1 and largest-contributor-first)"; `internal-docs/design/mandate-risk-budget.md`, "Risk allocations"). A machine sleeve's `[mandate.sleeves]` allocation is reserved only as far as it runs: its stage times that allocation while it sends orders, and nothing while it does not: in this release the core sends none and the overlay has no strategy, so your allocation is the whole budget and nothing you can trade changes. A sleeve's use is the sum of its legs' Euler contributions, so the uses add up to the book's risk; the verdict lists each sleeve's allocation, use and standalone risk (`verdict.allocations`, a Risk allocations section in `canary mandate`). Every whole-book rule binds as before; an addition is also refused while its sleeve is over its allocation or would be with the order. The core's contract is the core's whoever buys it. The forced reduction cuts the sleeve furthest over its allocation first, within it the largest contributor, and never stops short where the old order reaches the target. Machine allocations above `vol_target_pct` are refused; `owner_vol_pct` is recorded and not read.
 - The core sleeve takes its contract, venue and calendar from IBKR's record for the fund's ISIN in the policy's currency (owner decision 2026-10-18 08:06 CEST): `[mandate.core]` needs only `isin` and `currency`, and a file that still writes `con_id` or `exchange` keeps loading (a written `con_id` must be one of the ISIN's lines and chooses among several; a written `exchange` must be a venue IBKR lists the line on, else the core holds and says so). The series is read for that contract on its primary exchange and judged on that exchange's calendar: London SETS for the fund's London EUR line, which IBKR lists as the only line, so decision days, sessions and freshness follow London, not Xetra. The core holds and names every candidate when IBKR lists more than one line in the currency, and holds when it lists another line than the one last used, until `con_id` chooses; a refused series read is named in the hold with IBKR's answer and its time instead of "no daily history yet". `canary core` shows the contract, its venue and calendar. The mandate matches the fund's lines by contract, so a held London line takes the broad index gap and SPY's returns as IBCF does.
@@ -52,6 +83,8 @@ their gain since purchase split into carry, rates and spread.
 
 ### Fixed
 
+- The decision scorecard scored nothing: one failed history read replaced a name's cached closes with an empty series stamped as fetched today, so a timeout behind the start-up fan-out cost the name its day and every earlier close, and the market proxy lost its closes the same way. A failed read now keeps the last closes and is retried after one pass, then with a doubling wait up to a day; a gateway that is away ends the pass without a mark against any name.
+- The mandate's verdict read unknown from Friday night to Tuesday: the flow check charged a whole trading day's P&L to a suspected cash flow when the broker's daily P&L reset to zero before the New York date turned, and the statement that would have cleared it was matched by UTC date, so Friday's statement, fetched Saturday, never covered a suspicion raised after UTC midnight. The reset is now read from the figures themselves and a suspicion is covered by the statement for the New York date of the reading that raised it; a flow landing in the same reading is still caught.
 - An agent can no longer change the owner's runtime settings. Every settings key now has a class the daemon judges by the write's origin (`internal-docs/design/strategy-register.md`, "Settings: classes the daemon enforces"): the safety controls (`trading.freeze`, `trading.tws_order_control.enabled`) take a human terminal only, as before; the owner's settings (`features.stock_protection.enabled`, the collection off switches `chains.recorder.enabled`, `regime.journal.enabled` and `stress.journal.enabled`, and the preferences) take a human terminal or the paired console; only the collection setting `chains.recorder.symbols` takes any origin. Before, the daemon checked the origin of `trading.*` keys only, and the agent hook refused `settings set` only when the two words were adjacent, while the CLI finds the verb after any flag (`canary settings --json set …`), so an agent session could switch off stock protection actions or the journals. The hook now reads a settings write as the CLI does and lets an agent's through only for a collection assignment; the Codex rules also refuse the flag-first form.
 - The mandate's incremental check no longer passes an option order it cannot price. An option sale whose limit gives no volatility (a limit of 0, below intrinsic value, past expiry, a trailing order) is refused with `mandate_budget`; an option buy is judged by a bound that needs no volatility (its premium at the limit on the gap, the underlying's full daily moves on the risk) and refused without a limit. Before, such an order skipped both the budget and the gap check.
 - The mandate's incremental check refuses an addition that would create or deepen a gap-cap breach, as it refuses one over the volatility budget (`mandate_budget`: "with this order a −25% gap in X would lose …, over the gap cap …"). Before, an addition inside the volatility budget passed with a one-name gap over its cap, and the forced reduction then sold it back.
