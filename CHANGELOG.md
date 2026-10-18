@@ -2,7 +2,15 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## Unreleased
+## v3.23.0 — Unreleased
+
+### What's new
+
+One evaluator now runs every machine strategy in the register. The core
+sleeve's rule was the first and is unchanged; a second strategy is a table in
+the risk policy that names its fund, a signal from the library and the owner's
+numbers, and `canary strategy ID` shows what it would trade. Every entry runs
+in shadow at most: nothing is proposed or placed.
 
 ### Added
 
