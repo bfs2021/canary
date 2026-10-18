@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## v3.23.2 — Unreleased
+## v3.23.2 — 2026-10-18 22:05 CEST
 
 ### What's new
 
