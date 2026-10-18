@@ -244,7 +244,7 @@ func renderMandateReduction(env *Env, r *rpc.MandateReductionView, ccy string) {
 // mandatePhaseWords names why a reduction row is in the batch.
 // renderMandateAllocations lists each sleeve's use against its allocation (allocations,
 // 2026-10-18): yours, the rest of the budget, then the machine's, each its
-// stage times its share while it sends orders.
+// stage times its allocation while it sends orders.
 func renderMandateAllocations(env *Env, v *mandate.Verdict, ccy string) {
 	if len(v.Allocations) == 0 {
 		return
@@ -256,7 +256,7 @@ func renderMandateAllocations(env *Env, v *mandate.Verdict, ccy string) {
 		case s.Sleeve == mandate.SleeveOwner:
 			name, detail = "Owner", "the budget less the machine's allocations"
 		case s.StagePct > 0:
-			detail = fmt.Sprintf("stage %s of its %s allocation", mandatePct(s.StagePct), mandatePct(s.SharePct))
+			detail = fmt.Sprintf("stage %s of its %s allocation", mandatePct(s.StagePct), mandatePct(s.TargetPct))
 		}
 		line := briefJoin(name, mandateAmount(s.UseBase, ccy)+" of "+mandateAmount(s.AllocationBase, ccy), "alone "+mandateAmount(s.StandaloneBase, ccy))
 		style := func(s string) string { return s }

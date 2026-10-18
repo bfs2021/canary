@@ -7,7 +7,7 @@ import (
 )
 
 func testAllocationPlan(coreStage float64, placed map[string]string) *AllocationPlan {
-	return &AllocationPlan{Machine: []MachineAllocation{{Sleeve: SleeveCore, SharePct: 6, StagePct: coreStage}, {Sleeve: SleeveOverlay, SharePct: 4}}, Placed: placed}
+	return &AllocationPlan{Machine: []MachineAllocation{{Sleeve: SleeveCore, TargetPct: 6, StagePct: coreStage}, {Sleeve: SleeveOverlay, TargetPct: 4}}, Placed: placed}
 }
 
 func near(a, b, tol float64) bool {
@@ -15,7 +15,7 @@ func near(a, b, tol float64) bool {
 }
 
 // The uses add up to the book's risk, the allocations to the budget; the core's
-// allocation is its stage times its share, the owner's the rest; every use is at
+// allocation is its stage times its allocation, the owner's the rest; every use is at
 // most the sleeve's standalone risk.
 func TestAllocationsAddUpToTheBookAndTheBudget(t *testing.T) {
 	in := testInput(t, []Leg{
@@ -119,7 +119,7 @@ func TestAllocationsAtRoomZeroAndAnOverfullMachine(t *testing.T) {
 	}
 
 	in = testInput(t, in.Legs)
-	in.Allocations = &AllocationPlan{Machine: []MachineAllocation{{Sleeve: SleeveCore, SharePct: 10, StagePct: 100}, {Sleeve: SleeveOverlay, SharePct: 8, StagePct: 100}}}
+	in.Allocations = &AllocationPlan{Machine: []MachineAllocation{{Sleeve: SleeveCore, TargetPct: 10, StagePct: 100}, {Sleeve: SleeveOverlay, TargetPct: 8, StagePct: 100}}}
 	v = Evaluate(in)
 	owner, _ := v.Allocation(SleeveOwner)
 	if owner.AllocationBase != 0 || owner.AllocationPct != 0 || !owner.Over {

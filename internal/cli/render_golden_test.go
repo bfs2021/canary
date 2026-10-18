@@ -434,8 +434,8 @@ func goldenMandateAllocations() rpc.MandateRiskResult {
 	v := *res.Verdict
 	v.Allocations = []mandate.AllocationReport{
 		{Sleeve: mandate.SleeveOwner, AllocationPct: 9, AllocationBase: 19230, UseBase: 23970, ContributionPct: 100, StandaloneBase: 23970, ExcessBase: 4740, Over: true, Legs: 3},
-		{Sleeve: mandate.SleeveCore, SharePct: 6, StagePct: 100, AllocationPct: 6, AllocationBase: 12820, ExcessBase: -12820, Note: "scale_pct 100 of core_vol_pct 6"},
-		{Sleeve: mandate.SleeveOverlay, SharePct: 4, Note: "no strategy runs in the overlay (s1 was dropped on 2026-10-18)"},
+		{Sleeve: mandate.SleeveCore, TargetPct: 6, StagePct: 100, AllocationPct: 6, AllocationBase: 12820, ExcessBase: -12820, Note: "scale_pct 100 of core_vol_pct 6"},
+		{Sleeve: mandate.SleeveOverlay, TargetPct: 4, Note: "no strategy runs in the overlay yet"},
 	}
 	res.Verdict = &v
 	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "your sleeve carries 23,970 EUR a year, over its allocation 19,230 EUR (the budget less the machine's allocations of 12,820 EUR)"}
@@ -476,8 +476,8 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 		NotModelled: []string{"SYNT (bill, no equity risk modelled)"},
 		Allocations: []mandate.AllocationReport{
 			{Sleeve: mandate.SleeveOwner, AllocationPct: 15, AllocationBase: 32050, UseBase: 23970 * scale, ContributionPct: 100, StandaloneBase: 23970 * scale, ExcessBase: 23970*scale - 32050, Over: scale > 1, Legs: 3},
-			{Sleeve: mandate.SleeveCore, SharePct: 6, Note: "the core sends no orders yet (its monthly rows are phase 2), so it runs nothing"},
-			{Sleeve: mandate.SleeveOverlay, SharePct: 4, Note: "no strategy runs in the overlay (s1 was dropped on 2026-10-18)"},
+			{Sleeve: mandate.SleeveCore, TargetPct: 6, Note: "the core sends no orders yet (its monthly rows are phase 2), so it runs nothing"},
+			{Sleeve: mandate.SleeveOverlay, TargetPct: 4, Note: "no strategy runs in the overlay yet"},
 		}}
 	if scale > 1 {
 		verdict.Stresses.GapBreaches = []string{"SYNA", "SYNB"}

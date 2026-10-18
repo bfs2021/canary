@@ -83,7 +83,7 @@ func TestMandateTableRefusedByOlderSemanticsAndUnknownKeys(t *testing.T) {
 		"unknown key":      strings.Replace(schema2ConstitutionTOML(), "policy_version = 5", "policy_version = 6", 1) + mandateTableTOML + "unknown_mandate_key = 1\n",
 		"bad start":        strings.Replace(schema2ConstitutionTOML(), "policy_version = 5", "policy_version = 6", 1) + strings.Replace(mandateTableTOML, `"2026-10-14"`, `"14.10.2026"`, 1),
 		"target above 100": strings.Replace(schema2ConstitutionTOML(), "policy_version = 5", "policy_version = 6", 1) + strings.Replace(mandateTableTOML, "vol_target_pct = 15.0", "vol_target_pct = 150.0", 1),
-		// Allocations (2026-10-18): the machine's shares sit inside the target.
+		// Allocations (2026-10-18): the machine's allocations sit inside the target.
 		"machine above the target": strings.Replace(schema2ConstitutionTOML(), "policy_version = 5", "policy_version = 6", 1) + strings.Replace(mandateTableTOML, "core_vol_pct = 6.0", "core_vol_pct = 12.0", 1),
 	} {
 		t.Run(name, func(t *testing.T) {

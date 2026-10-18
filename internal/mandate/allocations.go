@@ -33,10 +33,10 @@ const allocationEpsilon = 1e-6
 // daemon's build give it.
 type MachineAllocation struct {
 	Sleeve string `json:"sleeve"`
-	// SharePct is the sleeve's share in percent a year of the budget base at
+	// TargetPct is the sleeve's target risk allocation in percent a year of the budget base at
 	// full room ([mandate.sleeves]).
-	SharePct float64 `json:"share_pct"`
-	// StagePct is how much of the share the sleeve runs: the core's
+	TargetPct float64 `json:"target_pct"`
+	// StagePct is how much of its target allocation the sleeve runs: the core's
 	// scale_pct, a lab strategy's stage; 0 while it sends no orders.
 	StagePct float64 `json:"stage_pct"`
 	// Note says why the stage is what it is.
@@ -79,19 +79,19 @@ func (p *AllocationPlan) WithPlaced(legID, sleeve string) *AllocationPlan {
 // AllocationReport is one sleeve's allocation and its use on a measured book.
 type AllocationReport struct {
 	Sleeve string `json:"sleeve"`
-	// SharePct and StagePct are a machine sleeve's share and stage; the
+	// TargetPct and StagePct are a machine sleeve's target allocation and stage; the
 	// owner's allocation is the rest and has neither.
-	SharePct float64 `json:"share_pct"`
-	StagePct float64 `json:"stage_pct"`
+	TargetPct float64 `json:"target_pct"`
+	StagePct  float64 `json:"stage_pct"`
 	// AllocationPct is the allocation in percent a year of the budget base at
-	// full room: a machine sleeve's share × stage, the owner's the target less
+	// full room: a machine sleeve's target × stage, the owner's the target less
 	// the machine's, never below zero.
 	AllocationPct float64 `json:"allocation_pct"`
 	// AllocationBase is the allocation in base currency a year: AllocationPct of
 	// the budget base × room, the budget's own scaling.
 	AllocationBase float64 `json:"allocation_base"`
 	// UseBase is the sum of the sleeve's legs' Euler contributions in base
-	// currency a year; ContributionPct is the same as a share of the book's
+	// currency a year; ContributionPct is the same as a percentage of the book's
 	// risk. The uses of all sleeves add up to the book's risk.
 	UseBase         float64 `json:"use_base"`
 	ContributionPct float64 `json:"contribution_pct"`
@@ -119,7 +119,7 @@ func (v Verdict) Allocation(sleeve string) (AllocationReport, bool) {
 }
 
 // allocationReports measures every sleeve on one simulation: legs, their scenario
-// P&L and Euler shares are index-aligned.
+// P&L and Euler contributions are index-aligned.
 func allocationReports(plan *AllocationPlan, p Policy, c Capital, legs []Leg, legPnL [][]float64, contributionPct []float64, risk *Risk) []AllocationReport {
 	byName := map[string]*AllocationReport{}
 	var names []string
@@ -136,8 +136,8 @@ func allocationReports(plan *AllocationPlan, p Policy, c Capital, legs []Leg, le
 	machinePct, machineBase := 0.0, 0.0
 	for _, m := range plan.Machine {
 		r := add(m.Sleeve)
-		r.SharePct, r.StagePct, r.Note = m.SharePct, m.StagePct, m.Note
-		r.AllocationPct = m.SharePct * m.StagePct / 100
+		r.TargetPct, r.StagePct, r.Note = m.TargetPct, m.StagePct, m.Note
+		r.AllocationPct = m.TargetPct * m.StagePct / 100
 		r.AllocationBase = r.AllocationPct / 100 * c.BudgetBase * c.Room
 		machinePct += r.AllocationPct
 		machineBase += r.AllocationBase

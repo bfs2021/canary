@@ -23,11 +23,11 @@ import (
 func TestMandateAllocationPlanGivesTheMachineWhatItRuns(t *testing.T) {
 	c := testCoreConstitution()
 	plan := mandateAllocationPlan(c, false, []int{coreTestConID})
-	if len(plan.Machine) != 2 || plan.Machine[0].Sleeve != mandate.SleeveCore || plan.Machine[0].SharePct != 6 || plan.Machine[0].StagePct != 0 ||
+	if len(plan.Machine) != 2 || plan.Machine[0].Sleeve != mandate.SleeveCore || plan.Machine[0].TargetPct != 6 || plan.Machine[0].StagePct != 0 ||
 		!strings.Contains(plan.Machine[0].Note, "sends no orders") {
 		t.Fatalf("core allocation while it sends no orders: %+v", plan.Machine)
 	}
-	if o := plan.Machine[1]; o.Sleeve != mandate.SleeveOverlay || o.SharePct != 4 || o.StagePct != 0 || !strings.Contains(o.Note, "no strategy runs") {
+	if o := plan.Machine[1]; o.Sleeve != mandate.SleeveOverlay || o.TargetPct != 4 || o.StagePct != 0 || !strings.Contains(o.Note, "no strategy runs") {
 		t.Fatalf("overlay allocation: %+v", o)
 	}
 	if plan.SleeveOf("con:9030") != mandate.SleeveCore || plan.SleeveOf("con:9001") != mandate.SleeveOwner {
@@ -132,7 +132,7 @@ func TestMandateGatePlacesTheCoreFundWithTheCore(t *testing.T) {
 		t.Fatalf("a buy inside the core's allocation: %+v", blocker)
 	}
 	// Far more than the allocation holds: the allocation refuses before the budget (the
-	// core's allocation is 40% of it here, and the owner holds the rest's share).
+	// core's allocation is 40% of it here, and the owner holds the rest).
 	big := int(math.Ceil(2 * allocation.AllocationBase / (0.16 * 100)))
 	blocker = srv.mandateBudgetGate(buy(big, coreTestConID), mandateOpen)
 	if blocker == nil || blocker.Code != mandateBudgetCode || !strings.Contains(blocker.Message, "the core's sleeve would carry") && !strings.Contains(blocker.Message, "over the budget") {
@@ -193,8 +193,8 @@ func mandateAllocationedFixture(t *testing.T, pos *rpc.PositionsResult, ratio fl
 	for _, id := range coreConIDs {
 		placed[mandateLegID(rpc.PositionView{ConID: id})] = mandate.SleeveCore
 	}
-	share := coreAllocation * book.Capital.BudgetAnnualSD / book.Capital.BudgetBase * 100
-	book.Allocations = &mandate.AllocationPlan{Machine: []mandate.MachineAllocation{{Sleeve: mandate.SleeveCore, SharePct: share, StagePct: 100}, {Sleeve: mandate.SleeveOverlay, SharePct: 4}}, Placed: placed}
+	target := coreAllocation * book.Capital.BudgetAnnualSD / book.Capital.BudgetBase * 100
+	book.Allocations = &mandate.AllocationPlan{Machine: []mandate.MachineAllocation{{Sleeve: mandate.SleeveCore, TargetPct: target, StagePct: 100}, {Sleeve: mandate.SleeveOverlay, TargetPct: 4}}, Placed: placed}
 	return mandateReductionVerdict(book, 2)
 }
 

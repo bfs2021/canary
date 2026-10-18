@@ -42,11 +42,11 @@ func mandateAllocationPlan(c *risk.Constitution, coreRuns bool, coreContracts []
 		return nil
 	}
 	m := c.Mandate
-	var coreShare, overlayShare float64
+	var coreTarget, overlayTarget float64
 	if sl := m.Sleeves; sl != nil {
-		coreShare, overlayShare = policyCheckDeref(sl.CoreVolPct), policyCheckDeref(sl.OverlayVolPct)
+		coreTarget, overlayTarget = policyCheckDeref(sl.CoreVolPct), policyCheckDeref(sl.OverlayVolPct)
 	}
-	coreAllocation := mandate.MachineAllocation{Sleeve: mandate.SleeveCore, SharePct: coreShare}
+	coreAllocation := mandate.MachineAllocation{Sleeve: mandate.SleeveCore, TargetPct: coreTarget}
 	switch {
 	case m.Core == nil:
 		coreAllocation.Note = "no [mandate.core]: the core is inactive"
@@ -56,11 +56,11 @@ func mandateAllocationPlan(c *risk.Constitution, coreRuns bool, coreContracts []
 		coreAllocation.Note = "the core holds: " + strings.Join(m.CoreUnapprovedKeys(), ", ") + " unwritten"
 	default:
 		coreAllocation.StagePct = policyCheckDeref(m.Core.ScalePct)
-		coreAllocation.Note = fmt.Sprintf("scale_pct %g of core_vol_pct %g", coreAllocation.StagePct, coreShare)
+		coreAllocation.Note = fmt.Sprintf("scale_pct %g of core_vol_pct %g", coreAllocation.StagePct, coreTarget)
 	}
 	plan := &mandate.AllocationPlan{
-		Machine: []mandate.MachineAllocation{coreAllocation, {Sleeve: mandate.SleeveOverlay, SharePct: overlayShare,
-			Note: "no strategy runs in the overlay (s1 was dropped on 2026-10-18)"}},
+		Machine: []mandate.MachineAllocation{coreAllocation, {Sleeve: mandate.SleeveOverlay, TargetPct: overlayTarget,
+			Note: "no strategy runs in the overlay yet"}},
 		Placed: map[string]string{},
 	}
 	if m.Core != nil {

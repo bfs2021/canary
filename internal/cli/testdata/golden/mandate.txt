@@ -13,8 +13,7 @@ Risk allocations  each sleeve's use against its allocation, a year · alone: its
   machine's allocations
   Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
   monthly rows are phase 2), so it runs nothing
-  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
-  was dropped on 2026-10-18)
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay yet
 
 Contributions  share of the risk · beta to SPY · one-name gap against its cap
   SYNA · 66.9% · beta 1.12 · gap −25% loses 22,100 EUR, +25% loses 6,200 EUR
@@ -59,8 +58,7 @@ Additions · \x1b[32mopen · reductions, closes, cancels and hedges always are\x
   machine's allocations
   Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
   monthly rows are phase 2), so it runs nothing
-  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
-  was dropped on 2026-10-18)
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay yet
 
 \x1b[1mContributions\x1b[0m  share of the risk · beta to SPY · one-name gap against its cap
   SYNA · 66.9% · beta 1.12 · gap −25% loses 22,100 EUR, +25% loses 6,200 EUR

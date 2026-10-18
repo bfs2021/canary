@@ -472,22 +472,23 @@ D1 and "largest risk contributor first"."
 It replaces two records: D1 "No, whole book only" (`core-sleeve.md` §7),
 under which the machine had only the room the owner's book left and could
 never count on any; and "largest risk contributor first" in decision 3 of
-2026-10-14 06:26 CEST (Forced reduction, above). At 08:21 CEST the owner
-dropped s1 ("Stop the s1 shadow session and drop s1: its backtest misses its
-own bar"), so the overlay has no strategy.
+2026-10-14 06:26 CEST (Forced reduction, above). No strategy runs in the
+overlay yet.
 
-Terms: the review and the decision say "seat"; this record uses the
-professional terms of the owner's strategy-engine map (Desk
-`docs/strategy-engine.md`, 2026-10-18): each trader's part of the book is a
-**sleeve**, and its slice of the budget a **risk allocation**.
+Terms (owner, 2026-10-18 08:50 CEST: "on terms, always use the ones that
+professionals use, risk budget or risk allocation, not seats or share."):
+the review and the decision say "seat"; this record says **risk budget** for
+the whole book's volatility budget, **sleeve** for each trader's part of the
+book and **risk allocation** for a sleeve's part of the risk budget, as the
+owner's strategy-engine map does (Desk `docs/strategy-engine.md`).
 
 ### Sleeves
 
 - **Owner**: the owner's own trading, by hand, in TWS or the console, and
   anything the owner's own Rulebook rules open (the owner wrote the rule).
 - **Core**: the core rule (`core-ibcf-v1`, the lab's s0), `core-sleeve.md`.
-- **Overlay**: the allocation for a lab strategy on index options. Its
-  candidate, s1, was dropped on 2026-10-18; no strategy runs in it.
+- **Overlay**: the risk allocation for a lab strategy on index options once
+  one passes its gates; none runs in it yet.
 
 A machine sleeve is a lab strategy Canary runs at a live stage. Rule
 buckets that only reduce (protection, hygiene, the budget governor, the
@@ -507,14 +508,14 @@ take them away.
 - **Allocation**: a machine sleeve's allocation is reserved only as far as it
   runs: its stage times its allocation, in percent a year of the budget base,
   scaled by the room exactly as the budget is: `allocation_base = stage_pct /
-  100 × share_pct / 100 × budget_base × room`. The core's stage is
-  `[mandate.core] scale_pct` and its share `[mandate.sleeves] core_vol_pct`; a
-  lab strategy's stage is the lab's ladder (R3 25, R4 50, established 100) and
-  the overlay's allocation `overlay_vol_pct`. A sleeve that sends no orders
-  runs nothing: its stage is 0 whatever the policy says. In this build the
-  core sends none (phase 1 is read-only; its rows are phase 2) and no strategy
-  runs in the overlay, so both stages are 0 and the machine's allocation is
-  zero, as the review said: "nothing today".
+  100 × target_pct / 100 × budget_base × room`. The core's stage is
+  `[mandate.core] scale_pct` and its allocation `[mandate.sleeves]
+  core_vol_pct`; a lab strategy's stage is the lab's ladder (R3 25, R4 50,
+  established 100) and the overlay's allocation `overlay_vol_pct`. A sleeve
+  that sends no orders runs nothing: its stage is 0 whatever the policy says.
+  In this build the core sends none (phase 1 is read-only; its rows are phase
+  2) and no strategy runs in the overlay, so both stages are 0 and the
+  machine's allocation is zero, as the review said: "nothing today".
 - **The owner's allocation is the rest**: `budget − Σ machine allocations`.
   The allocations add up to the budget, so the book is inside the budget
   exactly when the uses do not exceed the allocations in sum, and a book over
@@ -670,19 +671,13 @@ rule are unchanged. Only the risk phase changes:
 ### Policy keys
 
 None in this build. The core's stage is its existing `scale_pct` and its
-allocation `core_vol_pct`; the owner's allocation is the rest. For a lab
-strategy in the overlay, once its order path exists, proposed (the owner
-writes it; the daemon refuses the table as an unknown key until the code that
-reads it lands):
-
-```toml
-[mandate.overlay]               # absent: the overlay runs nothing
-spec      = ""                  # the lab spec that runs in the allocation
-spec_hash = ""                  # the lab registry's hash of that spec
-stage     = "R3"                # R3 25%, R4 50%, established 100% of overlay_vol_pct
-```
-
-No key acts by default: absent, the overlay's stage is 0.
+target risk allocation `core_vol_pct`; the owner's allocation is the rest. A
+lab strategy's stage needs a home in Canary's risk policy before it can hold
+an allocation: the strategy register proposed in Desk's
+`docs/strategy-engine.md` (each live strategy's spec hash, sleeve, risk
+allocation and ladder stage, as `[mandate.core]` carries `rule` and
+`scale_pct`) is that home. It awaits the owner and is not built here; until
+then the overlay's stage is 0 and no key acts by default.
 
 ### Surfaces
 
@@ -704,7 +699,7 @@ and four serious items.
 | S2 | Allocations key on `con_id` and the compiled symbol; the venue fix makes `con_id` optional and resolves the line by ISIN | Placement by contract id only, through one function (`mandateCoreContracts`) that takes the venue fix's resolved line when both land; the symbol rule is dropped, since the order path resolves a contract id before every gate point |
 | S3 | "Allocations unknown ⇒ the batch holds" would stop a pre-authorised protection on bookkeeping | Unknown allocations refuse additions only; the batch sizes in the whole book's order and says so; rule 4 gets its recovery (journal reconciliation or a statement) |
 | S4 | "A sleeve inside its allocation stays there" holds only while its standalone risk on the mandate's measure fits its allocation | Restated as use ≤ standalone; every core buy cut to its allocation on the mandate's measure; the drift between decisions recorded as residual risk |
-| M1-M8 | s1 dropped; the owner's 7 no longer read; the gate's treatment of a sleeve already over; a guard against stopping short; overfull machine allocations; lineage and gate gaps for later; stale lines; `canary core` copy | Each folded in above, with a test where it acts (Verification) |
+| M1-M8 | the overlay without a strategy; the owner's 7 no longer read; the gate's treatment of a sleeve already over; a guard against stopping short; overfull machine allocations; lineage and gate gaps for later; stale lines; `canary core` copy | Each folded in above, with a test where it acts (Verification) |
 
 ### Residual risk accepted
 

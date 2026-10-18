@@ -1,4 +1,4 @@
-# Core sleeve (the mandate's rule-based index share)
+# Core sleeve (the mandate's rule-based index sleeve)
 
 Written: 2026-10-14 16:50 CEST. Revised 2026-10-14 18:30 CEST: the owner's
 answers to D1 to D4, the independent design review folded in (section
@@ -75,7 +75,7 @@ for one instrument.
 ## Recommendation in brief
 
 1. The core holds IBCF while IBCF's month-end close is above its 10-month
-   average, sized so its own volatility is at most its 6% share of the
+   average, sized so its own volatility is at most its 6% risk allocation of the
    budget base × room and its value at most 40% of the budget base ×
    room. It rebalances monthly on the calendar of the exchange IBKR lists
    it on (London today, section 1) with a 10% no-trade band. Trend off
@@ -243,7 +243,7 @@ and choosing between the two now would be a search.
   adjust=True)`, `bias=False`), on the fixed window.
 - σ_252: the sample standard deviation of the window's 252 daily simple
   returns × √252, the mandate's window length, so the sleeve is never over
-  its share by that measure.
+  its risk allocation by that measure.
 - σ = max(σ_E, σ_252, 15%).
 - Sleeve budget S = core_vol_pct / 100 × budget_base × room, from the
   mandate verdict's capital at the decision (`budget_base`, `room`;
@@ -264,7 +264,7 @@ number:
   gives N = w × K = S / max(σ_E, 15%). Hence N ≤ 0.4 × budget base × room
   with the owner's 6.
 - Ex ante N × σ_E ≤ S and N × σ_252 ≤ S: the sleeve's own volatility is
-  within its share on both estimators at every rebalance.
+  within its risk allocation on both estimators at every rebalance.
 - Funding: a buy is funded as an Add of that exact quantity would be
   (`position-add.md`): settled EUR after the account reserve, commitments
   and a fee bound when the row is sized, the exact WhatIf at preview,
@@ -407,10 +407,10 @@ five changes:
 
 1. One instrument, IBCF, instead of SPY, QQQ and EFA: the owner's choice;
    s0 left the real instrument mapping to the owner.
-2. The volatility target is the mandate's share S instead of a
+2. The volatility target is the mandate's risk allocation S instead of a
    free-standing 15%; s0's 15% target and gross cap 1.0 become the 15%
    floor.
-3. σ_252 joins σ_E, so the sleeve is within its share on the mandate's
+3. σ_252 joins σ_E, so the sleeve is within its risk allocation on the mandate's
    own window too. Cost: slower re-risking for up to a year after a
    volatility spike.
 4. A 10% no-trade band and a minimum order.
@@ -622,18 +622,18 @@ Gap stress (D4): a broad index fund or index on the compiled list takes
 At its 40% cap the core's gap loss is 4.8% of the budget base, under half
 the 9.99% cap at full room, and both scale with room.
 
-### The core's own share
+### The core's own risk allocation
 
-By the formula, the sleeve's own volatility is at most S on σ_E and on
-σ_252, both measured on the line's own closes, which carry what the
-sleeve earns. The mandate measures the same line on SPY's returns, on the
-US clock of the rest of the book (review S5); the headroom uses the
-mandate's measure. Phase 2 adds the core's standalone risk (the mandate's
-evaluator on the core leg alone) and its Euler contribution, which cannot
-exceed the standalone figure, to the target. A holding over its share at
-a decision is sold down by the rule; between decisions it is not. Since
-2026-10-18 the mandate verdict serves the core's standalone risk and its
-Euler use beside its allocation (`verdict.allocations`).
+By the formula, the sleeve's own volatility is at most S on σ_E and on σ_252,
+both measured on the line's own closes, which carry what the sleeve earns. The
+mandate measures the same line on SPY's returns, on the US clock of the rest
+of the book (review S5); the headroom uses the mandate's measure. Phase 2 adds
+the core's standalone risk (the mandate's evaluator on the core leg alone) and
+its Euler contribution, which cannot exceed the standalone figure, to the
+target. A holding over its risk allocation at a decision is sold down by the
+rule; between decisions it is not. Since 2026-10-18 the mandate verdict serves
+the core's standalone risk and its Euler use beside its allocation
+(`verdict.allocations`).
 
 ### Headroom: the core never pushes the book over budget
 
@@ -899,7 +899,7 @@ Live witness, each step only after the one before:
 - **W2, live under A.** `scale_pct` 25, then 50, then 100, one monthly
   window each (the lab's R3 and R4 fractions). In each window: fills within
   10 bp of the mid at sending, the holding equal to Q within one share, no
-  duplicate, the standalone risk within the share.
+  duplicate, the standalone risk within the risk allocation.
 - **W3, B.** After tests 15–20 and the authority path's own witnesses, the
   owner arms Fully armed on the device, and the first automatic window is
   watched end to end.
@@ -1003,14 +1003,14 @@ owner's 12, D4).
 
 Phase 2 adds the window keys (`window_sessions = 5`, `send_after =
 "15:45"` Europe/Berlin) with the rows that read them, and the cash rule's
-`[cash.currency_cap.USD]` (`max_share_pct = 20`, `target_share_pct =
+`[cash.currency_cap.USD]` (`max_target_pct = 20`, `target_target_pct =
 15`). An unknown key refuses the constitution, so neither is written
 before the code that reads it.
 
-The sleeve's share is the existing `[mandate.sleeves] core_vol_pct`. The
-rule's own parameters (the 253-session window, ten months, span 63, 252
-returns, the 15% floor) are compiled with the rule version and are not
-policy keys; changing one is a new lab spec version and a new rule.
+The sleeve's risk allocation is the existing `[mandate.sleeves] core_vol_pct`.
+The rule's own parameters (the 253-session window, ten months, span 63, 252
+returns, the 15% floor) are compiled with the rule version and are not policy
+keys; changing one is a new lab spec version and a new rule.
 
 ## Files
 

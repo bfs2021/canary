@@ -832,19 +832,19 @@ func (z *mandateSizer) sizeMain() {
 		if mandateRisk(v) <= z.target+mandateReductionEpsilon {
 			return
 		}
-		share := map[string]float64{}
+		contribution := map[string]float64{}
 		for _, rep := range v.Legs {
-			share[rep.ID] = rep.ContributionPct
+			contribution[rep.ID] = rep.ContributionPct
 		}
 		var top *mandateCut
 		var allocation mandate.AllocationReport
 		for _, sleeve := range mandateAllocationOrder(v) {
 			for _, id := range z.ids {
 				c := z.candidates[id]
-				if z.in.Allocations.SleeveOf(c.id) != sleeve || c.units >= c.full || exhausted[c.id] || share[c.id] <= mandateReductionEpsilon {
+				if z.in.Allocations.SleeveOf(c.id) != sleeve || c.units >= c.full || exhausted[c.id] || contribution[c.id] <= mandateReductionEpsilon {
 					continue
 				}
-				if top == nil || share[c.id] > share[top.id] {
+				if top == nil || contribution[c.id] > contribution[top.id] {
 					top = c
 				}
 			}
