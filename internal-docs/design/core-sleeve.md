@@ -656,11 +656,15 @@ its stage times its allocation, `scale_pct / 100 × core_vol_pct / 100 × budget
 base × room`, while the core runs, and nothing while it sends no orders, as in
 this build (phase 1 is read-only). The owner has the rest of the budget. Once
 the core runs, the owner's additions stop at the owner's allocation, so the
-core's allocation stays free for the core; a core buy needs the whole-book
-`within` and headroom above, and its own allocation with the buy added. While
-the verdict reads over, reduce or unknown, no core buy is admitted, as before
-("No addition by anyone while the whole book is over budget"). The core's
-sales (rebalance down, trend off) always pass.
+core's allocation stays free for the core; the core's own rule sizes a buy
+to the whole-book `within` and headroom above, and to its own allocation with
+the buy added. The mandate gate itself admits a core buy inside the core's
+allocation while another sleeve has the book over budget (owner, 2026-10-18
+15:31 CEST: "yes, it should. unless you advise differently";
+`mandate-risk-budget.md`, "The gate"); the core's rule still buys only on a
+`within` verdict, and whether it should buy inside its allocation while the
+book is over is for phase 2, with its rows. An unknown verdict admits no core
+buy. The core's sales (rebalance down, trend off) always pass.
 
 A sleeve's Euler use never exceeds its own standalone risk, and every core buy
 is cut to the core's allocation on the mandate's measure (`coreHeadroomFits`),
