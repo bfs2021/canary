@@ -89,6 +89,7 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 	confirm.AddWarningsAccepted = p.AcceptAddWarnings && draft.Add != nil && len(draft.Add.Plan.Warnings) > 0
 	attempt := orderJournalEventForDraft(draft, orderJournalEventSendAttempted, status, payload.TokenID, reservedOrderID, now)
 	attachOrderFeeBound(&attempt, payload.WhatIf)
+	attempt.Quote = fillQuoteAtEvent(payload.Quote, now)
 	attempt.AttemptID = attemptID
 	attempt.ActionKind = corestore.ActionPlace
 	attempt.SendState = orderSendStateSendAttempted

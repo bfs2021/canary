@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	protoOrderStatusMsgID  = msgOrderStatus + protoBufMsgID
-	protoOpenOrderMsgID    = msgOpenOrder + protoBufMsgID
-	protoExecDetailsMsgID  = msgExecDetails + protoBufMsgID
-	protoOpenOrderEndMsgID = msgOpenOrderEnd + protoBufMsgID
+	protoOrderStatusMsgID    = msgOrderStatus + protoBufMsgID
+	protoOpenOrderMsgID      = msgOpenOrder + protoBufMsgID
+	protoExecDetailsMsgID    = msgExecDetails + protoBufMsgID
+	protoOpenOrderEndMsgID   = msgOpenOrderEnd + protoBufMsgID
+	protoExecDetailsEndMsgID = msgExecDetailsEnd + protoBufMsgID
 )
 
 type inboundOrderProtoSummary struct {
@@ -94,6 +95,8 @@ func summarizeInboundOrderProtoCallback(wireMsgID int, body []byte) ([]string, b
 		return summarizeExecDetailsProtoCallback(body), true
 	case protoOpenOrderEndMsgID:
 		return []string{strconv.Itoa(msgOpenOrderEnd), "protobuf", "wire_msg_id=" + strconv.Itoa(wireMsgID)}, true
+	case protoExecDetailsEndMsgID:
+		return summarizeExecDetailsEndProtoCallback(body), true
 	default:
 		return nil, false
 	}
@@ -612,4 +615,27 @@ func setProtoDouble(fieldNumber, wireType int, value []byte, dst *float64) error
 
 func protoSummaryBool(fields []string, prefix string) bool {
 	return strings.EqualFold(summaryFieldValue(fields, prefix), "true")
+}
+
+// summarizeExecDetailsEndProtoCallback flattens ExecutionDetailsEnd (reqId
+// only) into the same summary shape as the other order callbacks, so the
+// executions request can correlate its terminator in either wire encoding.
+func summarizeExecDetailsEndProtoCallback(body []byte) []string {
+	fields := inboundProtoBaseFields(msgExecDetailsEnd, protoExecDetailsEndMsgID)
+	requestID := 0
+	err := forEachProtoField(body, func(fieldNumber, wireType int, value []byte) error {
+		if fieldNumber != 1 {
+			return nil
+		}
+		v, err := protoVarintValue(fieldNumber, wireType, value)
+		if err != nil {
+			return err
+		}
+		requestID = int(v)
+		return nil
+	})
+	if err != nil {
+		return append(fields, "decode_error="+err.Error())
+	}
+	return append(fields, "reqId="+strconv.Itoa(requestID))
 }

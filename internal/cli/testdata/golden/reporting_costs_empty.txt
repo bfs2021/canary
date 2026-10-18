@@ -1,0 +1,34 @@
+# canary reporting costs --month 2026-08 · COLUMNS=80 · colour off
+Execution costs  2026-08
+  mode paper · base - · no fills retained
+  Half-spread paid = (fill − mid) × side × quantity × multiplier at the quote
+  retained for the fill; positive is cost, negative is price improvement. Base
+  amounts use each fill's own FX rate.
+
+Fills
+  none retained for this scope
+
+Executions from the account
+  poll every 60 s · no poll yet
+  visibility own_orders_unproven
+  Only this client's own executions have been seen. Fills entered in TWS or by
+  other API clients reach Canary when TWS Global Configuration → API → Settings
+  → Master API client ID is Canary's client id (7); the owner decides that
+  setting.
+# canary reporting costs --month 2026-08 · COLUMNS=80 · colour on, ESC written as \x1b
+Execution costs  2026-08
+  mode paper · base - · no fills retained
+  Half-spread paid = (fill − mid) × side × quantity × multiplier at the quote
+  retained for the fill; positive is cost, negative is price improvement. Base
+  amounts use each fill's own FX rate.
+
+Fills
+  none retained for this scope
+
+Executions from the account
+  poll every 60 s · no poll yet
+  visibility own_orders_unproven
+  Only this client's own executions have been seen. Fills entered in TWS or by
+  other API clients reach Canary when TWS Global Configuration → API → Settings
+  → Master API client ID is Canary's client id (7); the owner decides that
+  setting.

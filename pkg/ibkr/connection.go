@@ -1473,6 +1473,8 @@ const (
 	msgNextValidID                            = 9
 	msgContractData                           = 10
 	msgExecDetails                            = 11
+	msgExecDetailsEnd                         = 55
+	msgCommissionReport                       = 59
 	msgMarketDepth                            = 12
 	msgMarketDepthL2                          = 13
 	msgNewsBulletins                          = 14
@@ -1550,6 +1552,7 @@ const (
 	cancelOrder                 = 4
 	reqOpenOrders               = 5
 	reqAcctData                 = 6
+	reqExecutions               = 7
 	reqIds                      = 8
 	reqContractData             = 9
 	reqMktDepth                 = 10
@@ -2340,7 +2343,7 @@ func (c *Connection) processSystemNoticeMessageAtEpoch(fields []string, epoch ui
 
 func isBenignUnhandledMessage(msgID int) bool {
 	switch msgID {
-	case msgContractData, msgBondContractData, msgContractDataEnd:
+	case msgContractData, msgBondContractData, msgContractDataEnd, msgCommissionReport:
 		return true
 	default:
 		return false

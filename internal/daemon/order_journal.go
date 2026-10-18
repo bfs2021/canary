@@ -124,6 +124,10 @@ type orderJournalEvent struct {
 	Bond                *rpc.OrderBondTerms      `json:"bond,omitempty"`
 	FeeUpper            *float64                 `json:"fee_upper,omitempty"`
 	FeeCurrency         string                   `json:"fee_currency,omitempty"`
+	// Quote is the exact-contract quote the event was priced on or read for:
+	// the preview quote on previewed and send-attempted events. Fill quotes
+	// live in the fill-quote store keyed by exec id (fill_quotes.go).
+	Quote *rpc.FillQuote `json:"quote,omitempty"`
 
 	// clientIDPresent records whether a decoded legacy JSON object actually
 	// carried client_id. Zero is a valid IBKR client ID, so the numeric Go

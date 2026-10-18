@@ -28,6 +28,7 @@ and this index needs the fix.
 | [design/regime-calibration.md](design/regime-calibration.md) | Regime indicator calibration and journal contract |
 | [design/tws-order-control.md](design/tws-order-control.md) | Cancelling and changing orders placed by hand in TWS over a one-request client-0 connection: the switch, the paper proof, the gates, the journal and the failure semantics |
 | [design/option-chain-recorder.md](design/option-chain-recorder.md) | Daily option-chain recorder: the switch, selection, schedule, line and pacing limits, coverage, `option-chains.db` data dictionary and read surfaces |
+| [design/fill-quotes.md](design/fill-quotes.md) | Fill quotes: the quote retained at every order event and fill, the reqExecutions poll for fills Canary did not place, `reporting.costs` (half-spread paid) and its coverage verdict |
 | [design/regime-input-currency.md](design/regime-input-currency.md) | Regime input currency model (`regime-currency-v1`) |
 | [design/documentation-ia.md](design/documentation-ia.md) | Public handbook information architecture |
 | [guides/trading-harness-development.md](guides/trading-harness-development.md) | Risk-harness development guide |

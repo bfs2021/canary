@@ -258,6 +258,8 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "mandate", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandate(mandate.StatusWithin)}},
 		{name: "mandate_reduce", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateReducing()}},
 		{name: "mandate_allocations", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateAllocations()}},
+		{name: "reporting_costs", argv: []string{"reporting", "costs"}, conn: goldenConn{rpc.MethodReportingCosts: goldenReportingCosts()}},
+		{name: "reporting_costs_empty", argv: []string{"reporting", "costs", "--month", "2026-08"}, conn: goldenConn{rpc.MethodReportingCosts: goldenReportingCostsEmpty()}},
 		{name: "mandate_register", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateRegister()}},
 		{name: "mandate_unknown", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateUnknown()}},
 		{name: "mandate_unknown_held", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateHeld()}},

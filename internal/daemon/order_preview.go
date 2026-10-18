@@ -657,6 +657,7 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 		OpenClose:        draft.OpenClose,
 		Source:           draft.Source,
 		Message:          previewWhatIfJournalMessage(whatIf),
+		Quote:            fillQuoteAtEvent(quote, now),
 	}); err != nil {
 		return nil, refusePreviewCode("order_journal_unavailable", fmt.Errorf("%w: append preview journal: %v", ErrTradingDisabled, err))
 	}
@@ -1295,6 +1296,8 @@ func orderQuoteSnapshotFromQuote(q *rpc.Quote) rpc.OrderQuoteSnapshot {
 		Symbol:         q.Symbol,
 		Bid:            q.Bid,
 		Ask:            q.Ask,
+		BidSize:        q.BidSize,
+		AskSize:        q.AskSize,
 		Last:           q.Last,
 		Mark:           q.Mark,
 		DataType:       q.DataType,

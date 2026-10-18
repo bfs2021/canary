@@ -1,0 +1,176 @@
+package ibkr
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+// defaultExecutionsTimeout bounds one reqExecutions round trip. TWS answers
+// a day's executions in well under a second; the generous bound covers the
+// background pacing lane queueing behind interactive reads.
+const defaultExecutionsTimeout = 15 * time.Second
+
+// ExecutionsSnapshot is one answer to reqExecutions: the current day's
+// executions TWS reports to this API client for the filtered account, as
+// execDetails callbacks parsed into OrderLifecycleEvent (Type execDetails).
+//
+// Complete is true only when the broker's execDetailsEnd for this exact
+// request ID arrived; a false Complete with rows means the deadline ended the
+// collection and proves nothing about rows not seen. Which clients' executions
+// appear is decided by TWS, not by this request: a non-master API client is
+// documented to receive its own orders' executions, and the master client ID
+// (TWS Global Configuration → API → Settings) receives every client's,
+// including orders entered in TWS by hand. AsOf is the local UTC completion
+// time, never a broker timestamp.
+type ExecutionsSnapshot struct {
+	Complete   bool
+	Executions []OrderLifecycleEvent
+	AsOf       time.Time
+	RequestID  int
+}
+
+// executionsFlight collects the execDetails that answer one request ID until
+// its end marker or the caller's deadline.
+type executionsFlight struct {
+	mu   sync.Mutex
+	rows []OrderLifecycleEvent
+	end  chan struct{}
+	done bool
+}
+
+func (f *executionsFlight) add(ev OrderLifecycleEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.done {
+		return
+	}
+	f.rows = append(f.rows, ev)
+}
+
+func (f *executionsFlight) finish() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.done {
+		return
+	}
+	f.done = true
+	close(f.end)
+}
+
+func (f *executionsFlight) snapshot() []OrderLifecycleEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.done = true
+	return append([]OrderLifecycleEvent(nil), f.rows...)
+}
+
+// FetchExecutions sends reqExecutions with an account-only filter and waits
+// for the same-request execDetailsEnd. ctx carries the pacing priority; a
+// timeout of zero or less uses defaultExecutionsTimeout. The answer rows are
+// routed to this flight by request ID and are never dispatched to the order
+// lifecycle handlers, so a requested inventory cannot be mistaken for a live
+// fill. A late answer after the deadline is dropped. This is a read request:
+// nothing here places, changes or cancels an order.
+func (c *Connector) FetchExecutions(ctx context.Context, account string, timeout time.Duration) (ExecutionsSnapshot, error) {
+	now := time.Now().UTC()
+	if c == nil {
+		return ExecutionsSnapshot{AsOf: now}, fmt.Errorf("connector is nil")
+	}
+	if ctx == nil {
+		return ExecutionsSnapshot{AsOf: now}, fmt.Errorf("context is nil")
+	}
+	if !c.IsReady() {
+		return ExecutionsSnapshot{AsOf: now}, ErrIBKRUnavailable
+	}
+	if timeout <= 0 {
+		timeout = defaultExecutionsTimeout
+	}
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	if conn == nil {
+		return ExecutionsSnapshot{AsOf: now}, ErrIBKRUnavailable
+	}
+	reqID, err := conn.nextRequestID()
+	if err != nil {
+		return ExecutionsSnapshot{AsOf: now}, fmt.Errorf("request executions: %w", err)
+	}
+	flight := &executionsFlight{end: make(chan struct{})}
+	c.executionsMu.Lock()
+	if c.executions == nil {
+		c.executions = make(map[int]*executionsFlight)
+	}
+	c.executions[reqID] = flight
+	c.executionsMu.Unlock()
+	endHandlerID := conn.RegisterHandler(msgExecDetailsEnd, func(fields []string) {
+		if execDetailsEndRequestID(fields) == reqID {
+			flight.finish()
+		}
+	})
+	cleanup := func() {
+		conn.UnregisterHandler(msgExecDetailsEnd, endHandlerID)
+		c.executionsMu.Lock()
+		delete(c.executions, reqID)
+		c.executionsMu.Unlock()
+	}
+
+	// REQ_EXECUTIONS version 3: request ID, then the ExecutionFilter in wire
+	// order (clientId, acctCode, time, symbol, secType, exchange, side). A zero
+	// client ID and empty fields leave those dimensions unfiltered; only the
+	// account is pinned. The broker still decides which clients' executions
+	// this API client may see.
+	msg := conn.encodeMsg(reqExecutions, 3, reqID, 0, strings.TrimSpace(account), "", "", "", "", "")
+	if err := conn.sendMessageWithTypeContext(ctx, msg, RequestTypeGeneral); err != nil {
+		cleanup()
+		return ExecutionsSnapshot{AsOf: time.Now().UTC(), RequestID: reqID}, fmt.Errorf("request executions: %w", err)
+	}
+
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	complete := false
+	var waitErr error
+	select {
+	case <-flight.end:
+		complete = true
+	case <-deadline.C:
+	case <-ctx.Done():
+		waitErr = ctx.Err()
+	}
+	cleanup()
+	return ExecutionsSnapshot{Complete: complete, Executions: flight.snapshot(), AsOf: time.Now().UTC(), RequestID: reqID}, waitErr
+}
+
+// deliverRequestedExecution hands an execDetails that answers reqExecutions
+// to the flight that asked. A row for an unknown request ID is a late answer
+// to a flight that already ended and is dropped.
+func (c *Connector) deliverRequestedExecution(ev OrderLifecycleEvent) {
+	c.executionsMu.Lock()
+	flight := c.executions[ev.RequestID]
+	c.executionsMu.Unlock()
+	if flight == nil {
+		connectorLogger.Debugf("executions: dropping late execDetails for request %d (exec %s)", ev.RequestID, ev.ExecID)
+		return
+	}
+	flight.add(ev)
+}
+
+// execDetailsEndRequestID reads the request ID from an execDetailsEnd frame in
+// either encoding: legacy [55, version, reqId] or the protobuf summary with a
+// reqId= field. Zero means absent or unparsable.
+func execDetailsEndRequestID(fields []string) int {
+	if len(fields) > 1 && fields[1] == "protobuf" {
+		return orderEventInt(summaryFieldValue(fields, "reqId="))
+	}
+	if len(fields) < 3 {
+		return 0
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(fields[2]))
+	if err != nil {
+		return 0
+	}
+	return v
+}

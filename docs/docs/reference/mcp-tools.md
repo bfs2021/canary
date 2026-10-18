@@ -4,7 +4,7 @@
 
 These are the tools `canary mcp` exposes to MCP clients (Claude Code, Claude Desktop, or any other MCP host). Every public tool uses the canonical `canary_*` namespace. Each entry lists the tool name an LLM picks against, the description the LLM reads to decide whether to invoke, and the parameter schema the LLM binds against.
 
-**40 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
+**41 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
 
 ## `canary_add`
 
@@ -280,6 +280,16 @@ Read completed daily FX valuation contribution for investments, currency cash an
 Read the retained IBKR statement equity series in the account base currency (one close per report date), dated external capital flows (deposits, withdrawals, position transfers in and out), statement coverage, and year-to-date sums of FIFO realised trading P&L, commissions, dividends, interest, withholding tax and fees, so that a consumer can compute cash-flow-adjusted (time-weighted) performance, drawdowns and a benchmark comparison itself. A missing report date is a gap, never interpolated; nothing is annualised or compared here. Use canary_account for live net liquidation and today's P&L, canary_reporting for statement setup and broker reachability, and canary_recon_status for capital-flow reconciliation verdicts. Read-only; returns no account identity, computes no return figure, and cannot refresh statements.
 
 *No parameters.*
+
+## `canary_reporting_costs`
+
+Read the half-spread each fill paid against the exact-contract quote Canary retained at the fill: per fill the side, quantity, price, bid, ask and mid, the quote's age against the fill, and the cost in the contract currency and in the base currency at the fill's own FX rate; totals by month, by source (orders Canary placed versus executions observed from the account) and by instrument class; coverage as fills with a usable two-sided quote over all fills; fills without a quote listed as unknown with the reason. Use for execution quality and spread cost. Not for realised P&L (canary_reporting_performance), statement setup (canary_reporting) or order state (canary_orders_history). Executions entered in TWS or by other API clients appear only when TWS reports them to this client; the observation section says whether that is proven and names the TWS Master API client ID setting, which the owner decides. Read-only: names no account, computes nothing live and cannot place or change orders.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `month` | string | no | optional calendar month YYYY-MM in UTC; omitted returns every retained fill |
 
 ## `canary_edge`
 

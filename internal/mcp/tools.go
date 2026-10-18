@@ -554,6 +554,35 @@ var Tools = []Tool{
 		},
 	},
 	{
+		Name:         "canary_reporting_costs",
+		Title:        "Canary Execution Costs",
+		Description:  "Read the half-spread each fill paid against the exact-contract quote Canary retained at the fill: per fill the side, quantity, price, bid, ask and mid, the quote's age against the fill, and the cost in the contract currency and in the base currency at the fill's own FX rate; totals by month, by source (orders Canary placed versus executions observed from the account) and by instrument class; coverage as fills with a usable two-sided quote over all fills; fills without a quote listed as unknown with the reason. Use for execution quality and spread cost. Not for realised P&L (canary_reporting_performance), statement setup (canary_reporting) or order state (canary_orders_history). Executions entered in TWS or by other API clients appear only when TWS reports them to this client; the observation section says whether that is proven and names the TWS Master API client ID setting, which the owner decides. Read-only: names no account, computes nothing live and cannot place or change orders.",
+		ReadOnlyHint: new(true),
+		RPCMethods:   []string{rpc.MethodReportingCosts},
+		JSONSchema: schemaObject(map[string]json.RawMessage{
+			"month": schemaString("optional calendar month YYYY-MM in UTC; omitted returns every retained fill"),
+		}, nil),
+		Handler: func(ctx context.Context, conn *dial.Conn, args json.RawMessage) (json.RawMessage, error) {
+			var params rpc.ReportingCostsParams
+			if len(args) > 0 {
+				if err := json.Unmarshal(args, &params); err != nil {
+					return nil, fmt.Errorf("invalid reporting costs arguments: %w", err)
+				}
+			}
+			if params.Month != "" && !rpc.ValidCostsMonth(params.Month) {
+				return nil, fmt.Errorf("month must be YYYY-MM")
+			}
+			var res rpc.ReportingCostsResult
+			if err := conn.Call(ctx, rpc.MethodReportingCosts, params, &res); err != nil {
+				return nil, err
+			}
+			if err := rpc.ValidateReportingCostsResult(res); err != nil {
+				return nil, fmt.Errorf("invalid reporting costs: %w", err)
+			}
+			return json.Marshal(res)
+		},
+	},
+	{
 		Name:         "canary_edge",
 		Title:        "Canary Edge Decision Review",
 		Description:  "Call with no arguments after canary_brief for an automatic one-year review of historical decision price outcomes: action/direction coverage, comparisons of the same decisions at different horizons, monthly consistency, concentration, and exact local protection provenance when available. SPY, QQQ, DIA, and VIX supply informational context. Options separately report option lifecycle coverage, proven flat-to-flat exact-contract positions, broker-reported realized option episodes, and the latest dated open option snapshot; these scopes overlap and must not be added. Use a returned change_id or returned option_id for broker-fact details; completed position cycles are already expanded in options.cycles. Do not use for current risk, order decisions, forecasting, or causal claims. Do not infer skill, strategy win rates, trade intent, or risk effectiveness. Use canary_brief for current portfolio risk and canary_positions for current holdings. Read-only; parameters select retained evidence and cannot refresh data.",

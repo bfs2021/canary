@@ -24,8 +24,11 @@ func runReporting(ctx context.Context, env *Env, args []string) int {
 	if sub == "performance" {
 		return runReportingPerformance(ctx, env, args)
 	}
+	if sub == "costs" {
+		return runReportingCosts(ctx, env, args)
+	}
 	if sub != "status" {
-		return fail(env, "reporting: unknown subcommand %q (try `canary reporting status` or `canary reporting performance`)", sub)
+		return fail(env, "reporting: unknown subcommand %q (try `canary reporting status`, `canary reporting performance` or `canary reporting costs`)", sub)
 	}
 	fs := flagSet(env, "reporting status")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
@@ -52,12 +55,15 @@ func printReportingUsage(env *Env) {
 	fmt.Fprintln(env.Stdout, "Usage: canary reporting status [--json]")
 	fmt.Fprintln(env.Stdout, "       canary reporting performance [--json]")
 	fmt.Fprintln(env.Stdout, "       canary reporting fx [--backfill] [--json]")
+	fmt.Fprintln(env.Stdout, "       canary reporting costs [--month YYYY-MM] [--json]")
 	fmt.Fprintln(env.Stdout, "       canary setup reporting")
 	fmt.Fprintln(env.Stdout)
 	fmt.Fprintln(env.Stdout, "status separates local credentials, broker reachability, report freshness,")
 	fmt.Fprintln(env.Stdout, "observed schema, absent sections, present-empty sections, and proven missing fields.")
 	fmt.Fprintln(env.Stdout, "performance prints the retained statement equity series, its external flows and")
 	fmt.Fprintln(env.Stdout, "year-to-date income sums; it computes no return and names no account.")
+	fmt.Fprintln(env.Stdout, "costs prints the half-spread each fill paid against the quote retained at the fill,")
+	fmt.Fprintln(env.Stdout, "totals by month, source and instrument class, and how far the account's executions are seen.")
 }
 
 func runReportingPerformance(ctx context.Context, env *Env, args []string) int {

@@ -145,6 +145,9 @@ type Server struct {
 	// setupMarkouts schedules and captures post-fill entry markouts for
 	// Canary-placed preview-path fills; nil until daemon.db is bound.
 	setupMarkouts *setupMarkoutRuntime
+	// fillQuotes retains the quote at every fill Canary places or observes and
+	// polls the account's executions; nil until daemon.db is bound.
+	fillQuotes *fillQuoteRuntime
 	// dailyPnLCloseCaptures pins each scope's account Daily P&L at the
 	// official close, the only figure that may serve as the last completed
 	dailyPnLCloseCaptures dailyPnLCloseCaptureAuthority
@@ -1582,6 +1585,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	go s.runFlexFetchLoop(serverCtx)
 	go s.runSetupMarkoutLoop(serverCtx)
+	go s.runFillQuoteLoop(serverCtx)
 	s.startEdgeWorker(serverCtx)
 	s.startScorecardWorker(serverCtx)
 	s.startFXWorker(serverCtx)
@@ -2896,6 +2900,8 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleFXBackfill(ctx) })
 	case rpc.MethodReportingPerformance:
 		s.unary(req, enc, func() (any, error) { return s.handleReportingPerformance(ctx) })
+	case rpc.MethodReportingCosts:
+		s.unary(req, enc, func() (any, error) { return s.handleReportingCosts(ctx, req) })
 	case rpc.MethodReportingValidate:
 		s.unary(req, enc, func() (any, error) { return s.handleReportingValidate(ctx, req) })
 	case rpc.MethodEdgeSnapshot:

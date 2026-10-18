@@ -122,6 +122,12 @@ type Connector struct {
 	openOrderSnapshotTimeout    time.Duration
 	openOrderSnapshotBeforeSend func()
 
+	// executions are the in-flight reqExecutions answers keyed by request ID;
+	// execDetails that carry one of these IDs are a requested inventory, not a
+	// live fill, and are routed here instead of to the lifecycle handlers.
+	executionsMu sync.Mutex
+	executions   map[int]*executionsFlight
+
 	// orderStatusLogSig dedupes the high-frequency order-status log line.
 	// IBKR re-sends unchanged orderStatus frames many times per second. Keep one
 	// signature per broker order ID and demote verbatim repeats to debug so
@@ -8899,6 +8905,13 @@ func (c *Connector) notifyOrderLifecycleFrom(conn *Connection, epoch uint64, fie
 		return
 	}
 	if ev.Type == OrderLifecycleEventStatus && c.isWhatIfOrderID(ev.OrderID) {
+		return
+	}
+	if ev.Type == OrderLifecycleEventExecDetails && ev.RequestID > 0 {
+		// An execDetails with a positive request ID answers reqExecutions. It
+		// is inventory for the flight that asked, never a live fill callback,
+		// so it must not reach the order journal.
+		c.deliverRequestedExecution(ev)
 		return
 	}
 	origin := ConnectorSessionBinding{connector: c, connection: conn, epoch: epoch}

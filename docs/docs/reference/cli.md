@@ -42,7 +42,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary rules`](#canary-rules) | Desk | Advisory daily trading rule checklist, hardest breach first, against limits you can set | `read-only` | yes |
 | [`canary policy`](#canary-policy) | Desk | Every policy and setting in force, capital/drawdown state, plausibility check, overrides (human-only writes) | `confirm` | CLI only |
 | [`canary recon`](#canary-recon) | Desk | Post-trade reconciliation: broker statement flows vs the declared capital ledger | `confirm` | CLI only |
-| [`canary reporting`](#canary-reporting) | Desk | IBKR statement reporting status and performance series for Recon and Edge | `read-only` | yes |
+| [`canary reporting`](#canary-reporting) | Desk | IBKR statement reporting status, performance series and execution costs for Recon and Edge | `read-only` | yes |
 | [`canary proposals`](#canary-proposals) | Desk | Review proposals to close or reduce positions | `confirm` | yes |
 | [`canary opportunities`](#canary-opportunities) | Desk | Review option exercise opportunities | `confirm` | yes |
 | [`canary trading`](#canary-trading) | Desk | Check trading permissions and what blocks orders | `read-only` | yes |
@@ -696,15 +696,15 @@ canary recon dismiss --line ID --reason S
 
 ## `canary reporting`
 
-IBKR statement reporting status and performance series for Recon and Edge.
+IBKR statement reporting status, performance series and execution costs for Recon and Edge.
 
 Guard `read-only`. Also available as an MCP tool.
 
 ```text
-canary reporting status|performance|fx [--json]
+canary reporting status|performance|fx|costs [--json]
 ```
 
-Subcommands: `status`, `performance`, `fx`.
+Subcommands: `status`, `performance`, `fx`, `costs`.
 
 **Flags**
 
@@ -712,6 +712,7 @@ Subcommands: `status`, `performance`, `fx`.
 |------|---------------|----------------|
 | `--json` | no | - |
 | `--backfill` | no | - |
+| `--month` | yes | - |
 
 ## `canary proposals`
 

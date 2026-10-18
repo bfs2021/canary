@@ -624,6 +624,19 @@
       }
     },
     {
+      "name": "canary_reporting_costs",
+      "description": "Read the half-spread each fill paid against the exact-contract quote Canary retained at the fill: per fill the side, quantity, price, bid, ask and mid, the quote's age against the fill, and the cost in the contract currency and in the base currency at the fill's own FX rate; totals by month, by source (orders Canary placed versus executions observed from the account) and by instrument class; coverage as fills with a usable two-sided quote over all fills; fills without a quote listed as unknown with the reason. Use for execution quality and spread cost. Not for realised P\u0026L (canary_reporting_performance), statement setup (canary_reporting) or order state (canary_orders_history). Executions entered in TWS or by other API clients appear only when TWS reports them to this client; the observation section says whether that is proven and names the TWS Master API client ID setting, which the owner decides. Read-only: names no account, computes nothing live and cannot place or change orders.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string",
+            "description": "optional calendar month YYYY-MM in UTC; omitted returns every retained fill"
+          }
+        }
+      }
+    },
+    {
       "name": "canary_edge",
       "description": "Use for reviewing past trading decisions after canary_brief. Do not use for current risk, positions, order decisions, forecasting, or causal claims. It is read-only and cannot refresh data.",
       "inputSchema": {

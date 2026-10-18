@@ -2833,6 +2833,8 @@ type OrderQuoteSnapshot struct {
 	Symbol         string         `json:"symbol"`
 	Bid            *float64       `json:"bid,omitempty"`
 	Ask            *float64       `json:"ask,omitempty"`
+	BidSize        *int           `json:"bid_size,omitempty"`
+	AskSize        *int           `json:"ask_size,omitempty"`
 	Last           *float64       `json:"last,omitempty"`
 	Mark           *float64       `json:"mark,omitempty"`
 	Midpoint       *float64       `json:"midpoint,omitempty"`

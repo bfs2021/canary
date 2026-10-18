@@ -191,6 +191,25 @@ func TestReportingPerformanceToolServesFactsWithoutComputingReturns(t *testing.T
 	}
 }
 
+func TestReportingCostsToolMeasuresSpreadAndSaysWhatItCannotSee(t *testing.T) {
+	tool, ok := lookupTool("canary_reporting_costs")
+	if !ok {
+		t.Fatal("missing canary_reporting_costs")
+	}
+	description := strings.ToLower(tool.Description)
+	for _, phrase := range []string{"half-spread", "quote canary retained at the fill", "base currency at the fill's own fx", "by source", "by instrument class", "coverage", "unknown with the reason", "canary_reporting_performance", "canary_reporting)", "canary_orders_history", "master api client id", "owner decides", "read-only", "names no account", "cannot place or change orders"} {
+		if !strings.Contains(description, phrase) {
+			t.Errorf("description missing %q: %s", phrase, tool.Description)
+		}
+	}
+	if tool.ReadOnlyHint == nil || !*tool.ReadOnlyHint || !slices.Equal(tool.RPCMethods, []string{rpc.MethodReportingCosts}) {
+		t.Fatalf("costs authority metadata=%+v", tool)
+	}
+	if !strings.Contains(string(tool.JSONSchema), `"month"`) {
+		t.Fatalf("costs schema lacks the month parameter: %s", tool.JSONSchema)
+	}
+}
+
 func TestEdgeToolPreservesTheTypedDecisionReviewExactly(t *testing.T) {
 	tool, ok := lookupTool("canary_edge")
 	if !ok {

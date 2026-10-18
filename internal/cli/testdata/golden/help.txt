@@ -28,7 +28,8 @@ Account, positions, orders and risk
   policy          Risk limits, capital and losses from the portfolio peak
   recon           Compare broker statements with recorded deposits and
                   withdrawals
-  reporting       Check broker statement setup, performance and currency data
+  reporting       Check broker statement setup, performance, currency data and
+                  execution costs
   proposals       Protection proposals to close or reduce positions
   opportunities   Option exercise opportunities
   trading         Check trading permissions and what blocks orders
@@ -98,7 +99,8 @@ Start: canary status — check the broker connection
   \x1b[36mpolicy          \x1b[0mRisk limits, capital and losses from the portfolio peak
   \x1b[36mrecon           \x1b[0mCompare broker statements with recorded deposits and
                   withdrawals
-  \x1b[36mreporting       \x1b[0mCheck broker statement setup, performance and currency data
+  \x1b[36mreporting       \x1b[0mCheck broker statement setup, performance, currency data and
+                  execution costs
   \x1b[36mproposals       \x1b[0mProtection proposals to close or reduce positions
   \x1b[36mopportunities   \x1b[0mOption exercise opportunities
   \x1b[36mtrading         \x1b[0mCheck trading permissions and what blocks orders

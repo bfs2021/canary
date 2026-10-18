@@ -1,0 +1,76 @@
+# canary reporting costs · COLUMNS=80 · colour off
+Execution costs  all months
+  mode paper · base EUR · fills 4 · quoted 3 (75%) · unknown 1
+  Half-spread paid = (fill − mid) × side × quantity × multiplier at the quote
+  retained for the fill; positive is cost, negative is price improvement. Base
+  amounts use each fill's own FX rate.
+
+By month
+  2026-09   fills   4  measured   2  unknown   2  +18.00 EUR
+
+By source
+  broker    fills   2  measured   0  unknown   2  —
+  canary    fills   2  measured   2  unknown   0  +18.00 EUR
+
+By class
+  option    fills   2  measured   1  unknown   1  +9.00 EUR
+  stock     fills   2  measured   1  unknown   1  +9.00 EUR
+
+Fills
+  2026-09-05 14:00:03 TZ  BUY 2 SYNX 261016C00100000 @ 1.3000 USD (canary)
+    quote 1.2000 / 1.3000 · mid 1.2500 · read 2.2 s after the fill · half-spread
+    +10.00 USD = +9.00 EUR
+  2026-09-05 14:05:03 TZ  SELL 100 AAA @ 10.4000 USD (canary)
+    quote 10.4000 / 10.6000 · mid 10.5000 · read 1.5 s after the fill ·
+    half-spread +10.00 USD = +9.00 EUR
+  2026-09-05 15:00:03 TZ  BUY 10 BBB @ 5.0000 USD (broker)
+    unknown: timeout
+  2026-09-05 16:00:03 TZ  SELL 1 SYNX 261120P00090000 @ 2.0000 USD (broker)
+    quote 1.9000 / 2.1000 · mid 2.0000 · read 40.0 s after the fill · unknown:
+    multiplier_unknown
+
+Executions from the account
+  poll every 60 s · last 14:00:05 TZ complete · 2 executions
+  visibility own_orders_unproven
+  Only this client's own executions have been seen. Fills entered in TWS or by
+  other API clients reach Canary when TWS Global Configuration → API → Settings
+  → Master API client ID is Canary's client id (7); the owner decides that
+  setting.
+# canary reporting costs · COLUMNS=80 · colour on, ESC written as \x1b
+Execution costs  all months
+  mode paper · base EUR · fills 4 · quoted 3 (75%) · unknown 1
+  Half-spread paid = (fill − mid) × side × quantity × multiplier at the quote
+  retained for the fill; positive is cost, negative is price improvement. Base
+  amounts use each fill's own FX rate.
+
+By month
+  2026-09   fills   4  measured   2  unknown   2  +18.00 EUR
+
+By source
+  broker    fills   2  measured   0  unknown   2  —
+  canary    fills   2  measured   2  unknown   0  +18.00 EUR
+
+By class
+  option    fills   2  measured   1  unknown   1  +9.00 EUR
+  stock     fills   2  measured   1  unknown   1  +9.00 EUR
+
+Fills
+  2026-09-05 14:00:03 TZ  BUY 2 SYNX 261016C00100000 @ 1.3000 USD (canary)
+    quote 1.2000 / 1.3000 · mid 1.2500 · read 2.2 s after the fill · half-spread
+    +10.00 USD = +9.00 EUR
+  2026-09-05 14:05:03 TZ  SELL 100 AAA @ 10.4000 USD (canary)
+    quote 10.4000 / 10.6000 · mid 10.5000 · read 1.5 s after the fill ·
+    half-spread +10.00 USD = +9.00 EUR
+  2026-09-05 15:00:03 TZ  BUY 10 BBB @ 5.0000 USD (broker)
+    unknown: timeout
+  2026-09-05 16:00:03 TZ  SELL 1 SYNX 261120P00090000 @ 2.0000 USD (broker)
+    quote 1.9000 / 2.1000 · mid 2.0000 · read 40.0 s after the fill · unknown:
+    multiplier_unknown
+
+Executions from the account
+  poll every 60 s · last 14:00:05 TZ complete · 2 executions
+  visibility own_orders_unproven
+  Only this client's own executions have been seen. Fills entered in TWS or by
+  other API clients reach Canary when TWS Global Configuration → API → Settings
+  → Master API client ID is Canary's client id (7); the owner decides that
+  setting.
