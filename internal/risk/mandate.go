@@ -214,10 +214,11 @@ type ConstitutionMandateSleeves struct {
 	// OwnerStopPct is the owner sleeve's drawdown stop: the fall of the
 	// sleeve's own equity-like measure from its high-water mark, in percent
 	// of the mark, at which the forced reduction cuts the sleeve, reduce-only,
-	// to half its risk, until the drawdown is back under it (the owner's
-	// delegation of 2026-10-18 21:41 CEST, "Need your judgement, be on the
-	// aggressive side"; the agent set 25). Optional: absent, nothing changes
-	// and a file without it keeps its fingerprint.
+	// to half its risk, until the drawdown is back under the stop's release,
+	// five points under it (the owner's delegation of 2026-10-18 21:41 CEST,
+	// "Need your judgement, be on the aggressive side"; the agent set 25,
+	// releasing under 20). Optional: absent, nothing changes and a file
+	// without it keeps its fingerprint.
 	OwnerStopPct *float64 `toml:"owner_stop_pct" json:"owner_stop_pct,omitempty"`
 }
 

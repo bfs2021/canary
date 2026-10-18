@@ -242,7 +242,11 @@ func renderMandateOwnerStop(env *Env, s *mandate.SleeveStop, ccy string) {
 		riskDisplayLine(env, "Owner sleeve · ", briefJoin(engaged, "stop state held: "+why), env.yellow)
 		return
 	}
-	line := briefJoin(engaged, fmt.Sprintf("%s below its high-water mark %s", mandatePct(s.DrawdownPct), mandateAmount(s.HWMRiskBase, ccy)), "stop "+mandatePct(s.StopPct))
+	stop := "stop " + mandatePct(s.StopPct)
+	if s.Engaged {
+		stop += ", releases under " + mandatePct(s.ReleasePct)
+	}
+	line := briefJoin(engaged, fmt.Sprintf("%s below its high-water mark %s", mandatePct(s.DrawdownPct), mandateAmount(s.HWMRiskBase, ccy)), stop)
 	if s.MachinePnLBase != 0 {
 		line = briefJoin(line, "machine P&L since the start "+mandateAmount(s.MachinePnLBase, ccy)+" set aside")
 	}

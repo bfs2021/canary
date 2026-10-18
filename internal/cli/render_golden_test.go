@@ -462,11 +462,11 @@ func goldenMandateOwnerStop() rpc.MandateRiskResult {
 		{Sleeve: mandate.SleeveCore, TargetPct: 6, Note: "no [mandate.core]: the core is inactive"},
 		{Sleeve: mandate.SleeveOverlay, TargetPct: 4, Note: "no strategy registered in the overlay yet"},
 	}
-	v.OwnerStop = &mandate.SleeveStop{Sleeve: mandate.SleeveOwner, StopPct: 25, Known: true, StartedAt: "2026-09-01", RiskBase: 175000, HWMRiskBase: 240000, HWMAsOf: goldenAt.Add(-72 * time.Hour),
+	v.OwnerStop = &mandate.SleeveStop{Sleeve: mandate.SleeveOwner, StopPct: 25, ReleasePct: 20, Known: true, StartedAt: "2026-09-01", RiskBase: 175000, HWMRiskBase: 240000, HWMAsOf: goldenAt.Add(-72 * time.Hour),
 		DrawdownBase: 65000, DrawdownPct: 27.08, Engaged: true, EngagedAt: goldenAt.Add(-30 * time.Minute), UseAtStopBase: 31200, TargetUseBase: 15600, UseBase: 23970, Over: true}
 	res.Verdict = &v
 	res.Policy.Sleeves = &rpc.MandateSleevesView{OwnerVolPct: new(7.0), CoreVolPct: new(6.0), OverlayVolPct: new(4.0), OwnerStopPct: new(25.0)}
-	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "your sleeve is 27% below its high-water mark 240,000 EUR, past its 25% stop; the sleeve is reduce-only until its drawdown is back under the stop"}
+	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "your sleeve is 27% below its high-water mark 240,000 EUR, past its 25% stop; the sleeve is reduce-only until its drawdown is back under 20%, 5 points under the stop"}
 	res.Reduction = &rpc.MandateReductionView{State: rpc.MandateReductionReducing, Rows: 1, PreAuthorised: true, Pending: 1, VetoUntil: goldenAt.Add(28 * time.Minute),
 		Reason: "the book is within the budget, but your sleeve is 27% below its high-water mark 240,000 EUR, past its 25% stop (risk 23,970 EUR a year, over its stop target 15,600 EUR); 1 cut sized to take the risk to 15,100 EUR a year, the sleeve's risk to its stop target 15,600 EUR",
 		Orders: []rpc.MandateReductionOrder{{Rank: 1, Key: "mandate_reduction:SELL:STK:9001", Contract: rpc.ContractParams{ConID: 9001, Symbol: "SYNA", SecType: "STK"}, Action: rpc.OrderActionSell, Quantity: 300,

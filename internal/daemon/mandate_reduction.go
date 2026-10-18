@@ -281,8 +281,8 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 		st.State, st.Withdrawn = rpc.MandateReductionWithin, len(standing)
 		st.Reason = fmt.Sprintf("the mandate risk %s a year is within the budget %s", mandateMoney(st.RiskAnnualBase, ccy), mandateMoney(st.BudgetAnnualSD, ccy))
 		if stop := v.OwnerStop; stop != nil && stop.Engaged {
-			st.Reason += fmt.Sprintf("; %s, and the sleeve's risk %s a year is at or under its stop target %s: the sleeve stays reduce-only until its drawdown is back under the stop",
-				mandateOwnerStopSentence(stop, ccy), mandateMoney(stop.UseBase, ccy), mandateMoney(stop.TargetUseBase, ccy))
+			st.Reason += fmt.Sprintf("; %s, and the sleeve's risk %s a year is at or under its stop target %s: the sleeve stays reduce-only %s",
+				mandateOwnerStopSentence(stop, ccy), mandateMoney(stop.UseBase, ccy), mandateMoney(stop.TargetUseBase, ccy), mandateOwnerStopReleaseClause(stop))
 		} else {
 			st.Episode = ""
 		}
@@ -1415,8 +1415,8 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 		details = append(details, fmt.Sprintf("%.0f%% of the risk on the verdict", c.contribution))
 	}
 	if stop := v.OwnerStop; stop != nil && stop.Engaged {
-		details = append(details, fmt.Sprintf("owner sleeve stop: %.0f%% below its high-water mark %s, stop %g%%; engaged since %s, reduce-only to %s a year, half its risk %s at the stop",
-			stop.DrawdownPct, mandateMoney(stop.HWMRiskBase, ccy), stop.StopPct, mandateClock(stop.EngagedAt), mandateMoney(stop.TargetUseBase, ccy), mandateMoney(stop.UseAtStopBase, ccy)))
+		details = append(details, fmt.Sprintf("owner sleeve stop: %.0f%% below its high-water mark %s, stop %g%%, releases under %g%%; engaged since %s, reduce-only to %s a year, half its risk %s at the stop, the target pinned until the release",
+			stop.DrawdownPct, mandateMoney(stop.HWMRiskBase, ccy), stop.StopPct, stop.ReleasePct, mandateClock(stop.EngagedAt), mandateMoney(stop.TargetUseBase, ccy), mandateMoney(stop.UseAtStopBase, ccy)))
 	}
 	details = append(details, fmt.Sprintf("sized on the %s verdict of %s (%s), afresh at every verdict", v.Status, mandateClock(v.AsOf), st.VerdictFingerprint))
 	if qty < c.units {

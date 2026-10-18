@@ -1,10 +1,12 @@
 package daemon
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"maps"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -121,11 +123,21 @@ func TestMandateOwnerStopSeriesFollowsTheBookLessTheMachine(t *testing.T) {
 	}
 }
 
+// stepOwnerStopAt moves the clock and reads the equity that puts the owner
+// sleeve's drawdown at pct of its 230,000 risk base (equity 300,000 less the
+// 70,000 reserve) with the machine's marks unchanged, the broker's P&L
+// explaining the move.
+func stepOwnerStopAt(t *testing.T, srv *Server, c *risk.Constitution, at time.Time, pct float64) *rpc.MandateRiskResult {
+	t.Helper()
+	return stepOwnerStop(t, srv, c, at, 300000-pct*2300, -pct*2300)
+}
+
 // At the stop the sleeve engages: the gate refuses the owner's additions,
 // the verdict pins half the owner's use as the target, two scheduled
-// readings build the streak while the book itself is within the budget, and
-// a recovered drawdown releases it, the gate open again. A stale capital
-// state holds the stop as it was.
+// readings build the streak while the book itself is within the budget, a
+// drawdown back under the stop but inside the release band holds the stop
+// and its pin, and one under the release lets go, the gate open again. A
+// stale capital state holds the stop as it was.
 func TestMandateOwnerStopEngagesHoldsAndReleases(t *testing.T) {
 	pos := withIBCF(mandateTestPositions(100), 100, 100)
 	srv, c := ownerStopServer(t, 10, pos)
@@ -138,7 +150,7 @@ func TestMandateOwnerStopEngagesHoldsAndReleases(t *testing.T) {
 	v := res.Verdict
 	s := v.OwnerStop
 	owner, _ := v.Allocation(mandate.SleeveOwner)
-	if v.Status != mandate.StatusWithin || s == nil || !s.Engaged || !s.Over || math.Abs(s.DrawdownPct-12) > 1e-9 || s.EngagedAt != at ||
+	if v.Status != mandate.StatusWithin || s == nil || !s.Engaged || !s.Over || math.Abs(s.DrawdownPct-12) > 1e-9 || s.EngagedAt != at || s.ReleasePct != 5 ||
 		math.Abs(s.UseAtStopBase-owner.UseBase) > 1e-9 || math.Abs(s.TargetUseBase-owner.UseBase/2) > 1e-9 || s.UseBase != owner.UseBase {
 		t.Fatalf("engaged: %s %+v owner %+v", v.Status, s, owner)
 	}
@@ -146,7 +158,7 @@ func TestMandateOwnerStopEngagesHoldsAndReleases(t *testing.T) {
 		t.Fatalf("gate view %+v", res.Gate)
 	}
 	blocker := srv.mandateBudgetGate(mandateBuy(10), mandateOpen)
-	if blocker == nil || blocker.Code != mandateBudgetCode || !strings.Contains(blocker.Message, "reduce-only until its drawdown is back under the stop") {
+	if blocker == nil || blocker.Code != mandateBudgetCode || !strings.Contains(blocker.Message, "reduce-only until its drawdown is back under 5%, 5 points under the stop") || !strings.Contains(blocker.Action, "back under 5%") {
 		t.Fatalf("the owner adds nothing while stopped: %+v", blocker)
 	}
 	coreBuy := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 10, LimitPrice: 100, Contract: rpc.ContractParams{ConID: coreTestConID, Symbol: "IBCF", SecType: "STK", Currency: "EUR"}}
@@ -183,10 +195,22 @@ func TestMandateOwnerStopEngagesHoldsAndReleases(t *testing.T) {
 	if kept := srv.mandateVerdicts.kept(); kept.overStreak != 0 {
 		t.Fatalf("an unknown reading resets the streak: %d", kept.overStreak)
 	}
-	// Recovered to 8% below the mark: released, the gate open.
+	// Recovered to 8% below the mark, under the stop but inside the release
+	// band: held, the pin kept, the sleeve still reduce-only and the gate
+	// naming the release.
 	at = stale.Add(time.Minute)
 	res = stepOwnerStop(t, srv, c, at, 281600, -18400)
-	if s := res.Verdict.OwnerStop; !s.Known || s.Engaged || s.Over || s.TargetUseBase != 0 || math.Abs(s.DrawdownPct-8) > 1e-9 {
+	if s := res.Verdict.OwnerStop; !s.Known || !s.Engaged || !s.Over || s.TargetUseBase != v.OwnerStop.TargetUseBase || s.EngagedAt != v.OwnerStop.EngagedAt || math.Abs(s.DrawdownPct-8) > 1e-9 {
+		t.Fatalf("held: %+v", s)
+	}
+	if !res.Gate.RefusesAdditions || !strings.Contains(res.Gate.Reason, "under its 10% stop but not yet under the 5% that releases it; the sleeve is reduce-only until its drawdown is back under 5%") {
+		t.Fatalf("gate view held %+v", res.Gate)
+	}
+	// Recovered to 4%, under the release: released, the pin cleared, the
+	// gate open.
+	at = at.Add(6 * time.Minute)
+	res = stepOwnerStopAt(t, srv, c, at, 4)
+	if s := res.Verdict.OwnerStop; !s.Known || s.Engaged || s.Over || s.TargetUseBase != 0 || s.UseAtStopBase != 0 || math.Abs(s.DrawdownPct-4) > 1e-9 {
 		t.Fatalf("released: %+v", s)
 	}
 	if res.Gate.RefusesAdditions {
@@ -197,6 +221,95 @@ func TestMandateOwnerStopEngagesHoldsAndReleases(t *testing.T) {
 	}
 }
 
+// The stop releases with hysteresis, so it never ratchets: with the sleeve
+// cut to its target, a drawdown oscillating around the stop on the
+// schedule's five-minute readings holds the first engagement's pin (the
+// stop stays engaged, the target never moves, nothing is over) instead of
+// releasing and re-engaging at half of the halved use. Only a reading under
+// the release clears the pin, and the next fall past the stop is a new
+// engagement that pins half the use of its own verdict. The journal has
+// engage, one hold and release with the pinned figures.
+func TestMandateOwnerStopOscillationCutsOnceAndAFullReleasePinsAnew(t *testing.T) {
+	pos := withIBCF(mandateTestPositions(100), 100, 100)
+	srv, c := ownerStopServer(t, 10, pos)
+	at := mandateTestNow
+	stepOwnerStop(t, srv, c, at, 300000, 0)
+	at = at.Add(10 * time.Minute)
+	first := stepOwnerStopAt(t, srv, c, at, 12).Verdict.OwnerStop
+	if !first.Engaged || !first.Over || first.ReleasePct != 5 {
+		t.Fatalf("engaged: %+v", first)
+	}
+	// The reduction has run: the owner's names at a third of their size, the
+	// short call gone. The sleeve's use is under its target.
+	pos.Stocks[0].Quantity, pos.Stocks[1].Quantity, pos.Options = 30, 30, nil
+	for i, pct := range []float64{9, 11, 9.5, 10.5, 9} {
+		at = at.Add(5 * time.Minute)
+		res := stepOwnerStopAt(t, srv, c, at, pct)
+		s := res.Verdict.OwnerStop
+		if !s.Engaged || s.Over || s.EngagedAt != first.EngagedAt || s.TargetUseBase != first.TargetUseBase || s.UseAtStopBase != first.UseAtStopBase || s.UseBase > s.TargetUseBase {
+			t.Fatalf("reading %d at %g%%: the pin moved: %+v (first %+v)", i, pct, s, first)
+		}
+		if !res.Gate.RefusesAdditions {
+			t.Fatalf("reading %d at %g%%: additions open while the stop holds: %+v", i, pct, res.Gate)
+		}
+		if kept := srv.mandateVerdicts.kept(); kept.overStreak != 0 {
+			t.Fatalf("reading %d at %g%%: a sleeve at its target builds a streak: %d", i, pct, kept.overStreak)
+		}
+	}
+	// Under the release: the pin is cleared.
+	at = at.Add(5 * time.Minute)
+	if s := stepOwnerStopAt(t, srv, c, at, 4).Verdict.OwnerStop; s.Engaged || s.TargetUseBase != 0 || s.UseAtStopBase != 0 || !s.EngagedAt.IsZero() {
+		t.Fatalf("released: %+v", s)
+	}
+	// A new fall past the stop pins half the use now, the use after the cut.
+	at = at.Add(5 * time.Minute)
+	v := stepOwnerStopAt(t, srv, c, at, 12).Verdict
+	owner, _ := v.Allocation(mandate.SleeveOwner)
+	if s := v.OwnerStop; !s.Engaged || !s.Over || s.EngagedAt != at || math.Abs(s.UseAtStopBase-owner.UseBase) > 1e-9 || math.Abs(s.TargetUseBase-owner.UseBase/2) > 1e-9 || s.TargetUseBase >= first.TargetUseBase {
+		t.Fatalf("re-engaged: %+v owner %+v first %+v", s, owner, first)
+	}
+	kinds, released := ownerStopJournal(t)
+	want := []string{"mandate_owner_stop_started", "mandate_owner_stop_engaged", "mandate_owner_stop_held", "mandate_owner_stop_released", "mandate_owner_stop_engaged"}
+	if strings.Join(kinds, " ") != strings.Join(want, " ") {
+		t.Fatalf("journal %v, want %v", kinds, want)
+	}
+	if released["target_use_base"] != first.TargetUseBase || released["use_at_stop_base"] != first.UseAtStopBase || released["release_pct"] != 5.0 || released["held"] != true {
+		t.Fatalf("the release entry lacks the pinned figures: %v", released)
+	}
+}
+
+// ownerStopJournal reads the owner stop's entries off the risk policy
+// journal: their kinds in order and the last release entry.
+func ownerStopJournal(t *testing.T) ([]string, map[string]any) {
+	t.Helper()
+	path, err := defaultTradingStatePath(riskPolicyJournalFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var kinds []string
+	var released map[string]any
+	for sc := bufio.NewScanner(f); sc.Scan(); {
+		var entry map[string]any
+		if err := json.Unmarshal(sc.Bytes(), &entry); err != nil {
+			t.Fatal(err)
+		}
+		kind, _ := entry["kind"].(string)
+		if !strings.HasPrefix(kind, "mandate_owner_stop_") {
+			continue
+		}
+		kinds = append(kinds, kind)
+		if kind == "mandate_owner_stop_released" {
+			released = entry
+		}
+	}
+	return kinds, released
+}
+
 // ownerStopFixture is the allocations fixture with the book inside the budget
 // and the owner's stop engaged at half the owner's use.
 func ownerStopFixture(t *testing.T, pos *rpc.PositionsResult, ratio float64, coreConIDs ...int) mandateReductionInput {
@@ -204,7 +317,7 @@ func ownerStopFixture(t *testing.T, pos *rpc.PositionsResult, ratio float64, cor
 	in := mandateAllocationedFixture(t, pos, ratio, 0.3, coreConIDs...)
 	book := *in.Input
 	owner, _ := in.Result.Verdict.Allocation(mandate.SleeveOwner)
-	book.OwnerStop = &mandate.SleeveStop{Sleeve: mandate.SleeveOwner, StopPct: 25, Known: true, StartedAt: "2026-10-01", RiskBase: 170000, HWMRiskBase: 230000, DrawdownBase: 60000, DrawdownPct: 26.1,
+	book.OwnerStop = &mandate.SleeveStop{Sleeve: mandate.SleeveOwner, StopPct: 25, ReleasePct: 20, Known: true, StartedAt: "2026-10-01", RiskBase: 170000, HWMRiskBase: 230000, DrawdownBase: 60000, DrawdownPct: 26.1,
 		Engaged: true, EngagedAt: book.Now.Add(-7 * time.Minute), UseAtStopBase: owner.UseBase, TargetUseBase: mandate.SleeveStopHalf * owner.UseBase}
 	return mandateReductionVerdict(book, 2)
 }
@@ -334,7 +447,7 @@ func TestMandateOwnerStopReleaseWithdrawsAndEndsTheEpisode(t *testing.T) {
 	// At the target (the owner reduced by hand): the episode stays, the rows go.
 	atTarget := next(func(s *mandate.SleeveStop) { s.TargetUseBase = 1e12 })
 	if out, got := mandateReductionRun(t, atTarget, pos); len(out) != 0 || got.State != rpc.MandateReductionWithin || got.Withdrawn != len(rows) || got.Episode != st.Episode ||
-		!strings.Contains(got.Reason, "stays reduce-only until its drawdown is back under the stop") {
+		!strings.Contains(got.Reason, "stays reduce-only until its drawdown is back under 20%, 5 points under the stop") {
 		t.Fatalf("at the target: %d rows, %s episode %q: %s", len(out), got.State, got.Episode, got.Reason)
 	}
 	// Released: the episode ends.

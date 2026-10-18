@@ -18,6 +18,18 @@ import (
 // scorecard holds 100 entry weeks. The key is [mandate.sleeves]
 // owner_stop_pct; absent, nothing here runs.
 //
+// Engaged, held, released. The stop engages on the reading at which the
+// drawdown reaches the stop and pins the sleeve's use on that verdict, half
+// of it the target. It then holds that pin while the drawdown stays within
+// the release band under the stop (mandate.SleeveStopReleaseBand: five
+// points, 20% for a 25% stop) and releases only on a reading below the band;
+// a later reading past the stop is a new engagement and pins the use of its
+// own verdict. Added 2026-10-18 22:00 WEST after the quality loop showed the
+// stop ratcheting: releasing on the first reading under the stop cleared the
+// pin, and a re-engagement on the next pinned half of the already halved
+// use, so a drawdown oscillating around the stop cut the sleeve to a quarter,
+// an eighth and on, each notch a new reduction batch.
+//
 // The sleeve's measure. The owner's sleeve has no account of its own, so its
 // equity-like measure is derived from the two series the capital state
 // already keeps: the book's cash-flow-adjusted equity (the whole-book
@@ -67,10 +79,13 @@ type mandateOwnerSleeveStateV1 struct {
 	LastAt     time.Time                    `json:"last_at,omitzero"`
 	// EngagedAt is the reading at which the drawdown reached the stop, zero
 	// while the stop is not engaged; UseAtStop the sleeve's use on that
-	// verdict and TargetUse half of it, the risk the reduction cuts to.
+	// verdict and TargetUse half of it, the risk the reduction cuts to. Held
+	// is true once the engaged stop's drawdown has been back under the stop,
+	// inside the release band, so the hold is journaled once an engagement.
 	EngagedAt time.Time `json:"engaged_at,omitzero"`
 	UseAtStop float64   `json:"use_at_stop_base,omitempty"`
 	TargetUse float64   `json:"target_use_base,omitempty"`
+	Held      bool      `json:"held,omitempty"`
 }
 
 // mandateSleeveMark is one machine leg as last marked.
@@ -124,9 +139,11 @@ func mandateOwnerUse(v *mandate.Verdict) float64 {
 // measure against its high-water mark, whether the stop is engaged and the
 // risk it cuts the sleeve to. While the capital state is unknown or the book
 // unmeasured the series holds and the state is returned as last persisted,
-// Known false, so the reduction sizes nothing new on it.
+// Known false, so the reduction sizes nothing new on it. The stop releases
+// with hysteresis: engaged at stopPct, it keeps its pinned target until the
+// drawdown is back under the release (the stop less the release band).
 func (st *riskCapitalStore) ObserveOwnerSleeveStop(c *risk.Constitution, scope brokerStateScope, stopPct float64, capital mandate.Capital, v *mandate.Verdict, plan *mandate.AllocationPlan, now time.Time) mandate.SleeveStop {
-	out := mandate.SleeveStop{Sleeve: mandate.SleeveOwner, StopPct: stopPct}
+	out := mandate.SleeveStop{Sleeve: mandate.SleeveOwner, StopPct: stopPct, ReleasePct: mandate.SleeveStopRelease(stopPct)}
 	if st == nil || c == nil || c.Mandate == nil {
 		out.Reasons = append(out.Reasons, "no capital state")
 		return out
@@ -212,21 +229,31 @@ func (st *riskCapitalStore) ObserveOwnerSleeveStop(c *risk.Constitution, scope b
 	out.RiskBase, out.HWMRiskBase, out.HWMAsOf, out.MachinePnLBase = adjusted-reserve, hwmRisk, m.HWMAsOf, m.MachinePnL
 	out.DrawdownBase = math.Max(0, m.HWMAdjusted-adjusted)
 	out.DrawdownPct = out.DrawdownBase / hwmRisk * 100
+	// Engage at the stop, hold the pin through the release band, release
+	// under it: a drawdown oscillating around the stop keeps the first
+	// engagement's target, so a sleeve cut to half is never cut to a quarter.
 	switch engaged := !m.EngagedAt.IsZero(); {
 	case !engaged && out.DrawdownPct >= stopPct:
 		use := mandateOwnerUse(v)
-		m.EngagedAt, m.UseAtStop, m.TargetUse = now, use, mandate.SleeveStopHalf*use
+		m.EngagedAt, m.UseAtStop, m.TargetUse, m.Held = now, use, mandate.SleeveStopHalf*use, false
 		st.appendRiskPolicyJournal(map[string]any{
-			"version": 1, "at": now.UTC(), "kind": "mandate_owner_stop_engaged", "drawdown_pct": out.DrawdownPct, "stop_pct": stopPct,
+			"version": 1, "at": now.UTC(), "kind": "mandate_owner_stop_engaged", "drawdown_pct": out.DrawdownPct, "stop_pct": stopPct, "release_pct": out.ReleasePct,
 			"hwm_risk_base": hwmRisk, "risk_base": out.RiskBase, "use_base": use, "target_use_base": m.TargetUse, "policy_fingerprint": constitutionFingerprint(c),
 		})
 		force = true
-	case engaged && out.DrawdownPct < stopPct:
+	case engaged && out.DrawdownPct < out.ReleasePct:
 		st.appendRiskPolicyJournal(map[string]any{
-			"version": 1, "at": now.UTC(), "kind": "mandate_owner_stop_released", "drawdown_pct": out.DrawdownPct, "stop_pct": stopPct,
-			"engaged_at": m.EngagedAt.UTC(), "policy_fingerprint": constitutionFingerprint(c),
+			"version": 1, "at": now.UTC(), "kind": "mandate_owner_stop_released", "drawdown_pct": out.DrawdownPct, "stop_pct": stopPct, "release_pct": out.ReleasePct,
+			"engaged_at": m.EngagedAt.UTC(), "use_at_stop_base": m.UseAtStop, "target_use_base": m.TargetUse, "held": m.Held, "policy_fingerprint": constitutionFingerprint(c),
 		})
-		m.EngagedAt, m.UseAtStop, m.TargetUse = time.Time{}, 0, 0
+		m.EngagedAt, m.UseAtStop, m.TargetUse, m.Held = time.Time{}, 0, 0, false
+		force = true
+	case engaged && out.DrawdownPct < stopPct && !m.Held:
+		m.Held = true
+		st.appendRiskPolicyJournal(map[string]any{
+			"version": 1, "at": now.UTC(), "kind": "mandate_owner_stop_held", "drawdown_pct": out.DrawdownPct, "stop_pct": stopPct, "release_pct": out.ReleasePct,
+			"engaged_at": m.EngagedAt.UTC(), "use_at_stop_base": m.UseAtStop, "target_use_base": m.TargetUse, "policy_fingerprint": constitutionFingerprint(c),
+		})
 		force = true
 	}
 	out.Engaged, out.EngagedAt, out.UseAtStopBase, out.TargetUseBase = !m.EngagedAt.IsZero(), m.EngagedAt, m.UseAtStop, m.TargetUse
@@ -242,16 +269,27 @@ func mandateStopOver(v mandate.Verdict) bool {
 
 // mandateOwnerStopHolds says why the owner sleeve's stop holds a risk-adding
 // order of sleeve, or "" when it does not: while the stop is engaged the
-// sleeve is reduce-only, whatever the book reads.
+// sleeve is reduce-only, whatever the book reads, through the release band.
 func mandateOwnerStopHolds(v *mandate.Verdict, sleeve, ccy string) string {
 	if v == nil || v.OwnerStop == nil || !v.OwnerStop.Engaged || sleeve != v.OwnerStop.Sleeve {
 		return ""
 	}
-	return mandateOwnerStopSentence(v.OwnerStop, ccy) + "; the sleeve is reduce-only until its drawdown is back under the stop"
+	return mandateOwnerStopSentence(v.OwnerStop, ccy) + "; the sleeve is reduce-only " + mandateOwnerStopReleaseClause(v.OwnerStop)
 }
 
 // mandateOwnerStopSentence states the stop in one clause: "your sleeve is
-// 27% below its high-water mark 240,000 EUR, past its 25% stop".
+// 27% below its high-water mark 240,000 EUR, past its 25% stop", or, held
+// inside the release band, "your sleeve is 23% below its high-water mark
+// 240,000 EUR, under its 25% stop but not yet under the 20% that releases it".
 func mandateOwnerStopSentence(s *mandate.SleeveStop, ccy string) string {
+	if s.Engaged && s.DrawdownPct < s.StopPct {
+		return fmt.Sprintf("%s is %.0f%% below its high-water mark %s, under its %g%% stop but not yet under the %g%% that releases it", mandateSleeveName(s.Sleeve), s.DrawdownPct, mandateMoney(s.HWMRiskBase, ccy), s.StopPct, s.ReleasePct)
+	}
 	return fmt.Sprintf("%s is %.0f%% below its high-water mark %s, past its %g%% stop", mandateSleeveName(s.Sleeve), s.DrawdownPct, mandateMoney(s.HWMRiskBase, ccy), s.StopPct)
+}
+
+// mandateOwnerStopReleaseClause says when an engaged stop lets go: "until its
+// drawdown is back under 20%, 5 points under the stop".
+func mandateOwnerStopReleaseClause(s *mandate.SleeveStop) string {
+	return fmt.Sprintf("until its drawdown is back under %g%%, %g points under the stop", s.ReleasePct, s.StopPct-s.ReleasePct)
 }

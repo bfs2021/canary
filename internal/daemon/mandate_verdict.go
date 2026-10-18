@@ -541,7 +541,7 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 	// reduce-only, inside the budget or over it (mandate_sleeve_stop.go).
 	if why := mandateOwnerStopHolds(result.Verdict, sleeve, ccy); why != "" {
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + why + "; this order adds risk." + open,
-			Action: "Reduce or close instead; the stop releases when the sleeve's drawdown is back under it. `canary mandate` has the sleeve's drawdown and high-water mark."}
+			Action: fmt.Sprintf("Reduce or close instead; the stop releases when the sleeve's drawdown is back under %g%%. `canary mandate` has the sleeve's drawdown and high-water mark.", result.Verdict.OwnerStop.ReleasePct)}
 	}
 	// A name or currency the book does not hold yet has no decision-grade
 	// history in the verdict: the order is measured on the series the store

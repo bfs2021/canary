@@ -1,11 +1,12 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-19 00:40 CEST
+Updated: 2026-10-18 22:00 WEST (2026-10-18 23:00 CEST)
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
 gate); increment 2 implemented 2026-10-14 (forced reduction, below);
 increment 3 implemented 2026-10-18 (allocations, below); increment 4
 implemented 2026-10-19 (the owner sleeve's drawdown stop, "Risk allocations"
-and "The forced reduction" below). The feature is inactive until the owner
+and "The forced reduction" below; its release band added 2026-10-18 22:00
+WEST, "Engaged, held and released"). The feature is inactive until the owner
 writes `[mandate]` into `risk-policy.toml`; the forced reduction places
 nothing by itself until the owner lists `mandate_reduction` under
 `[authority].pre_authorised`; the owner sleeve's stop runs only once
@@ -492,7 +493,14 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   stop the gate refuses the owner's additions and passes the core's and a
   reduction, the within verdict counts toward the streak, the target is
   pinned through a deeper fall, a stale capital state holds the stop as it
-  was and resets the streak, and a recovered drawdown releases it; inside the
+  was and resets the streak, a drawdown back under the stop but inside the
+  release band holds the stop and its pin with the gate naming the release,
+  and one under the release lets go; with the sleeve cut to its target, a
+  drawdown oscillating around the stop on five-minute readings keeps the
+  first pin (engaged throughout, the target never moves, nothing over, no
+  streak) and only a reading under the release clears it, the next fall past
+  the stop pinning half the use of its own verdict, the journal reading
+  engage, one hold, release with the pinned figures, engage; inside the
   budget the batch cuts the owner's sleeve alone to half its use by the
   smallest lots, nothing of the core's fund, every row reduce-only and
   lowering the risk, the same book without the stop proposing nothing; over
@@ -662,26 +670,45 @@ scorecard holds 100 entry weeks. Built 2026-10-19 (increment 4).
   the legs it prices anyway. The state lives in the `risk_capital` document
   beside the book's mark (`mandate_owner_sleeve`), journaled as
   `mandate_owner_stop_started`, `mandate_owner_hwm_advanced`,
-  `mandate_owner_stop_engaged` and `mandate_owner_stop_released`.
-- **Engaged and released**: the stop engages on the reading at which the
-  sleeve's drawdown from its high-water mark reaches `owner_stop_pct`, and
-  pins the sleeve's use on that verdict and half of it as the target; it
-  releases on the reading at which the drawdown is back under the stop. While
-  engaged the owner's sleeve is reduce-only: a risk-adding order in it is
-  refused (`mandate_budget`: "your sleeve is 27% below its high-water mark
-  240,000 EUR, past its 25% stop; the sleeve is reduce-only until its drawdown
-  is back under the stop"), inside the budget or over it; reductions,
-  closes, cancels and hedges pass, and the machine sleeves are untouched.
+  `mandate_owner_stop_engaged`, `mandate_owner_stop_held` and
+  `mandate_owner_stop_released`, the last three with the pinned figures.
+- **Engaged, held and released**: the stop engages on the reading at which
+  the sleeve's drawdown from its high-water mark reaches `owner_stop_pct`,
+  and pins the sleeve's use on that verdict and half of it as the target. It
+  releases with hysteresis: the pin holds while the drawdown is back under
+  the stop but within the release band, five points of the high-water mark
+  (`mandate.SleeveStopReleaseBand`; a 25% stop releases under 20%, carried as
+  `release_pct`), and only a reading under the release clears it; the next
+  reading past the stop is a new engagement and pins half the use of its own
+  verdict. Five points is a fifth of the stop the owner delegated and the
+  same width as the room the stop leaves under the book's 30% maximum loss;
+  at the 15% volatility budget it is about five daily standard deviations,
+  so a crossing back is a recovery, not one reading's noise. A stop under
+  ten points keeps half of itself as the band, so the release stays above
+  zero. Added 2026-10-18 22:00 WEST after the quality loop found, and a
+  second pass confirmed, that the first build ratcheted: it released on the
+  first reading under the stop and cleared the pin, so a re-engagement on
+  the next reading pinned half of the already halved use, and a drawdown
+  oscillating around 25% cut the sleeve to a quarter, an eighth and on, each
+  notch sizing a new reduction batch (two scheduled readings five minutes
+  apart sufficed). While engaged, held included, the owner's sleeve is
+  reduce-only: a risk-adding order in it is refused (`mandate_budget`: "your
+  sleeve is 27% below its high-water mark 240,000 EUR, past its 25% stop; the
+  sleeve is reduce-only until its drawdown is back under 20%, 5 points under
+  the stop"; held: "your sleeve is 23% below its high-water mark 240,000 EUR,
+  under its 25% stop but not yet under the 20% that releases it"), inside the
+  budget or over it; reductions, closes, cancels and hedges pass, and the
+  machine sleeves are untouched.
 - **While the measure cannot be read** (the capital state unknown or stale, a
   suspected flow, the book unmeasured) the series holds, the stop keeps its
   last state (`known: false` with the reason) and sizes nothing new; the
   verdict is unknown then anyway, so standing rows are held as before.
 - **Surfaces**: the verdict carries `verdict.owner_stop` (the measure, the
   high-water mark, the drawdown, the machine's P&L set aside, engaged since,
-  the use at the stop and the target, the use now and `over`); `canary
-  mandate` prints the "Owner sleeve" line (drawdown against the stop, STOP
-  ENGAGED with the target, or the hold) and the "Additions" line names the
-  stop; the forced reduction's rows and status say "owner sleeve stop"
+  the use at the stop and the target, the release, the use now and `over`);
+  `canary mandate` prints the "Owner sleeve" line (drawdown against the
+  stop, STOP ENGAGED with the target and the release, or the hold) and the
+  "Additions" line names the stop and its release; the forced reduction's rows and status say "owner sleeve stop"
   (`phase: stop`); the policy view echoes `owner_stop_pct`.
 
 ### Placement
@@ -843,12 +870,17 @@ rule are unchanged. Only the risk phase changes:
   phase `stop`. Nothing of the machine sleeves is cut for the stop; the
   owner's hand sales count, since the use is measured afresh at every
   verdict, and a sleeve cut to half is not cut again, because the target is
-  pinned for the engagement. The target is reached only when the book's
+  pinned for the engagement and the engagement outlasts a drawdown back
+  under the stop until it is under the release (five points under the stop,
+  "Engaged, held and released"); without that band an oscillation around the
+  stop re-engaged at half of the halved use and cut again (found and fixed
+  2026-10-18 22:00 WEST). The target is reached only when the book's
   target and the stop's are both met. A verdict within the budget with the
   stop engaged and the use at or under its target withdraws the rows and
   keeps the episode open (the sleeve stays reduce-only); a rise in the
   sleeve's risk is then sized again inside the episode, with its veto clocks.
-  The episode ends when the book reads within and the stop has released. The
+  The episode ends when the book reads within and the stop has released,
+  under the release band. The
   whole-book line is unchanged: at the maximum loss the batch still reduces
   to the hedges.
 

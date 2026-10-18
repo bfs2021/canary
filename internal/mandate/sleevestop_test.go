@@ -21,9 +21,9 @@ func TestSleeveStopReadsTheOwnersUseAgainstItsTarget(t *testing.T) {
 	in.Allocations = testAllocationPlan(100, map[string]string{"con:3": SleeveCore})
 	plain := Evaluate(in)
 	owner, _ := plain.Allocation(SleeveOwner)
-	in.OwnerStop = &SleeveStop{Sleeve: SleeveOwner, StopPct: 25, Known: true, Engaged: true, TargetUseBase: owner.UseBase / 2}
+	in.OwnerStop = &SleeveStop{Sleeve: SleeveOwner, StopPct: 25, ReleasePct: 20, Known: true, Engaged: true, TargetUseBase: owner.UseBase / 2}
 	v := Evaluate(in)
-	if v.OwnerStop == nil || !v.OwnerStop.Over || v.OwnerStop.UseBase != owner.UseBase || v.OwnerStop.TargetUseBase != owner.UseBase/2 {
+	if v.OwnerStop == nil || !v.OwnerStop.Over || v.OwnerStop.UseBase != owner.UseBase || v.OwnerStop.TargetUseBase != owner.UseBase/2 || v.OwnerStop.ReleasePct != 20 {
 		t.Fatalf("engaged over its target: %+v (owner use %g)", v.OwnerStop, owner.UseBase)
 	}
 	in.OwnerStop.TargetUseBase = owner.UseBase
@@ -47,5 +47,18 @@ func TestSleeveStopReadsTheOwnersUseAgainstItsTarget(t *testing.T) {
 	}
 	if SleeveStopHalf != 0.5 || math.Abs(0.5*owner.UseBase-in.OwnerStop.TargetUseBase) > 1e-9 {
 		t.Fatalf("the stop cuts to half the sleeve's risk")
+	}
+}
+
+// The release sits five points under the stop, or half the stop when the
+// stop is smaller than ten: 25 releases under 20, 10 under 5, 6 under 3.
+func TestSleeveStopReleaseIsFivePointsUnderTheStop(t *testing.T) {
+	for stop, want := range map[float64]float64{25: 20, 10: 5, 6: 3, 4: 2} {
+		if got := SleeveStopRelease(stop); math.Abs(got-want) > 1e-12 {
+			t.Fatalf("stop %g releases under %g, want %g", stop, got, want)
+		}
+	}
+	if SleeveStopReleaseBand != 5 {
+		t.Fatalf("band %g", SleeveStopReleaseBand)
 	}
 }
