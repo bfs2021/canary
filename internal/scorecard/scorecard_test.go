@@ -296,6 +296,28 @@ func TestEvaluateIsDeterministic(t *testing.T) {
 }
 
 // syntheticBars is a seeded random walk of positive closes on weekdays.
+// Each unknown reason names the series that is missing: the market proxy
+// when the name has history and SPY has none, the underlying contract when
+// the statement named none (so no history was ever asked for it), and the
+// name's own history only when that is what is missing.
+func TestUnknownReasonsNameTheMissingSeries(t *testing.T) {
+	t.Parallel()
+	named := Decision{ID: "n", Sleeve: "owner", Underlying: "ACME", UnderlyingConID: 123, ConID: 123, Symbol: "ACME", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 10, ExecutedAt: day("2026-01-12"), ClusterKey: "owner:2026-W03"}
+	noUnderlying := Decision{ID: "u", Sleeve: "owner", Underlying: "ACME", ConID: 456, Symbol: "ACME 260320C00100000", Instrument: InstrumentOption, Action: "open", Side: SideBuy, Sign: 1, Quantity: 1, ExecutedAt: day("2026-01-12"), ClusterKey: "owner:2026-W03"}
+	res := Evaluate(Input{AsOf: day("2026-03-01"), Decisions: []Decision{named, noUnderlying}, History: History{Underlying: map[int64][]edge.DailyBar{123: syntheticBars(123, "2025-01-01", 400, 2, 50)}}})
+	want := map[string]string{"n": ReasonMarketHistoryUnavailable, "u": ReasonUnderlyingUnknown}
+	for _, d := range res.Decisions {
+		for _, score := range d.Scores {
+			if score.Z != nil || score.Reason != want[d.ID] {
+				t.Fatalf("decision %s score = %+v, want reason %s", d.ID, score, want[d.ID])
+			}
+		}
+	}
+	if res.Coverage.UnknownByReason[ReasonMarketHistoryUnavailable] != 3 || res.Coverage.UnknownByReason[ReasonUnderlyingUnknown] != 3 || res.Coverage.UnknownByReason[ReasonHistoryUnavailable] != 0 {
+		t.Fatalf("coverage = %+v", res.Coverage.UnknownByReason)
+	}
+}
+
 func syntheticBars(conid int64, start string, count int, seed uint64, first float64) []edge.DailyBar {
 	rng := rand.New(rand.NewPCG(seed, seed+1))
 	out := make([]edge.DailyBar, 0, count)

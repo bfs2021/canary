@@ -75,8 +75,11 @@ const (
 
 // Reasons a score, an entry fact or a ledger row is unknown.
 const (
-	ReasonImmature                 = "immature"
-	ReasonHistoryUnavailable       = "history_unavailable"
+	ReasonImmature           = "immature"
+	ReasonHistoryUnavailable = "history_unavailable"
+	// ReasonUnderlyingUnknown: the statement named no underlying contract
+	// for the fill, so no history was ever asked for it.
+	ReasonUnderlyingUnknown        = "underlying_unknown"
 	ReasonMarketHistoryUnavailable = "market_history_unavailable"
 	ReasonLookbackShort            = "lookback_short"
 	ReasonEntrySessionMissing      = "entry_session_missing"

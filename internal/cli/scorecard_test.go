@@ -78,8 +78,11 @@ func goldenScorecard() rpc.ScorecardResult {
 		},
 		DecisionsTotal: 28,
 		Coverage:       rpc.ScorecardCoverage{Ledger: 28, Stocks: 15, Options: 13, Entries: 14, Exits: 7, IndexEntries: 4, RuleOriginated: map[string]int{"proposal:trailing_stop": 2, "lifecycle": 1}, Skipped: map[string]int{"unsupported_asset": 2}, ScoredByHorizon: map[int]int{5: 23, 10: 21, 21: 14}, UnknownByReason: map[string]int{"immature": 16, "history_unavailable": 6}},
-		History:        rpc.ScorecardHistory{Names: 11, Missing: 1, MarketSymbol: "SPY", MarketBars: 530, LastFetchedAt: at.Add(-time.Hour)},
-		NotExecution:   true,
+		History: rpc.ScorecardHistory{Names: 11, Missing: 1, MarketSymbol: "SPY", MarketBars: 530, LastFetchedAt: at.Add(-time.Hour), Failures: []rpc.ScorecardHistoryFailure{
+			{Symbol: "SPY", Bars: 530, Failure: "historical data timeout for SPY after 45s: context deadline exceeded", FailedAt: at.Add(-time.Hour), RetryAt: at.Add(time.Hour)},
+			{Symbol: "SYNC", ConID: 3, Failure: "contract details unresolved for SYNC: no security definition has been found", FailedAt: at.Add(-3 * time.Hour), RetryAt: at.Add(5 * time.Hour)},
+		}},
+		NotExecution: true,
 	}
 }
 

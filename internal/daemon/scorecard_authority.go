@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -44,8 +45,17 @@ const (
 	scorecardMaturityCalendarDays = 32
 	scorecardMaxLookbackDays      = 3 * 365
 	scorecardPassInterval         = 2 * time.Hour
-	scorecardFetchTimeout         = 90 * time.Second
-	scorecardLedgerPage           = 10000
+	// scorecardFetchTimeout bounds one read behind the background pacing
+	// queue. The historical bucket admits one request per 10 s, shared with
+	// Edge's fan-out and the market and mandate history readers, so a read
+	// can wait minutes before it is sent; the market history refresh waits
+	// the same window (marketHistoryRefreshWindow).
+	scorecardFetchTimeout = 4 * time.Minute
+	// scorecardRetryBase is the wait after a failed read: one pass, then
+	// doubling per consecutive failure up to scorecardMaxRetryAfter.
+	scorecardRetryBase     = scorecardPassInterval
+	scorecardMaxRetryAfter = 24 * time.Hour
+	scorecardLedgerPage    = 10000
 )
 
 type scorecardBarCache struct {
@@ -56,14 +66,22 @@ type scorecardBarCache struct {
 }
 
 type scorecardBarSeries struct {
-	ConID     int64     `json:"conid"`
-	Symbol    string    `json:"symbol"`
-	Currency  string    `json:"currency"`
+	ConID    int64  `json:"conid"`
+	Symbol   string `json:"symbol"`
+	Currency string `json:"currency"`
+	// FetchedAt is the last successful read. A failure never moves it, so
+	// one failed read does not cost the name its session.
 	FetchedAt time.Time `json:"fetched_at,omitzero"`
 	// Lookback is the calendar-day span the last fetch asked for; a name
 	// whose history is shorter than that is not asked again for it.
-	Lookback int                 `json:"lookback,omitempty"`
+	Lookback int `json:"lookback,omitempty"`
+	// Failure is the last failed read since the last successful one: the
+	// broker's answer, when it came, how many reads in a row failed and
+	// when the name is asked again. The bars of the last success stay.
 	Failure  string              `json:"failure,omitempty"`
+	FailedAt time.Time           `json:"failed_at,omitzero"`
+	Failures int                 `json:"failures,omitempty"`
+	RetryAt  time.Time           `json:"retry_at,omitzero"`
 	Bars     []edgecore.DailyBar `json:"bars"`
 }
 
@@ -183,37 +201,11 @@ func (s *Server) rebuildScorecard(ctx context.Context) error {
 	if cache.ScopeFingerprint != scopeFingerprint {
 		cache = scorecardBarCache{Version: scorecardBarsVersion, ScopeFingerprint: scopeFingerprint, Names: map[string]scorecardBarSeries{}}
 	}
-	needs := scorecardHistoryNeeds(ledger, cache, now)
-	fetched, failed := 0, 0
-	for _, need := range needs {
-		if fetched >= scorecardMaxFetchesPerPass || ctx.Err() != nil {
-			break
-		}
-		fetched++
-		series := s.fetchScorecardSeries(ctx, need, now)
-		if series.Failure != "" {
-			failed++
-		}
-		if need.market {
-			cache.Market = series
-		} else {
-			cache.Names[strconv.FormatInt(need.conid, 10)] = series
-		}
-		if err := s.saveScorecardBarCache(ctx, cache); err != nil {
-			return err
-		}
+	pending, err := s.fetchScorecardNeeds(ctx, &cache, scorecardHistoryNeeds(ledger, cache, now), now)
+	if err != nil {
+		return err
 	}
-	pending := len(needs) - fetched
-	history := scorecard.History{Underlying: make(map[int64][]edgecore.DailyBar, len(cache.Names)), Market: append([]edgecore.DailyBar(nil), cache.Market.Bars...), MarketSymbol: "SPY"}
-	missing := 0
-	for _, series := range cache.Names {
-		if len(series.Bars) == 0 {
-			missing++
-			continue
-		}
-		history.Underlying[series.ConID] = append([]edgecore.DailyBar(nil), series.Bars...)
-	}
-	state := rpc.ScorecardHistory{Names: len(cache.Names), Missing: missing, Pending: pending, LastFetchedAt: scorecardLastFetch(cache)}
+	history, state := scorecardHistoryFromCache(cache, pending)
 	result := scorecard.Evaluate(scorecard.Input{
 		AsOf: now, EvidenceTo: scorecardEvidenceTo(projected), BaseCurrency: base, Decisions: ledger, History: history,
 		Marks: evidence.Marks, Events: evidence.Events, Skipped: skipped, Superseded: superseded, HistoryState: state,
@@ -221,7 +213,7 @@ func (s *Server) rebuildScorecard(ctx context.Context) error {
 	switch {
 	case pending > 0:
 		result.State, result.Reason = rpc.ScorecardStateBackfilling, "history_backfill_pending"
-	case failed > 0 || missing > 0:
+	case len(state.Failures) > 0 || state.Missing > 0:
 		result.Reason = "history_partial"
 	}
 	if !sameBrokerScope(scope, s.currentBrokerStateScope()) {
@@ -242,7 +234,8 @@ type scorecardHistoryNeed struct {
 
 // scorecardHistoryNeeds lists the names whose cached history does not yet
 // cover their decisions, the market proxy first, then by earliest decision.
-// A name fetched (or failed) today is not fetched again today.
+// A name read today is not read again today; a name whose read failed is
+// asked again at its retry time.
 func scorecardHistoryNeeds(ledger []scorecard.Decision, cache scorecardBarCache, now time.Time) []scorecardHistoryNeed {
 	type span struct {
 		symbol, currency string
@@ -299,12 +292,22 @@ func scorecardHistoryNeeds(ledger []scorecard.Decision, cache scorecardBarCache,
 	return out
 }
 
-// scorecardSeriesStale reports whether a series must be fetched: it is
-// empty, was fetched with a shorter lookback than the earliest decision now
-// needs, or ends before the latest decision could have matured and was not
-// read since. One fetch per name per session.
+// scorecardSeriesStale reports whether a series must be fetched: its last
+// read failed and its retry time has come, or it is empty, was fetched with
+// a shorter lookback than the earliest decision now needs, or ends before
+// the latest decision could have matured and was not read since. One
+// successful fetch per name per session.
 func scorecardSeriesStale(series scorecardBarSeries, earliest, latest, now time.Time) bool {
-	if !series.FetchedAt.IsZero() && series.FetchedAt.UTC().Format(time.DateOnly) == now.UTC().Format(time.DateOnly) {
+	if series.Failure != "" {
+		// A failure the shipped cache stamped as fetched today carries no
+		// retry time; it waits one pass from the stamp.
+		retryAt := series.RetryAt
+		if retryAt.IsZero() {
+			retryAt = series.FetchedAt.Add(scorecardRetryBase)
+		}
+		return !now.Before(retryAt)
+	}
+	if !series.FetchedAt.IsZero() && sameUTCDay(series.FetchedAt, now) {
 		return false
 	}
 	if len(series.Bars) == 0 {
@@ -323,30 +326,144 @@ func scorecardLookback(earliest, now time.Time) int {
 	return max(scorecardLookbackCalendarDays, min(scorecardMaxLookbackDays, days))
 }
 
+// fetchScorecardNeeds reads the needs in order, at most
+// scorecardMaxFetchesPerPass, and keeps each answer in the cache as it
+// arrives. A gateway that is away ends the pass without a mark against any
+// name: the needs it did not reach are pending for the next pass. It returns
+// how many needs were not read.
+func (s *Server) fetchScorecardNeeds(ctx context.Context, cache *scorecardBarCache, needs []scorecardHistoryNeed, now time.Time) (int, error) {
+	fetched := 0
+	for _, need := range needs {
+		if fetched >= scorecardMaxFetchesPerPass || ctx.Err() != nil {
+			break
+		}
+		key := strconv.FormatInt(need.conid, 10)
+		prev := cache.Market
+		if !need.market {
+			prev = cache.Names[key]
+		}
+		series, err := s.fetchScorecardSeries(ctx, prev, need, now)
+		if errors.Is(err, ibkrlib.ErrIBKRUnavailable) || ctx.Err() != nil {
+			break
+		}
+		fetched++
+		if err != nil && scorecardFailureWarnDue(prev, now) {
+			s.warnf("decision scorecard: history read for %s (conid %d) failed: %v; %s, next try %s", need.symbol, need.conid, err, scorecardKeptWords(prev), series.RetryAt.UTC().Format(time.RFC3339))
+		}
+		if need.market {
+			cache.Market = series
+		} else {
+			cache.Names[key] = series
+		}
+		if err := s.saveScorecardBarCache(ctx, *cache); err != nil {
+			return 0, err
+		}
+	}
+	return len(needs) - fetched, nil
+}
+
 // fetchScorecardSeries reads one name's daily closes on the background lane:
-// the exact contract first, then the symbol route for an index underlying. A
-// failure is recorded with today's fetch time so the budget is not spent on
-// it again this session.
-func (s *Server) fetchScorecardSeries(ctx context.Context, need scorecardHistoryNeed, now time.Time) scorecardBarSeries {
+// the exact contract first, then the symbol route for an index underlying.
+// A success replaces the bars and stamps the session; a failure keeps the
+// last success's bars and records the broker's answer with the time the
+// name is asked again. The error is returned for the caller's own decision.
+func (s *Server) fetchScorecardSeries(ctx context.Context, prev scorecardBarSeries, need scorecardHistoryNeed, now time.Time) (scorecardBarSeries, error) {
 	readCtx, cancel := context.WithTimeout(ibkrlib.WithRequestPriority(ctx, ibkrlib.PriorityBackground), scorecardFetchTimeout)
 	defer cancel()
-	series := scorecardBarSeries{ConID: need.conid, Symbol: need.symbol, Currency: need.currency, FetchedAt: now, Lookback: need.lookback}
+	series := prev
+	series.ConID, series.Symbol, series.Currency = need.conid, need.symbol, need.currency
 	var bars []edgecore.DailyBar
 	var err error
 	if need.market {
 		bars, err = s.fetchEdgeMarketBars(readCtx, need.symbol, need.lookback)
 	} else {
 		bars, err = s.fetchEdgeBars(readCtx, edgeContractSpec{ConID: need.conid, Symbol: need.symbol, Currency: need.currency}, need.lookback)
-		if err != nil && need.symbol != "" && readCtx.Err() == nil {
+		if err != nil && need.symbol != "" && readCtx.Err() == nil && !errors.Is(err, ibkrlib.ErrIBKRUnavailable) {
 			bars, err = s.fetchEdgeMarketBars(readCtx, need.symbol, need.lookback)
 		}
 	}
 	if err != nil {
-		series.Failure = err.Error()
-		return series
+		series.Failures = prev.Failures + 1
+		series.Failure, series.FailedAt = errText(err), now
+		series.RetryAt = now.Add(scorecardRetryAfter(series.Failures))
+		return series, err
 	}
-	series.Bars = scorecardNormalizeBars(bars, need.conid)
-	return series
+	series.Bars, series.FetchedAt, series.Lookback = scorecardNormalizeBars(bars, need.conid), now, need.lookback
+	series.Failure, series.FailedAt, series.Failures, series.RetryAt = "", time.Time{}, 0, time.Time{}
+	return series, nil
+}
+
+// scorecardRetryAfter is the wait after the n-th consecutive failed read:
+// one pass, doubling, at most a day.
+func scorecardRetryAfter(failures int) time.Duration {
+	wait := scorecardRetryBase
+	for i := 1; i < failures && wait < scorecardMaxRetryAfter; i++ {
+		wait *= 2
+	}
+	return min(wait, scorecardMaxRetryAfter)
+}
+
+// scorecardFailureWarnDue reports whether a failed read is its name's first
+// of the day: the log warns once per name per day, the result lists every
+// failure.
+func scorecardFailureWarnDue(prev scorecardBarSeries, now time.Time) bool {
+	return prev.FailedAt.IsZero() || !sameUTCDay(prev.FailedAt, now)
+}
+
+func scorecardKeptWords(series scorecardBarSeries) string {
+	if len(series.Bars) == 0 {
+		return "no history behind its scores"
+	}
+	return fmt.Sprintf("the %d closes of the last successful read stay", len(series.Bars))
+}
+
+func sameUTCDay(a, b time.Time) bool {
+	return a.UTC().Format(time.DateOnly) == b.UTC().Format(time.DateOnly)
+}
+
+// scorecardHistoryFromCache assembles the evidence behind the scores and the
+// state the result reports: the names with and without bars, the reads
+// still pending and every name whose last read failed, the market proxy
+// first, then by symbol.
+func scorecardHistoryFromCache(cache scorecardBarCache, pending int) (scorecard.History, rpc.ScorecardHistory) {
+	history := scorecard.History{Underlying: make(map[int64][]edgecore.DailyBar, len(cache.Names)), Market: append([]edgecore.DailyBar(nil), cache.Market.Bars...), MarketSymbol: "SPY"}
+	state := rpc.ScorecardHistory{Names: len(cache.Names), Pending: pending, LastFetchedAt: scorecardLastFetch(cache)}
+	if cache.Market.Failure != "" {
+		state.Failures = append(state.Failures, scorecardHistoryFailure(cache.Market))
+	}
+	var failed []rpc.ScorecardHistoryFailure
+	for _, series := range cache.Names {
+		if series.Failure != "" {
+			failed = append(failed, scorecardHistoryFailure(series))
+		}
+		if len(series.Bars) == 0 {
+			state.Missing++
+			continue
+		}
+		history.Underlying[series.ConID] = append([]edgecore.DailyBar(nil), series.Bars...)
+	}
+	sort.Slice(failed, func(i, j int) bool {
+		if failed[i].Symbol != failed[j].Symbol {
+			return failed[i].Symbol < failed[j].Symbol
+		}
+		return failed[i].ConID < failed[j].ConID
+	})
+	state.Failures = append(state.Failures, failed...)
+	return history, state
+}
+
+// scorecardHistoryFailure is the served form of a failed series. A failure
+// the shipped cache stamped as fetched carries the stamp as its time and
+// waits one pass from it.
+func scorecardHistoryFailure(series scorecardBarSeries) rpc.ScorecardHistoryFailure {
+	failedAt, retryAt := series.FailedAt, series.RetryAt
+	if failedAt.IsZero() {
+		failedAt = series.FetchedAt
+	}
+	if retryAt.IsZero() {
+		retryAt = series.FetchedAt.Add(scorecardRetryBase)
+	}
+	return rpc.ScorecardHistoryFailure{Symbol: series.Symbol, ConID: series.ConID, Bars: len(series.Bars), Failure: series.Failure, FailedAt: failedAt, RetryAt: retryAt}
 }
 
 // scorecardNormalizeBars keeps one positive close per day, oldest first,

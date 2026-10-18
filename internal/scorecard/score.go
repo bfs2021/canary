@@ -71,7 +71,11 @@ func (s series) entryIndex(executedAt time.Time) (int, bool) {
 // entryFacts derives the entry facts of one decision from history.
 func entryFacts(d Decision, underlying series) (rpc.ScorecardEntry, int, bool) {
 	var out rpc.ScorecardEntry
-	if len(underlying.bars) == 0 {
+	switch {
+	case d.UnderlyingConID == 0:
+		out.Reason = ReasonUnderlyingUnknown
+		return out, 0, false
+	case len(underlying.bars) == 0:
 		out.Reason = ReasonHistoryUnavailable
 		return out, 0, false
 	}

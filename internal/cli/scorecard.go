@@ -92,9 +92,26 @@ func renderScorecard(env *Env, res rpc.ScorecardResult, horizon int) {
 		history = fmt.Sprintf("%d names, %d without history, %d still to fetch", res.History.Names, res.History.Missing, res.History.Pending)
 	}
 	riskReadLine(env, "History", history, fmt.Sprintf("%s %d sessions", res.History.MarketSymbol, res.History.MarketBars))
+	renderScorecardHistoryFailures(env, res.History.Failures)
 	fmt.Fprintln(out)
 	riskReadLine(env, "Reading", "z is the underlying's move from the close of the fill's session, net of its market exposure, in units of its own daily noise; positive means the move went the decision's way. On an index (SPY, SPX, QQQ and the like, or a name that moves with SPY at R² 0.90 or more) z is the index's whole move in units of its whole daily noise. Entries (opens and adds) carry the gates; exits (trims and exits) and the index streams are reported, never gated. Each entry week counts once. The e-value is the weight of evidence for information in the decisions (100 is the bar); the posterior gives the chance the true mean z per week exceeds 0.05 and 0.10.")
 	riskReadLine(env, "", "A sleeve is established only when every gate on its entries passes; until then nothing here says whether the decisions carry information. Fills made by Canary's rules or the broker's lifecycle are the rule sleeve and count for no one. Read-only review of past fills; it places no orders.")
+}
+
+// renderScorecardHistoryFailures names each name whose last history read
+// failed, with the broker's answer, when, and when the daemon asks again.
+func renderScorecardHistoryFailures(env *Env, failures []rpc.ScorecardHistoryFailure) {
+	if len(failures) == 0 {
+		return
+	}
+	riskReadLine(env, "History failures", fmt.Sprintf("%d %s; the closes of the last successful read stay behind the scores", len(failures), pluralWord(len(failures), "name", "names")))
+	for _, f := range failures {
+		kept := "no history"
+		if f.Bars > 0 {
+			kept = fmt.Sprintf("%d sessions kept", f.Bars)
+		}
+		riskReadLine(env, "  "+f.Symbol, f.Failure, "failed "+f.FailedAt.Local().Format("2 Jan 15:04"), "next try "+f.RetryAt.Local().Format("2 Jan 15:04"), kept)
+	}
 }
 
 func scorecardStateWords(res rpc.ScorecardResult) string {

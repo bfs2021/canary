@@ -274,12 +274,30 @@ type ScorecardCoverage struct {
 
 // ScorecardHistory reports the history cache behind the scores.
 type ScorecardHistory struct {
-	Names         int       `json:"names"`
-	Missing       int       `json:"missing"`
-	Pending       int       `json:"pending"`
-	MarketSymbol  string    `json:"market_symbol"`
-	MarketBars    int       `json:"market_bars"`
-	LastFetchedAt time.Time `json:"last_fetched_at,omitzero"`
+	Names   int `json:"names"`
+	Missing int `json:"missing"`
+	Pending int `json:"pending"`
+	// Failures lists every name whose last history read failed since its
+	// last successful one, the market proxy first, then by symbol.
+	Failures      []ScorecardHistoryFailure `json:"failures,omitempty"`
+	MarketSymbol  string                    `json:"market_symbol"`
+	MarketBars    int                       `json:"market_bars"`
+	LastFetchedAt time.Time                 `json:"last_fetched_at,omitzero"`
+}
+
+// ScorecardHistoryFailure is one name whose last history read failed since
+// its last successful one: the broker's answer, when it came and when the
+// daemon asks again. The closes of the last success, if any, stay behind the
+// scores meanwhile.
+type ScorecardHistoryFailure struct {
+	Symbol string `json:"symbol"`
+	// ConID is the exact contract read; 0 for the market proxy.
+	ConID int64 `json:"conid,omitempty"`
+	// Bars is how many closes the last successful read left behind.
+	Bars     int       `json:"bars"`
+	Failure  string    `json:"failure"`
+	FailedAt time.Time `json:"failed_at"`
+	RetryAt  time.Time `json:"retry_at"`
 }
 
 // ScorecardMethod travels with every result.

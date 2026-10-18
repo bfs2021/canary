@@ -49,6 +49,12 @@ Coverage · 28 decisions in the ledger · 15 stock · 13 option · 14 entries ·
   lifecycle 1, proposal:trailing stop 2 · skipped: unsupported asset 2 ·
   unknown: history unavailable 6, immature 16
 History · 11 names, 1 without history, 0 still to fetch · SPY 530 sessions
+History failures · 2 names; the closes of the last successful read stay behind
+  the scores
+  SPY · historical data timeout for SPY after 45s: context deadline exceeded ·
+    failed 5 Sep 13:00 · next try 5 Sep 15:00 · 530 sessions kept
+  SYNC · contract details unresolved for SYNC: no security definition has been
+    found · failed 5 Sep 11:00 · next try 5 Sep 19:00 · no history
 
 Reading · z is the underlying's move from the close of the fill's session, net
   of its market exposure, in units of its own daily noise; positive means the
@@ -114,6 +120,12 @@ Coverage · 28 decisions in the ledger · 15 stock · 13 option · 14 entries ·
   lifecycle 1, proposal:trailing stop 2 · skipped: unsupported asset 2 ·
   unknown: history unavailable 6, immature 16
 History · 11 names, 1 without history, 0 still to fetch · SPY 530 sessions
+History failures · 2 names; the closes of the last successful read stay behind
+  the scores
+  SPY · historical data timeout for SPY after 45s: context deadline exceeded ·
+    failed 5 Sep 13:00 · next try 5 Sep 15:00 · 530 sessions kept
+  SYNC · contract details unresolved for SYNC: no security definition has been
+    found · failed 5 Sep 11:00 · next try 5 Sep 19:00 · no history
 
 Reading · z is the underlying's move from the close of the fill's session, net
   of its market exposure, in units of its own daily noise; positive means the

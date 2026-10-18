@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +12,7 @@ import (
 	edgecore "github.com/osauer/canary/v2/internal/edge"
 	"github.com/osauer/canary/v2/internal/rpc"
 	"github.com/osauer/canary/v2/internal/scorecard"
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 func TestScorecardLedgerAppendsEachDecisionOnceAndReloads(t *testing.T) {
@@ -70,21 +74,25 @@ func TestScorecardHistoryNeedsPlanMarketFirstOncePerSession(t *testing.T) {
 	if needs[0].lookback < 400+365 || needs[1].lookback != needs[0].lookback || needs[2].lookback != 443 || needs[0].lookback > scorecardMaxLookbackDays {
 		t.Fatalf("lookbacks = %d %d %d", needs[0].lookback, needs[1].lookback, needs[2].lookback)
 	}
-	// A name fetched (even unsuccessfully) today is not fetched again
-	// today; a covered name is not fetched at all.
+	// A name read today is not read again today; a name whose read failed
+	// waits for its retry time; a covered name is not fetched at all.
 	covered := make([]edgecore.DailyBar, 0, 500)
 	for i := range 500 {
 		covered = append(covered, edgecore.DailyBar{ConID: 2, Day: now.AddDate(0, 0, -500+i), Close: 100})
 	}
 	cache := scorecardBarCache{Names: map[string]scorecardBarSeries{
-		"1": {ConID: 1, FetchedAt: now.Add(-2 * time.Hour), Failure: "gateway unavailable"},
+		"1": {ConID: 1, Failure: "historical data timeout for SYNA after 45s", FailedAt: now.Add(-time.Hour), Failures: 1, RetryAt: now.Add(time.Hour)},
 		"2": {ConID: 2, FetchedAt: now.AddDate(0, 0, -1), Lookback: 443, Bars: covered},
 	}, Market: scorecardBarSeries{FetchedAt: now.Add(-time.Hour), Lookback: 900, Bars: covered}}
 	if needs := scorecardHistoryNeeds(ledger, cache, now); len(needs) != 0 {
 		t.Fatalf("needs after today's fetches = %+v", needs)
 	}
+	// At its retry time the failed name is asked again, alone.
+	if needs := scorecardHistoryNeeds(ledger, cache, now.Add(time.Hour)); len(needs) != 1 || needs[0].conid != 1 {
+		t.Fatalf("needs at the retry time = %+v", needs)
+	}
 	// Tomorrow the market advances (the October decision is immature) and
-	// the failed name is tried again; the matured, covered name is not, and
+	// the failed name is still due; the matured, covered name is not, and
 	// a short listing fetched with the full lookback is not asked again.
 	tomorrow := now.AddDate(0, 0, 1)
 	needs = scorecardHistoryNeeds(ledger, cache, tomorrow)
@@ -175,5 +183,111 @@ func TestScorecardSleeveResolverTagsMandateReductionAsRule(t *testing.T) {
 		if got.Name != rpc.ScorecardSleeveRule || got.Origin != "proposal:"+rpc.TradeProposalBucketMandateReduction {
 			t.Fatalf("%s resolved to %+v, want rule proposal:mandate_reduction", exec, got)
 		}
+	}
+}
+
+// A failed read is not written off for the day: the name is asked again at
+// its retry time (the next pass, then doubling to at most a day), and a
+// success today is the only fetch that counts as today's.
+func TestScorecardFailedSeriesIsRetriedAtItsRetryTimeNotTomorrow(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 18, 1, 24, 0, 0, time.UTC)
+	entry := time.Date(2026, 10, 1, 15, 0, 0, 0, time.UTC)
+	// A failure the shipped cache stamped as fetched today (no retry time
+	// yet) is retried one pass later, not tomorrow.
+	legacy := scorecardBarSeries{ConID: 1, Symbol: "SYNA", FetchedAt: now, Failure: "historical data timeout for SYNA after 45s"}
+	if scorecardSeriesStale(legacy, entry, entry, now.Add(time.Hour)) {
+		t.Fatal("a failed series was asked again before its retry time")
+	}
+	if !scorecardSeriesStale(legacy, entry, entry, now.Add(scorecardPassInterval)) {
+		t.Fatal("a failed series was written off for the day instead of retried at its retry time")
+	}
+	fetched := scorecardBarSeries{ConID: 1, Symbol: "SYNA", FetchedAt: now, Lookback: 400, Bars: []edgecore.DailyBar{{ConID: 1, Day: now.AddDate(0, 0, -1), Close: 100}}}
+	if scorecardSeriesStale(fetched, entry, entry, now.Add(scorecardPassInterval)) {
+		t.Fatal("a series fetched today was asked again today")
+	}
+	failed := scorecardBarSeries{ConID: 1, Symbol: "SYNA", FetchedAt: now.AddDate(0, 0, -1), Failure: "historical data timeout for SYNA after 45s", FailedAt: now, Failures: 3, RetryAt: now.Add(8 * time.Hour)}
+	if scorecardSeriesStale(failed, entry, entry, now.Add(7*time.Hour)) || !scorecardSeriesStale(failed, entry, entry, now.Add(8*time.Hour)) {
+		t.Fatal("a failed series is asked again at its retry time, not before")
+	}
+	// The wait doubles per consecutive failure, from one pass to a day.
+	for failures, want := range map[int]time.Duration{1: 2 * time.Hour, 2: 4 * time.Hour, 3: 8 * time.Hour, 4: 16 * time.Hour, 5: 24 * time.Hour, 9: 24 * time.Hour} {
+		if got := scorecardRetryAfter(failures); got != want {
+			t.Fatalf("retry after %d failures = %s, want %s", failures, got, want)
+		}
+	}
+	// The log warns once per name per day; the result lists every failure.
+	if !scorecardFailureWarnDue(scorecardBarSeries{}, now) || scorecardFailureWarnDue(failed, now.Add(3*time.Hour)) || !scorecardFailureWarnDue(failed, now.AddDate(0, 0, 1)) {
+		t.Fatal("the failure warning is due once per name per day")
+	}
+}
+
+// A failed read keeps the closes of the last successful one and leaves its
+// session stamp alone; a gateway that is away ends the pass with no mark
+// against any name. The result lists every failure with its retry time.
+func TestScorecardFetchPassKeepsBarsOnFailureAndStopsWhenTheGatewayIsAway(t *testing.T) {
+	store, err := corestore.Open(t.Context(), corestore.Options{Path: filepath.Join(privateTestDir(t), "daemon.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Date(2026, 10, 18, 1, 24, 0, 0, time.UTC)
+	yesterday := now.AddDate(0, 0, -1)
+	srv := &Server{coreStore: store}
+	srv.edgeFetchMarketBarsFn = func(context.Context, string, int) ([]ibkrlib.HistoricalBar, error) {
+		return nil, errors.New("historical data timeout for SPY after 45s")
+	}
+	srv.edgeFetchBarsFn = func(_ context.Context, contract ibkrlib.Contract, _ int) ([]ibkrlib.HistoricalBar, error) {
+		if contract.ConID == 1 {
+			return []ibkrlib.HistoricalBar{{Date: "2026-10-16", Close: 101}, {Date: "2026-10-17", Close: 102}}, nil
+		}
+		return nil, fmt.Errorf("gateway unavailable: %w", ibkrlib.ErrIBKRUnavailable)
+	}
+	kept := []edgecore.DailyBar{{Day: yesterday.AddDate(0, 0, -1), Close: 500}, {Day: yesterday, Close: 501}}
+	cache := scorecardBarCache{Version: scorecardBarsVersion, ScopeFingerprint: "scope_test", Names: map[string]scorecardBarSeries{}, Market: scorecardBarSeries{Symbol: "SPY", Currency: "USD", FetchedAt: yesterday, Lookback: 400, Bars: kept}}
+	needs := []scorecardHistoryNeed{
+		{market: true, symbol: "SPY", currency: "USD", lookback: 400},
+		{conid: 1, symbol: "SYNA", currency: "USD", lookback: 400},
+		{conid: 2, symbol: "SYNB", currency: "USD", lookback: 400},
+		{conid: 3, symbol: "SYNC", currency: "USD", lookback: 400},
+	}
+	pending, err := srv.fetchScorecardNeeds(t.Context(), &cache, needs, now)
+	if err != nil || pending != 2 {
+		t.Fatalf("pending = %d, %v; want 2 (the pass ends when the gateway is away)", pending, err)
+	}
+	market := cache.Market
+	if len(market.Bars) != 2 || !market.FetchedAt.Equal(yesterday) || market.Failure == "" || !market.FailedAt.Equal(now) || market.Failures != 1 || !market.RetryAt.Equal(now.Add(2*time.Hour)) {
+		t.Fatalf("failed market series = %+v; want yesterday's bars and stamp kept, failure recorded, retry in one pass", market)
+	}
+	name := cache.Names["1"]
+	if len(name.Bars) != 2 || !name.FetchedAt.Equal(now) || name.Failure != "" || name.Lookback != 400 {
+		t.Fatalf("fetched series = %+v", name)
+	}
+	if _, ok := cache.Names["2"]; ok {
+		t.Fatal("a name the gateway could not serve was marked")
+	}
+	reloaded, err := srv.loadScorecardBarCache(t.Context())
+	if err != nil || len(reloaded.Market.Bars) != 2 || reloaded.Market.Failure != market.Failure || len(reloaded.Names) != 1 {
+		t.Fatalf("saved cache = %+v, %v", reloaded, err)
+	}
+	history, state := scorecardHistoryFromCache(cache, pending)
+	if len(history.Market) != 2 || len(history.Underlying[1]) != 2 || state.Names != 1 || state.Missing != 0 || state.Pending != 2 || !state.LastFetchedAt.Equal(now) {
+		t.Fatalf("history = %d market bars, %d names; state = %+v", len(history.Market), len(history.Underlying), state)
+	}
+	if len(state.Failures) != 1 || state.Failures[0].Symbol != "SPY" || state.Failures[0].ConID != 0 || state.Failures[0].Bars != 2 || state.Failures[0].Failure != market.Failure || !state.Failures[0].RetryAt.Equal(now.Add(2*time.Hour)) {
+		t.Fatalf("failures = %+v", state.Failures)
+	}
+	// A second failure doubles the wait and keeps the bars; a success
+	// clears the failure and stamps the session.
+	again, err := srv.fetchScorecardSeries(t.Context(), cache.Market, needs[0], now.Add(2*time.Hour))
+	if err == nil || len(again.Bars) != 2 || again.Failures != 2 || !again.RetryAt.Equal(now.Add(6*time.Hour)) {
+		t.Fatalf("second failure = %+v, %v", again, err)
+	}
+	srv.edgeFetchMarketBarsFn = func(context.Context, string, int) ([]ibkrlib.HistoricalBar, error) {
+		return []ibkrlib.HistoricalBar{{Date: "2026-10-17", Close: 503}}, nil
+	}
+	fixed, err := srv.fetchScorecardSeries(t.Context(), again, needs[0], now.Add(6*time.Hour))
+	if err != nil || len(fixed.Bars) != 1 || fixed.Failure != "" || fixed.Failures != 0 || !fixed.RetryAt.IsZero() || !fixed.FetchedAt.Equal(now.Add(6*time.Hour)) {
+		t.Fatalf("recovered series = %+v, %v", fixed, err)
 	}
 }

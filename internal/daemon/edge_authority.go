@@ -316,7 +316,7 @@ func (s *Server) fetchEdgeBars(ctx context.Context, spec edgeContractSpec, lookb
 	} else {
 		connector := s.gatewayConnector()
 		if connector == nil {
-			return nil, fmt.Errorf("gateway unavailable")
+			return nil, fmt.Errorf("gateway unavailable: %w", ibkrlib.ErrIBKRUnavailable)
 		}
 		raw, err = connector.FetchHistoricalDailyTradeBarsWithContract(ctx, contract, lookback, 0)
 	}
@@ -336,7 +336,7 @@ func (s *Server) fetchEdgeMarketBars(ctx context.Context, symbol string, lookbac
 	} else {
 		connector := s.gatewayConnector()
 		if connector == nil {
-			return nil, fmt.Errorf("gateway unavailable")
+			return nil, fmt.Errorf("gateway unavailable: %w", ibkrlib.ErrIBKRUnavailable)
 		}
 		raw, err = connector.FetchHistoricalDailyBars(ctx, symbol, lookback, 0)
 	}

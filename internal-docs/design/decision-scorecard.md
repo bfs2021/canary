@@ -159,11 +159,31 @@ Daily closes for each decision's underlying and for SPY, covering 252
 sessions before the decision through 21 sessions after. The daemon fetches
 them on the background lane (`ibkr.PriorityBackground`) inside the IBKR
 history budget (60 requests per 10 minutes, `pkg/ibkr/ratelimiter.go`): at
-most 20 fetches per pass, at most one fetch per name per session, names no
-longer held included. A name is fetched again only while it has a decision
-whose 21st session after entry is not yet in the cache. Series are kept in one
-state document (`scorecard_bars`, version 1, exact contract id, up to 800 bars each).
-Missing history makes a score unknown; it is counted and never imputed.
+most 20 fetches per pass, at most one successful fetch per name per session,
+names no longer held included. A name is fetched again only while it has a
+decision whose 21st session after entry is not yet in the cache. Series are
+kept in one state document (`scorecard_bars`, version 1, exact contract id,
+up to 800 bars each). Missing history makes a score unknown; it is counted
+and never imputed. A lookback above a year is asked for in years
+(`formatHistoricalDuration`: 400 days is "2 Y", three years "3 Y"), the form
+IBKR accepts for daily bars.
+
+One read waits up to four minutes behind the pacing queue
+(`scorecardFetchTimeout`, the market history refresh's window): the
+historical bucket admits one request per 10 s and Edge's fan-out and the
+market and mandate history readers share it, so a read sent right after a
+restart can wait minutes before the broker sees it. A failed read is not
+written off for the day (fixed 2026-10-18; until then a failure was stamped
+as fetched today and replaced the series, so one timeout cost the name its
+day and its bars): the closes of the last successful read stay behind the
+scores, the series records the broker's answer, when it came and how many
+reads in a row failed, and the name is asked again after one pass (2 h),
+doubling per consecutive failure up to a day. A gateway that is away ends the
+pass without a mark against any name; the names it did not reach are pending
+for the next pass. The worker warns once per name per day in the daemon log;
+the result lists every current failure (`history.failures`: symbol, contract
+id, closes kept, the broker's answer, when it failed and when it is retried),
+the market proxy first.
 
 ## Scores per decision
 
@@ -244,7 +264,9 @@ sleeve is never called skilled before `established`, and `accruing` reads as
 "not enough evidence yet". It shows each sleeve's entries, then exits, then
 its index streams once the sleeve has an index decision, each with a
 one-line meaning ("market timing and hedges: did the index move the way the
-decision positioned for?").
+decision positioned for?"). After the history line, a "History failures"
+block names each name whose last read failed, with the broker's answer, when
+it failed, when the daemon asks again and how many closes it kept.
 
 The worker runs after start, every two hours, and when Edge's statement
 evidence changes. The publication (`scorecard_publication`, version 2 since
@@ -268,8 +290,16 @@ volatility in index_entries with the bought-put median; a broad ETF off the
 list with R² ≥ 0.90 is routed to the index streams while a list member is
 routed whatever its fit; a single name keeps the market-adjusted z exactly;
 post-entry bars change neither σ_total, R² nor the class; only flat series
-leave `idio_vol_zero` and `total_vol_zero`. `internal/edge`: position changes
-match Edge's own classification. `internal/daemon`: the ledger appends a
-decision once and reloads it; the resolver tags proposal buckets and daemon
-origins as rule and leaves hand and TWS fills to the owner. `internal/cli`: golden render. `internal/stress`:
-`TestOnlyTheDaemonEvaluates` names the scorecard evaluators.
+leave `idio_vol_zero` and `total_vol_zero`; each unknown reason names the
+series that is missing (`market_history_unavailable` when the name has
+history and SPY has none, `underlying_unknown` when the statement named no
+underlying contract). `internal/edge`: position changes match Edge's own
+classification. `internal/daemon`: the ledger appends a decision once and
+reloads it; the resolver tags proposal buckets and daemon origins as rule and
+leaves hand and TWS fills to the owner; a failed read keeps the last closes,
+leaves the session stamp alone and is retried at its retry time with the
+doubling wait, a gateway that is away ends the pass unmarked, the result
+lists the failures and the log warns once per name per day. `pkg/ibkr`: a
+lookback above a year is asked for in years. `internal/cli`: golden render.
+`internal/stress`: `TestOnlyTheDaemonEvaluates` names the scorecard
+evaluators.
