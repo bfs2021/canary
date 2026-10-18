@@ -208,7 +208,8 @@ func TestRunRecordsEveryPlannedContract(t *testing.T) {
 	if len(sink.rows) != out.Planned || sink.outcome == nil || sink.outcome.Status != RunComplete {
 		t.Fatalf("stored %d rows, outcome %+v", len(sink.rows), sink.outcome)
 	}
-	if len(sink.symbols) != 2 || sink.symbols[0].Source != SourceExplicit || sink.symbols[1].Source != SourceHeld ||
+	// Held option underlyings are recorded before the research list.
+	if len(sink.symbols) != 2 || sink.symbols[0].Source != SourceHeld || sink.symbols[1].Source != SourceExplicit ||
 		sink.symbols[0].Planned != 239 || len(sink.symbols[0].Expiries) != 3 || sink.symbols[0].DiscoveredAt.IsZero() {
 		t.Fatalf("symbols = %+v", sink.symbols)
 	}

@@ -258,6 +258,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "mandate", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandate(mandate.StatusWithin)}},
 		{name: "mandate_reduce", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateReducing()}},
 		{name: "mandate_allocations", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateAllocations()}},
+		{name: "mandate_register", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateRegister()}},
 		{name: "mandate_unknown", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateUnknown()}},
 		{name: "mandate_unknown_held", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateHeld()}},
 		{name: "mandate_no_room", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateNoRoom()}},
@@ -267,6 +268,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "core_trend_off", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreTrendOff()}},
 		{name: "core_ambiguous", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreAmbiguous()}},
 		{name: "core_london", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreLondon()}},
+		{name: "core_shadow", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreShadow()}},
 		{name: "core_resolve", argv: []string{"core", "resolve"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolve()}},
 		{name: "core_resolve_pinned", argv: []string{"core", "resolve"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolvePinned()}},
 		{name: "core_resolve_none", argv: []string{"core", "resolve", "--isin", "IE00B5BMR087", "--currency", "EUR"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolveNone()}},
@@ -434,11 +436,28 @@ func goldenMandateAllocations() rpc.MandateRiskResult {
 	v := *res.Verdict
 	v.Allocations = []mandate.AllocationReport{
 		{Sleeve: mandate.SleeveOwner, AllocationPct: 9, AllocationBase: 19230, UseBase: 23970, ContributionPct: 100, StandaloneBase: 23970, ExcessBase: 4740, Over: true, Legs: 3},
-		{Sleeve: mandate.SleeveCore, TargetPct: 6, StagePct: 100, AllocationPct: 6, AllocationBase: 12820, ExcessBase: -12820, Note: "scale_pct 100 of core_vol_pct 6"},
-		{Sleeve: mandate.SleeveOverlay, TargetPct: 4, Note: "no strategy runs in the overlay yet"},
+		{Sleeve: mandate.SleeveCore, TargetPct: 6, StagePct: 100, AllocationPct: 6, AllocationBase: 12820, ExcessBase: -12820, Note: "the core is live at scale 100 of its 6 allocation"},
+		{Sleeve: mandate.SleeveOverlay, TargetPct: 4, Note: "no strategy registered in the overlay yet"},
 	}
 	res.Verdict = &v
 	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "your sleeve carries 23,970 EUR a year, over its allocation 19,230 EUR (the budget less the machine's allocations of 12,820 EUR)"}
+	return res
+}
+
+// goldenMandateRegister is a verdict with the strategy register: the core
+// in its first form (no stage written, so shadow; the compiled spec stands)
+// and a synthetic later entry on hold for a missing key and a rule this
+// build does not carry (strategy-register.md).
+func goldenMandateRegister() rpc.MandateRiskResult {
+	res := goldenMandate(mandate.StatusWithin)
+	res.Register = []rpc.MandateStrategyView{
+		{ID: "core", Sleeve: "core", Rule: "core-ibcf-v1", RuleCompiled: true, AllocationPct: 6, AllocationKey: "mandate.sleeves.core_vol_pct", State: "shadow", ScalePct: 25,
+			Notes:          []string{"stage unwritten: shadow, as before the register", "spec_hash unwritten: the compiled rule's own spec stands"},
+			DeclaredSeries: []string{"IBCF EUR daily closes, 253 sessions"}},
+		{ID: "s9", Sleeve: "s9", Rule: "synthetic-v1", SpecHash: "abababababababababababababababababababababababababababababababab", SpecCited: true, AllocationPct: 2,
+			AllocationKey: "mandate.strategies.s9.risk_allocation_pct", Stage: "live", State: "hold",
+			Reasons: []string{"mandate.strategies.s9.scale_pct unwritten", "rule synthetic-v1 is not compiled into this Canary"}},
+	}
 	return res
 }
 
@@ -476,8 +495,8 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 		NotModelled: []string{"SYNT (bill, no equity risk modelled)"},
 		Allocations: []mandate.AllocationReport{
 			{Sleeve: mandate.SleeveOwner, AllocationPct: 15, AllocationBase: 32050, UseBase: 23970 * scale, ContributionPct: 100, StandaloneBase: 23970 * scale, ExcessBase: 23970*scale - 32050, Over: scale > 1, Legs: 3},
-			{Sleeve: mandate.SleeveCore, TargetPct: 6, Note: "the core sends no orders yet (its monthly rows are phase 2), so it runs nothing"},
-			{Sleeve: mandate.SleeveOverlay, TargetPct: 4, Note: "no strategy runs in the overlay yet"},
+			{Sleeve: mandate.SleeveCore, TargetPct: 6, Note: "the core runs in shadow: it serves its target and sends no orders, so it reserves nothing (stage unwritten: shadow, as before the register)"},
+			{Sleeve: mandate.SleeveOverlay, TargetPct: 4, Note: "no strategy registered in the overlay yet"},
 		}}
 	if scale > 1 {
 		verdict.Stresses.GapBreaches = []string{"SYNA", "SYNB"}

@@ -50,6 +50,11 @@ type ConstitutionMandate struct {
 	// (internal-docs/design/core-sleeve.md). Optional: absent, the core is
 	// inactive and every fingerprint is kept.
 	Core *ConstitutionMandateCore `toml:"core" json:"core,omitempty"`
+	// Strategies is the strategy register's later entries, one
+	// [mandate.strategies.<id>] table per machine strategy
+	// (internal-docs/design/strategy-register.md); [mandate.core] is its
+	// first entry. Optional: absent, every fingerprint is kept.
+	Strategies map[string]*ConstitutionMandateStrategy `toml:"strategies" json:"strategies,omitempty"`
 }
 
 // ConstitutionMandateCore is [mandate.core]: which compiled rule the core
@@ -77,8 +82,10 @@ type ConstitutionMandateCore struct {
 	ConID    *int   `toml:"con_id" json:"con_id,omitempty"`
 	Exchange string `toml:"exchange" json:"exchange,omitempty"`
 	Currency string `toml:"currency" json:"currency,omitempty"`
-	// ScalePct is the commissioning ramp (25, then 50, then 100); 0
-	// suspends the core.
+	// ScalePct is the commissioning ramp (25, then 50, then 100), the scale
+	// the core sizes at; reserved only while it is live. While Stage is
+	// unwritten, 0 suspends the core; once Stage is written the scale is on
+	// the ladder and a suspension is stage = "suspended".
 	ScalePct *float64 `toml:"scale_pct" json:"scale_pct,omitempty"`
 	// BandPct is the no-trade band in percent of the target shares.
 	BandPct *float64 `toml:"band_pct" json:"band_pct,omitempty"`
@@ -88,6 +95,15 @@ type ConstitutionMandateCore struct {
 	// MaxValuePct caps the core's value at this share of the budget base ×
 	// room.
 	MaxValuePct *float64 `toml:"max_value_pct" json:"max_value_pct,omitempty"`
+	// SpecHash is the lab registry's hash of the spec the rule implements,
+	// as the owner cites it, and Stage the core's ladder stage: shadow, live
+	// or suspended (internal-docs/design/strategy-register.md). Both are
+	// optional in this, the register's first form, so a file written before
+	// them keeps its behaviour and its fingerprints: an unwritten stage runs
+	// in shadow, as the core ran before the register, and an unwritten hash
+	// lets the compiled rule's own spec stand. Live needs both written.
+	SpecHash string `toml:"spec_hash" json:"spec_hash,omitempty"`
+	Stage    string `toml:"stage" json:"stage,omitempty"`
 }
 
 // CoreUnapprovedKeys lists the [mandate.core] keys the owner has not
@@ -131,6 +147,9 @@ func (c *ConstitutionMandateCore) validate() error {
 	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 	if v := c.ScalePct; v != nil && (!finite(*v) || *v < 0 || *v > 100) {
 		return fmt.Errorf("mandate.core.scale_pct must be in [0, 100]")
+	}
+	if v := c.ScalePct; v != nil && c.Stage != "" && *v != 25 && *v != 50 && *v != 100 {
+		return fmt.Errorf("mandate.core.scale_pct must be 25, 50 or 100 once mandate.core.stage is written (the ladder's small, larger and full steps); suspend with stage = \"suspended\"")
 	}
 	if v := c.BandPct; v != nil && (!finite(*v) || *v <= 0 || *v >= 100) {
 		return fmt.Errorf("mandate.core.band_pct must be in (0, 100)")
@@ -233,22 +252,8 @@ func (m *ConstitutionMandate) validate(semantics ConstitutionSemantics) error {
 				return err
 			}
 		}
-		// The machine's allocations sit inside the budget: shares above the
-		// target would leave the owner no allocation and turn a forced reduction
-		// on the owner's whole book first.
-		if t := m.VolTargetPct; t != nil {
-			machine := 0.0
-			for _, v := range []*float64{sl.CoreVolPct, sl.OverlayVolPct} {
-				if v != nil {
-					machine += *v
-				}
-			}
-			if machine > *t {
-				return fmt.Errorf("mandate.sleeves.core_vol_pct + overlay_vol_pct (%g) must not exceed mandate.vol_target_pct (%g): the machine's allocations sit inside the budget", machine, *t)
-			}
-		}
 	}
-	return nil
+	return m.validateRegister()
 }
 
 // UnapprovedKeys lists the material mandate keys the owner has not written.

@@ -118,6 +118,19 @@ the ledger and the decision list and are counted under
   trade rows they produced; such a fill is `rule` with origin `lifecycle`,
   whatever the journal says.
 
+Open since 2026-10-18 (strategy-register.md, section 5): the journal path
+needs a round-trip test before a classification rule changes. Lifecycle and
+fill events are journaled without an origin, which the journal stores as
+`daemon_internal`, so by the last clause above a journaled fill would read as
+`rule`, the owner's included, and an owner order queued for the open would
+too; yet the live publication tags only lifecycle fills, which suggests the
+journal join matches no fill at all. The fix is to classify a fill by its
+order's staged attempt, joined by order reference, never by a lifecycle
+event's transmit origin. When Desk's automatic submission is served, its
+writes journal their own origin (`desk-automatic`) with the item's source,
+and an entry-rule addition counts as the owner's (the owner configures and
+arms it) until the rule is registered as a strategy with its own sleeve.
+
 What remains unclassifiable: the Flex trade row keeps no transaction type or
 notes, so a lifecycle delivery without an `OptionEAE` row, a stop that rested
 at the broker outside Canary's journal, a Canary order older than the

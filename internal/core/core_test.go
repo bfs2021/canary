@@ -1,6 +1,8 @@
 package core
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math"
 	"math/rand/v2"
@@ -321,5 +323,27 @@ func TestDecideBandMinimumAndHeadroom(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The rule, the lab spec it implements and the parity fixture that proves
+// the implementation move together (strategy-register.md, "The compiled rule
+// catalogue"): the register checks the spec hash, which names a spec, not
+// code. A behaviour change fails the parity test unless the fixture changes,
+// and a new fixture fails here unless the rule's spec hash (a new lab spec
+// version, so a new rule) changes with it.
+func TestParityFixturePinnedToTheSpec(t *testing.T) {
+	raw, err := os.ReadFile("testdata/core_ibcf_v1_parity.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	const (
+		pinnedRule    = "core-ibcf-v1"
+		pinnedSpec    = "2408d09e618904c84219cacf6bc0f599e1a00ee3c4b04b0effbcc4521f45a441"
+		pinnedFixture = "024e8f5c7e6f4b0d60d9824707c7c7ca7afa266ab0188beaac187330901b3241"
+	)
+	if RuleID != pinnedRule || SpecHash != pinnedSpec || hex.EncodeToString(sum[:]) != pinnedFixture {
+		t.Fatalf("rule %s, spec %s, fixture %x: a new fixture is a new spec version and a new rule", RuleID, SpecHash, sum)
 	}
 }

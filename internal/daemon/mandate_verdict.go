@@ -225,7 +225,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	capital, _ := s.riskCapital.MandateCapitalForScope(c, scope, s.nowUTC())
 	now := s.nowUTC()
 	in := mandate.Input{Now: now, BaseCurrency: base, Policy: mandatePolicyNumbers(c), Capital: capital,
-		Series: map[string]mandate.Series{}, FX: map[string]mandate.Series{}, FXNow: map[string]float64{}, Allocations: mandateAllocationPlan(c, s.coreRuns(), s.mandateCoreContracts(ctx, c))}
+		Series: map[string]mandate.Series{}, FX: map[string]mandate.Series{}, FXNow: map[string]float64{}}
 	if unapproved := c.Mandate.UnapprovedKeys(); len(unapproved) > 0 {
 		in.Reasons = append(in.Reasons, "mandate keys are unwritten: "+strings.Join(unapproved, ", "))
 	}
@@ -266,12 +266,18 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 			evidence.Series = append(evidence.Series, row)
 		}
 	}
+	// The allocation plan follows the resolved strategy register; it reads
+	// the legs, since a live strategy on hold keeps its reservation only
+	// while its sleeve holds positions.
+	resolved := s.resolvedRegister(c)
+	in.Allocations = mandateAllocationPlan(c, resolved, s.mandateCoreContracts(ctx, c), in.Legs)
 	verdict := mandate.Evaluate(in)
 	fp := c.FingerprintKey()
 	res := &rpc.MandateRiskResult{AsOf: now, Active: true, Verdict: &verdict, Evidence: evidence,
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: fp},
 		Policy:            mandatePolicyView(c.Mandate)}
 	res.Gate = s.mandateGateView(res, now)
+	res.Register = mandateRegisterView(resolved)
 	s.mandateVerdicts.set(res, &in, now, fp, !refreshAccount)
 	return res
 }

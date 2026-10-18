@@ -50,6 +50,12 @@ type CoreTargetResult struct {
 	SpecID     string `json:"spec_id"`
 	SpecHash   string `json:"spec_hash"`
 	PolicyRule string `json:"policy_rule,omitempty"`
+	// Stage is the core's entry in the strategy register as this build runs
+	// it (internal-docs/design/strategy-register.md).
+	Stage *CoreStageView `json:"stage,omitempty"`
+	// Shadow is the core's shadow record while it runs in shadow: the paper
+	// position on its production code and the newest records.
+	Shadow *ShadowView `json:"shadow,omitempty"`
 	// PolicyFingerprint identifies the constitution read.
 	PolicyFingerprint *Fingerprint     `json:"policy_fingerprint,omitempty"`
 	Policy            *CorePolicyView  `json:"policy,omitempty"`
@@ -63,6 +69,18 @@ type CoreTargetResult struct {
 	// calendar, when the calendar covers it.
 	NextDecision string        `json:"next_decision,omitempty"`
 	Evidence     *CoreEvidence `json:"evidence,omitempty"`
+}
+
+// CoreStageView is the core's ladder stage: as written (empty while
+// unwritten, which runs in shadow), as this build runs it (shadow, live,
+// suspended or hold), the part of its allocation it reserves in percent, and
+// whether the policy cites the lab spec hash or the compiled one stands.
+type CoreStageView struct {
+	Written       string   `json:"written,omitempty"`
+	State         string   `json:"state"`
+	ReservedPct   float64  `json:"reserved_pct"`
+	SpecHashCited bool     `json:"spec_hash_cited"`
+	Notes         []string `json:"notes,omitempty"`
 }
 
 // CorePolicyView is [mandate.core] as the daemon read it, with the sleeve

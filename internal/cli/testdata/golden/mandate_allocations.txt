@@ -13,7 +13,8 @@ Risk allocations  each sleeve's use against its allocation, a year · alone: its
   Owner · 23,970 EUR of 19,230 EUR · alone 23,970 EUR · OVER by 4,740 EUR · the
   budget less the machine's allocations
   Core · 0 EUR of 12,820 EUR · alone 0 EUR · stage 100% of its 6% allocation
-  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay yet
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy registered in the overlay
+  yet
 
 Contributions  share of the risk · beta to SPY · one-name gap against its cap
   SYNA · 66.9% · beta 1.12 · gap −25% loses 22,100 EUR, +25% loses 6,200 EUR
@@ -58,7 +59,8 @@ Additions · \x1b[31mrefused · your sleeve carries 23,970 EUR a year, over its 
   \x1b[31mOwner · 23,970 EUR of 19,230 EUR · alone 23,970 EUR · OVER by 4,740 EUR · the\x1b[0m
   \x1b[31mbudget less the machine's allocations\x1b[0m
   Core · 0 EUR of 12,820 EUR · alone 0 EUR · stage 100% of its 6% allocation
-  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay yet
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy registered in the overlay
+  yet
 
 \x1b[1mContributions\x1b[0m  share of the risk · beta to SPY · one-name gap against its cap
   SYNA · 66.9% · beta 1.12 · gap −25% loses 22,100 EUR, +25% loses 6,200 EUR

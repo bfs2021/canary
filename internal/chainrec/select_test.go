@@ -149,16 +149,24 @@ func TestSelectStrikesWindowAndCap(t *testing.T) {
 	}
 }
 
+// Held option underlyings come first (alphabetically), then the registered
+// strategies' declared chains, then the research list; a symbol several
+// sources name keeps every source in priority order; past the cap the
+// research names go first (strategy-register.md, section 4).
 func TestResolveSymbolsMergesAndCaps(t *testing.T) {
-	sel, skipped := ResolveSymbols([]string{"spx", "SPY", "QQQ", "SPY"}, []string{"SYNB", "SPY", "SYNA"})
-	want := []SymbolChoice{{"SPX", SourceExplicit}, {"SPY", SourceBoth}, {"QQQ", SourceExplicit}, {"SYNA", SourceHeld}, {"SYNB", SourceHeld}}
+	declared := []SymbolChoice{{"SYNC", SourceStrategyPrefix + "s9"}, {"SPY", SourceStrategyPrefix + "s9"}}
+	sel, skipped := ResolveSymbols([]string{"SYNB", "SPY", "SYNA"}, declared, []string{"spx", "SPY", "QQQ", "SYNC"})
+	want := []SymbolChoice{{"SPY", SourceHeld + "+strategy:s9+" + SourceExplicit}, {"SYNA", SourceHeld}, {"SYNB", SourceHeld}, {"SYNC", "strategy:s9+" + SourceExplicit}, {"SPX", SourceExplicit}, {"QQQ", SourceExplicit}}
 	if !slices.Equal(sel, want) || skipped != nil {
 		t.Fatalf("resolved = %v skipped %v, want %v", sel, skipped, want)
 	}
 	held := []string{"SYNA", "SYNB", "SYNC", "SYND", "SYNE", "SYNF", "SYNG", "SYNH", "SYNI", "SYNJ", "SYNK"}
-	sel, skipped = ResolveSymbols(DefaultSymbols, held)
-	if len(sel) != MaxSymbols || len(skipped) != 3+len(held)-MaxSymbols || skipped[0].Symbol != "SYNJ" {
-		t.Fatalf("cap: selected %d skipped %v", len(sel), skipped)
+	sel, skipped = ResolveSymbols(held, []SymbolChoice{{"SYNL", "strategy:s9"}}, []string{"SPX", "SPY", "QQQ"})
+	if len(sel) != MaxSymbols || len(skipped) != len(held)+1+3-MaxSymbols || skipped[0].Symbol != "SPX" || sel[MaxSymbols-1].Symbol != "SYNL" {
+		t.Fatalf("cap: selected %v skipped %v", sel, skipped)
+	}
+	if sel, _ := ResolveSymbols(nil, nil, DefaultSymbols); len(sel) != 0 {
+		t.Fatalf("the default research list records %v", sel)
 	}
 }
 

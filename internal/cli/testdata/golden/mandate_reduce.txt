@@ -19,9 +19,11 @@ Reduction · reducing · 2 rows, pre-authorised: the daemon places 2 after the
 Risk allocations  each sleeve's use against its allocation, a year · alone: its own risk
   Owner · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the
   budget less the machine's allocations
-  Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
-  monthly rows are phase 2), so it runs nothing
-  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay yet
+  Core · 0 EUR of 0 EUR · alone 0 EUR · the core runs in shadow: it serves its
+  target and sends no orders, so it reserves nothing (stage unwritten: shadow,
+  as before the register)
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy registered in the overlay
+  yet
 
 Contributions  share of the risk · beta to SPY · one-name gap against its cap
   SYNA · 66.9% · beta 1.12 · gap −25% loses 88,400 EUR, +25% loses 24,800 EUR
@@ -72,9 +74,11 @@ Reduction · \x1b[33mreducing · 2 rows, pre-authorised: the daemon places 2 aft
 \x1b[1mRisk allocations\x1b[0m  each sleeve's use against its allocation, a year · alone: its own risk
   \x1b[31mOwner · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the\x1b[0m
   \x1b[31mbudget less the machine's allocations\x1b[0m
-  Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
-  monthly rows are phase 2), so it runs nothing
-  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay yet
+  Core · 0 EUR of 0 EUR · alone 0 EUR · the core runs in shadow: it serves its
+  target and sends no orders, so it reserves nothing (stage unwritten: shadow,
+  as before the register)
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy registered in the overlay
+  yet
 
 \x1b[1mContributions\x1b[0m  share of the risk · beta to SPY · one-name gap against its cap
   \x1b[31mSYNA · 66.9% · beta 1.12 · gap −25% loses 88,400 EUR, +25% loses 24,800 EUR\x1b[0m

@@ -10,7 +10,10 @@ import (
 var goldenChainsAt = time.Date(2026, 10, 14, 20, 0, 0, 0, time.UTC)
 
 func goldenChainRecorderState(enabled bool) rpc.ChainRecorderState {
-	st := rpc.ChainRecorderState{Enabled: enabled, Symbols: []string{"SPX", "SPY", "QQQ"}, SymbolsDefault: true, MaxSymbols: 12,
+	// Research names a session added (a collection setting), and one chain a
+	// synthetic registered strategy declares.
+	st := rpc.ChainRecorderState{Enabled: enabled, Symbols: []string{"SPX", "SPY", "QQQ"}, MaxSymbols: 12,
+		Declared: []rpc.ChainRecorderDeclaration{{Symbol: "SYNO", Source: "strategy:s9"}},
 		Expiries: "two nearest standard monthlies and the nearest weekly", StrikeWindowPct: 0.2, MaxStrikesPerExpiry: 40,
 		LeadMinutes: 30, MaxLines: 4, LineReserve: 20}
 	if enabled {

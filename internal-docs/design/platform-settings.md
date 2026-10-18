@@ -194,9 +194,11 @@ exists. A version-4 document that carries the block is refused by the strict
 decoder, so a rollback never reads the newer preference as an old one.
 
 `chains.recorder.enabled` and `chains.recorder.symbols` (document version 6,
-2026-10-14) are the option-chain recorder's switch, off by default, and its
-explicit underlyings; `null` on the list restores SPX, SPY, QQQ and `[]` keeps
-held option underlyings only ([option-chain-recorder.md](option-chain-recorder.md)).
+2026-10-14) are the option-chain recorder's off switch and its research
+names. Since 2026-10-18 the recorder records what holdings and registered
+strategies declare without a switch: unset runs, `false` is the owner's off
+switch, and `null` on the list restores none
+([option-chain-recorder.md](option-chain-recorder.md)).
 They govern market-data reads, never a broker write, and neither touches the
 trading-control generation. The switch is the owner's (class `owner`); the
 list is a collection key any origin may change. A version-5 document that

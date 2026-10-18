@@ -1,0 +1,134 @@
+package register
+
+import (
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/osauer/canary/v2/internal/core"
+	"github.com/osauer/canary/v2/internal/risk"
+)
+
+// A synthetic catalogue: the core's rule and one entry rule, either of which
+// a test may let send.
+func testRules(coreSends, entrySends bool) []Rule {
+	rules := Catalogue()
+	rules[0].Sends = coreSends
+	return append(rules, Rule{ID: "synthetic-v1", SpecID: "s9_synthetic", SpecHash: strings.Repeat("ab", 32), Form: FormEntry, Sends: entrySends, Bucket: "synthetic_rows"})
+}
+
+func coreEntry(stage, specHash string, scale float64) risk.StrategyEntry {
+	return risk.StrategyEntry{ID: risk.CoreStrategyID, Form: risk.StrategyFormCore, Rule: core.RuleID, SpecHash: specHash, Sleeve: risk.CoreStrategyID,
+		AllocationPct: new(6.0), AllocationKey: "mandate.sleeves.core_vol_pct", Stage: stage, ScalePct: new(scale)}
+}
+
+func entry(stage string, scale float64) risk.StrategyEntry {
+	return risk.StrategyEntry{ID: "s9", Form: risk.StrategyFormEntry, Rule: "synthetic-v1", SpecHash: strings.Repeat("ab", 32), Sleeve: "s9",
+		AllocationPct: new(2.0), AllocationKey: "mandate.strategies.s9.risk_allocation_pct", Stage: stage, ScalePct: new(scale)}
+}
+
+// Each row of the design's stage table (strategy-register.md §2).
+func TestResolveStages(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		e        risk.StrategyEntry
+		sends    bool
+		state    State
+		reserved float64
+		scale    float64
+		note     string
+	}{
+		{"core first form, no stage", coreEntry("", "", 25), false, StateShadow, 0, 25, "stage unwritten"},
+		{"core shadow", coreEntry(risk.StageShadow, core.SpecHash, 25), true, StateShadow, 0, 25, ""},
+		{"core live, build sends", coreEntry(risk.StageLive, core.SpecHash, 25), true, StateLive, 25, 25, ""},
+		{"core live, build sends nothing", coreEntry(risk.StageLive, core.SpecHash, 50), false, StateShadow, 0, 50, "this build sends no orders"},
+		{"core scale 0 suspends", coreEntry(risk.StageLive, core.SpecHash, 0), true, StateSuspended, 0, 0, ""},
+		{"core suspended", coreEntry(risk.StageSuspended, core.SpecHash, 25), true, StateSuspended, 0, 0, ""},
+		{"entry shadow", entry(risk.StageShadow, 25), true, StateShadow, 0, 25, ""},
+		{"entry live", entry(risk.StageLive, 50), true, StateLive, 50, 50, ""},
+		{"entry live, build sends nothing", entry(risk.StageLive, 100), false, StateShadow, 0, 100, "this build sends no orders"},
+		{"entry suspended", entry(risk.StageSuspended, 25), true, StateSuspended, 0, 0, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Resolve([]risk.StrategyEntry{tc.e}, testRules(tc.sends, tc.sends))[0]
+			if got.State != tc.state || got.ReservedPct != tc.reserved || got.ScalePct != tc.scale || len(got.Reasons) != 0 {
+				t.Fatalf("got %+v, want %s reserving %g at %g", got, tc.state, tc.reserved, tc.scale)
+			}
+			if got.Reserves() != (tc.reserved > 0) {
+				t.Fatalf("Reserves() = %v with %g reserved", got.Reserves(), got.ReservedPct)
+			}
+			if tc.note != "" && !slices.ContainsFunc(got.Notes, func(n string) bool { return strings.Contains(n, tc.note) }) {
+				t.Fatalf("notes %q lack %q", got.Notes, tc.note)
+			}
+		})
+	}
+}
+
+// A missing key, a rule not compiled, a hash that is not the rule's and a
+// rule in the other form each hold the strategy, name why, and reserve
+// nothing, even when its stage is live and the build sends.
+func TestResolveHolds(t *testing.T) {
+	missing := entry(risk.StageLive, 25)
+	missing.Unwritten = []string{"mandate.strategies.s9.spec_hash"}
+	unknown := entry(risk.StageLive, 25)
+	unknown.Rule = "not-compiled-v1"
+	mismatch := coreEntry(risk.StageLive, strings.Repeat("0", 64), 25)
+	coreInEntry := entry(risk.StageLive, 25)
+	coreInEntry.Rule = core.RuleID
+	entryInCore := coreEntry(risk.StageLive, strings.Repeat("ab", 32), 25)
+	entryInCore.Rule = "synthetic-v1"
+	for name, tc := range map[string]struct {
+		e    risk.StrategyEntry
+		want string
+	}{
+		"missing key":                        {missing, "mandate.strategies.s9.spec_hash unwritten"},
+		"not compiled":                       {unknown, "rule not-compiled-v1 is not compiled into this Canary"},
+		"hash mismatch":                      {mismatch, "is not the spec rule " + core.RuleID + " implements"},
+		"core's rule outside [mandate.core]": {coreInEntry, "runs only as [mandate.core]"},
+		"another rule in [mandate.core]":     {entryInCore, "[mandate.core] runs only the core's rule"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := Resolve([]risk.StrategyEntry{tc.e}, testRules(true, true))[0]
+			if got.State != StateHold || got.Reserves() || got.ScalePct != 0 {
+				t.Fatalf("got %+v, want a hold that reserves nothing", got)
+			}
+			if !slices.ContainsFunc(got.Reasons, func(r string) bool { return strings.Contains(r, tc.want) }) {
+				t.Fatalf("reasons %q lack %q", got.Reasons, tc.want)
+			}
+		})
+	}
+}
+
+// The catalogue carries the core's rule as the core compiles it, never
+// sending in this build and never in the other form.
+func TestCatalogueCarriesTheCoreRule(t *testing.T) {
+	rule, ok := Find(Catalogue(), core.RuleID)
+	if !ok || rule.SpecHash != core.SpecHash || rule.SpecID != core.SpecID || rule.Form != FormCore || rule.Sends || rule.Bucket != CoreRebalanceBucket {
+		t.Fatalf("catalogue core rule %+v", rule)
+	}
+	if len(rule.Data.Series) != 1 || rule.Data.Series[0].ISIN != core.ISIN || rule.Data.Series[0].Sessions != core.WindowCloses || len(rule.Data.Chains) != 0 {
+		t.Fatalf("core declares %+v", rule.Data)
+	}
+}
+
+// The recorder reads US option chains in USD on the US session only, on its
+// v1 plan; a rule declaring any other chain cannot be collected, so the
+// catalogue refuses it here (strategy-register.md, section 4). Every rule
+// names its bucket and declares a positive window for each series.
+func TestCatalogueDeclaresOnlyWhatCanaryCollects(t *testing.T) {
+	for _, r := range Catalogue() {
+		if r.ID == "" || r.SpecHash == "" || r.Bucket == "" {
+			t.Fatalf("rule %+v lacks an id, a spec hash or a bucket", r)
+		}
+		for _, s := range r.Data.Series {
+			if s.Sessions <= 0 || s.Currency == "" || s.ISIN == "" && s.Symbol == "" {
+				t.Fatalf("%s declares a series it cannot be read by: %+v", r.ID, s)
+			}
+		}
+		for _, c := range r.Data.Chains {
+			if c.Plan != "v1" || c.Underlying == "" {
+				t.Fatalf("%s declares a chain the recorder cannot collect: %+v", r.ID, c)
+			}
+		}
+	}
+}

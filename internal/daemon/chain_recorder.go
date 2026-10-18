@@ -13,6 +13,7 @@ import (
 
 	"github.com/osauer/canary/v2/internal/chainrec"
 	"github.com/osauer/canary/v2/internal/marketcal"
+	"github.com/osauer/canary/v2/internal/register"
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
@@ -37,8 +38,11 @@ type chainRecorderRuntime struct {
 	openErr string
 }
 
+// chainRecorderSettingsFrom is the recorder's settings: on unless the owner
+// switched it off (strategy-register.md, section 4: collection needs no
+// switch; the owner keeps the off switch), with the research list.
 func chainRecorderSettingsFrom(data platformSettingsData) chainrec.Settings {
-	out := chainrec.Settings{Symbols: slices.Clone(chainrec.DefaultSymbols)}
+	out := chainrec.Settings{Enabled: true, Symbols: slices.Clone(chainrec.DefaultSymbols)}
 	if v := data.Chains.Recorder.Enabled; v != nil {
 		out.Enabled = *v
 	}
@@ -50,13 +54,13 @@ func chainRecorderSettingsFrom(data platformSettingsData) chainrec.Settings {
 
 func chainRecorderPlatformSettings(data platformSettingsData) rpc.PlatformChainsSettings {
 	settings := chainRecorderSettingsFrom(data)
-	symbolsReason := "explicit underlyings; held option underlyings are added at run time"
+	symbolsReason := "research names, recorded after held option underlyings and registered strategies' declared chains"
 	if data.Chains.Recorder.Symbols == nil {
-		symbolsReason = "default list; held option underlyings are added at run time"
+		symbolsReason = "no research names (the default); held option underlyings and registered strategies' declared chains are recorded"
 	}
 	return rpc.PlatformChainsSettings{Recorder: rpc.ChainRecorderSettings{
 		Enabled: settingsBool(settings.Enabled, rpc.SettingsAccessWrite, rpc.SettingsSourceRuntime,
-			"daily option-chain snapshot 30 minutes before the US close into option-chains.db; off by default"),
+			"daily option-chain snapshot 30 minutes before the US close into option-chains.db of what holdings and registered strategies declare; unset records, false is the owner's off switch"),
 		Symbols: rpc.SettingsStringList{Value: settings.Symbols, Access: rpc.SettingsAccessWrite, Source: rpc.SettingsSourceRuntime, Reason: symbolsReason},
 	}}
 }
@@ -134,6 +138,14 @@ func (s *Server) maybeRunChainRecorder(ctx context.Context, now time.Time) bool 
 	slot, due := chainrec.DueSlot(marketcal.New(), now)
 	if !due {
 		return false
+	}
+	settings.Declared = s.registerChainDeclarations()
+	if len(settings.Declared) == 0 && len(settings.Symbols) == 0 {
+		// Nothing is declared but what holdings hold: with no held option
+		// underlying there is nothing to record, and no store is opened.
+		if held, err := (&chainRecorderBroker{s: s}).HeldUnderlyings(ctx); err != nil || len(held) == 0 {
+			return false
+		}
 	}
 	if c := s.gatewayConnector(); (c == nil || !c.IsReady()) && now.Before(slot.ScheduledAt.Add(chainRecorderGatewayGrace)) {
 		return false
@@ -415,7 +427,7 @@ func (s *Server) handleChainsRecorded(ctx context.Context, req *rpc.Request) (*r
 		ran = func(string) bool { return false }
 	}
 	res := &rpc.ChainsRecordedResult{Version: 1, AsOf: now.UTC(), Filter: p, Runs: []rpc.ChainRecorderRun{},
-		Recorder: chainRecorderState(chainRecorderSettingsFrom(data), data.Chains.Recorder.Symbols == nil, s.chainRecorder.running.Load(), now, ran)}
+		Recorder: chainRecorderState(s.chainRecorderPlan(data), data.Chains.Recorder.Symbols == nil, s.chainRecorder.running.Load(), now, ran)}
 	if store == nil {
 		return res, nil
 	}
@@ -437,6 +449,7 @@ func (s *Server) handleChainsRecorded(ctx context.Context, req *rpc.Request) (*r
 func chainRecorderState(settings chainrec.Settings, symbolsDefault, running bool, now time.Time, ran func(date string) bool) rpc.ChainRecorderState {
 	st := rpc.ChainRecorderState{
 		Enabled: settings.Enabled, Symbols: settings.Symbols, SymbolsDefault: symbolsDefault, MaxSymbols: chainrec.MaxSymbols,
+		Declared:        []rpc.ChainRecorderDeclaration{},
 		Expiries:        "two nearest standard monthlies and the nearest weekly",
 		StrikeWindowPct: chainrec.StrikeWindowPct, MaxStrikesPerExpiry: chainrec.MaxStrikesPerExpiry,
 		LeadMinutes: int(chainrec.SnapshotLead / time.Minute), MaxLines: chainrec.MaxLines, LineReserve: chainrec.LineReserve,
@@ -444,6 +457,9 @@ func chainRecorderState(settings chainrec.Settings, symbolsDefault, running bool
 	}
 	if st.Symbols == nil {
 		st.Symbols = []string{}
+	}
+	for _, d := range settings.Declared {
+		st.Declared = append(st.Declared, rpc.ChainRecorderDeclaration{Symbol: d.Symbol, Source: d.Source})
 	}
 	if settings.Enabled {
 		cal := marketcal.New()
@@ -479,4 +495,35 @@ func (s *Server) handleChainsRecordedRows(ctx context.Context, req *rpc.Request)
 		return nil, err
 	}
 	return &rpc.ChainsRecordedRowsResult{Rows: rows, Next: next}, nil
+}
+
+// chainRecorderPlan is the recorder's settings with the registered
+// strategies' declared chains.
+func (s *Server) chainRecorderPlan(data platformSettingsData) chainrec.Settings {
+	settings := chainRecorderSettingsFrom(data)
+	settings.Declared = s.registerChainDeclarations()
+	return settings
+}
+
+// registerChainDeclarations is the option chains the registered strategies
+// declare (internal-docs/design/strategy-register.md, section 4): every
+// entry whose rule is compiled, in any stage, held or not, live strategies
+// first, then shadow, suspended and held ones, each named as its source.
+func (s *Server) registerChainDeclarations() []chainrec.SymbolChoice {
+	if s == nil || s.riskPolicies == nil {
+		return nil
+	}
+	resolved := s.resolvedRegister(s.riskPolicies.snapshot().policy)
+	rank := map[register.State]int{register.StateLive: 0, register.StateShadow: 1, register.StateSuspended: 2, register.StateHold: 3}
+	slices.SortStableFunc(resolved, func(a, b register.Resolved) int { return rank[a.State] - rank[b.State] })
+	var out []chainrec.SymbolChoice
+	for _, r := range resolved {
+		if r.Rule == nil {
+			continue
+		}
+		for _, c := range r.Rule.Data.Chains {
+			out = append(out, chainrec.SymbolChoice{Symbol: c.Underlying, Source: chainrec.SourceStrategyPrefix + r.Entry.ID})
+		}
+	}
+	return out
 }

@@ -254,8 +254,8 @@ Daemon-owned preferences persisted in `$XDG_STATE_HOME/ibkr/daemon.db` and chang
 | `trading.tws_order_control.enabled` | `true/false/null` | safety | Lets an owner-confirmed cancel or change reach an order placed by hand in TWS through a separate client-0 connection; paper works once enabled, live also needs the daemon-recorded paper proof (trading.tws_order_control.paper_proven_at); human-only by policy (default false). |
 | `regime.journal.enabled` | `true/false/null` | owner | Turns forward regime decision-event collection in daemon.db on (default true). |
 | `stress.journal.enabled` | `true/false/null` | owner | Turns forward portfolio-stress decision-event collection in daemon.db on, mirroring regime.journal.enabled (default true). |
-| `chains.recorder.enabled` | `true/false/null` | owner | Records a daily option-chain snapshot (quotes, sizes, IV, greeks, open interest) 30 minutes before the US close into option-chains.db beside daemon.db; market-data reads only, within a line reserve for the live display (default false). |
-| `chains.recorder.symbols` | `SYM,SYM,.../[]/null` | collection | Underlyings the option-chain recorder covers besides held option underlyings, at most 12; null restores SPX, SPY, QQQ. |
+| `chains.recorder.enabled` | `true/false/null` | owner | The owner's off switch for the daily option-chain snapshot (quotes, sizes, IV, greeks, open interest) 30 minutes before the US close into option-chains.db beside daemon.db: unset, it records what holdings and registered strategies declare; false stops it. Market-data reads only, within a line reserve for the live display (default unset: on). |
+| `chains.recorder.symbols` | `SYM,SYM,.../[]/null` | collection | Research names the option-chain recorder covers after held option underlyings and registered strategies' declared chains, at most 12 in all; a collection setting any origin may change; null restores none. |
 
 ## Environment variables
 

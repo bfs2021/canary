@@ -16,6 +16,7 @@ import (
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/marketcal"
+	"github.com/osauer/canary/v2/internal/register"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
@@ -284,10 +285,12 @@ func (s *Server) refreshCoreTarget(ctx context.Context) {
 	if why != "" {
 		return
 	}
-	if f := s.coreFrozen(ctx, coreScope(s.currentBrokerStateScope(), contract.ConID)); f != nil && f.Decision == latest {
+	f := s.coreFrozen(ctx, coreScope(s.currentBrokerStateScope(), contract.ConID))
+	if f != nil && f.Decision == latest && !s.coreShadowDue(ctx, latest) {
 		return
 	}
-	s.evaluateCoreTarget(ctx, now)
+	// The shadow record's only writer (strategy-register.md, section 3).
+	s.recordCoreShadow(ctx, s.evaluateCoreTarget(ctx, now), now)
 }
 
 // coreScope keys a frozen month by account, mode and the core's contract.
@@ -315,6 +318,17 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	}
 	if p.Rule != "" && p.Rule != core.RuleID {
 		hold(fmt.Sprintf("the policy names rule %q; this daemon carries %s", p.Rule, core.RuleID))
+	}
+	// The core's entry in the strategy register: a cited spec hash must be
+	// the compiled rule's, and live needs it cited.
+	reg, _ := resolvedCore(s.resolvedRegister(c))
+	res.Stage = &rpc.CoreStageView{Written: p.Stage, State: string(reg.State), ReservedPct: reg.ReservedPct, SpecHashCited: p.SpecHash != "", Notes: reg.Notes}
+	res.Shadow = s.coreShadowView(ctx, reg.State)
+	if p.SpecHash != "" && p.SpecHash != core.SpecHash {
+		hold(fmt.Sprintf("the policy cites spec_hash %s; %s implements %s", p.SpecHash, core.RuleID, core.SpecHash))
+	}
+	if p.Stage == risk.StageLive && p.SpecHash == "" {
+		hold("mandate.core.spec_hash is unwritten: the core goes live only with the lab spec it implements cited")
 	}
 	if p.ISIN != "" && p.ISIN != core.ISIN {
 		hold(fmt.Sprintf("the policy pins ISIN %s; %s is compiled for %s (%s)", p.ISIN, core.RuleID, core.ISIN, core.Symbol))
@@ -506,11 +520,10 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	in := core.DecideInput{Target: res.Sizing.Target, TrendOn: sig.TrendOn, Held: held, Price: price, BandPct: *p.BandPct, MinOrderBase: *p.MinOrderBase, Holdable: held}
 	if verdict.Status != mandate.StatusWithin {
 		in.BuyBlocked = "the mandate verdict reads " + verdict.Status
-	} else if !s.coreRuns() {
-		// Allocations (2026-10-18): the core's allocation is reserved only as
-		// far as it runs: its stage times its allocation while it sends orders,
-		// and nothing until then.
-		in.BuyBlocked = "the core sends no orders yet, so it has no allocation"
+	} else if reg.State != register.StateLive {
+		// The core's allocation is reserved only while it is live
+		// (strategy-register.md, section 2); in shadow it sends nothing.
+		in.BuyBlocked = "the core runs in " + string(reg.State) + " and sends no orders, so it reserves no allocation"
 	} else if want := res.Sizing.Target - held; want > 0 && price > 0 {
 		add := core.Headroom(want, func(q int) bool { return coreHeadroomFits(input, contract, q, price) })
 		in.Holdable = held + add

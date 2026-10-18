@@ -1369,6 +1369,27 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # band_pct = 10.0
 # min_order_base = 2500.0
 # max_value_pct = 40.0
+# The core is the strategy register's first entry (design
+# internal-docs/design/strategy-register.md). spec_hash cites the lab spec
+# the rule implements; stage is its ladder stage: shadow (what an unwritten
+# stage reads: it serves its target and sends nothing), live or suspended.
+# Live needs spec_hash written, and once stage is written scale_pct is 25,
+# 50 or 100.
+# spec_hash = "2408d09e618904c84219cacf6bc0f599e1a00ee3c4b04b0effbcc4521f45a441"
+# stage = "shadow"
+# Every later machine strategy is one table of its own, every key yours: a
+# rule compiled into Canary, the lab spec hash it implements, its sleeve,
+# its risk allocation in percent a year of the budget base (the overlay's is
+# overlay_vol_pct above), its stage and the scale it sizes at. A missing key
+# holds that strategy and is named in canary mandate; the core's allocation
+# and every risk_allocation_pct together stay within vol_target_pct.
+# [mandate.strategies.example]
+# rule = ""
+# spec_hash = ""
+# sleeve = "example"
+# risk_allocation_pct = 2.0
+# stage = "shadow"
+# scale_pct = 25.0
 `)
 	return []byte(b.String())
 }

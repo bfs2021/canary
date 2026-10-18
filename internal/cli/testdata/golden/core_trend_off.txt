@@ -1,6 +1,7 @@
 # canary core · COLUMNS=80 · colour off
 Core  WOULD SELL ALL 640 IBCF
 Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
+Stage · live · reserves 100% of its allocation · spec cited
 Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
   the ISIN
 Action · sell all 640 shares · the trend is off: sell every share; the band
@@ -30,6 +31,7 @@ Read-only: the core proposes nothing and places no order in this phase. It is
 # canary core · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mCore\x1b[0m  \x1b[33m\x1b[1mWOULD SELL ALL 640 IBCF\x1b[0m\x1b[0m
 Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
+Stage · live · reserves 100% of its allocation · spec cited
 Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
   the ISIN
 Action · sell all 640 shares · the trend is off: sell every share; the band

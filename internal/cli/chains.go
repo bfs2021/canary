@@ -141,16 +141,24 @@ func renderChainsRecorded(env *Env, res rpc.ChainsRecordedResult) {
 	fmt.Fprintf(env.Stdout, "Option-chain recorder  %s\n", env.statusBadge(badge))
 	fmt.Fprintln(env.Stdout)
 	if !rec.Enabled {
-		displayRow(env, env.Stdout, "Recorder", "off; turn it on with canary settings set chains.recorder.enabled=true")
+		displayRow(env, env.Stdout, "Recorder", "off: you switched it off; canary settings set chains.recorder.enabled=null records what holdings and strategies declare again")
 	}
-	symbols := strings.Join(rec.Symbols, ", ")
+	declared := "none"
+	if len(rec.Declared) > 0 {
+		parts := make([]string, len(rec.Declared))
+		for i, d := range rec.Declared {
+			parts[i] = d.Symbol + " (" + strings.TrimPrefix(d.Source, "strategy:") + ")"
+		}
+		declared = strings.Join(parts, ", ")
+	}
+	research := strings.Join(rec.Symbols, ", ")
 	if len(rec.Symbols) == 0 {
-		symbols = "none listed"
+		research = "none"
 	}
 	if rec.SymbolsDefault {
-		symbols += " (default)"
+		research += " (default)"
 	}
-	displayRow(env, env.Stdout, "Symbols", fmt.Sprintf("%s + held option underlyings, at most %d", symbols, rec.MaxSymbols))
+	displayRow(env, env.Stdout, "Symbols", fmt.Sprintf("held option underlyings, then strategies' chains: %s, then research names: %s; at most %d", declared, research, rec.MaxSymbols))
 	displayRow(env, env.Stdout, "Plan", fmt.Sprintf("%s; strikes within ±%.0f%% of spot, at most %d per expiry, calls and puts; %d min before the close",
 		rec.Expiries, rec.StrikeWindowPct*100, rec.MaxStrikesPerExpiry, rec.LeadMinutes))
 	displayRow(env, env.Stdout, "Lines", fmt.Sprintf("at most %d at once; %d kept free for the live display and orders", rec.MaxLines, rec.LineReserve))

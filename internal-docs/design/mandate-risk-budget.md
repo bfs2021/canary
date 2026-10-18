@@ -670,14 +670,17 @@ rule are unchanged. Only the risk phase changes:
 
 ### Policy keys
 
-None in this build. The core's stage is its existing `scale_pct` and its
-target risk allocation `core_vol_pct`; the owner's allocation is the rest. A
-lab strategy's stage needs a home in Canary's risk policy before it can hold
-an allocation: the strategy register proposed in Desk's
-`docs/strategy-engine.md` (each live strategy's spec hash, sleeve, risk
-allocation and ladder stage, as `[mandate.core]` carries `rule` and
-`scale_pct`) is that home. It awaits the owner and is not built here; until
-then the overlay's stage is 0 and no key acts by default.
+The stage lives in the strategy register (owner decision 2026-10-18 09:01
+CEST; [strategy-register.md](strategy-register.md)): `[mandate.core]` is its
+first entry and every later machine strategy a `[mandate.strategies.<id>]`
+table naming its compiled rule, the lab spec hash it implements, its sleeve,
+its risk allocation, its stage (shadow, live or suspended) and the scale it
+sizes at. A machine sleeve reserves its allocation times its scale only while
+its entry is live and its rule sends orders; shadow, suspended and an entry
+that holds reserve nothing, except that a live entry on hold keeps its
+reservation while its sleeve holds positions. The core's allocation stays
+`[mandate.sleeves] core_vol_pct` and the overlay's `overlay_vol_pct`; the
+owner's allocation is the rest. No key acts by default.
 
 ### Surfaces
 

@@ -1,8 +1,8 @@
 # Strategy register (one list of machine strategies in the risk policy)
 
 Written: 2026-10-18 09:20 CEST. Revised 09:45 CEST after the independent
-review (section "Independent review"). Status: designed and reviewed;
-increments 1 to 4 being built (section "Build"). Nothing here writes policy:
+review (section "Independent review"). Status: built (increments 1 to 4,
+section "Build"), 2026-10-18. Nothing here writes policy:
 every entry and every promotion is the owner's, written by the owner into
 `risk-policy.toml`.
 
@@ -50,17 +50,17 @@ the lab's README ladder and `registry/registry.jsonl` (`0870f3b`).
      only.
 - Earlier decisions this builds on: risk allocations inside the whole-book
   limits, reserved only to the extent a strategy runs (owner, 2026-10-18
-  08:06 CEST; `mandate-risk-budget.md`, "Seats"); s1 dropped (08:21); the
+  08:06 CEST; `mandate-risk-budget.md`, "Risk allocations"); s1 dropped (08:21); the
   core's contract by ISIN and out of protection's automatic sales (08:06,
   `core-sleeve.md`); the professional terms (08:50: "always use the ones
-  that professionals use, risk budget or risk allocation"). The code names a
-  risk allocation a "seat" (`mandate.SeatPlan`, `verdict.seats`); this record
-  says risk allocation, and copy this build adds says it too.
+  that professionals use, risk budget or risk allocation"). Canary's code and
+  copy say risk allocation since `16b52c52` (`mandate.AllocationPlan`,
+  `verdict.allocations`).
 - Current authority: `risk-policy.toml` `[mandate.core]` and
   `[mandate.sleeves]`; code `internal/risk/mandate.go`,
-  `internal/daemon/mandate_seats.go`, `internal/daemon/core_target.go`,
+  `internal/daemon/mandate_allocations.go`, `internal/daemon/core_target.go`,
   `internal/core`.
-- Status: approved by the owner's decision above; being built.
+- Status: approved by the owner's decision above; built 2026-10-18.
 
 ## In brief
 
@@ -234,10 +234,10 @@ needs a new fixture.
 | `live`, with an entry hold | hold | its hold | s/100 × its allocation while its sleeve holds positions, else nothing |
 | any other, with an entry hold | hold | its hold | nothing |
 
-The allocation plan (`mandateSeatPlan`) reads the resolved register: one
+The allocation plan (`mandateAllocationPlan`) reads the resolved register: one
 machine sleeve per entry, its allocation the entry's, its reserved fraction
 above. The overlay keeps its line whenever no entry uses the sleeve, as
-today ("no strategy registered in the overlay").
+today ("no strategy registered in the overlay yet").
 
 Why a held live strategy keeps its reservation while it holds positions: a
 new build that changes a rule's spec hash, or a key the owner is fixing,
@@ -337,9 +337,11 @@ recomputation.
 
 ### Surfaces
 
-`canary shadow [--strategy ID] [--json]` and the read-only MCP tool
-`canary_shadow`: per strategy, its stage, the shadow holding, and the
-records newest first. Golden render `shadow*.txt`.
+The record is served on the strategy's own verdict: for the core, `shadow`
+on `core.target` (`canary core` shows a Shadow section, `canary_core`
+carries it): the stage, the paper position, the number of records and the
+newest twelve. Golden render `core_shadow.txt`. A generic `canary shadow`
+comes with the first strategy other than the core.
 
 ## 4. Strategies declare their data
 
@@ -491,7 +493,8 @@ otherwise the owner's.
 ## 8. Operating cadence
 
 - Daily: `canary mandate` lists the register (stage written and effective,
-  reservation, holds, declared data); `canary shadow` the shadow records.
+  reservation, holds, declared data); `canary core` the core's stage and its
+  shadow records.
 - At a strategy's decision: the shadow record's `decision` and `intent`
   after the decision close; its `fill` after the next session's close.
 - Missed run: the next refresh records a missed session from the kept
@@ -560,7 +563,7 @@ Synthetic data only.
   before the verb, a flag after, `-json`, `trading.freeze=true`,
   `features.stock_protection.enabled=false`, `chains.recorder.enabled=false`,
   a mixed command and a composed command are refused.
-- CLI goldens: `mandate` with the register, `shadow`, `chains_recorded*`.
+- CLI goldens: `mandate_register`, `core_shadow`, `chains_recorded*`.
 
 ## 11. The core's entry (proposed; the owner writes it)
 
@@ -587,14 +590,14 @@ and `make check`:
 2. The register: schema, `Register()`, validation, the catalogue and
    `Resolve`; the allocation plan and the core's buy block read it;
    `canary mandate` shows it.
-3. The core's shadow record, `canary shadow`, `canary_shadow`.
+3. The core's shadow record, served on `canary core` and `canary_core`.
 4. The recorder on declarations: the off switch, the empty research list,
    the declared chains, the plan's priority; changelog, goldens, docs.
 
 Not in this build: the `controller` kind, `intent` row terms (with phase
-2), a declared-series loop for later rules, register sleeves in the
-scorecard and the resolver's round-trip fix (its own task), placement for
-non-core strategies.
+2), a declared-series loop for later rules, a generic `canary shadow`, register
+sleeves in the scorecard and the resolver's round-trip fix (its own task),
+placement for non-core strategies.
 
 Desk: `docs/strategy-engine.md` moves findings 2 to 5 from target to state;
 a re-pin only if Desk reads a new field.
@@ -634,15 +637,16 @@ An independent review of the first draft (2026-10-18, read-only, against
 internal/register/                     compiled rule catalogue, Resolve
 internal/risk/register.go              [mandate.strategies], Register(), validation
 internal/risk/mandate.go               the core's spec_hash and stage
-internal/daemon/mandate_seats.go       the allocation plan from the register
+internal/daemon/mandate_allocations.go the allocation plan from the register
 internal/daemon/core_target.go         the core's buy block and holds through the register
 internal/daemon/shadow_record.go       the shadow recorder and its read
+internal/rpc/shadow.go                 the shadow record's types
 internal/daemon/chain_recorder.go      declared chains, the off switch
 internal/chainrec/select.go            the plan's priority and sources
 internal/rpc/settings.go               settings classes
 internal/daemon/platform_settings.go   class enforcement by origin
-internal/cli/shadow.go                 canary shadow
-internal/mcp/tools.go                  canary_shadow
+internal/cli/mandate.go, core.go       the register, the core's stage and shadow
+internal/mcp/tools.go                  canary_mandate's register, canary_core's stage and shadow
 hooks/canary-pre-tool-use.sh, hooks/canary-pre-tool-use_test.sh, .codex/rules/canary.rules
 internal-docs/design/option-chain-recorder.md, platform-settings.md,
 mandate-risk-budget.md ([mandate.overlay] proposal replaced by the register),

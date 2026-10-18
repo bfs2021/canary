@@ -124,22 +124,32 @@ type ChainsRecordedResult struct {
 	Filter   ChainsRecordedParams `json:"filter"`
 }
 
+// ChainRecorderDeclaration is one chain a registered strategy declares, with
+// its source ("strategy:<id>").
+type ChainRecorderDeclaration struct {
+	Symbol string `json:"symbol"`
+	Source string `json:"source"`
+}
+
 // ChainRecorderState is the switch, the explicit list and the fixed plan.
 type ChainRecorderState struct {
 	Enabled bool `json:"enabled"`
 	// Symbols is the explicit list in force; held option underlyings are
 	// added at run time.
-	Symbols             []string   `json:"symbols"`
-	SymbolsDefault      bool       `json:"symbols_default"`
-	MaxSymbols          int        `json:"max_symbols"`
-	Expiries            string     `json:"expiries"`
-	StrikeWindowPct     float64    `json:"strike_window_pct"`
-	MaxStrikesPerExpiry int        `json:"max_strikes_per_expiry"`
-	LeadMinutes         int        `json:"lead_minutes"`
-	MaxLines            int        `json:"max_lines"`
-	LineReserve         int        `json:"line_reserve"`
-	Running             bool       `json:"running"`
-	NextRun             *time.Time `json:"next_run,omitempty"`
+	Symbols        []string `json:"symbols"`
+	SymbolsDefault bool     `json:"symbols_default"`
+	// Declared is the registered strategies' declared chains, recorded after
+	// held option underlyings and before the research list.
+	Declared            []ChainRecorderDeclaration `json:"declared"`
+	MaxSymbols          int                        `json:"max_symbols"`
+	Expiries            string                     `json:"expiries"`
+	StrikeWindowPct     float64                    `json:"strike_window_pct"`
+	MaxStrikesPerExpiry int                        `json:"max_strikes_per_expiry"`
+	LeadMinutes         int                        `json:"lead_minutes"`
+	MaxLines            int                        `json:"max_lines"`
+	LineReserve         int                        `json:"line_reserve"`
+	Running             bool                       `json:"running"`
+	NextRun             *time.Time                 `json:"next_run,omitempty"`
 }
 
 // ChainRecorderStore describes the separate recorder database.

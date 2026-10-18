@@ -46,6 +46,36 @@ type MandateRiskResult struct {
 	// it: the batch waiting, held or withdrawn. Nil while inactive or before
 	// the engine has generated.
 	Reduction *MandateReductionView `json:"reduction,omitempty"`
+	// Register is the strategy register as this build runs it
+	// (internal-docs/design/strategy-register.md): one entry per machine
+	// strategy, the core first.
+	Register []MandateStrategyView `json:"register,omitempty"`
+}
+
+// MandateStrategyView is one register entry: as the policy writes it (rule,
+// cited spec hash, sleeve, allocation, stage and scale) and as this build
+// runs it (state, the part of its allocation it reserves, the holds and the
+// notes), with the data its rule declares.
+type MandateStrategyView struct {
+	ID            string   `json:"id"`
+	Sleeve        string   `json:"sleeve"`
+	Rule          string   `json:"rule,omitempty"`
+	RuleCompiled  bool     `json:"rule_compiled"`
+	SpecHash      string   `json:"spec_hash,omitempty"`
+	SpecCited     bool     `json:"spec_cited"`
+	AllocationPct float64  `json:"allocation_pct"`
+	AllocationKey string   `json:"allocation_key"`
+	Stage         string   `json:"stage,omitempty"`
+	State         string   `json:"state"`
+	ScalePct      float64  `json:"scale_pct"`
+	ReservedPct   float64  `json:"reserved_pct"`
+	Sends         bool     `json:"sends"`
+	Reasons       []string `json:"reasons,omitempty"`
+	Notes         []string `json:"notes,omitempty"`
+	// DeclaredSeries and DeclaredChains name the data the rule reads, which
+	// Canary collects while the rule is compiled, in any stage.
+	DeclaredSeries []string `json:"declared_series,omitempty"`
+	DeclaredChains []string `json:"declared_chains,omitempty"`
 }
 
 // MandateReductionView is the forced reduction in brief for the mandate

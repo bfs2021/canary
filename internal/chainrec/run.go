@@ -194,7 +194,7 @@ func (ex *execution) run(settings Settings) Outcome {
 		out.HeldUnavailable = true
 		r.logf("chain recorder: held underlyings unavailable: %v", err)
 	}
-	selected, skipped := ResolveSymbols(settings.Symbols, held)
+	selected, skipped := ResolveSymbols(held, settings.Declared, settings.Symbols)
 	for _, s := range skipped {
 		ex.recordSymbol(SymbolPlan{Symbol: s.Symbol, Source: s.Source, Status: SymbolSkippedCap, DiscoveredAt: r.Clock.Now()})
 	}

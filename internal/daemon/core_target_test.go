@@ -33,7 +33,10 @@ const coreTestConID = 9030
 func testCoreConstitution() *risk.Constitution {
 	c := testMandateConstitution()
 	c.Mandate.Core = &risk.ConstitutionMandateCore{Rule: core.RuleID, ISIN: core.ISIN, Currency: core.Currency,
-		ScalePct: new(100.0), BandPct: new(10.0), MinOrderBase: new(2500.0), MaxValuePct: new(40.0)}
+		ScalePct: new(100.0), BandPct: new(10.0), MinOrderBase: new(2500.0), MaxValuePct: new(40.0),
+		// Live in the register, so the core reserves its allocation exactly
+		// when its rule sends (coreSendsOrdersForTest), as the build will.
+		SpecHash: core.SpecHash, Stage: risk.StageLive}
 	c.Mandate.IndexGapShockPct = new(12.0) // the owner's D4
 	c.Capital.BaseCurrency = "EUR"
 	return c

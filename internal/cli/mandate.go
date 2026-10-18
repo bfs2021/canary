@@ -121,6 +121,7 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 	}
 	renderMandateReduction(env, res.Reduction, ccy)
 	renderMandateAllocations(env, v, ccy)
+	renderMandateRegister(env, res.Register)
 	if len(v.Reasons) > 0 {
 		fmt.Fprintln(env.Stdout, "\n"+env.bold("Why unknown"))
 		for _, reason := range v.Reasons {
@@ -266,6 +267,58 @@ func renderMandateAllocations(env *Env, v *mandate.Verdict, ccy string) {
 		}
 		riskDisplayLine(env, "  ", briefJoin(line, detail), style)
 	}
+}
+
+// renderMandateRegister lists the strategy register
+// (internal-docs/design/strategy-register.md): each machine strategy, its
+// rule and whether the policy cites its spec, its stage as written and as
+// this build runs it, the part of its allocation it reserves, and why it
+// holds.
+func renderMandateRegister(env *Env, entries []rpc.MandateStrategyView) {
+	if len(entries) == 0 {
+		return
+	}
+	fmt.Fprintln(env.Stdout, "\n"+env.bold("Strategy register")+"  each machine strategy as the policy writes it and this build runs it")
+	for _, e := range entries {
+		state := e.State
+		if e.Stage != "" && e.Stage != e.State {
+			state = e.State + " (written " + e.Stage + ")"
+		}
+		reserve := "reserves nothing"
+		if e.ReservedPct > 0 {
+			reserve = fmt.Sprintf("reserves %s of its %s allocation", mandatePct(e.ReservedPct), mandatePct(e.AllocationPct))
+		}
+		spec := "spec compiled, not cited"
+		if e.SpecCited {
+			spec = "spec cited " + mandateShortHash(e.SpecHash)
+		}
+		style := func(s string) string { return s }
+		if e.State == "hold" {
+			style = env.yellow
+		}
+		rule := e.Rule
+		if rule == "" {
+			rule = "no rule"
+		}
+		riskDisplayLine(env, "  ", briefJoin(e.ID, rule, state, reserve, spec), style)
+		for _, r := range e.Reasons {
+			riskDisplayLine(env, "    ", "holds: "+r, env.yellow)
+		}
+		for _, n := range e.Notes {
+			riskDisplayLine(env, "    ", n, nil)
+		}
+		for _, d := range append(append([]string(nil), e.DeclaredSeries...), e.DeclaredChains...) {
+			riskDisplayLine(env, "    ", "collects "+d, nil)
+		}
+	}
+}
+
+// mandateShortHash is a spec hash's first twelve characters.
+func mandateShortHash(h string) string {
+	if len(h) > 12 {
+		return h[:12]
+	}
+	return h
 }
 
 func mandatePhaseWords(phase string) string {

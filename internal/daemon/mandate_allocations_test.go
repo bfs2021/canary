@@ -10,37 +10,89 @@ import (
 
 	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/mandate"
+	"github.com/osauer/canary/v2/internal/register"
+	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
 // Allocations (internal-docs/design/mandate-risk-budget.md, "Risk allocations"; owner
 // decision 2026-10-18 08:06 CEST), witnessed on synthetic books.
 
-// The machine's allocation is only as big as what it runs: in this build the core
-// sends no orders, so its stage is 0 whatever scale_pct says and the owner
-// has the whole budget. The core's pinned contract is placed with the core
-// either way; a book without [mandate.core] places nothing.
+// The machine's allocation is only as big as what it runs: in this build the
+// core's rule sends no orders, so a core written live runs as shadow and
+// reserves nothing, and the owner has the whole budget. The core's contract
+// is placed with the core either way; a book without [mandate.core] places
+// nothing (strategy-register.md, section 2).
 func TestMandateAllocationPlanGivesTheMachineWhatItRuns(t *testing.T) {
 	c := testCoreConstitution()
-	plan := mandateAllocationPlan(c, false, []int{coreTestConID})
+	building := &Server{}
+	plan := mandateAllocationPlan(c, building.resolvedRegister(c), []int{coreTestConID}, nil)
 	if len(plan.Machine) != 2 || plan.Machine[0].Sleeve != mandate.SleeveCore || plan.Machine[0].TargetPct != 6 || plan.Machine[0].StagePct != 0 ||
 		!strings.Contains(plan.Machine[0].Note, "sends no orders") {
 		t.Fatalf("core allocation while it sends no orders: %+v", plan.Machine)
 	}
-	if o := plan.Machine[1]; o.Sleeve != mandate.SleeveOverlay || o.TargetPct != 4 || o.StagePct != 0 || !strings.Contains(o.Note, "no strategy runs") {
+	if o := plan.Machine[1]; o.Sleeve != mandate.SleeveOverlay || o.TargetPct != 4 || o.StagePct != 0 || !strings.Contains(o.Note, "no strategy registered") {
 		t.Fatalf("overlay allocation: %+v", o)
 	}
 	if plan.SleeveOf("con:9030") != mandate.SleeveCore || plan.SleeveOf("con:9001") != mandate.SleeveOwner {
 		t.Fatalf("placement %+v", plan.Placed)
 	}
-	if running := mandateAllocationPlan(c, true, []int{coreTestConID}); running.Machine[0].StagePct != 100 {
-		t.Fatalf("a running core's stage is its scale_pct: %+v", running.Machine[0])
+	sends := &Server{coreSendsOrdersForTest: true}
+	if running := mandateAllocationPlan(c, sends.resolvedRegister(c), []int{coreTestConID}, nil); running.Machine[0].StagePct != 100 {
+		t.Fatalf("a live core whose rule sends reserves its scale: %+v", running.Machine[0])
 	}
-	if bare := mandateAllocationPlan(testMandateConstitution(), true, []int{coreTestConID}); len(bare.Placed) != 0 || bare.Machine[0].StagePct != 0 || !strings.Contains(bare.Machine[0].Note, "inactive") {
-		t.Fatalf("no core table: %+v", bare)
+	bare := testMandateConstitution()
+	if plan := mandateAllocationPlan(bare, sends.resolvedRegister(bare), []int{coreTestConID}, nil); len(plan.Placed) != 0 || plan.Machine[0].StagePct != 0 || !strings.Contains(plan.Machine[0].Note, "inactive") {
+		t.Fatalf("no core table: %+v", plan)
 	}
-	if srv := (&Server{}); srv.coreRuns() {
+	if rule, _ := register.Find(building.registerRules(), core.RuleID); rule.Sends {
 		t.Fatal("this build serves no core orders, so the core runs nothing")
+	}
+}
+
+// The register decides the reservation (strategy-register.md, section 2):
+// the core's first form, without a stage, runs in shadow and reserves
+// nothing even where its rule sends; shadow and suspended reserve nothing; a
+// live core on hold keeps its reservation only while it holds positions; a
+// later entry reserves its own allocation at its scale.
+func TestMandateAllocationPlanFollowsTheRegister(t *testing.T) {
+	sends := &Server{coreSendsOrdersForTest: true}
+	held := []mandate.Leg{{ID: mandateConLegID(coreTestConID), Quantity: 10}}
+	plan := func(c *risk.Constitution, legs []mandate.Leg) mandate.MachineAllocation {
+		return mandateAllocationPlan(c, sends.resolvedRegister(c), []int{coreTestConID}, legs).Machine[0]
+	}
+	with := func(edit func(*risk.ConstitutionMandateCore)) *risk.Constitution {
+		c := testCoreConstitution()
+		edit(c.Mandate.Core)
+		return c
+	}
+	for name, tc := range map[string]struct {
+		c     *risk.Constitution
+		legs  []mandate.Leg
+		stage float64
+		note  string
+	}{
+		"first form, no stage":         {with(func(k *risk.ConstitutionMandateCore) { k.Stage, k.SpecHash = "", "" }), held, 0, "stage unwritten"},
+		"shadow":                       {with(func(k *risk.ConstitutionMandateCore) { k.Stage = risk.StageShadow }), held, 0, "runs in shadow"},
+		"suspended":                    {with(func(k *risk.ConstitutionMandateCore) { k.Stage = risk.StageSuspended }), held, 0, "suspended"},
+		"live":                         {testCoreConstitution(), nil, 100, "is live"},
+		"live, hash mismatch, holding": {with(func(k *risk.ConstitutionMandateCore) { k.SpecHash = strings.Repeat("0", 64) }), held, 100, "keeps its scale"},
+		"live, hash mismatch, flat":    {with(func(k *risk.ConstitutionMandateCore) { k.SpecHash = strings.Repeat("0", 64) }), nil, 0, "holds:"},
+		"live, no spec_hash, holding":  {with(func(k *risk.ConstitutionMandateCore) { k.SpecHash = "" }), held, 100, "mandate.core.spec_hash unwritten"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := plan(tc.c, tc.legs)
+			if got.StagePct != tc.stage || !strings.Contains(got.Note, tc.note) {
+				t.Fatalf("core line %+v, want stage %g and a note with %q", got, tc.stage, tc.note)
+			}
+		})
+	}
+	// A later entry is its own sleeve with its own allocation.
+	c := testCoreConstitution()
+	c.Mandate.Strategies = map[string]*risk.ConstitutionMandateStrategy{"s9": {Rule: "not-compiled-v1", SpecHash: strings.Repeat("ab", 32), Sleeve: "s9", RiskAllocationPct: new(2.0), Stage: risk.StageShadow, ScalePct: new(25.0)}}
+	p := mandateAllocationPlan(c, sends.resolvedRegister(c), []int{coreTestConID}, nil)
+	if len(p.Machine) != 3 || p.Machine[2].Sleeve != "s9" || p.Machine[2].TargetPct != 2 || p.Machine[2].StagePct != 0 || !strings.Contains(p.Machine[2].Note, "is not compiled") {
+		t.Fatalf("a later entry: %+v", p.Machine)
 	}
 }
 

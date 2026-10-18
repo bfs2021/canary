@@ -93,6 +93,17 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 		fund = strings.TrimSpace(in.ISIN + " " + in.Currency)
 	}
 	riskReadLine(env, "Rule", res.Rule, "spec "+res.SpecID+" "+spec, fund)
+	if st := res.Stage; st != nil {
+		reserve := "reserves nothing"
+		if st.ReservedPct > 0 {
+			reserve = fmt.Sprintf("reserves %g%% of its allocation", st.ReservedPct)
+		}
+		cited := "spec cited"
+		if !st.SpecHashCited {
+			cited = "spec compiled, not cited"
+		}
+		riskReadLine(env, "Stage", append([]string{st.State, reserve, cited}, st.Notes...)...)
+	}
 	if in := res.Instrument; in != nil {
 		riskReadLine(env, "Contract", coreContractLine(*in)...)
 	}
@@ -176,6 +187,7 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 		}
 		riskDisplayLine(env, "  ", strings.Join(parts, " · "), nil)
 	}
+	renderCoreShadow(env, res.Shadow)
 	fmt.Fprintln(env.Stdout, "\n"+env.bold("Evidence"))
 	if e := res.Evidence; e != nil {
 		calendar := coreVenue(res.Instrument) + " calendar"
@@ -328,4 +340,45 @@ func renderCoreResolve(env *Env, res rpc.CoreResolveResult) {
 		riskReadLine(env, "  "+a.Form, answer)
 	}
 	riskReadLine(env, "", "Read-only: nothing is chosen for you and the policy is not written.")
+}
+
+// renderCoreShadow lists the core's shadow record
+// (internal-docs/design/strategy-register.md, section 3): the paper position
+// its production code holds and the newest records. Nothing in it is sent.
+func renderCoreShadow(env *Env, v *rpc.ShadowView) {
+	if v == nil {
+		return
+	}
+	fmt.Fprintln(env.Stdout, "\n"+env.bold("Shadow")+"  the rule on a paper position; nothing is sent")
+	if v.Unavailable != "" {
+		riskWarnReadLine(env, "  Record", "unavailable", v.Unavailable)
+		return
+	}
+	riskReadLine(env, "  Paper position", coreShares(v.Holding), fmt.Sprintf("%d %s", v.Records, pluralWord(v.Records, "record", "records")))
+	for _, r := range v.Recent {
+		switch {
+		case r.Kind == rpc.ShadowKindDecision && r.Decision != nil:
+			trend := "trend off"
+			if r.Decision.TrendOn {
+				trend = "trend on"
+			}
+			riskReadLine(env, "  "+r.Session, "decision", trend, "target "+coreShares(r.Decision.TargetShares)+" at scale "+fmtPctNum(r.Decision.ScalePct)+"%")
+		case r.Kind == rpc.ShadowKindIntent && r.Intent != nil:
+			what := strings.ReplaceAll(r.Intent.Kind, "_", " ")
+			if q := r.Intent.Quantity; q != 0 {
+				what += " " + coreShares(int(math.Abs(float64(q))))
+			}
+			riskReadLine(env, "  "+r.Session, "intent for "+r.Intent.ForSession, what, r.Intent.Why)
+		case r.Kind == rpc.ShadowKindFill && r.Fill != nil && r.Fill.Unobserved != "":
+			riskWarnReadLine(env, "  "+r.Session, "fill unobserved", r.Fill.Unobserved)
+		case r.Kind == rpc.ShadowKindFill && r.Fill != nil:
+			side := "bought"
+			if r.Fill.Quantity < 0 {
+				side = "sold"
+			}
+			riskReadLine(env, "  "+r.Session, "fill", side+" "+coreShares(int(math.Abs(float64(r.Fill.Quantity))))+" at "+corePrice(r.Fill.Price)+" (the close)", "paper position "+coreShares(r.Fill.HoldingAfter))
+		case r.Kind == rpc.ShadowKindHold:
+			riskWarnReadLine(env, "  "+r.Session, "held", r.Reasons...)
+		}
+	}
 }

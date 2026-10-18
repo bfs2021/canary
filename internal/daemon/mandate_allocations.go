@@ -6,7 +6,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/mandate"
+	"github.com/osauer/canary/v2/internal/register"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
@@ -21,54 +23,146 @@ import (
 // on top of every whole-book check; the forced reduction cuts the sleeve
 // furthest over its allocation first.
 
-// coreSendsOrders is whether this build serves the core's orders. Phase 2
-// (core-sleeve.md items 7 and 8) adds the core_rebalance rows; until then
-// the core is read-only, runs nothing and holds no allocation, whatever its
-// scale_pct says.
-const coreSendsOrders = false
-
-// coreRuns reports whether the core sends orders in this daemon.
-func (s *Server) coreRuns() bool {
-	return coreSendsOrders || s != nil && s.coreSendsOrdersForTest
+// registerRules is the compiled rule catalogue as this daemon runs it
+// (internal-docs/design/strategy-register.md). A test may let the core's rule
+// send, as the build will once its monthly rows exist (core-sleeve.md phase 2).
+func (s *Server) registerRules() []register.Rule {
+	rules := register.Catalogue()
+	if s != nil && s.coreSendsOrdersForTest {
+		for i := range rules {
+			if rules[i].ID == core.RuleID {
+				rules[i].Sends = true
+			}
+		}
+	}
+	return rules
 }
 
-// mandateAllocationPlan is the allocation plan of the policy in force: the
-// core's and the overlay's stage and allocation, and the core's contract placed
-// with the core. coreRuns says whether the core sends orders. Every other leg is
-// the owner's: no order path in this build places units in a machine sleeve by
-// its fills, so placement is total and never unknown.
-func mandateAllocationPlan(c *risk.Constitution, coreRuns bool, coreContracts []int) *mandate.AllocationPlan {
+// resolvedRegister is the policy's strategy register against this build's
+// rules: each entry's effective stage and the part of its risk allocation it
+// reserves. The allocation plan, the core's buy and the shadow record read
+// this one result.
+func (s *Server) resolvedRegister(c *risk.Constitution) []register.Resolved {
+	if c == nil || c.Mandate == nil {
+		return nil
+	}
+	return register.Resolve(c.Mandate.Register(), s.registerRules())
+}
+
+// resolvedCore is the core's entry in a resolved register, or false while
+// the constitution carries no [mandate.core].
+func resolvedCore(resolved []register.Resolved) (register.Resolved, bool) {
+	for _, r := range resolved {
+		if r.Entry.Form == risk.StrategyFormCore {
+			return r, true
+		}
+	}
+	return register.Resolved{}, false
+}
+
+// mandateAllocationPlan is the allocation plan of the policy in force, from
+// the resolved register (internal-docs/design/strategy-register.md, section
+// 2): one machine sleeve per entry, its allocation the entry's and its stage
+// the part it reserves, which is its scale while it is live and nothing in
+// shadow, suspended or on hold. A live entry that holds keeps its reservation
+// while its sleeve holds positions, so a new build or a key the owner is
+// fixing never reshuffles the allocations. The core's sleeve and the overlay
+// are always listed, as before the register; the core's contract is placed
+// with the core. Every other leg is the owner's: no order path in this build
+// places units in a machine sleeve by its fills, so placement is total and
+// never unknown.
+func mandateAllocationPlan(c *risk.Constitution, resolved []register.Resolved, coreContracts []int, legs []mandate.Leg) *mandate.AllocationPlan {
 	if c == nil || c.Mandate == nil {
 		return nil
 	}
 	m := c.Mandate
-	var coreTarget, overlayTarget float64
-	if sl := m.Sleeves; sl != nil {
-		coreTarget, overlayTarget = policyCheckDeref(sl.CoreVolPct), policyCheckDeref(sl.OverlayVolPct)
-	}
-	coreAllocation := mandate.MachineAllocation{Sleeve: mandate.SleeveCore, TargetPct: coreTarget}
-	switch {
-	case m.Core == nil:
-		coreAllocation.Note = "no [mandate.core]: the core is inactive"
-	case !coreRuns:
-		coreAllocation.Note = "the core sends no orders yet (its monthly rows are phase 2), so it runs nothing"
-	case len(m.CoreUnapprovedKeys()) > 0:
-		coreAllocation.Note = "the core holds: " + strings.Join(m.CoreUnapprovedKeys(), ", ") + " unwritten"
-	default:
-		coreAllocation.StagePct = policyCheckDeref(m.Core.ScalePct)
-		coreAllocation.Note = fmt.Sprintf("scale_pct %g of core_vol_pct %g", coreAllocation.StagePct, coreTarget)
-	}
-	plan := &mandate.AllocationPlan{
-		Machine: []mandate.MachineAllocation{coreAllocation, {Sleeve: mandate.SleeveOverlay, TargetPct: overlayTarget,
-			Note: "no strategy runs in the overlay yet"}},
-		Placed: map[string]string{},
-	}
+	plan := &mandate.AllocationPlan{Placed: map[string]string{}}
 	if m.Core != nil {
 		for _, id := range coreContracts {
 			plan.Placed[mandateConLegID(id)] = mandate.SleeveCore
 		}
 	}
+	holds := func(sleeve string) bool {
+		for _, l := range legs {
+			if l.Quantity != 0 && plan.SleeveOf(l.ID) == sleeve {
+				return true
+			}
+		}
+		return false
+	}
+	var coreTarget, overlayTarget float64
+	if sl := m.Sleeves; sl != nil {
+		coreTarget, overlayTarget = policyCheckDeref(sl.CoreVolPct), policyCheckDeref(sl.OverlayVolPct)
+	}
+	coreLine := mandate.MachineAllocation{Sleeve: mandate.SleeveCore, TargetPct: coreTarget, Note: "no [mandate.core]: the core is inactive"}
+	overlayLine := mandate.MachineAllocation{Sleeve: mandate.SleeveOverlay, TargetPct: overlayTarget,
+		Note: "no strategy registered in the overlay yet"}
+	var others []mandate.MachineAllocation
+	for _, r := range resolved {
+		line := registerAllocation(r, holds(r.Entry.Sleeve))
+		switch r.Entry.Sleeve {
+		case mandate.SleeveCore:
+			coreLine = line
+		case mandate.SleeveOverlay:
+			overlayLine = line
+		default:
+			others = append(others, line)
+		}
+	}
+	plan.Machine = append([]mandate.MachineAllocation{coreLine, overlayLine}, others...)
 	return plan
+}
+
+// mandateRegisterView is the resolved register as the mandate serves it.
+func mandateRegisterView(resolved []register.Resolved) []rpc.MandateStrategyView {
+	out := make([]rpc.MandateStrategyView, 0, len(resolved))
+	for _, r := range resolved {
+		v := rpc.MandateStrategyView{ID: r.Entry.ID, Sleeve: r.Entry.Sleeve, Rule: r.Entry.Rule, RuleCompiled: r.Rule != nil, SpecHash: r.Entry.SpecHash, SpecCited: r.Entry.SpecHash != "",
+			AllocationPct: r.AllocationPct, AllocationKey: r.Entry.AllocationKey, Stage: r.Entry.Stage, State: string(r.State), ScalePct: r.ScalePct, ReservedPct: r.ReservedPct,
+			Reasons: r.Reasons, Notes: r.Notes}
+		if r.Rule != nil {
+			v.Sends = r.Rule.Sends
+			for _, n := range r.Rule.Data.Series {
+				v.DeclaredSeries = append(v.DeclaredSeries, fmt.Sprintf("%s %s daily closes, %d sessions", nonEmptyString(n.Symbol, n.ISIN), n.Currency, n.Sessions))
+			}
+			for _, n := range r.Rule.Data.Chains {
+				v.DeclaredChains = append(v.DeclaredChains, n.Underlying)
+			}
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// registerAllocation is one resolved entry's line in the allocation plan.
+func registerAllocation(r register.Resolved, holdsPositions bool) mandate.MachineAllocation {
+	name := "the " + r.Entry.ID + " strategy"
+	if r.Entry.Form == risk.StrategyFormCore {
+		name = "the core"
+	}
+	line := mandate.MachineAllocation{Sleeve: r.Entry.Sleeve, TargetPct: r.AllocationPct}
+	notes := ""
+	if len(r.Notes) > 0 {
+		notes = " (" + strings.Join(r.Notes, "; ") + ")"
+	}
+	switch r.State {
+	case register.StateLive:
+		line.StagePct = r.ReservedPct
+		line.Note = fmt.Sprintf("%s is live at scale %g of its %g allocation", name, r.ReservedPct, r.AllocationPct)
+	case register.StateShadow:
+		line.Note = name + " runs in shadow: it serves its target and sends no orders, so it reserves nothing" + notes
+	case register.StateSuspended:
+		line.Note = name + " is suspended, so it reserves nothing"
+	default:
+		why := strings.Join(r.Reasons, "; ")
+		if scale := policyCheckDeref(r.Entry.ScalePct); r.Entry.Stage == risk.StageLive && holdsPositions && scale > 0 {
+			line.StagePct = scale
+			line.Note = fmt.Sprintf("%s holds (%s); live and holding positions, it keeps its scale %g of its %g allocation", name, why, scale, r.AllocationPct)
+		} else {
+			line.Note = name + " holds: " + why
+		}
+	}
+	return line
 }
 
 // mandateCoreContracts are the core's contracts, reserved to the core

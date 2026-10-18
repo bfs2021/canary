@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/marketcal"
@@ -266,10 +267,15 @@ type SymbolChoice struct {
 	Source string
 }
 
-// ResolveSymbols merges the explicit list (in order) with held option
+// ResolveSymbols merges, in priority order, held option underlyings
+// (alphabetically), the registered strategies' declared chains (in their
+// order) and the research list (in order), de-duplicated with every source
+// named, and splits off everything past MaxSymbols.
+//
+// Before 2026-10-18 it merged the explicit list (in order) with held option
 // underlyings (alphabetically), de-duplicated, and splits off everything past
 // MaxSymbols.
-func ResolveSymbols(explicit, held []string) (selected, skipped []SymbolChoice) {
+func ResolveSymbols(held []string, declared []SymbolChoice, explicit []string) (selected, skipped []SymbolChoice) {
 	var all []SymbolChoice
 	index := map[string]int{}
 	add := func(raw, source string) {
@@ -278,21 +284,24 @@ func ResolveSymbols(explicit, held []string) (selected, skipped []SymbolChoice) 
 			return
 		}
 		if i, ok := index[s]; ok {
-			if all[i].Source != source {
-				all[i].Source = SourceBoth
+			if !slices.Contains(strings.Split(all[i].Source, "+"), source) {
+				all[i].Source += "+" + source
 			}
 			return
 		}
 		index[s] = len(all)
 		all = append(all, SymbolChoice{Symbol: s, Source: source})
 	}
-	for _, s := range explicit {
-		add(s, SourceExplicit)
-	}
 	heldSorted := slices.Clone(held)
 	slices.Sort(heldSorted)
 	for _, s := range heldSorted {
 		add(s, SourceHeld)
+	}
+	for _, d := range declared {
+		add(d.Symbol, d.Source)
+	}
+	for _, s := range explicit {
+		add(s, SourceExplicit)
 	}
 	if len(all) <= MaxSymbols {
 		return all, nil

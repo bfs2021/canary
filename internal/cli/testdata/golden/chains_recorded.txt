@@ -2,7 +2,8 @@
 
 Option-chain recorder  ON
 
-Symbols        SPX, SPY, QQQ (default) + held option underlyings, at most 12
+Symbols        held option underlyings, then strategies' chains: SYNO (s9), then
+               research names: SPX, SPY, QQQ; at most 12
 Plan           two nearest standard monthlies and the nearest weekly; strikes
                within ±20% of spot, at most 40 per expiry, calls and puts; 30
                min before the close
@@ -29,7 +30,8 @@ cells were not observed.
 
 Option-chain recorder  \x1b[32m\x1b[1mON\x1b[0m\x1b[0m
 
-\x1b[2mSymbols       \x1b[0m SPX, SPY, QQQ (default) + held option underlyings, at most 12
+\x1b[2mSymbols       \x1b[0m held option underlyings, then strategies' chains: SYNO (s9), then
+               research names: SPX, SPY, QQQ; at most 12
 \x1b[2mPlan          \x1b[0m two nearest standard monthlies and the nearest weekly; strikes
                within ±20% of spot, at most 40 per expiry, calls and puts; 30
                min before the close

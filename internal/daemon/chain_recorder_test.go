@@ -40,18 +40,22 @@ func setChainRecorder(t *testing.T, srv *Server, recorder string) error {
 	return srv.applyPlatformSettingsPatch(context.Background(), map[string]json.RawMessage{"chains": json.RawMessage(`{"recorder":` + recorder + `}`)}, rpc.OrderOriginHumanTTY)
 }
 
-// Off by default: a due instant runs nothing, opens no file and reads as off.
-func TestChainRecorderOffByDefault(t *testing.T) {
+// Collection needs no switch (strategy-register.md, section 4): unset, the
+// recorder is on and records what holdings and registered strategies
+// declare. With nothing declared and no held option underlying a due
+// instant runs nothing and opens no file; false, the owner's off switch,
+// keeps it off.
+func TestChainRecorderRunsOnDeclarationsWithoutASwitch(t *testing.T) {
 	srv := newChainRecorderTestServer(t)
 	settings := chainRecorderSettingsFrom(srv.platformSettings.snapshot())
-	if settings.Enabled || !slices.Equal(settings.Symbols, chainrec.DefaultSymbols) {
-		t.Fatalf("default settings = %+v, want off with the default list", settings)
+	if !settings.Enabled || len(settings.Symbols) != 0 || len(chainrec.DefaultSymbols) != 0 {
+		t.Fatalf("default settings = %+v, want on with no research names", settings)
 	}
 	if srv.maybeRunChainRecorder(context.Background(), newYork(t, "2027-03-17 15:40")) {
-		t.Fatal("the recorder ran while off")
+		t.Fatal("the recorder ran with nothing declared")
 	}
 	res, err := srv.handleChainsRecorded(context.Background(), &rpc.Request{})
-	if err != nil || res.Recorder.Enabled || res.Recorder.NextRun != nil || res.Store.Present || len(res.Runs) != 0 || !res.Recorder.SymbolsDefault {
+	if err != nil || !res.Recorder.Enabled || res.Recorder.NextRun == nil || res.Store.Present || len(res.Runs) != 0 || !res.Recorder.SymbolsDefault || len(res.Recorder.Declared) != 0 {
 		t.Fatalf("chains.recorded = %+v, %v", res, err)
 	}
 	rows, err := srv.handleChainsRecordedRows(context.Background(), &rpc.Request{Params: json.RawMessage(`{"date":"2027-03-17"}`)})
@@ -59,11 +63,34 @@ func TestChainRecorderOffByDefault(t *testing.T) {
 		t.Fatalf("rows = %+v, %v", rows, err)
 	}
 	if _, err := os.Stat(filepath.Dir(srv.chainRecorderStorePath())); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("reading an unused recorder touched the state directory: %v", err)
+		t.Fatalf("a recorder with nothing to record touched the state directory: %v", err)
 	}
 	view := chainRecorderPlatformSettings(srv.platformSettings.snapshot())
-	if view.Recorder.Enabled.Value || view.Recorder.Enabled.Access != rpc.SettingsAccessWrite || !slices.Equal(view.Recorder.Symbols.Value, chainrec.DefaultSymbols) {
+	if !view.Recorder.Enabled.Value || view.Recorder.Enabled.Access != rpc.SettingsAccessWrite || len(view.Recorder.Symbols.Value) != 0 {
 		t.Fatalf("settings view = %+v", view)
+	}
+	if err := setChainRecorder(t, srv, `{"enabled":false,"symbols":["SYNA"]}`); err != nil {
+		t.Fatal(err)
+	}
+	if srv.maybeRunChainRecorder(context.Background(), newYork(t, "2027-03-17 15:40")) {
+		t.Fatal("the recorder ran while the owner had switched it off")
+	}
+	if res, err := srv.handleChainsRecorded(context.Background(), &rpc.Request{}); err != nil || res.Recorder.Enabled || res.Recorder.NextRun != nil {
+		t.Fatalf("off: chains.recorded = %+v, %v", res.Recorder, err)
+	}
+}
+
+// A registered strategy's declared chains join the plan, after held option
+// underlyings and before the research list, with the strategy as source
+// (strategy-register.md, section 4). The core declares none.
+func TestChainRecorderPlanCarriesTheDeclarations(t *testing.T) {
+	srv, _ := mandateTestServer(t, testCoreConstitution())
+	if got := srv.registerChainDeclarations(); len(got) != 0 {
+		t.Fatalf("the core declares no chain, got %+v", got)
+	}
+	plan := srv.chainRecorderPlan(srv.platformSettings.snapshot())
+	if !plan.Enabled || len(plan.Declared) != 0 {
+		t.Fatalf("plan %+v", plan)
 	}
 }
 
@@ -96,7 +123,7 @@ func TestChainRecorderSettingsPatch(t *testing.T) {
 	if err := setChainRecorder(t, srv, `{"enabled":null,"symbols":null}`); err != nil {
 		t.Fatal(err)
 	}
-	if got := chainRecorderSettingsFrom(srv.platformSettings.snapshot()); got.Enabled || !slices.Equal(got.Symbols, chainrec.DefaultSymbols) {
+	if got := chainRecorderSettingsFrom(srv.platformSettings.snapshot()); !got.Enabled || !slices.Equal(got.Symbols, chainrec.DefaultSymbols) {
 		t.Fatalf("null must restore the defaults, got %+v", got)
 	}
 }

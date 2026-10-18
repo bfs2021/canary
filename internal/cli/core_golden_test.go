@@ -19,6 +19,7 @@ func goldenCore() rpc.CoreTargetResult {
 	size := core.Size{SleeveBudget: 13800, Cap: 92000, Notional: 92000, TargetShares: 958}
 	return rpc.CoreTargetResult{AsOf: goldenAt, Active: true, Status: rpc.CoreStatusReady, ReadOnly: true,
 		Rule: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash, PolicyRule: core.RuleID,
+		Stage:             &rpc.CoreStageView{Written: "live", State: "live", ReservedPct: 100, SpecHashCited: true},
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: "sha256:synthetic"},
 		Policy: &rpc.CorePolicyView{Rule: core.RuleID, ISIN: core.ISIN, Currency: core.Currency,
 			ScalePct: &scale, BandPct: &band, MinOrderBase: &minimum, MaxValuePct: &maxValue, CoreVolPct: &coreVol},
@@ -122,5 +123,23 @@ func goldenCoreLondon() rpc.CoreTargetResult {
 		Calendar: "uk_lse", CalendarLabel: "London SETS", ResolvedAt: goldenAt.Add(-2 * time.Hour)}
 	res.Holding = &rpc.CoreHolding{}
 	res.Evidence = &rpc.CoreEvidence{SeriesKey: "core:con:900002", Missing: true, Calendar: "uk_lse", ReadError: refusal, ReadErrorAt: refusedAt}
+	return res
+}
+
+// goldenCoreShadow is the core in shadow: written live while this build sends
+// no orders, its own verdict waits, and its shadow record holds a month's
+// decision, intent and fill on the paper position, newest first, and an
+// earlier month's fill whose close was missing.
+func goldenCoreShadow() rpc.CoreTargetResult {
+	res := goldenCore()
+	res.Stage = &rpc.CoreStageView{Written: "live", State: "shadow", Notes: []string{"live written; this build sends no orders for core-ibcf-v1, so it runs as shadow"}}
+	res.Action = &core.Decision{Kind: core.ActionWait, Why: "no buy: the core runs in shadow and sends no orders, so it reserves no allocation", Diff: 958, BandShares: 95.8}
+	base := rpc.ShadowRecord{Version: 1, Strategy: "core", Rule: core.RuleID, SpecHash: core.SpecHash, SpecCited: true, Stage: "shadow", RecordedAt: goldenAt}
+	fill, intent, decision, missed := base, base, base, base
+	fill.Kind, fill.Session, fill.Fill = rpc.ShadowKindFill, "2026-09-01", &rpc.ShadowFill{Quantity: 958, Price: 96.12, HoldingAfter: 958, Convention: rpc.ShadowFillConvention}
+	intent.Kind, intent.Session, intent.Intent = rpc.ShadowKindIntent, "2026-08-31", &rpc.ShadowIntent{ForSession: "2026-09-01", Kind: core.ActionBuy, Quantity: 958, Why: "first buy toward the target", Diff: 958, BandShares: 95.8}
+	decision.Kind, decision.Session, decision.Decision = rpc.ShadowKindDecision, "2026-08-31", &rpc.ShadowDecision{TrendOn: true, Sigma: 0.15, Binding: core.BindingFloor, TargetShares: 958, ScalePct: 100}
+	missed.Kind, missed.Session, missed.Fill = rpc.ShadowKindFill, "2026-08-03", &rpc.ShadowFill{Convention: rpc.ShadowFillConvention, Unobserved: "no close of 2026-08-03 in the series; nothing is guessed"}
+	res.Shadow = &rpc.ShadowView{Strategy: "core", Stage: "shadow", Holding: 958, Records: 6, Recent: []rpc.ShadowRecord{fill, intent, decision, missed}}
 	return res
 }

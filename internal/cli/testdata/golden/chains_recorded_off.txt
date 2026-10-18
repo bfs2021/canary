@@ -2,9 +2,11 @@
 
 Option-chain recorder  OFF
 
-Recorder       off; turn it on with canary settings set
-               chains.recorder.enabled=true
-Symbols        SPX, SPY, QQQ (default) + held option underlyings, at most 12
+Recorder       off: you switched it off; canary settings set
+               chains.recorder.enabled=null records what holdings and strategies
+               declare again
+Symbols        held option underlyings, then strategies' chains: SYNO (s9), then
+               research names: SPX, SPY, QQQ; at most 12
 Plan           two nearest standard monthlies and the nearest weekly; strikes
                within ±20% of spot, at most 40 per expiry, calls and puts; 30
                min before the close
@@ -19,9 +21,11 @@ cells were not observed.
 
 Option-chain recorder  \x1b[2m\x1b[1mOFF\x1b[0m\x1b[0m
 
-\x1b[2mRecorder      \x1b[0m off; turn it on with canary settings set
-               chains.recorder.enabled=true
-\x1b[2mSymbols       \x1b[0m SPX, SPY, QQQ (default) + held option underlyings, at most 12
+\x1b[2mRecorder      \x1b[0m off: you switched it off; canary settings set
+               chains.recorder.enabled=null records what holdings and strategies
+               declare again
+\x1b[2mSymbols       \x1b[0m held option underlyings, then strategies' chains: SYNO (s9), then
+               research names: SPX, SPY, QQQ; at most 12
 \x1b[2mPlan          \x1b[0m two nearest standard monthlies and the nearest weekly; strikes
                within ±20% of spot, at most 40 per expiry, calls and puts; 30
                min before the close

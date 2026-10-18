@@ -52,15 +52,24 @@ const (
 	EntitlementGiveUp = 4
 )
 
-// DefaultSymbols is the explicit list in force while the setting is unset.
-// XSP is not in it: the gateway layer routes XSP as a stock, so its chain
-// cannot be discovered until it is classified as an index.
-var DefaultSymbols = []string{"SPX", "SPY", "QQQ"}
+// DefaultSymbols is the research list in force while the setting is unset:
+// none. The recorder records what holdings and registered strategies
+// declare (internal-docs/design/strategy-register.md, section 4; owner
+// decision 2026-10-18 09:01 CEST); SPX, SPY and QQQ were the default for s1,
+// which was dropped. XSP cannot be listed: the gateway layer routes XSP as a
+// stock, so its chain cannot be discovered until it is classified as an
+// index.
+var DefaultSymbols = []string{}
 
-// Settings is the owner's resolved preference.
+// Settings is the recorder's resolved plan input.
 type Settings struct {
+	// Enabled is false only when the owner switched the recorder off.
 	Enabled bool
-	// Symbols is the explicit list; held option underlyings are added to it.
+	// Declared is the registered strategies' declared chains, in priority
+	// order (live strategies first), each with its strategy as source.
+	Declared []SymbolChoice
+	// Symbols is the research list, recorded after held option underlyings
+	// and the declared chains.
 	Symbols []string
 }
 
@@ -118,7 +127,13 @@ const (
 const (
 	SourceExplicit = "explicit"
 	SourceHeld     = "held"
-	SourceBoth     = "explicit+held"
+	// SourceBoth is how runs before 2026-10-18 named an explicit and held
+	// symbol; a symbol several sources declare now names them all joined
+	// by "+" in priority order.
+	SourceBoth = "explicit+held"
+	// SourceStrategyPrefix names a registered strategy's declaration,
+	// "strategy:<id>".
+	SourceStrategyPrefix = "strategy:"
 )
 
 // ListedExpiry is one listed (date, trading class) pair and its strikes, as

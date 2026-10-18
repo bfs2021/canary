@@ -365,11 +365,11 @@ func SettingsKeys() []SettingsKeySpec {
 		},
 		{
 			Key: "chains.recorder.enabled", Kind: SettingsKindBool, Class: SettingsClassOwner,
-			Doc: "Records a daily option-chain snapshot (quotes, sizes, IV, greeks, open interest) 30 minutes before the US close into option-chains.db beside daemon.db; market-data reads only, within a line reserve for the live display (default false).",
+			Doc: "The owner's off switch for the daily option-chain snapshot (quotes, sizes, IV, greeks, open interest) 30 minutes before the US close into option-chains.db beside daemon.db: unset, it records what holdings and registered strategies declare; false stops it. Market-data reads only, within a line reserve for the live display (default unset: on).",
 		},
 		{
 			Key: "chains.recorder.symbols", Kind: SettingsKindSymbolList, Class: SettingsClassCollection,
-			Doc: "Underlyings the option-chain recorder covers besides held option underlyings, at most 12; null restores SPX, SPY, QQQ.",
+			Doc: "Research names the option-chain recorder covers after held option underlyings and registered strategies' declared chains, at most 12 in all; a collection setting any origin may change; null restores none.",
 		},
 	}
 }

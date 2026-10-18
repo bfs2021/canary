@@ -995,7 +995,19 @@ scale_pct       = 25             # ramp: 25, then 50, then 100; 0 suspends
 band_pct        = 10
 min_order_base  = 2500
 max_value_pct   = 40             # of the budget base × room
+# spec_hash     = "2408d09e…"    # optional while not live: the lab spec cited
+# stage         = "shadow"       # optional: unwritten reads shadow; live, suspended
 ```
+
+Since 2026-10-18 `[mandate.core]` is the strategy register's first entry
+([strategy-register.md](strategy-register.md)). Its two register keys are
+optional in this form, so the file above keeps its behaviour and its
+fingerprints: an unwritten `stage` runs the core in shadow (it serves its
+target and sends nothing, as phase 1 always has), and an unwritten
+`spec_hash` lets the compiled rule's own spec stand. The core goes live only
+when the owner writes `stage = "live"` with `spec_hash`, and once `stage` is
+written `scale_pct` is 25, 50 or 100 and a suspension is `stage =
+"suspended"`.
 
 The core also reads two `[mandate]` keys and holds while either is
 unwritten: `[mandate.sleeves] core_vol_pct` and `index_gap_shock_pct` (the

@@ -1,14 +1,16 @@
 # Option-chain recorder
 
-Updated: 2026-10-14 (first version)
+Updated: 2026-10-18 (coverage follows the declarations: the strategy
+register, [strategy-register.md](strategy-register.md), section 4; first
+version 2026-10-14)
 
 Status: current authority for `internal/chainrec`, `internal/daemon/chain_recorder.go`,
 `chains.recorded`, `chains.recorded_rows` and `canary chains recorded`.
 
 The desk cannot buy affordable historical option data, so it records its own.
 Once a session, shortly before the close, the recorder reads a fixed slice of
-the option chain of every name the desk trades options on and appends one row
-per contract: quotes and sizes, model IV and greeks, open interest, volume.
+the option chain of every name the desk's holdings and registered strategies
+declare and appends one row per contract: quotes and sizes, model IV and greeks, open interest, volume.
 After a year the desk owns an options panel for its own names, and the cost
 models can use spreads that were actually quoted instead of assumed ones.
 
@@ -17,18 +19,25 @@ no setting, schedule or row can reach an order path.
 
 ## Switch and settings
 
-Off by default. While off, the daemon's loop only reads the setting every 30
-seconds: no file is created, no line is opened, nothing is sent, and the read
-surfaces report the recorder off with no store. Turning it on needs no restart.
+The recorder needs no switch to run (owner decision 2026-10-18 09:01 CEST:
+"strategies declaring the data Canary collects"): it records what holdings
+and registered strategies declare. The owner keeps one off switch. While
+nothing is declared and no option is held, a due session runs nothing: no
+file is created, no line is opened, nothing is sent, and the read surfaces
+report no store. Switching it off or on needs no restart.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `chains.recorder.enabled` | `false` | Runs the daily snapshot |
-| `chains.recorder.symbols` | `SPX, SPY, QQQ` | Explicit underlyings; `[]` records held option underlyings only; `null` restores the default |
+| `chains.recorder.enabled` | unset: on | The owner's off switch: `false` stops the daily snapshot; `null` runs it again |
+| `chains.recorder.symbols` | none | Research names, recorded after held option underlyings and registered strategies' declared chains; `null` restores none |
 
 Both are runtime keys of the platform settings document, version 6
-([platform-settings.md](platform-settings.md)). Any origin may change them;
-they govern market-data reads only.
+([platform-settings.md](platform-settings.md)). The off switch is the owner's
+(class `owner`: a human terminal or the paired console); the research list is
+a collection key any origin may change, an agent session included. Both
+govern market-data reads only. Before 2026-10-18 the switch was off while
+unset and the list's default was SPX, SPY and QQQ, the names of s1, which was
+dropped.
 
 Everything else is the fixed v1 plan below, in `internal/chainrec/chainrec.go`,
 and changes with this note. The Mini-SPX index option (one tenth of SPX) is not
@@ -38,10 +47,14 @@ that would also alter quotes elsewhere and needs its own decision.
 
 ## What one run records
 
-**Underlyings.** The explicit list in order, then the underlyings of open USD
-option positions (from the cached portfolio, alphabetically), de-duplicated, at
-most 12. The rest are recorded as `skipped_symbol_cap`. When the portfolio
-cannot be read the run continues with the explicit list and says so
+**Underlyings.** The underlyings of open USD option positions (from the
+cached portfolio, alphabetically), then the chains registered strategies
+declare (live strategies first, then shadow, suspended and held ones), then
+the research list in order, de-duplicated with every source named
+(`held`, `strategy:<id>`, `explicit`, joined by `+`; runs before 2026-10-18
+wrote `explicit+held`), at most 12. The rest are recorded as
+`skipped_symbol_cap` with their source. When the portfolio cannot be read the
+run continues with the declarations and the research list and says so
 (`held_unavailable`).
 
 **Expiries**, from the symbol's security-definition listing, never an expiry
