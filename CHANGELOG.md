@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.24.2 — 2026-10-18 23:40 CEST
+
+### What's new
+
+The core sleeve's monthly row on its London line can be previewed, prepared
+and sent. Since v3.23.0 the quote contract had refused the `uk` market, so no
+preview of the row could have succeeded on 2 November, by hand or under the
+standing mandate; a behavioural test that drives the core's buy through the
+production write path found it and now guards it.
+
+### Fixed
+
+- A `core_rebalance` row on a London line can be previewed, prepared and sent: the quote contract accepts the `uk` market (`london`, `lse`: SMART with the line's venue and currency; a bare London request defaults to LSE in GBP). Before, every preview, prepare or submit of the row was refused `preview_failed: unsupported quote market "uk"` (#114).
+- Under the standing mandate a strategy row whose quote is stale, delayed or missing, or whose spread the preview refuses, is refused before journaling with its readiness code, so its session's episode stays free for the controller's next pass; a withdrawn row or a stale revision is journaled as before.
+- A frozen core month another writer kept first is re-read from the store rather than served from memory.
+
 ## v3.24.1 — 2026-10-18 23:25 CEST
 
 ### What's new
