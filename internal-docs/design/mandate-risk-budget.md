@@ -39,9 +39,9 @@ proposal the owner confirms by writing it into the policy file.
     furthest over its allocation first, within it the largest contributor.
   - Sleeve volatility shares of the 15%: owner 7, core 6, overlay 4. Recorded
     here as `[mandate.sleeves]`; enforcement per sleeve comes later. Since
-    2026-10-18 the machine's shares size its allocations ("Risk allocations"
-    below); the owner's allocation is the rest of the budget, and
-    `owner_vol_pct` is recorded and not read.
+    2026-10-18 the machine's `[mandate.sleeves]` numbers size its allocations
+    ("Risk allocations" below); the owner's allocation is the rest of the
+    budget, and `owner_vol_pct` is recorded and not read.
 - Departure from risk-policy.md decision 3 ("No auto-increase: deposits,
   profits, and live events never raise declared risk capital"): the
   mandate's budget follows the high-water mark of the cash-flow-adjusted
@@ -504,34 +504,35 @@ take them away.
 - **One contract, two sleeves**: the Euler contribution of a contract is
   linear in its units (q × ∂σ/∂q), so a contract held by two sleeves splits
   its contribution exactly in proportion to the units each holds.
-- **Allocation**: a machine sleeve's allocation is its stage times its share,
-  in percent a year of the budget base, scaled by the room exactly as the
-  budget is: `allocation_base = stage_pct / 100 × share_pct / 100 ×
-  budget_base × room`. The core's stage is `[mandate.core] scale_pct` and its
-  share `[mandate.sleeves] core_vol_pct`; a lab strategy's stage is the lab's
-  ladder (R3 25, R4 50, established 100) and the overlay's share
-  `overlay_vol_pct`. A sleeve that sends no orders runs nothing: its stage is
-  0 whatever the policy says. In this build the core sends none (phase 1 is
-  read-only; its rows are phase 2) and no strategy runs in the overlay, so
-  both stages are 0 and the machine's allocation is zero, as the review said:
-  "nothing today".
+- **Allocation**: a machine sleeve's allocation is reserved only as far as it
+  runs: its stage times its allocation, in percent a year of the budget base,
+  scaled by the room exactly as the budget is: `allocation_base = stage_pct /
+  100 × share_pct / 100 × budget_base × room`. The core's stage is
+  `[mandate.core] scale_pct` and its share `[mandate.sleeves] core_vol_pct`; a
+  lab strategy's stage is the lab's ladder (R3 25, R4 50, established 100) and
+  the overlay's allocation `overlay_vol_pct`. A sleeve that sends no orders
+  runs nothing: its stage is 0 whatever the policy says. In this build the
+  core sends none (phase 1 is read-only; its rows are phase 2) and no strategy
+  runs in the overlay, so both stages are 0 and the machine's allocation is
+  zero, as the review said: "nothing today".
 - **The owner's allocation is the rest**: `budget − Σ machine allocations`.
   The allocations add up to the budget, so the book is inside the budget
   exactly when the uses do not exceed the allocations in sum, and a book over
   budget always has a sleeve over its allocation. Today the owner's allocation
-  is the whole budget. The constitution refuses machine shares (`core_vol_pct
-  + overlay_vol_pct`) above `vol_target_pct`, so the owner's allocation is
-  never negative; the evaluator also floors it at zero.
-- **The owner's 7 is no longer read**: the shares of 2026-10-14 were
-  standalone figures whose sum (17) exceeded the target because the sleeves
-  are not perfectly correlated. Allocations count use, which adds up, so the
-  owner's allocation is the rest: 15 − 6 − 4 = 5 points once both machine
-  sleeves run at full stage, not 7. `owner_vol_pct` is recorded and not read.
+  is the whole budget. The constitution refuses machine allocations
+  (`core_vol_pct + overlay_vol_pct`) above `vol_target_pct`, so the owner's
+  allocation is never negative; the evaluator also floors it at zero.
+- **The owner's 7 is no longer read**: the numbers of 2026-10-14 (owner 7,
+  core 6, overlay 4) were standalone figures whose sum (17) exceeded the
+  target because the sleeves are not perfectly correlated. Allocations count
+  use, which adds up, so the owner's allocation is the rest: 15 − 6 − 4 = 5
+  points once both machine sleeves run at full stage, not 7. `owner_vol_pct`
+  is recorded and not read.
 - **Use and standalone risk**: a sleeve's use is its standalone risk times its
   correlation with the book, so it never exceeds its standalone risk; others'
   holdings can raise it at most to that. A sleeve whose standalone risk fits
   its allocation is therefore inside its allocation whatever the others hold.
-  The core sizes its volatility to its share on its own closes, the mandate
+  The core sizes its volatility to its allocation on its own closes, the mandate
   measures it on the index's returns, and every core buy is cut to its
   allocation on the mandate's measure (`coreHeadroomFits`); between decisions
   a smaller room shrinks the allocation and the core's standalone risk does
@@ -668,10 +669,11 @@ rule are unchanged. Only the risk phase changes:
 
 ### Policy keys
 
-None in this build. The core's stage is its existing `scale_pct` and its share
-`core_vol_pct`; the owner's allocation is the rest. For a lab strategy in the
-overlay, once its order path exists, proposed (the owner writes it; the daemon
-refuses the table as an unknown key until the code that reads it lands):
+None in this build. The core's stage is its existing `scale_pct` and its
+allocation `core_vol_pct`; the owner's allocation is the rest. For a lab
+strategy in the overlay, once its order path exists, proposed (the owner
+writes it; the daemon refuses the table as an unknown key until the code that
+reads it lands):
 
 ```toml
 [mandate.overlay]               # absent: the overlay runs nothing
@@ -685,11 +687,11 @@ No key acts by default: absent, the overlay's stage is 0.
 ### Surfaces
 
 `canary mandate` (and `--json`, MCP `canary_mandate`) lists each allocation:
-its use against its allocation, its standalone risk, and its stage and share
-or why it runs nothing; the verdict carries them as `verdict.allocations`.
-Desk shows each allocation's use against its allocation on Risk › Mandate. An
-allocation refusal names the sleeve, its use, its allocation and, for the
-owner, the machine's allocations.
+its use against its allocation, its standalone risk, and its stage and
+allocation or why it runs nothing; the verdict carries them as
+`verdict.allocations`. Desk shows each allocation's use against its allocation
+on Risk › Mandate. An allocation refusal names the sleeve, its use, its
+allocation and, for the owner, the machine's allocations.
 
 ### Safety review (2026-10-18) and how it is folded in
 
@@ -702,7 +704,7 @@ and four serious items.
 | S2 | Allocations key on `con_id` and the compiled symbol; the venue fix makes `con_id` optional and resolves the line by ISIN | Placement by contract id only, through one function (`mandateCoreContracts`) that takes the venue fix's resolved line when both land; the symbol rule is dropped, since the order path resolves a contract id before every gate point |
 | S3 | "Allocations unknown ⇒ the batch holds" would stop a pre-authorised protection on bookkeeping | Unknown allocations refuse additions only; the batch sizes in the whole book's order and says so; rule 4 gets its recovery (journal reconciliation or a statement) |
 | S4 | "A sleeve inside its allocation stays there" holds only while its standalone risk on the mandate's measure fits its allocation | Restated as use ≤ standalone; every core buy cut to its allocation on the mandate's measure; the drift between decisions recorded as residual risk |
-| M1-M8 | s1 dropped; the owner's 7 no longer read; the gate's treatment of a sleeve already over; a guard against stopping short; overfull machine shares; lineage and gate gaps for later; stale lines; `canary core` copy | Each folded in above, with a test where it acts (Verification) |
+| M1-M8 | s1 dropped; the owner's 7 no longer read; the gate's treatment of a sleeve already over; a guard against stopping short; overfull machine allocations; lineage and gate gaps for later; stale lines; `canary core` copy | Each folded in above, with a test where it acts (Verification) |
 
 ### Residual risk accepted
 
@@ -719,24 +721,25 @@ contract with the owner.
 ### Verification
 
 Synthetic books only. `internal/mandate` (`allocations_test.go`): uses add up
-to the book's risk and allocations to the budget, the core's allocation is its
-stage times its share and the owner's the rest, a contract split by units
-splits its contribution in proportion, every allocation is zero at room 0, an
-overfull machine leaves the owner a zero allocation, a sleeve whose standalone
-risk fits its allocation stays inside it whatever is added elsewhere.
-`internal/daemon` (`mandate_allocations_test.go`): the allocation plan gives
-the core no stage while it sends no orders and places its contract with it;
-with a live core allocation the gate refuses an owner addition past the
-owner's allocation that the whole budget would take, and passes one inside;
-with the core running nothing the same order passes; a hand buy of the core's
-contract is the core's and refused while its allocation is zero, a sale
-passes; an unpriced option buy is judged by its sleeve's standalone risk plus
-the bound; the forced reduction cuts the sleeve furthest over first, leaves a
-sleeve inside its allocation alone, stops a sleeve's cut at its allocation
-while another is over, never stops short where the old order reaches the
-target, every row alone lowers the risk, and with the machine empty the batch
-is the old one; the constitution refuses machine shares above the target.
-Core: the headroom-cut buy passes the gate with the allocation
+to the book's risk and allocations to the budget, the core's allocation is
+reserved only as far as it runs: its stage times its allocation and the
+owner's the rest, a contract split by units splits its contribution in
+proportion, every allocation is zero at room 0, an overfull machine leaves the
+owner a zero allocation, a sleeve whose standalone risk fits its allocation
+stays inside it whatever is added elsewhere. `internal/daemon`
+(`mandate_allocations_test.go`): the allocation plan gives the core no stage
+while it sends no orders and places its contract with it; with a live core
+allocation the gate refuses an owner addition past the owner's allocation that
+the whole budget would take, and passes one inside; with the core running
+nothing the same order passes; a hand buy of the core's contract is the core's
+and refused while its allocation is zero, a sale passes; an unpriced option
+buy is judged by its sleeve's standalone risk plus the bound; the forced
+reduction cuts the sleeve furthest over first, leaves a sleeve inside its
+allocation alone, stops a sleeve's cut at its allocation while another is
+over, never stops short where the old order reaches the target, every row
+alone lowers the risk, and with the machine empty the batch is the old one;
+the constitution refuses machine allocations above the target. Core: the
+headroom-cut buy passes the gate with the allocation
 (`TestCoreTargetBuyCutToTheGapCapMargin`). CLI golden `mandate_allocations`.
 
 ## Decision-grade history

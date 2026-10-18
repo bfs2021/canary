@@ -148,8 +148,9 @@ type policyFileKind struct {
 
 // EnsurePolicyFiles writes every missing policy file from its template and
 // previews conversions of existing files; it applies one with exact reviewed
-// hashes, or with ApplyMigrations at daemon start. It never replaces owner settings or touches a file it cannot read: an
-// unreadable file keeps the policy in force and is reported, not replaced.
+// hashes, or with ApplyMigrations at daemon start. It never replaces owner
+// settings or touches a file it cannot read: an unreadable file keeps the policy
+// in force and is reported, not replaced.
 func EnsurePolicyFiles(set PolicyFileSet, opts EnsureOptions) []PolicyFileAction {
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
@@ -168,7 +169,8 @@ func EnsurePolicyFiles(set PolicyFileSet, opts EnsureOptions) []PolicyFileAction
 	}
 	// Validate the whole reviewed set before any write. Applying a plan never
 	// creates unrelated missing files, and an unknown/stale entry cannot cause
-	// another entry to be applied first. Each file is checked again at write time.
+	// another entry to be applied first. Each file is checked again at write
+	// time.
 	if len(opts.Approved) > 0 {
 		selected := make([]policyFileKind, 0, len(opts.Approved))
 		for name, approval := range opts.Approved {
@@ -1336,8 +1338,9 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # this gap instead; absent, they take gap_shock_pct. 12 is your decision of
 # 2026-10-14 (D4).
 # index_gap_shock_pct = 12.0
-# Volatility shares per sleeve. The machine's (core, overlay) size its
-# allocations: an allocation is its stage times its share while the sleeve sends orders,
+# Risk allocations per sleeve, in percent a year of the budget base. The
+# machine's (core, overlay) are reserved as far as each runs: its stage times
+# its allocation while the sleeve sends orders,
 # and their sum may not exceed vol_target_pct; your allocation is the rest of the
 # budget, so owner_vol_pct is recorded and not read.
 # [mandate.sleeves]
@@ -1370,7 +1373,8 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 	return []byte(b.String())
 }
 
-// constitutionTemplateVersion is the initial document revision; format 2 defines its semantics.
+// constitutionTemplateVersion is the initial document revision; format 2 defines
+// its semantics.
 const constitutionTemplateVersion = 1
 
 // parseConstitutionPolicy validates a constitution file the way the risk

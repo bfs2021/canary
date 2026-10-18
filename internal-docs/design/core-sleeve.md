@@ -651,16 +651,16 @@ sale by itself; only the market can.
 ### The core's allocation (2026-10-18, replacing D1)
 
 The core has its own allocation inside the whole-book limits
-(`mandate-risk-budget.md`, "Risk allocations"): its stage times its share,
-`scale_pct / 100 × core_vol_pct / 100 × budget base × room`, while the core
-runs, and nothing while it sends no orders, as in this build (phase 1 is
-read-only). The owner has the rest of the budget. Once the core runs, the
-owner's additions stop at the owner's allocation, so the core's allocation
-stays free for the core; a core buy needs the whole-book `within` and headroom
-above, and its own allocation with the buy added. While the verdict reads
-over, reduce or unknown, no core buy is admitted, as before ("No addition by
-anyone while the whole book is over budget"). The core's sales (rebalance
-down, trend off) always pass.
+(`mandate-risk-budget.md`, "Risk allocations"), reserved as far as it runs:
+its stage times its allocation, `scale_pct / 100 × core_vol_pct / 100 × budget
+base × room`, while the core runs, and nothing while it sends no orders, as in
+this build (phase 1 is read-only). The owner has the rest of the budget. Once
+the core runs, the owner's additions stop at the owner's allocation, so the
+core's allocation stays free for the core; a core buy needs the whole-book
+`within` and headroom above, and its own allocation with the buy added. While
+the verdict reads over, reduce or unknown, no core buy is admitted, as before
+("No addition by anyone while the whole book is over budget"). The core's
+sales (rebalance down, trend off) always pass.
 
 A sleeve's Euler use never exceeds its own standalone risk, and every core buy
 is cut to the core's allocation on the mandate's measure (`coreHeadroomFits`),
@@ -929,11 +929,12 @@ Decided 2026-10-14 (the questions as asked, the answers verbatim):
   shadow test, and go for the core venue fix with the core fund out of
   protection's automatic sales." Under D1 the machine had only the room the
   owner's book left, so it could never count on any. Now: allocations inside
-  the whole-book limits; the machine's allocation is its stage times its
-  share, nothing while it runs nothing; the owner has the rest; over budget,
-  the sleeve furthest over its allocation is cut first; each position stays in
-  the sleeve of whoever opened it, and the core's fund stays reserved to the
-  core (`mandate-risk-budget.md`, "Risk allocations").
+  the whole-book limits; the machine's allocation is reserved only as far as
+  it runs: its stage times its allocation, nothing while it runs nothing; the
+  owner has the rest; over budget, the sleeve furthest over its allocation is
+  cut first; each position stays in the sleeve of whoever opened it, and the
+  core's fund stays reserved to the core (`mandate-risk-budget.md`, "Risk
+  allocations").
 - **D2. If IBKR refuses Adaptive for IBCF, may core orders use a plain
   DAY limit at the mid?** "Yes, for the core only." Tick-snapped, never
   crossing the mid against the owner, never repriced; the 2026-10-09 "no

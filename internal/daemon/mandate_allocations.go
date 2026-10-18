@@ -11,15 +11,15 @@ import (
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
-// Allocations (internal-docs/design/mandate-risk-budget.md, "Risk allocations"; owner
-// decision 2026-10-18 08:06 CEST: "give the machine its own seat (replacing
-// D1 and largest-contributor-first)"). The machine's allocation is only as big as
-// what it actually runs: each machine sleeve's stage times its share. The
-// owner has the rest. Each position stays in the sleeve of whoever opened it, and
-// the core's pinned contract is reserved to the core. The additions gate
-// refuses an order that takes its own sleeve over its allocation, on top of every
-// whole-book check; the forced reduction cuts the sleeve furthest over its
-// allocation first.
+// Allocations (internal-docs/design/mandate-risk-budget.md, "Risk allocations";
+// owner decision 2026-10-18 08:06 CEST: "give the machine its own seat
+// (replacing D1 and largest-contributor-first)"). The machine's allocation is
+// only as big as what it actually runs: each machine sleeve's stage times its
+// allocation. The owner has the rest. Each position stays in the sleeve of
+// whoever opened it, and the core's pinned contract is reserved to the core. The
+// additions gate refuses an order that takes its own sleeve over its allocation,
+// on top of every whole-book check; the forced reduction cuts the sleeve
+// furthest over its allocation first.
 
 // coreSendsOrders is whether this build serves the core's orders. Phase 2
 // (core-sleeve.md items 7 and 8) adds the core_rebalance rows; until then
@@ -32,10 +32,10 @@ func (s *Server) coreRuns() bool {
 	return coreSendsOrders || s != nil && s.coreSendsOrdersForTest
 }
 
-// mandateAllocationPlan is the allocation plan of the policy in force: the core's and
-// the overlay's stage and share, and the core's contract placed with the
-// core. coreRuns says whether the core sends orders. Every other leg is the
-// owner's: no order path in this build places units in a machine sleeve by
+// mandateAllocationPlan is the allocation plan of the policy in force: the
+// core's and the overlay's stage and allocation, and the core's contract placed
+// with the core. coreRuns says whether the core sends orders. Every other leg is
+// the owner's: no order path in this build places units in a machine sleeve by
 // its fills, so placement is total and never unknown.
 func mandateAllocationPlan(c *risk.Constitution, coreRuns bool, coreContracts []int) *mandate.AllocationPlan {
 	if c == nil || c.Mandate == nil {
@@ -113,10 +113,10 @@ func mandateSleeveName(sleeve string) string {
 	return "the " + sleeve + " sleeve"
 }
 
-// mandateAllocationRefusal judges an order's sleeve: a sleeve over its allocation adds
-// nothing, as a book over budget adds nothing, and an addition must leave
-// its sleeve inside its allocation on the book with the order added. Nil when it
-// fits, or when the evaluations carry no allocations (no plan).
+// mandateAllocationRefusal judges an order's sleeve: a sleeve over its
+// allocation adds nothing, as a book over budget adds nothing, and an addition
+// must leave its sleeve inside its allocation on the book with the order added.
+// Nil when it fits, or when the evaluations carry no allocations (no plan).
 func mandateAllocationRefusal(sleeve string, standing *mandate.Verdict, with mandate.Verdict, ccy, open string) *rpc.TradingBlocker {
 	const action = "Size it smaller, or reduce in the same sleeve first; `canary mandate` has each sleeve's allocation."
 	if standing != nil {

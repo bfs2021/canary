@@ -171,15 +171,15 @@ func isinShape(s string) bool {
 }
 
 // ConstitutionMandateSleeves is [mandate.sleeves]: annualised volatility in
-// percent of the budget base per sleeve (owner 7, core 6, overlay 4 as
-// decided 2026-10-14, then shares of one book whose sum exceeded the target
-// because the sleeves are not perfectly correlated). Since the allocations of
-// 2026-10-18 08:06 CEST (internal-docs/design/mandate-risk-budget.md,
-// "Risk allocations") a machine sleeve's allocation is its stage times its share, measured by
-// Euler contributions, which add up: the machine's shares together may not
-// exceed vol_target_pct, and the owner's allocation is the rest of the budget
-// (at full stages 15 − 6 − 4 = 5 points), so owner_vol_pct is recorded and
-// not read.
+// percent of the budget base per sleeve (owner 7, core 6, overlay 4 as decided
+// 2026-10-14, then shares of one book whose sum exceeded the target because the
+// sleeves are not perfectly correlated). Since the allocations of 2026-10-18
+// 08:06 CEST (internal-docs/design/mandate-risk-budget.md, "Risk allocations") a
+// machine sleeve's allocation is reserved only as far as it runs: its stage
+// times its allocation, measured by Euler contributions, which add up: the
+// machine's shares together may not exceed vol_target_pct, and the owner's
+// allocation is the rest of the budget (at full stages 15 − 6 − 4 = 5 points),
+// so owner_vol_pct is recorded and not read.
 type ConstitutionMandateSleeves struct {
 	OwnerVolPct   *float64 `toml:"owner_vol_pct" json:"owner_vol_pct"`
 	CoreVolPct    *float64 `toml:"core_vol_pct" json:"core_vol_pct"`
@@ -233,9 +233,9 @@ func (m *ConstitutionMandate) validate(semantics ConstitutionSemantics) error {
 				return err
 			}
 		}
-		// The machine's allocations sit inside the budget: shares above the target
-		// would leave the owner no allocation and turn a forced reduction on the
-		// owner's whole book first.
+		// The machine's allocations sit inside the budget: shares above the
+		// target would leave the owner no allocation and turn a forced reduction
+		// on the owner's whole book first.
 		if t := m.VolTargetPct; t != nil {
 			machine := 0.0
 			for _, v := range []*float64{sl.CoreVolPct, sl.OverlayVolPct} {

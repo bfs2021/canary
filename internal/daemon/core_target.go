@@ -22,15 +22,14 @@ import (
 
 // The core sleeve's target (internal-docs/design/core-sleeve.md), phase 1:
 // read-only. The daemon keeps the core contract's own closes (the line IBKR
-// lists under the policy's ISIN and currency, core_resolve.go, read by
-// contract id on its primary exchange, judged fresh on that exchange's
-// calendar, and never read by the book's verdict), decides each month at
-// the exchange's last session's close with internal/core, freezes the month's target with the
-// digest of its inputs, sizes it on the mandate's capital, cuts a buy to
-// the mandate's headroom (the book at most at 0.95 of the budget, the
-// core's gap at most at 0.95 of its cap, whole book: owner decision D1)
-// and serves what the rule would do. It creates no proposal row and sends
-// no order.
+// lists under the policy's ISIN and currency, core_resolve.go, read by contract
+// id on its primary exchange, judged fresh on that exchange's calendar, and
+// never read by the book's verdict), decides each month at the exchange's last
+// session's close with internal/core, freezes the month's target with the digest
+// of its inputs, sizes it on the mandate's capital, cuts a buy to the mandate's
+// headroom (the book at most at 0.95 of the budget, the core's gap at most at
+// 0.95 of its cap, whole book: owner decision D1) and serves what the rule would
+// do. It creates no proposal row and sends no order.
 
 const (
 	coreSeriesKeyPrefix = "core:con:"
@@ -508,8 +507,9 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	if verdict.Status != mandate.StatusWithin {
 		in.BuyBlocked = "the mandate verdict reads " + verdict.Status
 	} else if !s.coreRuns() {
-		// Allocations (2026-10-18): the core's allocation is its stage times its share
-		// while it sends orders, and nothing until then.
+		// Allocations (2026-10-18): the core's allocation is reserved only as
+		// far as it runs: its stage times its allocation while it sends orders,
+		// and nothing until then.
 		in.BuyBlocked = "the core sends no orders yet, so it has no allocation"
 	} else if want := res.Sizing.Target - held; want > 0 && price > 0 {
 		add := core.Headroom(want, func(q int) bool { return coreHeadroomFits(input, contract, q, price) })
