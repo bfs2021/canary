@@ -386,12 +386,24 @@ func (s *Server) mandateGateView(res *rpc.MandateRiskResult, now time.Time) *rpc
 	if age := now.Sub(res.AsOf); age > mandateVerdictMaxAge {
 		return &rpc.MandateGateView{RefusesAdditions: true, Reason: fmt.Sprintf("the verdict is %s old; the gate trusts one up to %s", formatQuoteAge(age), mandateVerdictMaxAge)}
 	}
-	if res.Verdict.Status != mandate.StatusWithin {
-		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, res.Verdict.BaseCurrency)}
+	ccy := res.Verdict.BaseCurrency
+	switch res.Verdict.Status {
+	case mandate.StatusWithin:
+	case mandate.StatusOver, mandate.StatusReduce:
+		// Over budget, your sleeve keeps adding while it is inside its own
+		// allocation (owner, 2026-10-18 15:31 CEST).
+		if why := mandateOverBudgetHolds(res.Verdict, mandate.SleeveOwner, ccy); why != "" {
+			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, ccy) + "; " + why}
+		}
+		return &rpc.MandateGateView{Reason: mandateStatusSentence(res.Verdict, ccy) + ", but your sleeve is inside its allocation: an addition that keeps it there passes"}
+	default:
+		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, ccy)}
 	}
 	// Within the budget, your additions still stop at your allocation.
-	if allocation, ok := res.Verdict.Allocation(mandate.SleeveOwner); ok && allocation.Over {
-		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateAllocationOverSentence(mandate.SleeveOwner, allocation, mandateMachineAllocations(*res.Verdict), "", allocation.UseBase, res.Verdict.BaseCurrency)}
+	if allocation, ok := res.Verdict.Allocation(mandate.SleeveOwner); ok {
+		if over, alone := mandateSleeveOver(allocation); over {
+			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateAllocationOverSentence(mandate.SleeveOwner, allocation, mandateMachineAllocations(*res.Verdict), "", mandateSleeveUse(allocation, alone), alone, res.Verdict.BaseCurrency)}
+		}
 	}
 	return &rpc.MandateGateView{}
 }
@@ -488,7 +500,21 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: fmt.Sprintf("Mandate budget: the verdict is %s old and cannot be shown current; this order adds risk.", formatQuoteAge(age)) + open, Action: action}
 	}
 	ccy := result.Verdict.BaseCurrency
-	if result.Verdict.Status != mandate.StatusWithin {
+	sleeve := mandateOrderSleeve(s.mandateCoreContracts(context.Background(), c), draft)
+	// A book over budget adds nothing, except in a sleeve inside its own risk
+	// allocation (owner, 2026-10-18 15:31 CEST: "yes, it should. unless you
+	// advise differently"): that sleeve keeps adding inside its allocation
+	// while the forced reduction cuts the sleeve furthest over its own. An
+	// unknown verdict adds nothing, ever.
+	overBudget := false
+	switch result.Verdict.Status {
+	case mandate.StatusWithin:
+	case mandate.StatusOver, mandate.StatusReduce:
+		if why := mandateOverBudgetHolds(result.Verdict, sleeve, ccy); why != "" {
+			return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + mandateStatusSentence(result.Verdict, ccy) + "; " + why + "; this order adds risk." + open, Action: action}
+		}
+		overBudget = true
+	default:
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + mandateStatusSentence(result.Verdict, ccy) + "; this order adds risk." + open, Action: action}
 	}
 	// A name or currency the book does not hold yet has no decision-grade
@@ -511,12 +537,11 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: this order cannot be measured: " + strings.Join(why, "; ") + "." + open,
 			Action: "Retry once the history has arrived (the background lane reads it within minutes); `canary mandate` has the measurement."}
 	}
-	sleeve := mandateOrderSleeve(s.mandateCoreContracts(context.Background(), c), draft)
 	leg, ok := mandateOrderLeg(draft, &book)
 	if !ok {
 		// Fail closed: an order the evaluator cannot price is never passed
 		// unmeasured (core sleeve review, 2026-10-14).
-		return mandateUnpricedOrderGate(draft, result.Verdict, book, sleeve, ccy, open, action)
+		return mandateUnpricedOrderGate(draft, result.Verdict, book, sleeve, overBudget, ccy, open, action)
 	}
 	// The order's units open in its sleeve: the allocations are judged with it
 	// placed there.
@@ -529,8 +554,11 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		}
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: with this order the book cannot be measured: " + why + "." + open, Action: action}
 	}
+	// The whole book with the order must stay inside the budget, unless the
+	// book is over it already and the order's sleeve adds inside its own
+	// allocation (checked below).
 	budget := with.Capital.BudgetAnnualSD
-	if with.Risk.SDAnnualBase > budget {
+	if !overBudget && with.Risk.SDAnnualBase > budget {
 		return &rpc.TradingBlocker{Code: mandateBudgetCode,
 			Message: fmt.Sprintf("Mandate budget: with this order the risk would be %s a year, over the budget %s (now %s).", mandateMoney(with.Risk.SDAnnualBase, ccy), mandateMoney(budget, ccy), mandateMoney(result.Verdict.Risk.SDAnnualBase, ccy)) + open,
 			Action:  "Size it smaller, or reduce elsewhere first; `canary mandate` has the measurement."}
@@ -558,7 +586,7 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 // allocation (a sleeve's use is at most its own risk, which the leg can raise by
 // at most the bound). Any other security type is left as it was: this check
 // judges only what the evaluator models.
-func mandateUnpricedOrderGate(draft rpc.OrderDraft, standing *mandate.Verdict, book mandate.Input, sleeve, ccy, open, action string) *rpc.TradingBlocker {
+func mandateUnpricedOrderGate(draft rpc.OrderDraft, standing *mandate.Verdict, book mandate.Input, sleeve string, overBudget bool, ccy, open, action string) *rpc.TradingBlocker {
 	sym := normSym(draft.Contract.Symbol)
 	refuse := func(msg, act string) *rpc.TradingBlocker {
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + msg + open, Action: act}
@@ -582,7 +610,7 @@ func mandateUnpricedOrderGate(draft rpc.OrderDraft, standing *mandate.Verdict, b
 		return refuse("this option buy cannot be measured: "+why+".", action)
 	}
 	budget := standing.Capital.BudgetAnnualSD
-	if b.riskAnnual > budget {
+	if !overBudget && b.riskAnnual > budget {
 		return refuse(fmt.Sprintf("with this order the risk could reach %s a year, over the budget %s: the option's limit gives no volatility, so it is bounded by %s's full daily moves.",
 			mandateMoney(b.riskAnnual, ccy), mandateMoney(budget, ccy), sym), "Size it smaller, or buy at a limit the volatility can be solved from; `canary mandate` has the measurement.")
 	}
@@ -592,7 +620,7 @@ func mandateUnpricedOrderGate(draft rpc.OrderDraft, standing *mandate.Verdict, b
 	}
 	if allocation, ok := standing.Allocation(sleeve); ok {
 		if worst := allocation.StandaloneBase + (b.riskAnnual - standing.Risk.SDAnnualBase); worst > allocation.AllocationBase+mandateReductionEpsilon {
-			return refuse("with this order "+mandateAllocationOverSentence(sleeve, allocation, mandateMachineAllocations(*standing), "could", worst, ccy)+
+			return refuse("with this order "+mandateAllocationOverSentence(sleeve, allocation, mandateMachineAllocations(*standing), "could", worst, false, ccy)+
 				": the option's limit gives no volatility, so the allocation is bounded by its own risk plus "+sym+"'s full daily moves.",
 				"Size it smaller, or buy at a limit the volatility can be solved from; `canary mandate` has each allocation.")
 		}

@@ -207,6 +207,50 @@ func mandateSleeveName(sleeve string) string {
 	return "the " + sleeve + " sleeve"
 }
 
+// mandateOverBudgetHolds says why a book over budget holds an order of
+// sleeve, or "" when the sleeve may keep adding inside its own risk
+// allocation (owner, 2026-10-18 15:31 CEST): not at the maximum loss, where
+// the book goes to its hedges, and not while the sleeve is over its own
+// allocation or its allocation cannot be measured.
+func mandateOverBudgetHolds(v *mandate.Verdict, sleeve, ccy string) string {
+	if v == nil || !v.Capital.Known || !(v.Capital.BudgetAnnualSD > 0) || !(v.Capital.Room > 0) {
+		return "at the maximum loss no sleeve adds"
+	}
+	allocation, ok := v.Allocation(sleeve)
+	if !ok {
+		return "the risk allocations cannot be measured"
+	}
+	if over, alone := mandateSleeveOver(allocation); over {
+		return mandateAllocationOverSentence(sleeve, allocation, mandateMachineAllocations(*v), "", mandateSleeveUse(allocation, alone), alone, ccy)
+	}
+	return ""
+}
+
+// mandateSleeveOver says whether a sleeve is over its allocation, and whether
+// it is so only on its own: a sleeve's use (its Euler contribution) is its
+// standalone risk times its correlation with the book, so a book far over
+// budget dampens the use of a small sleeve to nothing whatever it holds. The
+// gate therefore binds a sleeve by both: its use and its standalone risk must
+// fit its allocation (mandate-risk-budget.md, "The gate").
+func mandateSleeveOver(a mandate.AllocationReport) (over, alone bool) {
+	if a.Over {
+		return true, false
+	}
+	if a.StandaloneBase > a.AllocationBase*(1+1e-9)+1e-6 {
+		return true, true
+	}
+	return false, false
+}
+
+// mandateSleeveUse is the figure a refusal names: the sleeve's use, or its
+// standalone risk when only that is over.
+func mandateSleeveUse(a mandate.AllocationReport, alone bool) float64 {
+	if alone {
+		return a.StandaloneBase
+	}
+	return a.UseBase
+}
+
 // mandateAllocationRefusal judges an order's sleeve: a sleeve over its
 // allocation adds nothing, as a book over budget adds nothing, and an addition
 // must leave its sleeve inside its allocation on the book with the order added.
@@ -214,28 +258,39 @@ func mandateSleeveName(sleeve string) string {
 func mandateAllocationRefusal(sleeve string, standing *mandate.Verdict, with mandate.Verdict, ccy, open string) *rpc.TradingBlocker {
 	const action = "Size it smaller, or reduce in the same sleeve first; `canary mandate` has each sleeve's allocation."
 	if standing != nil {
-		if allocation, ok := standing.Allocation(sleeve); ok && allocation.Over {
-			return &rpc.TradingBlocker{Code: mandateBudgetCode, Action: action,
-				Message: "Mandate budget: " + mandateAllocationOverSentence(sleeve, allocation, mandateMachineAllocations(*standing), "", allocation.UseBase, ccy) + "; this order adds risk." + open}
+		if allocation, ok := standing.Allocation(sleeve); ok {
+			if over, alone := mandateSleeveOver(allocation); over {
+				return &rpc.TradingBlocker{Code: mandateBudgetCode, Action: action,
+					Message: "Mandate budget: " + mandateAllocationOverSentence(sleeve, allocation, mandateMachineAllocations(*standing), "", mandateSleeveUse(allocation, alone), alone, ccy) + "; this order adds risk." + open}
+			}
 		}
 	}
 	allocation, ok := with.Allocation(sleeve)
-	if !ok || !allocation.Over {
+	if !ok {
+		return nil
+	}
+	over, alone := mandateSleeveOver(allocation)
+	if !over {
 		return nil
 	}
 	return &rpc.TradingBlocker{Code: mandateBudgetCode, Action: action,
-		Message: "Mandate budget: with this order " + mandateAllocationOverSentence(sleeve, allocation, mandateMachineAllocations(with), "would", allocation.UseBase, ccy) + "." + open}
+		Message: "Mandate budget: with this order " + mandateAllocationOverSentence(sleeve, allocation, mandateMachineAllocations(with), "would", mandateSleeveUse(allocation, alone), alone, ccy) + "." + open}
 }
 
 // mandateAllocationOverSentence says a sleeve's use against its allocation:
 // "your sleeve would carry X a year, over its allocation Y (the budget less
-// the machine's allocations of Z)"; without a verb, what it carries now.
-func mandateAllocationOverSentence(sleeve string, allocation mandate.AllocationReport, machine float64, verb string, use float64, ccy string) string {
+// the machine's allocations of Z)"; without a verb, what it carries now; with
+// alone, the figure is the sleeve's standalone risk ("on its own").
+func mandateAllocationOverSentence(sleeve string, allocation mandate.AllocationReport, machine float64, verb string, use float64, alone bool, ccy string) string {
 	carry := "carries"
 	if verb != "" {
 		carry = verb + " carry"
 	}
-	s := fmt.Sprintf("%s %s %s a year, over its allocation %s", mandateSleeveName(sleeve), carry, mandateMoney(use, ccy), mandateMoney(allocation.AllocationBase, ccy))
+	own := ""
+	if alone {
+		own = " on its own"
+	}
+	s := fmt.Sprintf("%s %s %s a year%s, over its allocation %s", mandateSleeveName(sleeve), carry, mandateMoney(use, ccy), own, mandateMoney(allocation.AllocationBase, ccy))
 	switch {
 	case sleeve == mandate.SleeveOwner:
 		s += fmt.Sprintf(" (the budget less the machine's allocations of %s)", mandateMoney(machine, ccy))

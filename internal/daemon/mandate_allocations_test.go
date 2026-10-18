@@ -2,11 +2,13 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"math"
 	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/mandate"
@@ -401,4 +403,103 @@ func TestMandateReductionAllocationsNeverStopShort(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Owner decision 2026-10-18 15:31 CEST, to "Should a sleeve inside its own
+// allocation keep adding while another sleeve is over its own?": "yes, it
+// should. unless you advise differently". The book over budget no longer
+// stops a sleeve inside its own allocation: here the core adds while the
+// owner's sleeve is far over its own. The owner's sleeve over its
+// allocation still adds nothing, and the core still stops at its own.
+func TestMandateGateLetsASleeveInsideItsAllocationAddWhileAnotherIsOver(t *testing.T) {
+	srv := coreTestServer(t, testCoreConstitution(), mandateTestPositions(3000), 0.25)
+	res := srv.evaluateMandate(t.Context(), false)
+	v := res.Verdict
+	owner, _ := v.Allocation(mandate.SleeveOwner)
+	coreLine, _ := v.Allocation(mandate.SleeveCore)
+	if v.Status != mandate.StatusOver && v.Status != mandate.StatusReduce || !owner.Over || coreLine.Over || coreLine.AllocationBase <= 0 {
+		t.Fatalf("fixture: %s, owner %+v, core %+v", v.Status, owner, coreLine)
+	}
+	buy := func(q int) rpc.OrderDraft {
+		return rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: q, LimitPrice: 100, Contract: rpc.ContractParams{ConID: coreTestConID, Symbol: core.Symbol, SecType: "STK", Currency: core.Currency}}
+	}
+	if blocker := srv.mandateBudgetGate(buy(10), mandateOpen); blocker != nil {
+		t.Fatalf("the core inside its allocation, with the owner's sleeve over its own: %+v", blocker)
+	}
+	if blocker := srv.mandateBudgetGate(mandateBuy(10), mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "your sleeve carries") || !strings.Contains(blocker.Message, "over its allocation") {
+		t.Fatalf("the owner's sleeve over its allocation adds nothing: %+v", blocker)
+	}
+	if blocker := srv.mandateBudgetGate(buy(int(math.Ceil(2*coreLine.AllocationBase/(0.16*100)))), mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "the core's sleeve would carry") {
+		t.Fatalf("the core past its own allocation: %+v", blocker)
+	}
+	// The gate view reads the owner's additions: refused, naming the sleeve.
+	if !res.Gate.RefusesAdditions || !strings.Contains(res.Gate.Reason, "your sleeve carries") {
+		t.Fatalf("gate view %+v", res.Gate)
+	}
+}
+
+// And the other way round: the owner's sleeve inside its allocation adds
+// while the core holds its fund past its own.
+func TestMandateGateLetsTheOwnerAddWhileTheCoreIsOver(t *testing.T) {
+	c := testCoreConstitution()
+	c.Mandate.Core.ScalePct = new(25.0)
+	srv := coreTestServer(t, c, withIBCF(mandateTestPositions(100), 2200, 100), 0.25)
+	res := srv.evaluateMandate(t.Context(), false)
+	v := res.Verdict
+	owner, _ := v.Allocation(mandate.SleeveOwner)
+	coreLine, _ := v.Allocation(mandate.SleeveCore)
+	if v.Status != mandate.StatusOver && v.Status != mandate.StatusReduce || owner.Over || !coreLine.Over {
+		t.Fatalf("fixture: %s, owner %+v, core %+v", v.Status, owner, coreLine)
+	}
+	if blocker := srv.mandateBudgetGate(mandateBuy(10), mandateOpen); blocker != nil {
+		t.Fatalf("the owner inside its allocation, with the core over its own: %+v", blocker)
+	}
+	if res.Gate.RefusesAdditions || !strings.Contains(res.Gate.Reason, "your sleeve is inside its allocation") {
+		t.Fatalf("gate view %+v", res.Gate)
+	}
+}
+
+// What still holds every sleeve while the book is over budget: an unknown
+// verdict, a gap-cap breach the order would create, and the maximum loss,
+// where the book goes to its hedges.
+func TestMandateGateOverBudgetStillHolds(t *testing.T) {
+	buy := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 10, LimitPrice: 100, Contract: rpc.ContractParams{ConID: coreTestConID, Symbol: core.Symbol, SecType: "STK", Currency: core.Currency}}
+	t.Run("unknown", func(t *testing.T) {
+		srv := coreTestServer(t, testCoreConstitution(), mandateTestPositions(3000), 0.25)
+		srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return nil, errors.New("synthetic read failure") }
+		if v := srv.evaluateMandate(t.Context(), false).Verdict; v.Status != mandate.StatusUnknown {
+			t.Fatalf("fixture: %s", v.Status)
+		}
+		if blocker := srv.mandateBudgetGate(buy, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "cannot be measured") {
+			t.Fatalf("unknown: %+v", blocker)
+		}
+	})
+	t.Run("gap cap", func(t *testing.T) {
+		c := testCoreConstitution()
+		c.Mandate.IndexGapShockPct = new(60.0) // the fund's gap binds before its allocation
+		srv := coreTestServer(t, c, mandateTestPositions(3000), 0.25)
+		v := srv.evaluateMandate(t.Context(), false).Verdict
+		if v.Status != mandate.StatusOver && v.Status != mandate.StatusReduce {
+			t.Fatalf("fixture: %s", v.Status)
+		}
+		big := buy
+		big.Quantity = 400
+		blocker := srv.mandateBudgetGate(big, mandateOpen)
+		if blocker == nil || !strings.Contains(blocker.Message, "gap in "+core.Symbol) {
+			t.Fatalf("a gap-cap breach the order creates: %+v", blocker)
+		}
+	})
+	t.Run("maximum loss", func(t *testing.T) {
+		c := testCoreConstitution()
+		srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
+		observeWithPnL(srv.riskCapital, c, 300000, 0, mandateTestNow.Add(-90*time.Second))
+		observeWithPnL(srv.riskCapital, c, 220000, -80000, mandateTestNow.Add(-time.Minute))
+		v := srv.evaluateMandate(t.Context(), false).Verdict
+		if coreLine, _ := v.Allocation(mandate.SleeveCore); v.Capital.Room != 0 || coreLine.Over {
+			t.Fatalf("fixture: room %g, core %+v", v.Capital.Room, coreLine)
+		}
+		if blocker := srv.mandateBudgetGate(buy, mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "at the maximum loss no sleeve adds") {
+			t.Fatalf("at the maximum loss: %+v", blocker)
+		}
+	})
 }

@@ -642,28 +642,41 @@ Each position stays in the sleeve of whoever opened it, fixed for its life.
 
 ### The gate
 
-Every whole-book rule above is unchanged and binds first, at the same four
-points: the standing verdict must read `within` ("No addition by anyone while
-the whole book is over budget"), the book with the order must stay inside the
-budget, and the order must create or deepen no gap-cap breach; the bill and
-hedge exemptions stand. Then the allocation: the order is placed (the core's
-contract the core's, anything else the owner's), and a risk-adding order is
-refused (`mandate_budget`) while its sleeve's use is over its allocation, or
-when its sleeve's use with the order added would be. The owner's room is the
-owner's allocation less the owner's use: the budget, less the machine's
-allocations, less what the owner's book uses.
+The whole-book rules bind at the same four points, with one change decided
+on 2026-10-18 15:31 CEST (owner, to "Should a sleeve inside its own
+allocation keep adding while another sleeve is over its own?": "yes, it
+should. unless you advise differently"): a book over budget no longer stops
+every sleeve. While the standing verdict reads `within`, the book with the
+order must stay inside the budget. While it reads `over` or `reduce`, a
+risk-adding order passes when its own sleeve is inside its allocation and
+stays inside it with the order; the forced reduction keeps cutting the sleeve
+furthest over its allocation meanwhile. Three holds remain whatever the
+sleeve: an `unknown` or stale verdict refuses every addition ("the mandate
+risk cannot be measured"), the order must create or deepen no gap-cap breach,
+and at the maximum loss (no room) no sleeve adds, since the book goes to its
+hedges. The bill and hedge exemptions stand. Then the allocation: the order is
+placed (the core's contract the core's, anything else the owner's), and a
+risk-adding order is refused (`mandate_budget`) while its sleeve is over its
+allocation, or would be with the order added. A sleeve is over its allocation
+when its use exceeds it, or when its standalone risk does ("on its own"):
+use is standalone risk times the sleeve's correlation with the book, so a
+book far over budget dampens a small sleeve's use to nothing whatever it
+holds, and the standalone bound is what keeps "inside its allocation" a
+limit. The owner's room is the owner's allocation less the owner's use: the
+budget, less the machine's allocations, less what the owner's book uses.
 
 - The check judges the order's own sleeve. By the bound above, an order can
   raise another sleeve's use at most to that sleeve's standalone risk.
 - A sleeve over its allocation adds nothing, even an order that would lower its
-  use, as the book over budget adds nothing.
+  use, as the book over budget adds nothing in that sleeve.
 - An option buy the evaluator cannot price is judged by its volatility-free
   bound (Enforcement class, above): its sleeve's standalone risk plus that
   bound must fit the allocation (use ≤ standalone, and the standalone risk grows
   by at most the bound).
 - The gate view (`gate.refuses_additions`) reads the owner's additions: it
-  refuses while the verdict is not within, and also while the owner's allocation
-  is over.
+  refuses while the verdict is unknown or stale, while the room is gone, and
+  while the owner's allocation is over; over budget with the owner's sleeve
+  inside its allocation it reads "an addition that keeps it there passes".
 - `canary core` reads "no buy: the core sends no orders yet, so it has no
   allocation" while the core runs nothing; once it runs, its buys are cut to its
   allocation as to the budget and the gap caps.
