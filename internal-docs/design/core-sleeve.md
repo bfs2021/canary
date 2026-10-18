@@ -9,7 +9,10 @@ the core's venue and on D5 (sections 1, 3 and 7), built on Canary branch
 Status: phase 1 built (read-only: the target is served, nothing is
 proposed or sent) with the two mandate-gate fixes the review requires;
 phases 2 and 3 are design. Buying stays off until the owner arms Fully
-armed on a device.
+armed on a device. Revised 2026-10-18 18:40 CEST: `internal/core` is the
+strategy evaluator's arithmetic and the core its first instance
+(`strategy-evaluator.md`); the core's verdict, goldens and parity fixture
+are unchanged.
 
 Sources read, read-only: Canary main `761a1c31` (mandate increment 1, Desk
 authority and execution groundwork), Canary `integration-2` `e4df5eeb`
@@ -459,7 +462,7 @@ selection only.
 
 | Concern | Owner | How |
 |---|---|---|
-| Rule, monthly target, evidence | Canary verdict `core.target` (built) | Pure evaluator `internal/core`; a frozen monthly state document with its input digest; `canary core` and `canary_core`, read-only; listed in `TestOnlyTheDaemonEvaluates` |
+| Rule, monthly target, evidence | Canary verdict `core.target` (built) | The strategy evaluator's arithmetic `internal/core`, the core its first instance (`strategy-evaluator.md`); a frozen monthly state document with its input digest; `canary core` and `canary_core`, read-only; listed in `TestOnlyTheDaemonEvaluates` |
 | The exact order | Canary proposal engine, bucket `core_rebalance` | Sizes D; applies the band, minimum, funding and headroom; nets and merges with other rows; readiness on the line's exchange calendar |
 | The decision to send | A: the owner on the device. B: the Desk controller under the Fully armed mandate | Desk never computes a size or a price |
 | Execution | Canary's existing order path | Every gate, the order journal, the wire guard |

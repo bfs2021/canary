@@ -328,6 +328,9 @@ func renderMandateRegister(env *Env, entries []rpc.MandateStrategyView) {
 		for _, n := range e.Notes {
 			riskDisplayLine(env, "    ", n, nil)
 		}
+		if e.ISIN != "" || e.Signal != "" {
+			riskDisplayLine(env, "    ", briefJoin("signal "+nonEmpty(e.Signal, "unwritten"), strings.TrimSpace(e.ISIN+" "+e.Currency)), nil)
+		}
 		for _, d := range append(append([]string(nil), e.DeclaredSeries...), e.DeclaredChains...) {
 			riskDisplayLine(env, "    ", "collects "+d, nil)
 		}

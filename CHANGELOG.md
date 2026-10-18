@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## Unreleased
+
+### Added
+
+- The strategy evaluator (plan item 4 of the review of 2026-10-18; `internal-docs/design/strategy-evaluator.md`): one evaluator runs every entry of the strategy register and serves the verdict shape `core.target` has served since phase 1, so the mandate gate, the forced reduction, the shadow record and Desk's controller read one number per strategy. The core is its first instance and is unchanged: `canary core` renders byte for byte as before, and the lab's parity fixture and its pin stand. A later entry names its fund by `isin` and `currency` (the account's base currency in this build; `con_id` and `exchange` are optional pins), a `signal` from the library (`trend-sma10m`, the core's ten-month filter on month-end closes), `band_pct`, `min_order_base` and `max_value_pct` under the parameterised rule `timed-holding-v1`; it is sized against its sleeve's risk allocation at its scale, its contract is resolved by ISIN on the background lane, its series is read after the verdict under its own key (`strategy:<id>:con:<contract id>`, never in the book's verdict), its month is decided and its shadow record written beside the core's. An unwritten key, a filter the library lacks, another currency, an unresolved contract or a missing series holds that entry and names why. `canary strategy ID [--refresh] [--json]` (`strategy.target`, `canary_strategy`) shows any entry, the core included, and `canary mandate`'s register names each entry's fund and signal. The rule sends nothing, so every entry runs in shadow at most: no proposal, no order, no reservation.
+- The kill rule's drawdown test: a register entry, `[mandate.core]` included, may write `kill_drawdown_k`, the bound in units of sleeve capital the lab's design run writes. The evaluator marks the paper sleeve's equity at each decision on the shadow record and, past the bound, holds the strategy and names it: buys stop, a sale the rule wants goes to the owner, and the owner suspends. Unwritten, the kill rule cannot fire, as the lab spec says, and the verdict says so.
+
+### Changed
+
+- `canary core --json` and `strategy.target` name the sizing's allocation `allocation_pct` where `sizing.frozen_on` and `sizing.current_on` said `core_vol_pct`: the same number, the sleeve's risk allocation, for every strategy. The human render is unchanged.
+
 ## v3.22.1 — 2026-10-18 17:35 CEST
 
 ### What's new

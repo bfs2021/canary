@@ -104,6 +104,11 @@ type ConstitutionMandateCore struct {
 	// lets the compiled rule's own spec stand. Live needs both written.
 	SpecHash string `toml:"spec_hash" json:"spec_hash,omitempty"`
 	Stage    string `toml:"stage" json:"stage,omitempty"`
+	// KillDrawdownK is the kill rule's drawdown bound in units of sleeve
+	// capital K, as the lab's design run writes it (strategy-evaluator.md
+	// §3). Optional: unwritten, the kill rule cannot fire, as the spec says,
+	// and the fingerprint is kept.
+	KillDrawdownK *float64 `toml:"kill_drawdown_k" json:"kill_drawdown_k,omitempty"`
 }
 
 // CoreUnapprovedKeys lists the [mandate.core] keys the owner has not
@@ -162,6 +167,9 @@ func (c *ConstitutionMandateCore) validate() error {
 	}
 	if v := c.ConID; v != nil && *v < 0 {
 		return fmt.Errorf("mandate.core.con_id must be an IBKR contract id, or 0 to let the ISIN decide")
+	}
+	if v := c.KillDrawdownK; v != nil && (!finite(*v) || *v <= 0) {
+		return fmt.Errorf("mandate.core.kill_drawdown_k must be positive: the drawdown bound in units of sleeve capital")
 	}
 	if s := c.ISIN; s != "" && !isinShape(s) {
 		return fmt.Errorf("mandate.core.isin %q must be twelve upper-case letters and digits", s)

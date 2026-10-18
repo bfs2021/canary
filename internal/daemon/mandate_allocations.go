@@ -122,10 +122,11 @@ func mandateRegisterView(resolved []register.Resolved) []rpc.MandateStrategyView
 			Reasons: r.Reasons, Notes: r.Notes}
 		if r.Rule != nil {
 			v.Sends = r.Rule.Sends
-			for _, n := range r.Rule.Data.Series {
+			v.ISIN, v.Currency, v.Signal = r.Instrument.ISIN, r.Instrument.Currency, r.Trend
+			for _, n := range r.Data.Series {
 				v.DeclaredSeries = append(v.DeclaredSeries, fmt.Sprintf("%s %s daily closes, %d sessions", nonEmptyString(n.Symbol, n.ISIN), n.Currency, n.Sessions))
 			}
-			for _, n := range r.Rule.Data.Chains {
+			for _, n := range r.Data.Chains {
 				v.DeclaredChains = append(v.DeclaredChains, n.Underlying)
 			}
 		}

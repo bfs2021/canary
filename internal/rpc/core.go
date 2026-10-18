@@ -32,11 +32,21 @@ const (
 	CoreStatusInactive = "inactive"
 )
 
-// CoreTargetResult is the core.target payload.
-type CoreTargetResult struct {
+// CoreTargetResult is the core.target payload: the strategy target of the
+// register's first entry.
+type CoreTargetResult = StrategyTargetResult
+
+// StrategyTargetResult is one registered strategy's verdict
+// (internal-docs/design/strategy-evaluator.md): the shape core.target has
+// served since phase 1, for every entry of the strategy register.
+type StrategyTargetResult struct {
 	AsOf   time.Time `json:"as_of"`
 	Active bool      `json:"active"`
 	Status string    `json:"status"`
+	// Strategy is the entry's id in the register ("core" for the core) and
+	// Sleeve where its positions count.
+	Strategy string `json:"strategy,omitempty"`
+	Sleeve   string `json:"sleeve,omitempty"`
 	// Message says why the core is inactive.
 	Message string `json:"message,omitempty"`
 	// Reasons name every hold.
@@ -46,10 +56,16 @@ type CoreTargetResult struct {
 	ReadOnly bool `json:"read_only"`
 	// Rule and SpecHash name the compiled rule and the lab spec it
 	// implements (s0_core_sleeve); PolicyRule is the rule the policy names.
+	// For a parameterised rule SpecHash is the spec the entry cites.
 	Rule       string `json:"rule"`
-	SpecID     string `json:"spec_id"`
+	SpecID     string `json:"spec_id,omitempty"`
 	SpecHash   string `json:"spec_hash"`
 	PolicyRule string `json:"policy_rule,omitempty"`
+	// Signal is the trend filter the strategy runs on, from the library.
+	Signal string `json:"signal,omitempty"`
+	// Kill is the kill rule's drawdown test as measured on the shadow
+	// record, and its bound when written.
+	Kill *KillView `json:"kill,omitempty"`
 	// Stage is the core's entry in the strategy register as this build runs
 	// it (internal-docs/design/strategy-register.md).
 	Stage *CoreStageView `json:"stage,omitempty"`
@@ -83,20 +99,38 @@ type CoreStageView struct {
 	Notes         []string `json:"notes,omitempty"`
 }
 
-// CorePolicyView is [mandate.core] as the daemon read it, with the sleeve
-// share from [mandate.sleeves]; nil numbers are unwritten.
+// CorePolicyView is the strategy's entry as the daemon read it:
+// [mandate.core] with the sleeve share from [mandate.sleeves] (CoreVolPct),
+// or a [mandate.strategies.<id>] table with its allocation (AllocationPct)
+// and signal; nil numbers are unwritten.
 type CorePolicyView struct {
-	Rule         string   `json:"rule,omitempty"`
-	ISIN         string   `json:"isin,omitempty"`
-	ConID        *int     `json:"con_id,omitempty"`
-	Exchange     string   `json:"exchange,omitempty"`
-	Currency     string   `json:"currency,omitempty"`
-	ScalePct     *float64 `json:"scale_pct,omitempty"`
-	BandPct      *float64 `json:"band_pct,omitempty"`
-	MinOrderBase *float64 `json:"min_order_base,omitempty"`
-	MaxValuePct  *float64 `json:"max_value_pct,omitempty"`
-	CoreVolPct   *float64 `json:"core_vol_pct,omitempty"`
-	Unapproved   []string `json:"unapproved,omitempty"`
+	Rule          string   `json:"rule,omitempty"`
+	ISIN          string   `json:"isin,omitempty"`
+	ConID         *int     `json:"con_id,omitempty"`
+	Exchange      string   `json:"exchange,omitempty"`
+	Currency      string   `json:"currency,omitempty"`
+	Signal        string   `json:"signal,omitempty"`
+	ScalePct      *float64 `json:"scale_pct,omitempty"`
+	BandPct       *float64 `json:"band_pct,omitempty"`
+	MinOrderBase  *float64 `json:"min_order_base,omitempty"`
+	MaxValuePct   *float64 `json:"max_value_pct,omitempty"`
+	CoreVolPct    *float64 `json:"core_vol_pct,omitempty"`
+	AllocationPct *float64 `json:"allocation_pct,omitempty"`
+	Unapproved    []string `json:"unapproved,omitempty"`
+}
+
+// KillView is the kill rule's drawdown test (strategy-evaluator.md §3):
+// the bound in units of sleeve capital K when the policy writes it, the
+// largest peak-to-trough loss measured on the shadow record at its
+// decisions, and whether anything was measured. Past the bound the
+// strategy holds; the owner suspends it.
+type KillView struct {
+	MaxDrawdownK *float64 `json:"max_drawdown_k,omitempty"`
+	DrawdownK    float64  `json:"drawdown_k"`
+	Measured     bool     `json:"measured"`
+	Decisions    int      `json:"decisions"`
+	Breached     bool     `json:"breached,omitempty"`
+	Note         string   `json:"note,omitempty"`
 }
 
 // CoreInstrument is the instrument the compiled rule trades: the fund and
@@ -189,6 +223,31 @@ func FetchCoreTarget(ctx context.Context, conn interface {
 	var out CoreTargetResult
 	if err := conn.Call(ctx, MethodCoreTarget, CoreTargetParams{Refresh: refresh}, &out); err != nil {
 		return CoreTargetResult{}, err
+	}
+	return out, nil
+}
+
+// MethodStrategyTarget serves a registered strategy's target
+// (internal-docs/design/strategy-evaluator.md): the same verdict shape as
+// MethodCoreTarget for any entry of the strategy register, by id. Read-only:
+// no entry proposes or sends anything in this build.
+const MethodStrategyTarget = "strategy.target"
+
+// StrategyTargetParams is the input for MethodStrategyTarget: the entry's
+// id ("core" is the core); Refresh measures the mandate again first.
+type StrategyTargetParams struct {
+	ID      string `json:"id"`
+	Refresh bool   `json:"refresh,omitempty"`
+}
+
+// FetchStrategyTarget reads the daemon's target for one registered
+// strategy.
+func FetchStrategyTarget(ctx context.Context, conn interface {
+	Call(context.Context, string, any, any) error
+}, id string, refresh bool) (StrategyTargetResult, error) {
+	var out StrategyTargetResult
+	if err := conn.Call(ctx, MethodStrategyTarget, StrategyTargetParams{ID: id, Refresh: refresh}, &out); err != nil {
+		return StrategyTargetResult{}, err
 	}
 	return out, nil
 }

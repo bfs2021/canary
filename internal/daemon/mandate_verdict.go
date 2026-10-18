@@ -248,7 +248,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		evidence.PositionsAsOf = pos.AsOf
 		var reasons []string
 		in.Legs, in.NotModelled, in.FXNow, reasons = mandateLegsFromPositions(pos, base, now)
-		in.LineISINs = s.coreFundLines(ctx)
+		in.LineISINs = s.registerFundLines(ctx)
 		in.Reasons = append(in.Reasons, reasons...)
 		for _, need := range mandateHistoryNeeds(pos, base, in.LineISINs) {
 			series := s.mandateHistorySeries(ctx, need.Key)

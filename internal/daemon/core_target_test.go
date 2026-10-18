@@ -66,7 +66,7 @@ func coreAnswer(t *testing.T, srv *Server, listings ...ibkrlib.Listing) *coreFak
 	}
 	srv.coreListingsForTest = fake.lookup
 	srv.coreTargets.mu.Lock()
-	srv.coreTargets.pin = corePin{}
+	srv.coreTargets.pins = nil
 	srv.coreTargets.mu.Unlock()
 	srv.coreResolve(t.Context(), srv.riskPolicies.snapshot().policy)
 	return fake
@@ -375,7 +375,7 @@ func TestCoreTargetHolds(t *testing.T) {
 			other.ConID = 9031
 			coreAnswer(t, s, coreTestListing(), other)
 		}, "no IBCF daily history yet; the desk reads it on IBIS"},
-		{"not resolved", func(_ *risk.Constitution, s *Server) { s.coreTargets.pin = corePin{} }, "the core's contract is not resolved yet"},
+		{"not resolved", func(_ *risk.Constitution, s *Server) { s.coreTargets.pins = nil }, "the core's contract is not resolved yet"},
 		{"stale series", func(_ *risk.Constitution, s *Server) {
 			series := *s.mandateHistorySeries(context.Background(), coreSeriesKey(coreTestConID))
 			series.Dates, series.Closes = series.Dates[:len(series.Dates)-3], series.Closes[:len(series.Closes)-3]
@@ -429,7 +429,7 @@ func TestCoreTargetAbsentChangesNothing(t *testing.T) {
 	srv, _ := mandateTestServer(t, c)
 	fake := &coreFakeListings{listings: []ibkrlib.Listing{coreTestListing()}}
 	srv.coreListingsForTest = fake.lookup
-	if srv.coreResolve(t.Context(), c) != nil || len(fake.asked) != 0 || srv.coreFundLines(t.Context()) != nil || srv.coreContractIDs(t.Context()) != nil {
+	if srv.coreResolve(t.Context(), c) != nil || len(fake.asked) != 0 || srv.registerFundLines(t.Context()) != nil || srv.coreContractIDs(t.Context()) != nil {
 		t.Fatal("IBKR is asked for a core contract without [mandate.core]")
 	}
 	res, err := srv.handleCoreTarget(t.Context(), &rpc.Request{})

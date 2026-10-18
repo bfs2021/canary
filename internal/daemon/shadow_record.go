@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 // under stable keys, so a retry or a second evaluation never writes one
 // twice. The only writer is the background refresh after the scheduled
 // verdict; no order path reads the record, and nothing in it is a proposal.
+// Since the strategy evaluator every register entry is recorded alike,
+// under its own scope.
 
 const (
 	shadowRecordType    = "shadow.record.v1"
@@ -98,37 +101,43 @@ func (s *Server) appendShadowRecord(ctx context.Context, r rpc.ShadowRecord) err
 	return err
 }
 
-// recordCoreShadow writes the core's shadow records that are due while the
-// core runs in shadow: the month's decision and intent once the month is
-// frozen, a hold when the decision was measured but not frozen, and the
-// intent's simulated fill once its session's close is in the core's series.
-// res is the core's verdict of this refresh.
+// recordCoreShadow writes the core's shadow records (recordStrategyShadow on
+// the register's first entry). res is the core's verdict of this refresh.
 func (s *Server) recordCoreShadow(ctx context.Context, res *rpc.CoreTargetResult, now time.Time) {
-	if s.coreStore == nil || res == nil || !res.Active {
+	r, ok := resolvedCore(s.resolvedRegister(s.riskPolicies.snapshot().policy))
+	if !ok {
 		return
 	}
-	c := s.riskPolicies.snapshot().policy
-	reg, ok := resolvedCore(s.resolvedRegister(c))
-	if !ok || reg.State != register.StateShadow {
+	s.recordStrategyShadow(ctx, res, r, now)
+}
+
+// recordStrategyShadow writes a strategy's shadow records that are due while
+// it runs in shadow: the month's decision and intent once the month is
+// frozen, a hold when the decision was measured but not frozen, and the
+// intent's simulated fill once its session's close is in the strategy's
+// series. res is the strategy's verdict of this refresh.
+func (s *Server) recordStrategyShadow(ctx context.Context, res *rpc.StrategyTargetResult, r register.Resolved, now time.Time) {
+	if s.coreStore == nil || res == nil || !res.Active || r.State != register.StateShadow {
 		return
 	}
-	records, err := s.shadowRecords(ctx, risk.CoreStrategyID)
+	e := r.Entry
+	records, err := s.shadowRecords(ctx, e.ID)
 	if err != nil {
 		s.logShadowFailure(err)
 		return
 	}
-	base := rpc.ShadowRecord{Version: shadowRecordVersion, Strategy: risk.CoreStrategyID, Rule: core.RuleID, SpecHash: core.SpecHash, SpecCited: c.Mandate.Core.SpecHash != "",
-		Stage: string(reg.State), RecordedAt: now}
+	base := rpc.ShadowRecord{Version: shadowRecordVersion, Strategy: e.ID, Rule: res.Rule, SpecHash: res.SpecHash, SpecCited: e.SpecHash != "",
+		Stage: string(r.State), RecordedAt: now}
 	if res.PolicyFingerprint != nil {
 		base.PolicyFingerprint = res.PolicyFingerprint.Key
 	}
-	contract, _, _, _ := s.corePinState(c.Mandate.Core)
+	contract, _, _, _ := s.instrumentPinState(s.requestedInstrument(r))
 	var series *mandateHistorySeries
 	if contract != nil {
-		series = s.mandateHistorySeries(ctx, coreSeriesKey(contract.ConID))
+		series = s.mandateHistorySeries(ctx, seriesKeyFor(r, contract.ConID))
 	}
 
-	records = s.recordCoreShadowDecision(ctx, res, base, records, contract, reg.ScalePct, now)
+	records = s.recordShadowDecision(ctx, res, r, base, records, contract, now)
 	// The fills due: an intent whose session's close is in.
 	for _, intent := range slices.Clone(records) {
 		if intent.Kind != rpc.ShadowKindIntent || intent.Intent == nil || intent.Intent.Quantity == 0 || shadowRecorded(records, rpc.ShadowKindFill, intent.Intent.ForSession) || series == nil {
@@ -138,36 +147,47 @@ func (s *Server) recordCoreShadow(ctx context.Context, res *rpc.CoreTargetResult
 		if !due {
 			continue
 		}
-		r := base
-		r.Kind, r.Session, r.Fill = rpc.ShadowKindFill, intent.Intent.ForSession, fill
-		if err := s.appendShadowRecord(ctx, r); err != nil {
+		rec := base
+		rec.Kind, rec.Session, rec.Fill = rpc.ShadowKindFill, intent.Intent.ForSession, fill
+		if err := s.appendShadowRecord(ctx, rec); err != nil {
 			s.logShadowFailure(err)
 			return
 		}
-		records = append(records, r)
+		records = append(records, rec)
 	}
 }
 
-// recordCoreShadowDecision writes the month's decision and intent once the
+// requestedInstrument is the instrument a resolved entry is resolved by:
+// the core's as the policy requests it, a later entry's as resolved.
+func (s *Server) requestedInstrument(r register.Resolved) register.Instrument {
+	if r.Entry.Form == risk.StrategyFormCore {
+		if c := s.riskPolicies.snapshot().policy; c != nil && c.Mandate != nil {
+			return coreInstrument(c.Mandate.Core)
+		}
+	}
+	return r.Instrument
+}
+
+// recordShadowDecision writes the month's decision and intent once the
 // month is frozen, or its hold when the decision was measured and not
 // frozen, and returns the records with what it wrote.
-func (s *Server) recordCoreShadowDecision(ctx context.Context, res *rpc.CoreTargetResult, base rpc.ShadowRecord, records []rpc.ShadowRecord, contract *coreContract, scalePct float64, now time.Time) []rpc.ShadowRecord {
+func (s *Server) recordShadowDecision(ctx context.Context, res *rpc.StrategyTargetResult, r register.Resolved, base rpc.ShadowRecord, records []rpc.ShadowRecord, contract *coreContract, now time.Time) []rpc.ShadowRecord {
 	d := res.Decision
 	if d == nil || d.Decision == "" || shadowRecorded(records, rpc.ShadowKindDecision, d.Decision) {
 		return records
 	}
 	if d.FrozenAt.IsZero() || d.Drift || res.Sizing == nil || len(res.Reasons) > 0 {
 		if !shadowRecorded(records, rpc.ShadowKindHold, d.Decision) {
-			r := base
-			r.Kind, r.Session, r.Status, r.Reasons = rpc.ShadowKindHold, d.Decision, rpc.CoreStatusHold, slices.Clone(res.Reasons)
-			if len(r.Reasons) == 0 {
-				r.Reasons = []string{"the month's decision is not frozen yet"}
+			rec := base
+			rec.Kind, rec.Session, rec.Status, rec.Reasons = rpc.ShadowKindHold, d.Decision, rpc.CoreStatusHold, slices.Clone(res.Reasons)
+			if len(rec.Reasons) == 0 {
+				rec.Reasons = []string{"the month's decision is not frozen yet"}
 			}
-			if err := s.appendShadowRecord(ctx, r); err != nil {
+			if err := s.appendShadowRecord(ctx, rec); err != nil {
 				s.logShadowFailure(err)
 				return records
 			}
-			records = append(records, r)
+			records = append(records, rec)
 		}
 		return records
 	}
@@ -177,10 +197,11 @@ func (s *Server) recordCoreShadowDecision(ctx context.Context, res *rpc.CoreTarg
 	held := shadowHolding(records)
 	decision := base
 	decision.Kind, decision.Session, decision.Status = rpc.ShadowKindDecision, d.Decision, rpc.CoreStatusReady
-	decision.Decision = &rpc.ShadowDecision{TrendOn: d.TrendOn, Sigma: d.Sigma, Binding: d.Binding, TargetShares: res.Sizing.Target, ScalePct: scalePct, Digest: d.Digest}
+	decision.Decision = &rpc.ShadowDecision{TrendOn: d.TrendOn, Sigma: d.Sigma, Binding: d.Binding, TargetShares: res.Sizing.Target, ScalePct: r.ScalePct, Digest: d.Digest,
+		Close: d.Close, SleeveBudget: res.Sizing.Current.SleeveBudget}
 	intent := base
 	intent.Kind, intent.Session = rpc.ShadowKindIntent, d.Decision
-	action := s.coreShadowDecide(res, contract, held, scalePct)
+	action := s.shadowDecide(res, r, contract, held)
 	intent.Intent = &rpc.ShadowIntent{ForSession: coreNextSession(d.Decision, contract.Market, now), Kind: action.Kind, Why: action.Why, Diff: action.Diff, BandShares: action.BandShares, HoldingBefore: held}
 	switch action.Kind {
 	case core.ActionBuy:
@@ -188,28 +209,32 @@ func (s *Server) recordCoreShadowDecision(ctx context.Context, res *rpc.CoreTarg
 	case core.ActionSell, core.ActionSellAll:
 		intent.Intent.Quantity = -action.Quantity
 	}
-	for _, r := range []rpc.ShadowRecord{decision, intent} {
-		if err := s.appendShadowRecord(ctx, r); err != nil {
+	for _, rec := range []rpc.ShadowRecord{decision, intent} {
+		if err := s.appendShadowRecord(ctx, rec); err != nil {
 			s.logShadowFailure(err)
 			return records
 		}
-		records = append(records, r)
+		records = append(records, rec)
 	}
 	return records
 }
 
-// coreShadowDecide is core.Decide on the shadow holding, with the buy cut to
-// the headroom a live core would have: the book as held with the core's
-// contracts holding the shadow position, and the core's allocation counted
-// as if reserved at its written scale. The kept verdict is read, never
-// changed; the hypothetical book is a copy that is never kept.
-func (s *Server) coreShadowDecide(res *rpc.CoreTargetResult, k *coreContract, held int, scalePct float64) core.Decision {
-	p := s.riskPolicies.snapshot().policy.Mandate.Core
+// shadowDecide is core.Decide on the shadow holding, with the buy cut to
+// the headroom a live strategy would have: the book as held with the
+// strategy's paper position in its sleeve, and its allocation counted as if
+// reserved at its written scale. The kept verdict is read, never changed;
+// the hypothetical book is a copy that is never kept.
+func (s *Server) shadowDecide(res *rpc.StrategyTargetResult, r register.Resolved, k *coreContract, held int) core.Decision {
+	e := r.Entry
+	isCore := e.Form == risk.StrategyFormCore
 	price := 0.0
 	if res.Holding != nil {
 		price = res.Holding.Price
 	}
-	in := core.DecideInput{Target: res.Sizing.Target, TrendOn: res.Decision.TrendOn, Held: held, Price: price, BandPct: policyCheckDeref(p.BandPct), MinOrderBase: policyCheckDeref(p.MinOrderBase), Holdable: held}
+	in := core.DecideInput{Target: res.Sizing.Target, TrendOn: res.Decision.TrendOn, Held: held, Price: price, BandPct: r.Terms.BandPct, MinOrderBase: r.Terms.MinOrderBase, Holdable: held}
+	if !isCore {
+		in.Symbol, in.Name = k.Symbol, strategyName(e)
+	}
 	_, kept, _, _ := s.mandateVerdicts.current()
 	switch {
 	case res.Mandate == nil || res.Mandate.Status != mandate.StatusWithin:
@@ -222,37 +247,70 @@ func (s *Server) coreShadowDecide(res *rpc.CoreTargetResult, k *coreContract, he
 		in.BuyBlocked = "no mandate verdict is kept"
 	default:
 		if want := res.Sizing.Target - held; want > 0 && price > 0 {
-			book := coreShadowBook(kept, k, s.mandateCoreContracts(context.Background(), s.riskPolicies.snapshot().policy), held, price, scalePct)
-			in.Holdable = held + core.Headroom(want, func(q int) bool { return coreHeadroomFits(book, k, q, price) })
+			var reserved []int
+			if isCore {
+				reserved = s.mandateCoreContracts(context.Background(), s.riskPolicies.snapshot().policy)
+			}
+			book := shadowBook(kept, k, e.Sleeve, reserved, held, price, r.ScalePct)
+			if !isCore {
+				// The hypothetical book measures the fund on its own closes,
+				// the strategy's series, where the book keeps none (the fund
+				// is not held, so the history pass never read it).
+				if own := s.mandateHistorySeries(context.Background(), seriesKeyFor(r, k.ConID)); own != nil {
+					if _, kept := book.Series[k.Symbol]; !kept {
+						book.Series = maps.Clone(book.Series)
+						if book.Series == nil {
+							book.Series = map[string]mandate.Series{}
+						}
+						book.Series[k.Symbol] = mandateSeriesInput(own, s.nowUTC())
+					}
+				}
+			}
+			in.Holdable = held + core.Headroom(want, func(q int) bool { return strategyHeadroomFits(book, k, e.Sleeve, q, price) })
 		}
 	}
 	return core.Decide(in)
 }
 
-// coreShadowBook is the book a live core would be judged on: a copy of the
-// kept book with the core's contracts holding the shadow position instead of
-// the account's units (every unit of the core's fund is the core's, so the
-// real units would otherwise count twice), and the core's allocation counted
-// as if reserved at scalePct.
+// coreShadowBook is shadowBook for the core: the account's units of its
+// reserved contracts replaced by the paper position.
 func coreShadowBook(in *mandate.Input, k *coreContract, coreContracts []int, held int, price, scalePct float64) *mandate.Input {
+	return shadowBook(in, k, mandate.SleeveCore, coreContracts, held, price, scalePct)
+}
+
+// shadowBook is the book a live strategy would be judged on: a copy of the
+// kept book with the strategy's paper position in its sleeve, and its
+// allocation counted as if reserved at scalePct. The account's units of the
+// strategy's reserved contracts (the core's fund: every unit is the core's,
+// so real units would otherwise count twice) are replaced by the paper
+// position; a strategy that reserves nothing keeps the owner's real units of
+// the fund beside its own leg, placed in its sleeve.
+func shadowBook(in *mandate.Input, k *coreContract, sleeve string, reserved []int, held int, price, scalePct float64) *mandate.Input {
 	book := *in
 	book.Legs = nil
 	template := mandate.Leg{ID: mandateConLegID(k.ConID), Symbol: k.Symbol, Underlying: k.Symbol, Kind: mandate.KindStock, Multiplier: 1, Currency: k.Currency, Spot: price, ISIN: k.ISIN}
 	ids := map[string]bool{}
-	for _, id := range coreContracts {
+	for _, id := range reserved {
 		ids[mandateConLegID(id)] = true
 	}
+	placed := ""
 	for _, l := range in.Legs {
-		if ids[l.ID] || l.ID == template.ID {
-			if l.ID == template.ID {
-				template.Symbol, template.Underlying = l.Symbol, l.Underlying
-				if l.Spot > 0 {
-					template.Spot = l.Spot
-				}
+		if l.ID == template.ID {
+			template.Symbol, template.Underlying = l.Symbol, l.Underlying
+			if l.Spot > 0 {
+				template.Spot = l.Spot
 			}
+		}
+		if ids[l.ID] || l.ID == template.ID && len(reserved) > 0 {
 			continue
 		}
 		book.Legs = append(book.Legs, l)
+	}
+	if len(reserved) == 0 {
+		// Not reserved: the paper position is a leg of its own in the
+		// strategy's sleeve, beside the owner's real units.
+		template.ID = strategyLegID(sleeve, k.ConID)
+		placed = sleeve
 	}
 	if held > 0 {
 		template.Quantity = float64(held)
@@ -261,9 +319,12 @@ func coreShadowBook(in *mandate.Input, k *coreContract, coreContracts []int, hel
 	if plan := in.Allocations; plan != nil {
 		copied := &mandate.AllocationPlan{Placed: plan.Placed, Machine: slices.Clone(plan.Machine)}
 		for i := range copied.Machine {
-			if copied.Machine[i].Sleeve == mandate.SleeveCore {
+			if copied.Machine[i].Sleeve == sleeve {
 				copied.Machine[i].StagePct = scalePct
 			}
+		}
+		if placed != "" {
+			copied = copied.WithPlaced(template.ID, placed)
 		}
 		book.Allocations = copied
 	}
@@ -310,25 +371,87 @@ func coreNextSession(date string, market marketcal.Market, now time.Time) string
 	return ""
 }
 
-// coreShadowView is the core's shadow record as `canary core` serves it:
-// the paper position and the newest records. Nil while the core is not in
-// shadow and has no record.
+// coreShadowView is the core's shadow record as `canary core` serves it.
 func (s *Server) coreShadowView(ctx context.Context, state register.State) *rpc.ShadowView {
+	return s.shadowView(ctx, risk.CoreStrategyID, state)
+}
+
+// shadowView is a strategy's shadow record as a read serves it: the paper
+// position and the newest records. Nil while the strategy is not in shadow
+// and has no record.
+func (s *Server) shadowView(ctx context.Context, id string, state register.State) *rpc.ShadowView {
 	if s.coreStore == nil {
 		return nil
 	}
-	records, err := s.shadowRecords(ctx, risk.CoreStrategyID)
+	records, err := s.shadowRecords(ctx, id)
 	if err != nil {
-		return &rpc.ShadowView{Strategy: risk.CoreStrategyID, Stage: string(state), Unavailable: err.Error()}
+		return &rpc.ShadowView{Strategy: id, Stage: string(state), Unavailable: err.Error()}
 	}
 	if state != register.StateShadow && len(records) == 0 {
 		return nil
 	}
-	view := &rpc.ShadowView{Strategy: risk.CoreStrategyID, Stage: string(state), Holding: shadowHolding(records), Records: len(records)}
+	view := &rpc.ShadowView{Strategy: id, Stage: string(state), Holding: shadowHolding(records), Records: len(records)}
 	for i := len(records) - 1; i >= 0 && len(view.Recent) < shadowServeRecords; i-- {
 		view.Recent = append(view.Recent, records[i])
 	}
 	return view
+}
+
+// killMark is the current reading, marked by the kill test when its
+// session is not yet a recorded decision.
+type killMark struct {
+	session      string
+	close        float64
+	sleeveBudget float64
+}
+
+// strategyKill is the kill rule's drawdown test on the shadow record
+// (strategy-evaluator.md §3): the paper sleeve's equity, cash and the paper
+// position marked at each decision's close (and at the current reading),
+// against its peak, in units of sleeve capital K = S / VolFloor at that
+// decision. Nil without a store; unmeasured without a decision that carries
+// a close.
+func (s *Server) strategyKill(ctx context.Context, r register.Resolved, mark killMark) *rpc.KillView {
+	if s.coreStore == nil {
+		return nil
+	}
+	records, err := s.shadowRecords(ctx, r.Entry.ID)
+	if err != nil {
+		return nil
+	}
+	kill := &rpc.KillView{MaxDrawdownK: r.KillDrawdownK}
+	cash, held, peak := 0.0, 0, 0.0
+	at := func(close, sleeveBudget float64) {
+		equity := cash + float64(held)*close
+		peak = max(peak, equity)
+		if dd := (peak - equity) / (sleeveBudget / core.VolFloor); dd > kill.DrawdownK {
+			kill.DrawdownK = dd
+		}
+		kill.Measured, kill.Decisions = true, kill.Decisions+1
+	}
+	marked := false
+	for _, rec := range records {
+		switch {
+		case rec.Kind == rpc.ShadowKindFill && rec.Fill != nil:
+			cash -= float64(rec.Fill.Quantity) * rec.Fill.Price
+			held += rec.Fill.Quantity
+		case rec.Kind == rpc.ShadowKindDecision && rec.Decision != nil && rec.Decision.Close > 0 && rec.Decision.SleeveBudget > 0:
+			at(rec.Decision.Close, rec.Decision.SleeveBudget)
+			marked = marked || rec.Session == mark.session
+		}
+	}
+	if !marked && mark.session != "" && mark.close > 0 && mark.sleeveBudget > 0 {
+		at(mark.close, mark.sleeveBudget)
+	}
+	switch {
+	case kill.MaxDrawdownK == nil:
+		kill.Note = "kill_drawdown_k unwritten: the kill rule cannot fire until the lab's design run writes its bound"
+	case kill.Measured && kill.DrawdownK > *kill.MaxDrawdownK:
+		kill.Breached = true
+	case !kill.Measured:
+		kill.Note = "no decision marked yet: the drawdown is measured on the shadow record from its first decision"
+	}
+	return kill
 }
 
 func (s *Server) logShadowFailure(err error) {
@@ -337,26 +460,28 @@ func (s *Server) logShadowFailure(err error) {
 	}
 }
 
-// coreShadowDue reports whether the core in shadow has a record to write
-// that a frozen month would not prompt: the latest month's decision not yet
-// recorded, or an intent whose fill is not in.
+// coreShadowDue is shadowDue for the core.
 func (s *Server) coreShadowDue(ctx context.Context, latest string) bool {
-	if s.coreStore == nil {
+	r, ok := resolvedCore(s.resolvedRegister(s.riskPolicies.snapshot().policy))
+	return ok && s.shadowDue(ctx, r, latest)
+}
+
+// shadowDue reports whether a strategy in shadow has a record to write that
+// a frozen month would not prompt: the latest month's decision not yet
+// recorded, or an intent whose fill is not in.
+func (s *Server) shadowDue(ctx context.Context, r register.Resolved, latest string) bool {
+	if s.coreStore == nil || r.State != register.StateShadow {
 		return false
 	}
-	reg, ok := resolvedCore(s.resolvedRegister(s.riskPolicies.snapshot().policy))
-	if !ok || reg.State != register.StateShadow {
-		return false
-	}
-	records, err := s.shadowRecords(ctx, risk.CoreStrategyID)
+	records, err := s.shadowRecords(ctx, r.Entry.ID)
 	if err != nil {
 		return false
 	}
 	if !shadowRecorded(records, rpc.ShadowKindDecision, latest) {
 		return true
 	}
-	for _, r := range records {
-		if r.Kind == rpc.ShadowKindIntent && r.Intent != nil && r.Intent.Quantity != 0 && !shadowRecorded(records, rpc.ShadowKindFill, r.Intent.ForSession) {
+	for _, rec := range records {
+		if rec.Kind == rpc.ShadowKindIntent && rec.Intent != nil && rec.Intent.Quantity != 0 && !shadowRecorded(records, rpc.ShadowKindFill, rec.Intent.ForSession) {
 			return true
 		}
 	}

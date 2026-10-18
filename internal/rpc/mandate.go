@@ -79,6 +79,11 @@ type MandateStrategyView struct {
 	// Canary collects while the rule is compiled, in any stage.
 	DeclaredSeries []string `json:"declared_series,omitempty"`
 	DeclaredChains []string `json:"declared_chains,omitempty"`
+	// ISIN, Currency and Signal are the instrument and the filter the
+	// evaluator runs the entry on, compiled or from its keys; empty on a hold.
+	ISIN     string `json:"isin,omitempty"`
+	Currency string `json:"currency,omitempty"`
+	Signal   string `json:"signal,omitempty"`
 }
 
 // MandateReductionView is the forced reduction in brief for the mandate

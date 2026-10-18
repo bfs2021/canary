@@ -117,8 +117,16 @@ func TestCatalogueCarriesTheCoreRule(t *testing.T) {
 // names its bucket and declares a positive window for each series.
 func TestCatalogueDeclaresOnlyWhatCanaryCollects(t *testing.T) {
 	for _, r := range Catalogue() {
-		if r.ID == "" || r.SpecHash == "" || r.Bucket == "" {
+		if r.ID == "" || r.SpecHash == "" && !r.Parameterised || r.Bucket == "" {
 			t.Fatalf("rule %+v lacks an id, a spec hash or a bucket", r)
+		}
+		if r.Parameterised && (len(r.Data.Series) != 0 || r.Trend != "" || r.Instrument.ISIN != "") {
+			t.Fatalf("parameterised rule %+v compiles what the entry supplies", r)
+		}
+		if !r.Parameterised {
+			if _, ok := core.FindTrend(r.Trend); !ok {
+				t.Fatalf("rule %s compiles filter %q, which the library lacks", r.ID, r.Trend)
+			}
 		}
 		for _, s := range r.Data.Series {
 			if s.Sessions <= 0 || s.Currency == "" || s.ISIN == "" && s.Symbol == "" {
@@ -130,5 +138,85 @@ func TestCatalogueDeclaresOnlyWhatCanaryCollects(t *testing.T) {
 				t.Fatalf("%s declares a chain the recorder cannot collect: %+v", r.ID, c)
 			}
 		}
+	}
+}
+
+// timedEntry is a complete [mandate.strategies.trend-fund] entry on the
+// parameterised rule, on a synthetic fund.
+func timedEntry() risk.StrategyEntry {
+	return risk.StrategyEntry{ID: "trend-fund", Form: risk.StrategyFormEntry, Rule: TimedHoldingRuleID, SpecHash: strings.Repeat("cd", 32), Sleeve: risk.OverlaySleeve,
+		AllocationPct: new(4.0), AllocationKey: "mandate.sleeves.overlay_vol_pct", Stage: risk.StageShadow, ScalePct: new(25.0),
+		KeyPrefix: "mandate.strategies.trend-fund", ISIN: "XS0000000001", Currency: "EUR", Signal: core.TrendSMA10.ID,
+		BandPct: new(10.0), MinOrderBase: new(2500.0), MaxValuePct: new(40.0)}
+}
+
+// The parameterised rule (strategy-evaluator.md §1): a complete entry
+// resolves to shadow with its instrument, filter, terms, cited spec and
+// declared series from the entry's keys; the core resolves with its
+// compiled ones and the entry's own numbers; the rule itself sends nothing
+// in this build, so live written runs as shadow.
+func TestResolveParameterisedEntry(t *testing.T) {
+	got := Resolve([]risk.StrategyEntry{timedEntry()}, Catalogue())[0]
+	if got.State != StateShadow || len(got.Reasons) != 0 || got.Rule == nil || !got.Rule.Parameterised {
+		t.Fatalf("resolved %+v", got)
+	}
+	if got.Instrument != (Instrument{ISIN: "XS0000000001", Currency: "EUR"}) || got.Trend != core.TrendSMA10.ID || got.SpecHash != strings.Repeat("cd", 32) {
+		t.Fatalf("instrument %+v trend %s spec %s", got.Instrument, got.Trend, got.SpecHash)
+	}
+	if got.Terms != (Terms{BandPct: 10, MinOrderBase: 2500, MaxValuePct: 40}) || len(got.Data.Series) != 1 || got.Data.Series[0] != (SeriesNeed{ISIN: "XS0000000001", Currency: "EUR", Sessions: core.WindowCloses}) {
+		t.Fatalf("terms %+v data %+v", got.Terms, got.Data)
+	}
+	pinned := timedEntry()
+	pinned.ConID, pinned.Exchange, pinned.KillDrawdownK = new(777), "LSEETF", new(1.5)
+	if got := Resolve([]risk.StrategyEntry{pinned}, Catalogue())[0]; got.Instrument.ConID != 777 || got.Instrument.Exchange != "LSEETF" || got.KillDrawdownK == nil || *got.KillDrawdownK != 1.5 {
+		t.Fatalf("pins %+v kill %v", got.Instrument, got.KillDrawdownK)
+	}
+	live := timedEntry()
+	live.Stage = risk.StageLive
+	if got := Resolve([]risk.StrategyEntry{live}, Catalogue())[0]; got.State != StateShadow || got.Reserves() || !slices.ContainsFunc(got.Notes, func(n string) bool { return strings.Contains(n, "sends no orders") }) {
+		t.Fatalf("live written on a rule that sends nothing: %+v", got)
+	}
+	c := coreEntry(risk.StageShadow, core.SpecHash, 25)
+	c.ISIN, c.Currency, c.BandPct, c.MinOrderBase, c.MaxValuePct = core.ISIN, core.Currency, new(10.0), new(2500.0), new(40.0)
+	if got := Resolve([]risk.StrategyEntry{c}, Catalogue())[0]; got.Instrument != (Instrument{ISIN: core.ISIN, Currency: core.Currency, Symbol: core.Symbol}) || got.Trend != core.TrendSMA10.ID || got.SpecHash != core.SpecHash || got.Terms.BandPct != 10 || len(got.Data.Series) != 1 {
+		t.Fatalf("the core resolves %+v", got)
+	}
+}
+
+// Each evaluator key an entry on the parameterised rule leaves unwritten
+// holds it and is named under its table; a filter the library lacks holds
+// it; a cited spec hash is never checked against the rule, which carries
+// none.
+func TestResolveParameterisedHolds(t *testing.T) {
+	for _, key := range []string{"isin", "currency", "signal", "band_pct", "min_order_base", "max_value_pct"} {
+		e := timedEntry()
+		switch key {
+		case "isin":
+			e.ISIN = ""
+		case "currency":
+			e.Currency = ""
+		case "signal":
+			e.Signal = ""
+		case "band_pct":
+			e.BandPct = nil
+		case "min_order_base":
+			e.MinOrderBase = nil
+		case "max_value_pct":
+			e.MaxValuePct = nil
+		}
+		got := Resolve([]risk.StrategyEntry{e}, Catalogue())[0]
+		if got.State != StateHold || got.Instrument.ISIN != "" || !slices.ContainsFunc(got.Reasons, func(r string) bool { return strings.Contains(r, "mandate.strategies.trend-fund."+key+" unwritten") }) {
+			t.Fatalf("%s unwritten: %+v", key, got)
+		}
+	}
+	unknown := timedEntry()
+	unknown.Signal = "trend-sma12m"
+	if got := Resolve([]risk.StrategyEntry{unknown}, Catalogue())[0]; got.State != StateHold || !slices.ContainsFunc(got.Reasons, func(r string) bool { return strings.Contains(r, "signal trend-sma12m is not in this Canary's library") }) {
+		t.Fatalf("unknown filter: %+v", got)
+	}
+	cited := timedEntry()
+	cited.SpecHash = strings.Repeat("ef", 32)
+	if got := Resolve([]risk.StrategyEntry{cited}, Catalogue())[0]; got.State != StateShadow || got.SpecHash != cited.SpecHash {
+		t.Fatalf("a cited spec on a parameterised rule: %+v", got)
 	}
 }

@@ -521,7 +521,7 @@ func (s *Server) registerChainDeclarations() []chainrec.SymbolChoice {
 		if r.Rule == nil {
 			continue
 		}
-		for _, c := range r.Rule.Data.Chains {
+		for _, c := range r.Data.Chains {
 			out = append(out, chainrec.SymbolChoice{Symbol: c.Underlying, Source: chainrec.SourceStrategyPrefix + r.Entry.ID})
 		}
 	}

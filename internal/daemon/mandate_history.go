@@ -152,7 +152,7 @@ func (s *Server) mandateHistoryRequests(now time.Time) []mandateHistoryNeed {
 // mandateHistoryNeedsWithRequests is what one background pass reads: the
 // book's needs, then the standing requests the book does not already need.
 func (s *Server) mandateHistoryNeedsWithRequests(ctx context.Context, pos *rpc.PositionsResult, base string, now time.Time) []mandateHistoryNeed {
-	needs := mandateHistoryNeeds(pos, base, s.coreFundLines(ctx))
+	needs := mandateHistoryNeeds(pos, base, s.registerFundLines(ctx))
 	for _, req := range s.mandateHistoryRequests(now) {
 		if !slices.ContainsFunc(needs, func(n mandateHistoryNeed) bool { return n.Key == req.Key }) {
 			needs = append(needs, req)
@@ -363,7 +363,7 @@ func (s *Server) startMandateHistoryRefresh(ctx context.Context) {
 			}
 			s.refreshMandateHistoryOnce(ctx)
 			s.refreshMandateVerdict(ctx)
-			s.refreshCoreTarget(ctx)
+			s.refreshStrategies(ctx)
 		}
 	})
 }

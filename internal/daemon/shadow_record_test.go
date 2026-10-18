@@ -134,7 +134,7 @@ func TestCoreShadowRecordsOnlyInShadow(t *testing.T) {
 // No order path reads the shadow record: its scope, event type and reader
 // appear only in the recorder and the core's verdict.
 func TestShadowRecordNeverReachesAnOrderPath(t *testing.T) {
-	allowed := map[string]bool{"shadow_record.go": true, "core_target.go": true}
+	allowed := map[string]bool{"shadow_record.go": true, "strategy_target.go": true}
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -147,9 +147,9 @@ func TestShadowRecordNeverReachesAnOrderPath(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, name := range []string{"shadowRecordType", "shadowScope(", "shadowRecords(", "coreShadowView(", "recordCoreShadow(", "shadow.record.v1", `"shadow/`} {
+		for _, name := range []string{"shadowRecordType", "shadowScope(", "shadowRecords(", "coreShadowView(", "shadowView(", "recordCoreShadow(", "recordStrategyShadow(", "strategyKill(", "shadow.record.v1", `"shadow/`} {
 			if strings.Contains(string(raw), name) {
-				t.Errorf("%s names %s: only the recorder and the core's verdict read the shadow record", f, name)
+				t.Errorf("%s names %s: only the recorder and the strategy verdicts read the shadow record", f, name)
 			}
 		}
 	}

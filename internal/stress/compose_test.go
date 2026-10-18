@@ -92,7 +92,7 @@ func TestOnlyTheDaemonEvaluates(t *testing.T) {
 		"scorecard": {"Evaluate": true, "BuildLedger": true, "PosteriorAbove": true, "EValue": true, "ImpliedVol": true},
 		"edge":      {"PositionChanges": true},
 		"mandate":   {"Evaluate": true, "EvaluateCapital": true, "WithLeg": true},
-		"core":      {"Measure": true, "SizeTarget": true, "Guard": true, "Headroom": true, "Decide": true},
+		"core":      {"Measure": true, "MeasureWith": true, "SizeTarget": true, "Guard": true, "GuardWith": true, "Headroom": true, "Decide": true, "DigestFor": true},
 		"register":  {"Resolve": true},
 	}
 	allowed := map[string]bool{

@@ -22,6 +22,7 @@ Strategy register  each machine strategy as the policy writes it and this build 
   core · core-ibcf-v1 · shadow · reserves nothing · spec compiled, not cited
     stage unwritten: shadow, as before the register
     spec_hash unwritten: the compiled rule's own spec stands
+    signal trend-sma10m · IE00B3ZW0K18 EUR
     collects IBCF EUR daily closes, 253 sessions
   s9 · synthetic-v1 · hold (written live) · reserves nothing · spec cited
   abababababab
@@ -80,6 +81,7 @@ Additions · \x1b[32mopen · reductions, closes, cancels and hedges always are\x
   core · core-ibcf-v1 · shadow · reserves nothing · spec compiled, not cited
     stage unwritten: shadow, as before the register
     spec_hash unwritten: the compiled rule's own spec stands
+    signal trend-sma10m · IE00B3ZW0K18 EUR
     collects IBCF EUR daily closes, 253 sessions
   \x1b[33ms9 · synthetic-v1 · hold (written live) · reserves nothing · spec cited\x1b[0m
   \x1b[33mabababababab\x1b[0m

@@ -21,21 +21,26 @@ import (
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
-// The core sleeve's target (internal-docs/design/core-sleeve.md), phase 1:
-// read-only. The daemon keeps the core contract's own closes (the line IBKR
-// lists under the policy's ISIN and currency, core_resolve.go, read by contract
-// id on its primary exchange, judged fresh on that exchange's calendar, and
-// never read by the book's verdict), decides each month at the exchange's last
-// session's close with internal/core, freezes the month's target with the digest
-// of its inputs, sizes it on the mandate's capital, cuts a buy to the mandate's
-// headroom (the book at most at 0.95 of the budget, the core's gap at most at
-// 0.95 of its cap, whole book: owner decision D1) and serves what the rule would
-// do. It creates no proposal row and sends no order.
+// The strategy evaluator (internal-docs/design/strategy-evaluator.md): one
+// verdict per entry of the strategy register, in the shape the core sleeve's
+// target has had since phase 1 (core-sleeve.md). The daemon keeps the
+// entry's instrument's own closes (the line IBKR lists under its ISIN and
+// currency, core_resolve.go, read by contract id on its primary exchange,
+// judged fresh on that exchange's calendar, and never read by the book's
+// verdict), decides each month at the exchange's last session's close with
+// internal/core under the entry's trend filter, freezes the month's target
+// with the digest of its inputs, sizes it on the mandate's capital against
+// the entry's sleeve's risk allocation, cuts a buy to the mandate's headroom
+// (the book at most at 0.95 of the budget, the strategy's gap at most at
+// 0.95 of its cap, the sleeve inside its allocation) and serves what the
+// rule would do. The core is the first instance; every entry runs through
+// the same code. It creates no proposal row and sends no order.
 
 const (
-	coreSeriesKeyPrefix = "core:con:"
-	stateKindCoreTarget = "core_target"
-	coreTargetDocVer    = 1
+	coreSeriesKeyPrefix     = "core:con:"
+	strategySeriesKeyPrefix = "strategy:"
+	stateKindCoreTarget     = "core_target"
+	coreTargetDocVer        = 1
 	// coreDecisionAfter is how long after a decision day's scheduled close
 	// its close counts as in: the closing auction's end with margin (18:00
 	// Berlin on a regular Xetra or London day).
@@ -45,11 +50,32 @@ const (
 // coreSeriesKey keys the core's series by its contract id.
 func coreSeriesKey(conID int) string { return fmt.Sprintf("%s%d", coreSeriesKeyPrefix, conID) }
 
+// strategySeriesKey keys a later entry's series by its id and contract: its
+// own namespace, never a book key, so it never enters the book's verdict
+// (strategy-register.md, section 4).
+func strategySeriesKey(id string, conID int) string {
+	return fmt.Sprintf("%s%s:con:%d", strategySeriesKeyPrefix, id, conID)
+}
+
+// seriesKeyFor keys a resolved entry's series: the core's as before the
+// evaluator, every other entry's under its own namespace.
+func seriesKeyFor(r register.Resolved, conID int) string {
+	if r.Entry.Form == risk.StrategyFormCore {
+		return coreSeriesKey(conID)
+	}
+	return strategySeriesKey(r.Entry.ID, conID)
+}
+
 // coreSeriesNeed is the core's series need: the contract IBKR lists under
 // the ISIN, asked by its id with IBKR's symbol on its primary exchange,
 // never SMART, and judged fresh on that exchange's calendar.
 func coreSeriesNeed(k *coreContract) mandateHistoryNeed {
-	return mandateHistoryNeed{Key: coreSeriesKey(k.ConID), Market: k.Market, Contract: rpc.ContractParams{ConID: k.ConID, Symbol: k.Symbol, SecType: "STK",
+	return instrumentSeriesNeed(coreSeriesKey(k.ConID), k)
+}
+
+// instrumentSeriesNeed is a strategy instrument's series need under a key.
+func instrumentSeriesNeed(key string, k *coreContract) mandateHistoryNeed {
+	return mandateHistoryNeed{Key: key, Market: k.Market, Contract: rpc.ContractParams{ConID: k.ConID, Symbol: k.Symbol, SecType: "STK",
 		Currency: k.Currency, Exchange: k.PrimaryExch, PrimaryExch: k.PrimaryExch}}
 }
 
@@ -72,9 +98,10 @@ type coreTargetStore struct {
 	frozen    map[string]*coreFrozenTarget
 	revisions map[string]int64
 	loaded    map[string]bool
-	// pin is the last resolution of the core's contract, and used the
-	// contract the core last used per ISIN and currency (core_resolve.go).
-	pin           corePin
+	// pins are the last resolutions of each strategy instrument's request,
+	// by request key, and used the contract each last used per ISIN and
+	// currency (core_resolve.go).
+	pins          map[string]corePin
 	used          map[string]*coreContract
 	usedRevisions map[string]int64
 	usedLoaded    map[string]bool
@@ -241,7 +268,7 @@ func coreInactiveResult(now time.Time, c *risk.Constitution) *rpc.CoreTargetResu
 	case c.Mandate == nil:
 		msg = "the risk constitution carries no [mandate] table; the core sleeve is inactive"
 	}
-	return &rpc.CoreTargetResult{AsOf: now, Active: false, Status: rpc.CoreStatusInactive, Message: msg, ReadOnly: true, Rule: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash}
+	return &rpc.CoreTargetResult{AsOf: now, Active: false, Status: rpc.CoreStatusInactive, Strategy: risk.CoreStrategyID, Sleeve: risk.CoreStrategyID, Message: msg, ReadOnly: true, Rule: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash}
 }
 
 // handleCoreTarget serves the core's target on the mandate verdict: the
@@ -259,10 +286,53 @@ func (s *Server) handleCoreTarget(ctx context.Context, req *rpc.Request) (*rpc.C
 	if c == nil || c.Mandate == nil || c.Mandate.Core == nil {
 		return coreInactiveResult(now, c), nil
 	}
-	if result, _, at, fp := s.mandateVerdicts.current(); p.Refresh || result == nil || fp != c.FingerprintKey() || now.Sub(at) >= mandateVerdictServeWithin {
+	s.refreshMandateForTarget(ctx, c, p.Refresh, now)
+	return s.evaluateCoreTarget(ctx, now), nil
+}
+
+// handleStrategyTarget serves any register entry's target by id, the core
+// included, as handleCoreTarget serves the core's.
+func (s *Server) handleStrategyTarget(ctx context.Context, req *rpc.Request) (*rpc.StrategyTargetResult, error) {
+	var p rpc.StrategyTargetParams
+	if len(req.Params) > 0 && string(req.Params) != "null" {
+		if err := decodeParams(req.Params, &p); err != nil {
+			return nil, err
+		}
+	}
+	id := strings.TrimSpace(p.ID)
+	if id == "" {
+		return nil, errBadRequest("strategy.target needs the strategy's id; `canary mandate` lists the register")
+	}
+	now := s.nowUTC()
+	c := s.riskPolicies.snapshot().policy
+	if id == risk.CoreStrategyID && (c == nil || c.Mandate == nil || c.Mandate.Core == nil) {
+		return coreInactiveResult(now, c), nil
+	}
+	r, ok := s.resolvedStrategy(c, id)
+	if !ok {
+		return nil, errBadRequest(fmt.Sprintf("no strategy %q in the register; `canary mandate` lists it", id))
+	}
+	s.refreshMandateForTarget(ctx, c, p.Refresh, now)
+	return s.evaluateStrategyTarget(ctx, now, r), nil
+}
+
+// refreshMandateForTarget measures the mandate again when a target read
+// asks for it, when none is kept for the policy in force, or when the kept
+// one is older than mandateVerdictServeWithin.
+func (s *Server) refreshMandateForTarget(ctx context.Context, c *risk.Constitution, refresh bool, now time.Time) {
+	if result, _, at, fp := s.mandateVerdicts.current(); refresh || result == nil || fp != c.FingerprintKey() || now.Sub(at) >= mandateVerdictServeWithin {
 		s.evaluateMandate(ctx, true)
 	}
-	return s.evaluateCoreTarget(ctx, now), nil
+}
+
+// resolvedStrategy is one entry of the resolved register by id.
+func (s *Server) resolvedStrategy(c *risk.Constitution, id string) (register.Resolved, bool) {
+	for _, r := range s.resolvedRegister(c) {
+		if r.Entry.ID == id {
+			return r, true
+		}
+	}
+	return register.Resolved{}, false
 }
 
 // refreshCoreTarget runs on the background cadence after the mandate
@@ -273,10 +343,44 @@ func (s *Server) refreshCoreTarget(ctx context.Context) {
 		return
 	}
 	c := s.riskPolicies.snapshot().policy
-	if c == nil || c.Mandate == nil || c.Mandate.Core == nil {
+	r, ok := resolvedCore(s.resolvedRegister(c))
+	if !ok {
 		return
 	}
-	contract, _, _, _ := s.corePinState(c.Mandate.Core)
+	s.refreshStrategyTarget(ctx, r)
+}
+
+// refreshStrategies runs every register entry on the background cadence
+// after the mandate verdict: the core as before the evaluator, then each
+// later entry, whose instrument is resolved and whose series is read here,
+// after the verdict, so no entry ages the book's verdict (strategy-
+// evaluator.md §5).
+func (s *Server) refreshStrategies(ctx context.Context) {
+	if s.riskPolicies == nil {
+		return
+	}
+	s.refreshCoreTarget(ctx)
+	c := s.riskPolicies.snapshot().policy
+	for _, r := range s.resolvedRegister(c) {
+		if ctx.Err() != nil {
+			return
+		}
+		if r.Entry.Form == risk.StrategyFormCore || r.Rule == nil || r.Instrument.ISIN == "" {
+			continue
+		}
+		if k := s.resolveInstrument(ctx, r.Instrument, strategyName(r.Entry), strategyTable(r.Entry)); k != nil {
+			if conn := s.gatewayConnector(); conn != nil {
+				s.refreshMandateSeries(ctx, conn, instrumentSeriesNeed(seriesKeyFor(r, k.ConID), k))
+			}
+		}
+		s.refreshStrategyTarget(ctx, r)
+	}
+}
+
+// refreshStrategyTarget evaluates one entry on the background cadence and
+// writes its shadow records when they are due.
+func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved) {
+	contract, _, _, _ := s.instrumentPinState(s.requestedInstrument(r))
 	if contract == nil {
 		return // nothing to decide on; a read names the hold
 	}
@@ -285,12 +389,12 @@ func (s *Server) refreshCoreTarget(ctx context.Context) {
 	if why != "" {
 		return
 	}
-	f := s.coreFrozen(ctx, coreScope(s.currentBrokerStateScope(), contract.ConID))
-	if f != nil && f.Decision == latest && !s.coreShadowDue(ctx, latest) {
+	f := s.coreFrozen(ctx, frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID))
+	if f != nil && f.Decision == latest && !s.shadowDue(ctx, r, latest) {
 		return
 	}
 	// The shadow record's only writer (strategy-register.md, section 3).
-	s.recordCoreShadow(ctx, s.evaluateCoreTarget(ctx, now), now)
+	s.recordStrategyShadow(ctx, s.evaluateStrategyTarget(ctx, now, r), r, now)
 }
 
 // coreScope keys a frozen month by account, mode and the core's contract.
@@ -298,60 +402,118 @@ func coreScope(scope brokerStateScope, conID int) string {
 	return fmt.Sprintf("%s|%s|%d", strings.TrimSpace(scope.Account), scope.Mode, conID)
 }
 
-// evaluateCoreTarget decides on the kept mandate verdict, the core's
-// contract as IBKR lists it and its series. Anything the decision lacks
-// holds, and every hold is named.
+// frozenScopeFor keys a resolved entry's frozen month: the core's scope as
+// before the evaluator, every other entry's under its id.
+func frozenScopeFor(r register.Resolved, scope brokerStateScope, conID int) string {
+	if r.Entry.Form == risk.StrategyFormCore {
+		return coreScope(scope, conID)
+	}
+	return "strategy|" + r.Entry.ID + "|" + coreScope(scope, conID)
+}
+
+// strategyName is how a verdict names a strategy: "the core", or "the
+// <id> strategy".
+func strategyName(e risk.StrategyEntry) string {
+	if e.Form == risk.StrategyFormCore {
+		return "the core"
+	}
+	return "the " + e.ID + " strategy"
+}
+
+// strategyTable is the policy table an entry is written in.
+func strategyTable(e risk.StrategyEntry) string { return "[" + e.KeyPrefix + "]" }
+
+// evaluateCoreTarget decides the core: evaluateStrategyTarget on the
+// register's first entry.
 func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.CoreTargetResult {
 	c := s.riskPolicies.snapshot().policy
-	if c == nil || c.Mandate == nil || c.Mandate.Core == nil {
+	r, ok := resolvedCore(s.resolvedRegister(c))
+	if !ok {
 		return coreInactiveResult(now, c)
 	}
-	p := c.Mandate.Core
-	isin, ccy, pinned := coreRequest(p)
-	res := &rpc.CoreTargetResult{AsOf: now, Active: true, Status: rpc.CoreStatusHold, ReadOnly: true, Rule: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash, PolicyRule: p.Rule,
+	return s.evaluateStrategyTarget(ctx, now, r)
+}
+
+// evaluateStrategyTarget decides one entry on the kept mandate verdict, its
+// instrument's contract as IBKR lists it and its series. Anything the
+// decision lacks holds, and every hold is named.
+func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r register.Resolved) *rpc.StrategyTargetResult {
+	c := s.riskPolicies.snapshot().policy
+	e := r.Entry
+	isCore := e.Form == risk.StrategyFormCore
+	if isCore && (c == nil || c.Mandate == nil || c.Mandate.Core == nil) {
+		return coreInactiveResult(now, c)
+	}
+	name := strategyName(e)
+	ruleID, specID := e.Rule, ""
+	if r.Rule != nil {
+		ruleID, specID = r.Rule.ID, r.Rule.SpecID
+	}
+	// The instrument IBKR is asked for: the core's as the policy requests
+	// it (the compiled fund while unwritten, core_resolve.go), a later
+	// entry's as the register resolved it (empty on a hold).
+	inst := s.requestedInstrument(r)
+	res := &rpc.StrategyTargetResult{AsOf: now, Active: true, Status: rpc.CoreStatusHold, Strategy: e.ID, Sleeve: e.Sleeve, ReadOnly: true,
+		Rule: ruleID, SpecID: specID, SpecHash: nonEmptyString(r.SpecHash, e.SpecHash), PolicyRule: e.Rule, Signal: nonEmptyString(r.Trend, e.Signal),
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: c.FingerprintKey()},
-		Policy:            corePolicyView(c.Mandate),
-		Instrument:        &rpc.CoreInstrument{Symbol: core.Symbol, ISIN: isin, ConID: pinned, Currency: ccy}}
+		Policy:            strategyPolicyView(c.Mandate, e),
+		Instrument:        &rpc.CoreInstrument{Symbol: nonEmptyString(inst.Symbol, inst.ISIN), ISIN: inst.ISIN, ConID: inst.ConID, Currency: inst.Currency}}
+	if isCore {
+		res.Rule, res.SpecID, res.SpecHash = core.RuleID, core.SpecID, core.SpecHash
+	}
 	hold := func(reason string) { res.Reasons = append(res.Reasons, reason) }
-	if keys := c.Mandate.CoreUnapprovedKeys(); len(keys) > 0 {
-		hold("core keys are unwritten: " + strings.Join(keys, ", "))
+	res.Stage = &rpc.CoreStageView{Written: e.Stage, State: string(r.State), ReservedPct: r.ReservedPct, SpecHashCited: e.SpecHash != "", Notes: r.Notes}
+	res.Shadow = s.shadowView(ctx, e.ID, r.State)
+	if isCore {
+		// The core's holds in its own words, as since phase 1; the register
+		// resolves the same facts for every other entry.
+		p := c.Mandate.Core
+		if keys := c.Mandate.CoreUnapprovedKeys(); len(keys) > 0 {
+			hold("core keys are unwritten: " + strings.Join(keys, ", "))
+		}
+		if p.Rule != "" && p.Rule != core.RuleID {
+			hold(fmt.Sprintf("the policy names rule %q; this daemon carries %s", p.Rule, core.RuleID))
+		}
+		if p.SpecHash != "" && p.SpecHash != core.SpecHash {
+			hold(fmt.Sprintf("the policy cites spec_hash %s; %s implements %s", p.SpecHash, core.RuleID, core.SpecHash))
+		}
+		if p.Stage == risk.StageLive && p.SpecHash == "" {
+			hold("mandate.core.spec_hash is unwritten: the core goes live only with the lab spec it implements cited")
+		}
+		if p.ISIN != "" && p.ISIN != core.ISIN {
+			hold(fmt.Sprintf("the policy pins ISIN %s; %s is compiled for %s (%s)", p.ISIN, core.RuleID, core.ISIN, core.Symbol))
+		}
+		if p.Currency != "" && p.Currency != core.Currency {
+			hold(fmt.Sprintf("the policy names currency %s; %s is %s", p.Currency, core.Symbol, core.Currency))
+		}
+	} else {
+		for _, reason := range r.Reasons {
+			hold(reason)
+		}
 	}
-	if p.Rule != "" && p.Rule != core.RuleID {
-		hold(fmt.Sprintf("the policy names rule %q; this daemon carries %s", p.Rule, core.RuleID))
-	}
-	// The core's entry in the strategy register: a cited spec hash must be
-	// the compiled rule's, and live needs it cited.
-	reg, _ := resolvedCore(s.resolvedRegister(c))
-	res.Stage = &rpc.CoreStageView{Written: p.Stage, State: string(reg.State), ReservedPct: reg.ReservedPct, SpecHashCited: p.SpecHash != "", Notes: reg.Notes}
-	res.Shadow = s.coreShadowView(ctx, reg.State)
-	if p.SpecHash != "" && p.SpecHash != core.SpecHash {
-		hold(fmt.Sprintf("the policy cites spec_hash %s; %s implements %s", p.SpecHash, core.RuleID, core.SpecHash))
-	}
-	if p.Stage == risk.StageLive && p.SpecHash == "" {
-		hold("mandate.core.spec_hash is unwritten: the core goes live only with the lab spec it implements cited")
-	}
-	if p.ISIN != "" && p.ISIN != core.ISIN {
-		hold(fmt.Sprintf("the policy pins ISIN %s; %s is compiled for %s (%s)", p.ISIN, core.RuleID, core.ISIN, core.Symbol))
-	}
-	if p.Currency != "" && p.Currency != core.Currency {
-		hold(fmt.Sprintf("the policy names currency %s; %s is %s", p.Currency, core.Symbol, core.Currency))
-	}
-	if base := normCcy(c.Capital.BaseCurrency); base != core.Currency {
+	if base := normCcy(c.Capital.BaseCurrency); isCore && base != core.Currency {
 		hold(fmt.Sprintf("the account base currency %s is not %s: the core is funded and measured in %s only", nonEmptyString(base, "(unwritten)"), core.Currency, core.Currency))
+	} else if !isCore && inst.Currency != "" && base != inst.Currency {
+		hold(fmt.Sprintf("the account base currency %s is not %s: %s trades in %s, and the rule sizes and funds in the base currency only", nonEmptyString(base, "(unwritten)"), inst.Currency, name, inst.Currency))
 	}
 
 	// The contract IBKR lists under the ISIN (core_resolve.go).
-	contract, pinHold, lookupErr, asked := s.corePinState(p)
-	switch {
-	case contract != nil:
-		res.Instrument = &rpc.CoreInstrument{Symbol: contract.Symbol, ISIN: contract.ISIN, ConID: contract.ConID, Exchange: contract.PrimaryExch, Currency: contract.Currency, Resolved: true,
-			LocalSymbol: contract.LocalSymbol, TradingClass: contract.TradingClass, Calendar: string(contract.Market), CalendarLabel: marketcal.Label(contract.Market), ResolvedAt: contract.At}
-	case pinHold != "":
-		hold(pinHold)
-	case lookupErr != "":
-		hold(fmt.Sprintf("the core's contract is not resolved: IBKR gave no answer for %s in %s (%s); the desk asks again on the background lane", isin, ccy, lookupErr))
-	case !asked:
-		hold(fmt.Sprintf("the core's contract is not resolved yet: the desk asks IBKR for %s in %s on the background lane", isin, ccy))
+	var contract *coreContract
+	if inst.ISIN != "" {
+		var pinHold, lookupErr string
+		var asked bool
+		contract, pinHold, lookupErr, asked = s.instrumentPinState(inst)
+		switch {
+		case contract != nil:
+			res.Instrument = &rpc.CoreInstrument{Symbol: contract.Symbol, ISIN: contract.ISIN, ConID: contract.ConID, Exchange: contract.PrimaryExch, Currency: contract.Currency, Resolved: true,
+				LocalSymbol: contract.LocalSymbol, TradingClass: contract.TradingClass, Calendar: string(contract.Market), CalendarLabel: marketcal.Label(contract.Market), ResolvedAt: contract.At}
+		case pinHold != "":
+			hold(pinHold)
+		case lookupErr != "":
+			hold(fmt.Sprintf("%s's contract is not resolved: IBKR gave no answer for %s in %s (%s); the desk asks again on the background lane", name, inst.ISIN, inst.Currency, lookupErr))
+		case !asked:
+			hold(fmt.Sprintf("%s's contract is not resolved yet: the desk asks IBKR for %s in %s on the background lane", name, inst.ISIN, inst.Currency))
+		}
 	}
 	var latest string
 	sym, venue := res.Instrument.Symbol, ""
@@ -365,10 +527,10 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 		}
 	}
 
-	// The core's own series.
+	// The instrument's own series.
 	var series *mandateHistorySeries
 	if contract != nil {
-		need := coreSeriesNeed(contract)
+		need := instrumentSeriesNeed(seriesKeyFor(r, contract.ConID), contract)
 		series = s.mandateHistorySeries(ctx, need.Key)
 		ev := &rpc.CoreEvidence{SeriesKey: need.Key, Missing: series == nil, Calendar: string(contract.Market)}
 		if series != nil {
@@ -388,7 +550,7 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 			hold(fmt.Sprintf("the kept %s history was read for the %s calendar, not %s; the desk reads it again on %s", sym, nonEmptyString(string(series.Market), "Xetra"), venue, contract.PrimaryExch))
 			series = nil
 		case series.Contract.ConID > 0 && series.Contract.ConID != contract.ConID:
-			hold(fmt.Sprintf("the series' contract %d is not the core's contract %d", series.Contract.ConID, contract.ConID))
+			hold(fmt.Sprintf("the series' contract %d is not %s's contract %d", series.Contract.ConID, name, contract.ConID))
 		case ev.Stale && refused != "":
 			hold(fmt.Sprintf("the %s daily history is stale: last close %s on the %s calendar; %s", sym, ev.LastClose, venue, refused))
 		case ev.Stale:
@@ -396,10 +558,17 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 		}
 	}
 
-	// The month's decision.
+	// The month's decision under the entry's filter: the core's compiled
+	// one whatever its holds, as since phase 1, so a held month is still
+	// measured and recorded as a hold; an entry's from its key.
+	trendID := e.Signal
+	if isCore {
+		trendID = core.TrendSMA10.ID
+	}
+	trend, trendOK := core.FindTrend(trendID)
 	var sig core.Signal
 	var window core.Window
-	if series != nil && latest != "" {
+	if series != nil && latest != "" && trendOK {
 		sessions, off := coreCalendar(series.Dates, latest, now, contract.Market)
 		for _, d := range off {
 			hold(fmt.Sprintf("the %s history carries a bar on %s, when %s was closed", sym, d, venue))
@@ -407,15 +576,24 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 		if series.Dates[len(series.Dates)-1] < latest {
 			hold(fmt.Sprintf("the decision waits for %s's close of %s", sym, latest))
 		} else {
-			sig, window = core.Measure(sessions, series.Dates, series.Closes, latest)
+			sig, window = core.MeasureWith(trend, digestLabel(r), sessions, series.Dates, series.Closes, latest)
 			if sig.Status != core.StatusOK {
 				hold(fmt.Sprintf("no decision for %s: %s", latest, sig.Reason))
 			} else {
-				index := core.Series{}
-				if spy := s.mandateHistorySeries(ctx, "u:"+mandate.IndexSymbol); spy != nil {
-					index = core.Series{Dates: spy.Dates, Closes: spy.Closes}
+				// The data guard corroborates a jump on the instrument's
+				// returns proxy where the mandate has one; without one a
+				// jump holds for review.
+				proxy := mandate.ReturnsSeriesFor(contract.Symbol, contract.Currency, contract.ISIN)
+				if proxy == contract.Symbol {
+					proxy = ""
 				}
-				for _, g := range core.Guard(sig, window, index) {
+				index := core.Series{}
+				if proxy != "" {
+					if spy := s.mandateHistorySeries(ctx, "u:"+proxy); spy != nil {
+						index = core.Series{Dates: spy.Dates, Closes: spy.Closes}
+					}
+				}
+				for _, g := range core.GuardWith(sig, window, index, proxy) {
 					hold(g)
 				}
 			}
@@ -451,27 +629,29 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 		}
 	}
 
-	// The holding of the core's contract, and any other line of the fund:
-	// another contract IBKR lists under the ISIN, or the fund's symbol in
-	// its currency.
+	// The holding: every unit of the core's contract is the core's, and any
+	// other line of the fund holds the core; a later entry's holding is what
+	// the allocation plan places in its sleeve (nothing, until an order path
+	// sends its rows), the account's units of its fund staying the owner's.
 	held, price, priceSource := 0, 0.0, ""
 	if input != nil && contract != nil {
 		id := mandateConLegID(contract.ConID)
 		qty := 0.0
 		for _, l := range input.Legs {
-			sameFund := input.LineISINs[l.ID] == contract.ISIN || (l.Underlying == core.Symbol || l.Underlying == contract.Symbol) && normCcy(l.Currency) == contract.Currency
+			if l.ID == id && l.Spot > 0 {
+				price, priceSource = l.Spot, "mark"
+			}
 			switch {
-			case l.ID == id:
+			case isCore && l.ID == id:
 				qty += l.Quantity
-				if l.Spot > 0 {
-					price, priceSource = l.Spot, "mark"
-				}
-			case sameFund:
+			case isCore && (input.LineISINs[l.ID] == contract.ISIN || (l.Underlying == core.Symbol || l.Underlying == contract.Symbol) && normCcy(l.Currency) == contract.Currency):
 				hold(fmt.Sprintf("a second line of the fund (%s) is held under %s; the core counts only %s", l.Symbol, l.ID, contract.label()))
+			case !isCore && l.ID == id && input.Allocations.SleeveOf(l.ID) == e.Sleeve:
+				qty += l.Quantity
 			}
 		}
 		if qty < 0 {
-			hold(fmt.Sprintf("the book is short %s; the core never shorts", sym))
+			hold(fmt.Sprintf("the book is short %s; %s never shorts", sym, name))
 		}
 		held = int(math.Max(0, math.Floor(qty)))
 	}
@@ -480,11 +660,26 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	}
 	res.Holding = &rpc.CoreHolding{Shares: held, Price: price, ValueBase: float64(held) * price, PriceSource: priceSource}
 
+	// The kill rule's drawdown test on the shadow record, with this
+	// reading marked when it is not recorded yet; past the bound the
+	// strategy holds before the month can be frozen.
+	killOf := func(mark killMark) {
+		res.Kill = s.strategyKill(ctx, r, mark)
+		if res.Kill != nil && res.Kill.Breached {
+			hold(fmt.Sprintf("kill rule: the drawdown on the shadow record is %.2f K, past the bound %g K: buys stop; suspend %s with stage = \"suspended\"", res.Kill.DrawdownK, *res.Kill.MaxDrawdownK, name))
+		}
+	}
+
 	// The size: frozen at the decision, lowered to today's capital.
-	if sig.Status == core.StatusOK && verdict != nil && verdict.Capital.Known && len(c.Mandate.CoreUnapprovedKeys()) == 0 && contract != nil {
-		on := core.Sizing{CoreVolPct: *c.Mandate.Sleeves.CoreVolPct, ScalePct: *p.ScalePct, MaxValuePct: *p.MaxValuePct, BudgetBase: verdict.Capital.BudgetBase, Room: verdict.Capital.Room}
+	sizable := e.ScalePct != nil && e.AllocationPct != nil && e.MaxValuePct != nil
+	if isCore {
+		sizable = len(c.Mandate.CoreUnapprovedKeys()) == 0
+	}
+	if sig.Status == core.StatusOK && verdict != nil && verdict.Capital.Known && sizable && contract != nil {
+		on := core.Sizing{AllocationPct: *e.AllocationPct, ScalePct: *e.ScalePct, MaxValuePct: *e.MaxValuePct, BudgetBase: verdict.Capital.BudgetBase, Room: verdict.Capital.Room}
 		current := core.SizeTarget(sig, on)
-		scope := coreScope(s.currentBrokerStateScope(), contract.ConID)
+		killOf(killMark{session: sig.Decision, close: sig.Close, sleeveBudget: current.SleeveBudget})
+		scope := frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID)
 		frozen := s.coreFrozen(ctx, scope)
 		switch {
 		case frozen != nil && frozen.Decision == sig.Decision && frozen.Digest != sig.Digest:
@@ -495,7 +690,7 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 		case len(res.Reasons) == 0:
 			frozen = &coreFrozenTarget{Version: coreTargetDocVer, Scope: scope, Decision: sig.Decision, Digest: sig.Digest, FrozenAt: now, Signal: sig, On: on, Size: current}
 			if err := s.freezeCore(ctx, frozen); err != nil && s.logger != nil {
-				s.logger.Warnf("core target %s: frozen in memory, the database save failed: %v", sig.Decision, err)
+				s.logger.Warnf("%s target %s: frozen in memory, the database save failed: %v", e.ID, sig.Decision, err)
 			}
 			res.Decision.FrozenAt = now
 		default:
@@ -507,8 +702,12 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 		}
 	}
 
+	if res.Kill == nil {
+		killOf(killMark{})
+	}
+
 	if len(res.Reasons) > 0 {
-		res.Action = &core.Decision{Kind: core.ActionHold, Why: "the core holds: buys stop, and a sale the rule wants goes to you for review"}
+		res.Action = &core.Decision{Kind: core.ActionHold, Why: name + " holds: buys stop, and a sale the rule wants goes to you for review"}
 		return res
 	}
 	if res.Sizing == nil {
@@ -517,15 +716,18 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	}
 
 	// The action, with a buy cut to the mandate's headroom.
-	in := core.DecideInput{Target: res.Sizing.Target, TrendOn: sig.TrendOn, Held: held, Price: price, BandPct: *p.BandPct, MinOrderBase: *p.MinOrderBase, Holdable: held}
+	in := core.DecideInput{Target: res.Sizing.Target, TrendOn: sig.TrendOn, Held: held, Price: price, BandPct: r.Terms.BandPct, MinOrderBase: r.Terms.MinOrderBase, Holdable: held}
+	if !isCore {
+		in.Symbol, in.Name = sym, name
+	}
 	if verdict.Status != mandate.StatusWithin {
 		in.BuyBlocked = "the mandate verdict reads " + verdict.Status
-	} else if reg.State != register.StateLive {
-		// The core's allocation is reserved only while it is live
+	} else if r.State != register.StateLive {
+		// The allocation is reserved only while the strategy is live
 		// (strategy-register.md, section 2); in shadow it sends nothing.
-		in.BuyBlocked = "the core runs in " + string(reg.State) + " and sends no orders, so it reserves no allocation"
+		in.BuyBlocked = name + " runs in " + string(r.State) + " and sends no orders, so it reserves no allocation"
 	} else if want := res.Sizing.Target - held; want > 0 && price > 0 {
-		add := core.Headroom(want, func(q int) bool { return coreHeadroomFits(input, contract, q, price) })
+		add := core.Headroom(want, func(q int) bool { return strategyHeadroomFits(input, contract, e.Sleeve, q, price) })
 		in.Holdable = held + add
 		res.Sizing.Holdable = &in.Holdable
 	}
@@ -535,6 +737,18 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	return res
 }
 
+// digestLabel names what a frozen month was decided under: the core's
+// rule and spec, as since phase 1; for a later entry its rule, the spec it
+// cites, its filter and its instrument, as the entry writes them, so the
+// label is the same whether or not the entry holds.
+func digestLabel(r register.Resolved) string {
+	e := r.Entry
+	if e.Form == risk.StrategyFormCore {
+		return core.CoreLabel
+	}
+	return e.Rule + "|" + e.SpecHash + "|" + e.Signal + "|" + e.ISIN + "|" + e.Currency
+}
+
 // coreHeadroomFits reports whether the book with q more shares of the core
 // stays at most at core.HeadroomFactor of the budget, carries no gap-cap
 // breach, keeps the core's own gap at most at that share of its cap, and
@@ -542,22 +756,45 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 // margin, so a core buy cannot set up a forced sale by itself (design §3;
 // review B1), and the gate's allocation check (allocations, 2026-10-18).
 func coreHeadroomFits(book *mandate.Input, k *coreContract, q int, price float64) bool {
+	return strategyHeadroomFits(book, k, mandate.SleeveCore, q, price)
+}
+
+// strategyLegID is a non-core strategy's own leg in a hypothetical book: its
+// units beside the owner's real units of the same contract, which stay the
+// owner's (strategy-evaluator.md §5).
+func strategyLegID(sleeve string, conID int) string {
+	return "sleeve:" + sleeve + ":" + mandateConLegID(conID)
+}
+
+// strategyHeadroomFits is coreHeadroomFits for any sleeve: the leg is
+// judged in the strategy's sleeve, where the plan would place its units; a
+// non-core strategy's leg is its own, so the owner's real units of the
+// fund are never moved into its sleeve.
+func strategyHeadroomFits(book *mandate.Input, k *coreContract, sleeve string, q int, price float64) bool {
 	if book == nil || k == nil {
 		return false
 	}
 	if q <= 0 {
 		return true
 	}
-	leg := mandate.Leg{ID: mandateConLegID(k.ConID), Symbol: k.Symbol, Underlying: k.Symbol, Kind: mandate.KindStock, Quantity: float64(q), Multiplier: 1, Currency: k.Currency, Spot: price, ISIN: k.ISIN}
+	real := mandateConLegID(k.ConID)
+	leg := mandate.Leg{ID: real, Symbol: k.Symbol, Underlying: k.Symbol, Kind: mandate.KindStock, Quantity: float64(q), Multiplier: 1, Currency: k.Currency, Spot: price, ISIN: k.ISIN}
+	if sleeve != mandate.SleeveCore {
+		leg.ID = strategyLegID(sleeve, k.ConID)
+	}
 	for _, l := range book.Legs {
-		if l.ID == leg.ID {
+		if l.ID == real || l.ID == leg.ID {
 			leg.Symbol, leg.Underlying = l.Symbol, l.Underlying // the held line's names, so the merged leg is one underlying
 			if l.Spot > 0 {
 				leg.Spot = l.Spot
 			}
 		}
 	}
-	with := mandate.Evaluate(mandate.WithLeg(*book, leg))
+	judged := mandate.WithLeg(*book, leg)
+	if sleeve != mandate.SleeveCore {
+		judged.Allocations = judged.Allocations.WithPlaced(leg.ID, sleeve)
+	}
+	with := mandate.Evaluate(judged)
 	if with.Status == mandate.StatusUnknown || with.Risk == nil || with.Stresses == nil {
 		return false
 	}
@@ -569,10 +806,21 @@ func coreHeadroomFits(book *mandate.Input, k *coreContract, q int, price float64
 			return false
 		}
 	}
-	if allocation, ok := with.Allocation(mandate.SleeveCore); ok && allocation.Over {
+	if allocation, ok := with.Allocation(sleeve); ok && allocation.Over {
 		return false
 	}
 	return true
+}
+
+// strategyPolicyView is the entry as the daemon read it: [mandate.core]
+// with the sleeve share from [mandate.sleeves], or a [mandate.strategies]
+// table with its allocation and signal.
+func strategyPolicyView(m *risk.ConstitutionMandate, e risk.StrategyEntry) *rpc.CorePolicyView {
+	if e.Form == risk.StrategyFormCore {
+		return corePolicyView(m)
+	}
+	return &rpc.CorePolicyView{Rule: e.Rule, ISIN: e.ISIN, ConID: e.ConID, Exchange: e.Exchange, Currency: e.Currency, Signal: e.Signal, ScalePct: e.ScalePct, BandPct: e.BandPct,
+		MinOrderBase: e.MinOrderBase, MaxValuePct: e.MaxValuePct, AllocationPct: e.AllocationPct, Unapproved: e.Unwritten}
 }
 
 func corePolicyView(m *risk.ConstitutionMandate) *rpc.CorePolicyView {
