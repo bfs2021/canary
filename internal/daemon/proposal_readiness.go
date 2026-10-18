@@ -38,6 +38,10 @@ var (
 	readinessQuoteCodes   = []string{"live_option_quote_required", "fresh_option_quote_required", "two_sided_option_quote_required",
 		optionQuoteRequestFailed, "missing_reference_price", previewQuoteStaleCode, previewQuoteNotLiveCode, previewQuoteNotTwoSidedCode, previewQuoteUnavailableCode,
 		rpc.CashSweepBlockerFreshQuote}
+	// readinessDueCodes wait for a row's own due time inside an open session:
+	// the core's row before fifteen minutes past the US cash open
+	// (core_due.go).
+	readinessDueCodes = []string{coreBeforeDueCode}
 )
 
 // readinessQueueBuckets are the rows a queued authorisation may carry to the
@@ -129,7 +133,12 @@ func (e *proposalEngine) classifyReadiness(prop rpc.TradeProposal, blockers []rp
 		}
 		return "", false
 	}
-	transient := slices.Concat(readinessFrozenCodes, readinessBrokerCodes, readinessHaltCodes, readinessSessionCodes, readinessSpreadCodes, readinessQuoteCodes)
+	transient := slices.Concat(readinessFrozenCodes, readinessBrokerCodes, readinessHaltCodes, readinessSessionCodes, readinessSpreadCodes, readinessQuoteCodes, readinessDueCodes)
+	// The core's row is due fifteen minutes after the US cash open of its
+	// session (core_due.go): before that an open London reads as the
+	// opening window, and a closed one dates its default send at the due
+	// time, not the London open.
+	due, hasDue := coreRowDueAt(prop, now)
 	hard := ""
 	for _, code := range codes {
 		if !slices.Contains(transient, code) {
@@ -162,12 +171,20 @@ func (e *proposalEngine) classifyReadiness(prop rpc.TradeProposal, blockers []rp
 		decide(rpc.ReadinessQuoteUnusable, code)
 	} else if needsSession && sessionKnown && session.IsOpen && now.Before(session.Open.Add(offset)) {
 		decide(rpc.ReadinessOpeningWindow, "")
+	} else if code, ok := first(readinessDueCodes); ok {
+		decide(rpc.ReadinessOpeningWindow, code)
+	} else if hasDue && now.Before(due) {
+		decide(rpc.ReadinessOpeningWindow, "")
+		out.Message = coreDuePhrase(due)
 	} else {
 		decide(rpc.ReadinessReady, "")
 	}
 
 	if (out.Code == rpc.ReadinessMarketClosed || out.Code == rpc.ReadinessOpeningWindow) && out.OpensAt != nil {
 		send := out.OpensAt.Add(offset)
+		if hasDue && due.After(send) {
+			send = due
+		}
 		out.DefaultSendAt = &send
 		// Readiness says which offset applies at a stress open.
 		switch stress {

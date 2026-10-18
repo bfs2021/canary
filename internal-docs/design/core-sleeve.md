@@ -124,7 +124,7 @@ answered here; "built" means phase 1 carries it, with a test.
 | S5 | IBCF closes at 17:30 CET, the US at 22:00: on its own closes the mandate understates its correlation with US names | The mandate moves IBCF with SPY's local-currency returns, no FX leg (EUR-hedged class); the ±8% price cross-check uses SPY's move over the two US sessions spanning IBCF's day. Since 2026-10-18 every EUR line IBKR lists under the ISIN matches by contract, whatever its symbol (the London line closes at the same instant) | Built: `mandate.ReturnsProxies`, `Input.LineISINs`, `core.Guard` |
 | S6 | Sales | A trend-off remainder does not wait a month: it continues in the next sessions until sold. A data hold stops buys and sends any sale the rule wants to the owner | Built in phase 2: a sale to zero is served past the window until the holding is zero; under a hold, the sale to zero the frozen month wants is served with the hold's reasons on it |
 | S7 | Series | Requested on the listing's primary exchange, not SMART, keyed by contract id; an unheld core series never makes the book's verdict stale; freshness on that exchange's calendar; a fixed input window. Until 2026-10-18 the venue was the policy's IBIS, on which IBKR does not list the contract it pinned | Built: key `core:con:<id>`, `coreSeriesNeed`, `mandateSeriesMarket`, `core.WindowCloses` |
-| S8 | Calendar | The order window skips sessions the US is closed (wide spreads on European S&P 500 fund lines); the send time is clamped before an early close, and on London's early closes, which end before the US open, the session is skipped instead | Built in phase 2 (`coreWindow`): the window skips US-closed sessions and London's early closes; no send time under option A, the owner sends |
+| S8 | Calendar | The order window skips sessions the US is closed (wide spreads on European S&P 500 fund lines); the send time is clamped before an early close, and on London's early closes, which end before the US open, the session is skipped instead | Built in phase 2 (`coreWindow`): the window skips US-closed sessions and London's early closes. The due time is built since 2026-10-18 (`core_due.go`): the row reads `opening_window` until fifteen minutes after the US cash open of its session, its default send that time; preview, prepare and submit hold it before then, and the standing-mandate controller sends it at its first ready read after it |
 
 Notes the review raised, with their rules:
 
@@ -331,7 +331,17 @@ restated for London, on the embedded calendars for 2026 to 2028.
   the earlier in the weeks the US is on summer time and Europe is not)
   and 1 hour 45 minutes before London's 16:30 close. The row is visible
   from the open. Five sessions also give a bill redemption time to settle
-  before a buy that needs its cash.
+  before a buy that needs its cash. Enforced since 2026-10-18 (`core_due.go`,
+  at the integrator's ask after the quality loop found readiness reading
+  `ready` five minutes after the London open): the due time is computed from
+  the US calendar for the row's session (`coreRowDueAt`), not written as a
+  key; before it the served row reads `opening_window` with the due time as
+  `default_send_at` (a closed London dates its default send there too, and a
+  row for a later session than today's reads the opening window until that
+  session's due time), the preview, the prepared submit and the submit hold
+  the row with `core_before_due_time`, the standing-mandate controller
+  refuses it before journaling and sends at its first ready read after it,
+  and `canary proposals` prints "opening window · default send 15:45 CET".
 - Early close (review S8): on Xetra the send time is clamped to an hour
   before an early close. London's early closes end at 12:30 London (24
   and 31 December 2026 and 2027, 22 and 29 December 2028), before the US
@@ -572,7 +582,7 @@ Phase 2, option A (built 2026-10-18, branch `core-rows`; the section
 
 | # | Item | State |
 |---|---|---|
-| 7 | `core_rebalance` rows: window (skipping US-closed sessions, S8), band, minimum, headroom, netting against every working IBCF order, readiness; a trend-off remainder continues past the window (S6); a data hold stops buys and serves the sale to the owner (S6) | Built, `core_rebalance.go`. No send time: under A the owner sends |
+| 7 | `core_rebalance` rows: window (skipping US-closed sessions, S8), band, minimum, headroom, netting against every working IBCF order, readiness; a trend-off remainder continues past the window (S6); a data hold stops buys and serves the sale to the owner (S6) | Built, `core_rebalance.go`. The due time (2026-10-18, `core_due.go`): readiness `opening_window` with `default_send_at` fifteen minutes after the US cash open of the row's session, the preview's `core_before_due_time` hold, the controller's first ready read after it; the owner's hand sees the same hold |
 | 8 | The typed buy exception at preview, prepare and submit, bound to the row, its quantity and its funded cost, re-checking both headrooms (S4) | Built: `coreOpenException`; the headroom through the refresh that re-sizes the row at preview and submit and the mandate gate; funding through the stock Add admission where `[position_add]` is written; `book_changed` is the prepared path's `prepared_proposal_changed` |
 | 9 | Core buys require a known incremental mandate evaluation (section 3) | Built before: the mandate gate refuses an addition it cannot evaluate, at preview and submit |
 | 10 | The sweep's planned need from the core's pending buy | Not built: the sweep's seam `cashSweepPlannedNeeds` still reads 0; a buy whose cash sits in bills waits for settled EUR and its row says why at preview |
@@ -659,7 +669,7 @@ steps, plus the core's own items:
 | 14 | Pin lookup's ID-only `absent` receipt in handler tests (the contract edge Desk recorded on 2026-10-10) | Built: `TestDeskExecutionSubmitRefusesWithoutStandingAuthority` reads `absent` after an authority refusal | S |
 | 15 | Contract: a proposal item may carry class `add` only for `core_rebalance`; fence action `entry` (full scope) for its buys, `reduction` (Protection) for its sales | Built: `Validate` accepts the class, the daemon classifies the row itself (`deskExecutionClass`) and refuses any other buy `class_mismatch` | S |
 | 16 | Desk snapshot and executor adapters over the Go client with the private capability (3) | Interfaces and tests only | M |
-| 17 | Torok lifecycle: the controller in the operating coordinator, reconciliation at startup and reconnect, controls through the daemon generation, the 15:45 due time (4) | Not registered | M |
+| 17 | Torok lifecycle: the controller in the operating coordinator, reconciliation at startup and reconnect, controls through the daemon generation, the 15:45 due time (4) | Not registered; the due time itself is the daemon's since 2026-10-18 (readiness `opening_window`, `core_due.go`), so the controller needs no clock of its own | M |
 | 18 | Device-confirmed arming in Desk (prepare, confirm) (4) | Arming refused | M |
 | 19 | Adaptive for IBCF proven and admitted, or the D2 plain limit at the mid for the core only | US-only | S |
 | 20 | Contract and recovery witnesses with a simulated daemon (5) | Not built | M |
@@ -723,7 +733,10 @@ What `desk.execution.submit` with `automatic` does (`desk_execution_submit.go`):
   `ready` (its exchange closed, the opening window, a stale quote, the broker
   link down) is refused with that readiness code before journaling, so the
   session's episode stays free and the controller sends the row once it
-  reads ready, at the live mid, inside the window. The controller never uses
+  reads ready, at the live mid, inside the window. The core's row reads the
+  opening window until its due time, fifteen minutes after the US cash open
+  of its session (`core_due.go`, "Due time" above), so the first ready read
+  is at or after 15:45 Europe/Berlin. The controller never uses
   the owner-queue path; neither does the owner's hand under option A any
   more: `prepareOwnerQueue` refuses the core's row
   (`queue_bucket_not_queueable`, as its readiness already said), because a

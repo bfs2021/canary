@@ -373,3 +373,53 @@ func TestCoreDecisionRecordFollowsTheRowServedLaterInTheWindow(t *testing.T) {
 		t.Fatalf("an unchanged decision was re-recorded: %+v", again)
 	}
 }
+
+// A send that lands between the engine serving the buy and the strategy
+// cadence re-recording the month (the controller sends at its first ready
+// read; the record follows a minute later) is read: the journal is searched
+// since the month was frozen, not since the row's re-record, so the record
+// reads submitted and is final.
+func TestCoreDecisionRecordReadsASendBeforeItsReRecord(t *testing.T) {
+	over := withIBCF(mandateTestPositions(3000), 100, 100)
+	srv, engine := coreRowServer(t, testCoreConstitution(), over, 0.25, coreDecisionNow)
+	srv.refreshCoreTarget(t.Context())
+	pos := mandateTestPositions(100)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
+	srv.now = func() time.Time { return coreDecisionNow.Add(90 * time.Minute) }
+	if res := srv.evaluateMandate(t.Context(), false); res.Verdict == nil {
+		t.Fatal("no mandate verdict")
+	}
+	rows, _ := coreRows(t, srv, engine, pos)
+	if len(rows) != 1 || rows[0].Action != rpc.OrderActionBuy {
+		t.Fatalf("rows %+v, want the buy", rows)
+	}
+	// The controller sends the served row before the strategy cadence
+	// re-records the month.
+	if err := initializeCleanProposalOpportunityAuthority(t.Context(), srv.coreStore); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := engine.store.bindCore(t.Context(), srv.coreStore); err != nil {
+		t.Fatal(err)
+	}
+	sent := proposalEventForProposal("submitted", rows[0], srv.now(), "", "canary-core-1", "sent under the standing mandate")
+	sent.AccountID, sent.AccountMode = srv.currentBrokerStateScope().Account, srv.currentBrokerStateScope().Mode
+	if err := engine.appendEvent(sent); err != nil {
+		t.Fatal(err)
+	}
+	srv.now = func() time.Time { return coreDecisionNow.Add(91 * time.Minute) }
+	srv.refreshCoreTarget(t.Context())
+	got := srv.evaluateCoreTarget(t.Context(), srv.now()).LastDecision
+	if got == nil || got.Kind != core.ActionBuy || !got.Outcome.Served || got.RowKey != rows[0].Key || !got.Outcome.Submitted || got.Outcome.OrderRef != "canary-core-1" {
+		t.Fatalf("the send before the re-record is not read: %+v", got)
+	}
+	// Final: a later change of the verdict re-records nothing.
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return over, nil }
+	srv.now = func() time.Time { return coreDecisionNow.Add(92 * time.Minute) }
+	if res := srv.evaluateMandate(t.Context(), false); res.Verdict == nil {
+		t.Fatal("no mandate verdict")
+	}
+	srv.refreshCoreTarget(t.Context())
+	if again := srv.evaluateCoreTarget(t.Context(), srv.now()).LastDecision; again == nil || !again.DecidedAt.Equal(got.DecidedAt) || !again.Outcome.Submitted {
+		t.Fatalf("a submitted record was rewritten: %+v", again)
+	}
+}

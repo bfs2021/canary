@@ -314,3 +314,39 @@ func TestDeskExecutionSubmitSendsAStrategyRowOnlyWhenReady(t *testing.T) {
 		t.Fatalf("the gate's refusal is not journaled: %+v", r)
 	}
 }
+
+// Under the standing mandate the core's row is refused before its due time
+// (fifteen minutes after the US cash open of its session) with the readiness
+// code opening_window and nothing journaled, and reaches the gate from the
+// due time on: the controller sends it at its first ready read after it.
+func TestDeskExecutionSubmitWaitsForTheCoreRowsDueTime(t *testing.T) {
+	s, scope := deskExecutionTestServer(t)
+	clock := utc(2026, 11, 2, 9, 0)
+	s.now = func() time.Time { return clock }
+	s.gatewayReadyForTrading = func() bool { return true }
+	e := notFoundEngine(s)
+	s.tradeProposals = e
+	row := rpc.TradeProposal{Key: "core_rebalance:syn", Revision: "r1", Bucket: rpc.TradeProposalBucketCoreRebalance, Action: rpc.OrderActionBuy, OrderType: rpc.OrderTypeLMT,
+		Core: &rpc.TradeProposalCore{Session: "2026-11-02", Sleeve: "core", Terms: rpc.CoreRowTerms{Episode: "core:DU1234567:paper:2026-10"}}}
+	e.snapshot = rpc.TradeProposalSnapshot{Kind: rpc.TradeProposalSnapshotKind, Revision: "r1", AccountID: scope.Account, AccountMode: scope.Mode, Proposals: []rpc.TradeProposal{row}}
+	full := installDeskMandate(t, s, scope, "full", true)
+	item := deskExecutionStrategyItem("req-due", "core:DU1234567:paper:2026-10:2026-11-02", rpc.DeskClassAdd)
+	if ready := e.snapshotForRead(false, false).Proposals[0].Readiness; ready == nil || ready.Code != rpc.ReadinessOpeningWindow || !strings.Contains(ready.Message, "US cash open") {
+		t.Fatalf("the served row reads %+v, want opening_window until the due time", ready)
+	}
+	got, err := deskExecutionSubmit(t, s, rpc.DeskExecutionSubmitParams{Automatic: &full, Items: []rpc.DeskExecutionItem{item}})
+	if err != nil || got.Receipts[0].Outcome != rpc.DeskOutcomeRefused || got.Receipts[0].Blockers[0].Code != rpc.ReadinessOpeningWindow || !strings.Contains(got.Receipts[0].Message, "in session") {
+		t.Fatalf("before the due time: %+v %v", got, err)
+	}
+	if r := deskExecutionLookup(t, s, item.RequestID)[0]; r.Outcome != rpc.DeskOutcomeAbsent {
+		t.Fatalf("a refusal before the due time was journaled: %+v", r)
+	}
+	clock = utc(2026, 11, 2, 14, 45)
+	if ready := e.snapshotForRead(false, false).Proposals[0].Readiness; ready == nil || ready.Code != rpc.ReadinessReady {
+		t.Fatalf("at the due time the served row reads %+v, want ready", ready)
+	}
+	got, err = deskExecutionSubmit(t, s, rpc.DeskExecutionSubmitParams{Automatic: &full, Items: []rpc.DeskExecutionItem{item}})
+	if err != nil || got.Receipts[0].Outcome != rpc.DeskOutcomeRefused || got.Receipts[0].Blockers[0].Code != "proposal_not_found" {
+		t.Fatalf("at the due time the row did not reach the gate: %+v %v", got, err)
+	}
+}

@@ -14,7 +14,9 @@ const (
 	// the only blockers are the ones a closed session causes.
 	ReadinessMarketClosed = "market_closed"
 	// ReadinessOpeningWindow means the session opened less than the opening
-	// offset ago; a preview can run, but the default send time is later.
+	// offset ago, or the row's own due time inside the session is ahead (the
+	// core's row: fifteen minutes after the US cash open); a preview can
+	// run, but the default send time is later.
 	ReadinessOpeningWindow = "opening_window"
 	// ReadinessQuoteUnusable means no live, fresh, two-sided quote is at hand.
 	ReadinessQuoteUnusable = "quote_unusable"
@@ -60,8 +62,11 @@ type TradeProposalReadiness struct {
 	OpensAt *time.Time `json:"opens_at,omitempty"`
 	// DefaultSendAt is OpensAt plus the opening offset (15 minutes for
 	// options, 30 for a discretionary-scale options row at a stress open, 5
-	// for stocks): the earliest time a queued authorisation would send. Set
-	// only for market_closed and opening_window.
+	// for stocks), or the row's own due time when it is later (the core's
+	// row: 15 minutes after the US cash open of its session): the earliest
+	// time a queued authorisation or the standing-mandate controller would
+	// send, and the earliest the owner's hand may. Set only for
+	// market_closed and opening_window.
 	DefaultSendAt *time.Time `json:"default_send_at,omitempty"`
 	// StressOpen reports that DefaultSendAt is dated at a stress open: the
 	// latched regime stage in force reads confirmed stress, so a

@@ -113,7 +113,7 @@ func renderProposalsSummary(env *Env, snap *rpc.TradeProposalSnapshot) {
 			if automatic := strings.TrimSpace(formatProposalAutomaticColumn(p.Automatic)); automatic != "" {
 				displayLine(env, "  "+automatic, nil)
 			}
-			if readiness := formatProposalReadiness(p.Readiness); readiness != "" {
+			if readiness := formatProposalReadiness(p.Readiness, proposalSendsByDefault(p)); readiness != "" {
 				displayLine(env, "  "+readiness, env.yellow)
 			}
 			renderDisplayBlockers(env, p.Blockers)

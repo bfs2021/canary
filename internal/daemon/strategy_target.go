@@ -421,7 +421,7 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	f := s.coreFrozen(ctx, scope)
 	decided := f != nil && f.Decision == latest
 	switch {
-	case decided && r.State == register.StateLive && f.Row != nil && f.Row.Served && s.coreDecisionSubmitted(f.Row, scope):
+	case decided && r.State == register.StateLive && f.Row != nil && f.Row.Served && s.coreDecisionSubmitted(f, scope):
 		// The month's row was sent: its record is final. Until then the
 		// evaluation runs on, so a row served later in the window (the
 		// verdict read reduce at the decision, within since) is recorded

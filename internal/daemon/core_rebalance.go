@@ -585,7 +585,7 @@ func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResu
 	// withdrawn or its window ends, with the journal's outcome on it. The
 	// sized quantity alone, which every generation re-sizes, changes no
 	// record.
-	if f.Row != nil && (!coreDecisionChanged(f.Row, row) || f.Row.Served && s.coreDecisionSubmitted(f.Row, coreScope(scope, contract.ConID))) {
+	if f.Row != nil && (!coreDecisionChanged(f.Row, row) || f.Row.Served && s.coreDecisionSubmitted(f, coreScope(scope, contract.ConID))) {
 		return
 	}
 	// A copy replaces the kept month under the store's lock, so no reader
@@ -605,14 +605,19 @@ func coreDecisionChanged(recorded, next *coreDecisionRow) bool {
 	return next.Served && (!recorded.Served || recorded.Kind != next.Kind || recorded.RowKey != next.RowKey)
 }
 
-// coreDecisionSubmitted reports whether the recorded row was submitted since
-// it was recorded, read from the proposal journal.
-func (s *Server) coreDecisionSubmitted(r *coreDecisionRow, scope string) bool {
+// coreDecisionSubmitted reports whether the recorded row was submitted, read
+// from the proposal journal since the month was frozen: a re-recorded row
+// carries the time it was re-recorded, and a send between the engine serving
+// the row and that re-record (the controller sends at the first ready read,
+// the record follows on the strategy cadence a minute later) must still
+// count (quality loop, 2026-10-18).
+func (s *Server) coreDecisionSubmitted(f *coreFrozenTarget, scope string) bool {
 	e := s.tradeProposals
-	if e == nil || e.store == nil || r == nil || r.RowKey == "" {
+	if e == nil || e.store == nil || f == nil || f.Row == nil || f.Row.RowKey == "" {
 		return false
 	}
-	for _, ev := range e.store.eventsSince(r.DecidedAt) {
+	r := f.Row
+	for _, ev := range e.store.eventsSince(f.FrozenAt) {
 		if ev.Key == r.RowKey && ev.Type == "submitted" && coreDecisionEventMatchesScope(ev, scope) {
 			return true
 		}
@@ -670,8 +675,11 @@ func (s *Server) coreLastDecision(ctx context.Context, scope string) *rpc.CoreDe
 	r := f.Row
 	out := &rpc.CoreDecisionRecord{Decision: f.Decision, DecidedAt: r.DecidedAt, Stage: r.Stage, Kind: r.Kind, Quantity: r.Quantity, Why: r.Why, Target: r.Target, Held: r.Held, Price: r.Price,
 		Window: slices.Clone(r.Window), RowKey: r.RowKey, Outcome: rpc.CoreDecisionOutcome{Served: r.Served}}
+	// The journal is read since the month was frozen, never since the row's
+	// last record, so a send between the row's serve and its re-record is
+	// read (coreDecisionSubmitted).
 	if e := s.tradeProposals; e != nil && e.store != nil && r.RowKey != "" {
-		for _, ev := range e.store.eventsSince(r.DecidedAt) {
+		for _, ev := range e.store.eventsSince(f.FrozenAt) {
 			if ev.Key != r.RowKey || !coreDecisionEventMatchesScope(ev, scope) {
 				continue
 			}

@@ -754,15 +754,25 @@ func renderProposalRow(env *Env, out io.Writer, p *rpc.TradeProposal) {
 	for _, d := range p.Details {
 		fmt.Fprintf(out, "      %s\n", d)
 	}
-	if readiness := formatProposalReadiness(p.Readiness); readiness != "" {
+	if readiness := formatProposalReadiness(p.Readiness, proposalSendsByDefault(*p)); readiness != "" {
 		fmt.Fprintf(out, "      Readiness:   %s\n", readiness)
 	}
 	printTradingBlockers(out, "      ", p.Blockers)
 }
 
+// proposalSendsByDefault reports whether something sends the row at its
+// default send time without a further hand: a queued authorisation, a
+// pre-authorised bucket's scheduler, or the standing-mandate controller for
+// the core's row. Every other row's time is the earliest a hand may send.
+func proposalSendsByDefault(p rpc.TradeProposal) bool {
+	return p.Queued != nil || p.Automatic != nil && p.Automatic.PreAuthorised || p.Bucket == rpc.TradeProposalBucketCoreRebalance
+}
+
 // formatProposalReadiness is the one-line readiness of a row or refusal in
-// local time; empty when the row is ready or carries no readiness.
-func formatProposalReadiness(r *rpc.TradeProposalReadiness) string {
+// local time; empty when the row is ready or carries no readiness. The send
+// time reads "default send" when something sends the row then by itself and
+// "earliest send" when only a hand would.
+func formatProposalReadiness(r *rpc.TradeProposalReadiness, sendsByDefault bool) string {
 	if r == nil || r.Code == "" || r.Code == rpc.ReadinessReady {
 		return ""
 	}
@@ -774,7 +784,11 @@ func formatProposalReadiness(r *rpc.TradeProposalReadiness) string {
 		parts = append(parts, "opens "+r.OpensAt.Local().Format("Mon 2 Jan 15:04 MST"))
 	}
 	if r.DefaultSendAt != nil {
-		send := "default send " + r.DefaultSendAt.Local().Format("15:04 MST")
+		label := "earliest send "
+		if sendsByDefault {
+			label = "default send "
+		}
+		send := label + r.DefaultSendAt.Local().Format("15:04 MST")
 		switch {
 		case r.StressOpen:
 			send += " (stress open: options wait 30 minutes)"
@@ -983,7 +997,7 @@ func renderProposalPreviewText(env *Env, res *rpc.TradeProposalPreviewResult) {
 	statusRow(env, out, "Proposal", res.Proposal.Key)
 	statusRow(env, out, "Token ID", res.PreviewTokenID)
 	renderProposalOrderPreview(env, out, res.Preview)
-	if readiness := formatProposalReadiness(res.Readiness); readiness != "" {
+	if readiness := formatProposalReadiness(res.Readiness, proposalSendsByDefault(res.Proposal)); readiness != "" {
 		statusRow(env, out, "Readiness", readiness)
 	}
 	printTradingBlockers(out, "  ", res.Blockers)
@@ -1297,7 +1311,7 @@ func renderProposalSubmitText(env *Env, res *rpc.TradeProposalSubmitResult) {
 	if res.Message != "" {
 		statusRow(env, out, "Message", res.Message)
 	}
-	if readiness := formatProposalReadiness(res.Readiness); readiness != "" {
+	if readiness := formatProposalReadiness(res.Readiness, proposalSendsByDefault(res.Proposal)); readiness != "" {
 		statusRow(env, out, "Readiness", readiness)
 	}
 	printTradingBlockers(out, "  ", res.Blockers)
