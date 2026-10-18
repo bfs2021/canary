@@ -66,10 +66,13 @@ type ConstitutionMandateCore struct {
 	// Rule names the compiled rule, for example "core-ibcf-v1"; the daemon
 	// holds the core on a rule it does not carry.
 	Rule string `toml:"rule" json:"rule,omitempty"`
-	// ISIN, ConID, Exchange and Currency pin the instrument: the IBKR
-	// contract id written after resolving the ISIN (`canary core resolve`),
-	// on its listing venue. 0 is accepted and holds the core until the owner
-	// writes the resolved id.
+	// ISIN and Currency name the instrument; Canary finds the contract
+	// IBKR lists under the ISIN in that currency and reads it on the
+	// listing's primary exchange (owner decision 2026-10-18 08:06 CEST).
+	// ConID and Exchange are optional: a written con_id (above 0) chooses
+	// among several lines and must be one IBKR lists under the ISIN; a
+	// written exchange must be a venue IBKR lists the contract on. 0, or
+	// unwritten, lets the ISIN decide.
 	ISIN     string `toml:"isin" json:"isin,omitempty"`
 	ConID    *int   `toml:"con_id" json:"con_id,omitempty"`
 	Exchange string `toml:"exchange" json:"exchange,omitempty"`
@@ -88,7 +91,8 @@ type ConstitutionMandateCore struct {
 }
 
 // CoreUnapprovedKeys lists the [mandate.core] keys the owner has not
-// written, and the two [mandate] keys the core reads: its sleeve share and
+// written (con_id and exchange are optional: IBKR's record for the ISIN
+// names them), and the two [mandate] keys the core reads: its sleeve share and
 // the index gap. Without index_gap_shock_pct the core's fund would be
 // stressed as a single name, its target would sit at the gap cap's margin,
 // and a modest rise would breach it and set up a forced sale the next
@@ -105,8 +109,6 @@ func (m *ConstitutionMandate) CoreUnapprovedKeys() []string {
 	}{
 		{"mandate.core.rule", strings.TrimSpace(c.Rule) == ""},
 		{"mandate.core.isin", strings.TrimSpace(c.ISIN) == ""},
-		{"mandate.core.con_id", c.ConID == nil},
-		{"mandate.core.exchange", strings.TrimSpace(c.Exchange) == ""},
 		{"mandate.core.currency", strings.TrimSpace(c.Currency) == ""},
 		{"mandate.core.scale_pct", c.ScalePct == nil},
 		{"mandate.core.band_pct", c.BandPct == nil},
@@ -140,7 +142,7 @@ func (c *ConstitutionMandateCore) validate() error {
 		return fmt.Errorf("mandate.core.max_value_pct must be in (0, 100]")
 	}
 	if v := c.ConID; v != nil && *v < 0 {
-		return fmt.Errorf("mandate.core.con_id must be an IBKR contract id, or 0 until it is resolved")
+		return fmt.Errorf("mandate.core.con_id must be an IBKR contract id, or 0 to let the ISIN decide")
 	}
 	if s := c.ISIN; s != "" && !isinShape(s) {
 		return fmt.Errorf("mandate.core.isin %q must be twelve upper-case letters and digits", s)

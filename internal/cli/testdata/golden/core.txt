@@ -1,7 +1,8 @@
 # canary core · COLUMNS=80 · colour off
 Core  WOULD BUY 908 IBCF
-Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IBCF IE00B3ZW0K18 on
-  IBIS, contract 9030
+Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
+Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
+  the ISIN
 Action · buy 908 shares · first buy, cut by the mandate's headroom from 958
   shares
 Decision · 2026-08-31 · close 95.95 above its 10-month average 89.50: trend on
@@ -29,8 +30,9 @@ Read-only: the core proposes nothing and places no order in this phase. It is
   a beta allocation with a drawdown filter that you chose, not an edge claim.
 # canary core · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mCore\x1b[0m  \x1b[32m\x1b[1mWOULD BUY 908 IBCF\x1b[0m\x1b[0m
-Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IBCF IE00B3ZW0K18 on
-  IBIS, contract 9030
+Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
+Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
+  the ISIN
 Action · buy 908 shares · first buy, cut by the mandate's headroom from 958
   shares
 Decision · 2026-08-31 · close 95.95 above its 10-month average 89.50: trend on

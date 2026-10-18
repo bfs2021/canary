@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/osauer/canary/v2/internal/core"
+	"github.com/osauer/canary/v2/internal/marketcal"
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
@@ -44,6 +45,7 @@ func coreFakeBroker() *coreFakeListings {
 // every form's answer, not an error.
 func TestCoreResolveListsEveryListing(t *testing.T) {
 	c := testCoreConstitution()
+	c.Mandate.Core.ConID = new(coreTestConID)
 	srv, _ := mandateTestServer(t, c)
 	fake := coreFakeBroker()
 	srv.coreListingsForTest = fake.lookup
@@ -84,89 +86,169 @@ func TestCoreResolveListsEveryListing(t *testing.T) {
 	}
 }
 
-// The core's series is read for the pinned contract as IBKR names it: the
-// contract id is asked first with no symbol (IBKR's own symbol for a Xetra
-// fund need not be the owner's ticker, and a contract id with another
-// symbol is answered "no security definition"), and the history read
-// carries the contract id, IBKR's symbol, IBIS and the listing's primary
-// exchange; normalised for the broker, the route stays on IBIS. The
-// resolution is kept, and a failed one holds the core and names itself.
-func TestCoreSeriesAsksThePinnedContractAsIBKRNamesIt(t *testing.T) {
+// The core's contract comes from IBKR's record for the ISIN in the
+// policy's currency (owner decision 2026-10-18): asked by ISIN with no
+// venue and no symbol, the one line IBKR lists is used, its series asked
+// by contract id with IBKR's symbol on the listing's primary exchange
+// (routed there, never SMART) and judged on that exchange's calendar. The
+// resolution is kept; the contract is remembered.
+func TestCoreContractFromIBKRsRecordForTheISIN(t *testing.T) {
 	c := testCoreConstitution()
 	srv, _ := mandateTestServer(t, c)
-	fake := coreFakeBroker()
+	fake := &coreFakeListings{listings: []ibkrlib.Listing{coreTestLondonListing()}}
 	srv.coreListingsForTest = fake.lookup
-	need, ok := coreHistoryNeed(c)
-	if !ok {
-		t.Fatal("no core need")
-	}
-	resolved, ok := srv.coreResolvedNeed(t.Context(), c, need)
-	if !ok {
-		t.Fatal("the pinned contract did not resolve")
+	k := srv.coreResolve(t.Context(), c)
+	if k == nil {
+		t.Fatalf("no contract: %+v", srv.coreTargets.pin)
 	}
 	asked := fake.asked[0]
-	if asked.ConID != coreTestConID || asked.ISIN != "" || len(asked.Symbols) != 0 || asked.Venues[0].Exchange != core.Exchange || asked.Currency != core.Currency {
+	if asked.ISIN != core.ISIN || asked.Currency != core.Currency || asked.ConID != 0 || len(asked.Venues) != 0 || len(asked.Symbols) != 0 {
 		t.Fatalf("asked %+v", asked)
 	}
-	want := rpc.ContractParams{ConID: coreTestConID, Symbol: "IBCF1", SecType: "STK", Currency: "EUR", Exchange: "IBIS", PrimaryExch: "IBIS"}
-	if resolved.Key != coreSeriesKey(coreTestConID) || resolved.Contract != want {
-		t.Fatalf("need %+v", resolved)
+	if k.ConID != 9031 || k.Symbol != "IXSE" || k.PrimaryExch != "LSEETF" || k.TradingClass != "EXXT" || k.Market != marketcal.MarketUKLSE || k.ISIN != core.ISIN {
+		t.Fatalf("contract %+v", k)
+	}
+	need := coreSeriesNeed(k)
+	want := rpc.ContractParams{ConID: 9031, Symbol: "IXSE", SecType: "STK", Currency: "EUR", Exchange: "LSEETF", PrimaryExch: "LSEETF"}
+	if need.Key != coreSeriesKey(9031) || need.Contract != want || need.Market != marketcal.MarketUKLSE {
+		t.Fatalf("need %+v", need)
 	}
 	var got rpc.MarketHistoryParams
 	srv.mandateHistoryFetchForTest = func(_ context.Context, p rpc.MarketHistoryParams, _ int, _ time.Time) (*rpc.MarketHistoryResult, error) {
 		got = p
 		return nil, errors.New("synthetic stop")
 	}
-	_, _ = srv.fetchMandateSeries(t.Context(), resolved, mandateTestNow)
-	if got.Contract != want {
-		t.Fatalf("history asked for %+v", got.Contract)
-	}
+	_, _ = srv.fetchMandateSeries(t.Context(), need, mandateTestNow)
 	contract, _, routed, err := normaliseStockQuoteContract(got.Contract)
-	if err != nil || !routed || contract.ConID != coreTestConID || contract.Symbol != "IBCF1" || contract.Exchange != "IBIS" || contract.PrimaryExch != "IBIS" || contract.Currency != "EUR" {
+	if err != nil || !routed || contract.ConID != 9031 || contract.Symbol != "IXSE" || contract.Exchange != "LSEETF" || contract.PrimaryExch != "LSEETF" || contract.Currency != "EUR" {
 		t.Fatalf("broker contract %+v routed %v err %v", contract, routed, err)
 	}
-	// Kept: the next pass asks nothing.
-	if _, ok := srv.coreResolvedNeed(t.Context(), c, need); !ok || len(fake.asked) != 1 {
+	// Kept: the next pass asks nothing; remembered as the line used.
+	if again := srv.coreResolve(t.Context(), c); again == nil || again.ConID != 9031 || len(fake.asked) != 1 {
 		t.Fatalf("asked again: %d", len(fake.asked))
 	}
-	// A pin IBKR does not answer holds the core and names it.
-	srv.coreTargets = coreTargetStore{}
-	fake.listings, fake.err = nil, ibkrlib.ErrNoListing
-	if _, ok := srv.coreResolvedNeed(t.Context(), c, need); ok {
-		t.Fatal("an unanswered pin resolved")
+	if used := srv.coreUsed(t.Context(), core.ISIN, core.Currency); used == nil || used.ConID != 9031 {
+		t.Fatalf("remembered %+v", used)
 	}
-	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
-	seedMandateHistory(t, srv, 0)
-	res := coreEvaluate(t, srv)
-	if res.Status != rpc.CoreStatusHold || !strings.Contains(strings.Join(res.Reasons, " "), "the pinned contract 9030 did not resolve on IBIS") {
-		t.Fatalf("reasons %v", res.Reasons)
+	// The mandate knows the line as the fund; protection leaves it out.
+	if lines := srv.coreFundLines(t.Context()); lines["con:9031"] != core.ISIN {
+		t.Fatalf("fund lines %v", lines)
 	}
-	// A listing in another currency is not the pin.
-	srv.coreTargets = coreTargetStore{}
-	fake.err = nil
-	fake.listings = []ibkrlib.Listing{{ConID: coreTestConID, Symbol: "IBCF", Exchange: "IBIS", Currency: "USD"}}
-	if _, ok := srv.coreResolvedNeed(t.Context(), c, need); ok || !strings.Contains(srv.corePinReason(coreTestConID), "lists it in USD") {
-		t.Fatalf("another currency: %q", srv.corePinReason(coreTestConID))
+	if ids := srv.coreContractIDs(t.Context()); !slices.Equal(ids, []int{9031}) {
+		t.Fatalf("protection exclusion %v", ids)
+	}
+	// After six hours IBKR is asked again.
+	srv.now = func() time.Time { return mandateTestNow.Add(corePinResolveEvery) }
+	srv.coreResolve(t.Context(), c)
+	if len(fake.asked) != 2 {
+		t.Fatalf("not asked again after %s: %d", corePinResolveEvery, len(fake.asked))
 	}
 }
 
-// With con_id 0 (or unwritten) the core holds with the one thing to do:
-// run canary core resolve and write the con_id. 0 is accepted by the
-// policy; a negative id is not.
-func TestCoreTargetUnpinnedSaysResolve(t *testing.T) {
-	for _, conID := range []*int{new(0), nil} {
-		c := testCoreConstitution()
-		c.Mandate.Core.ConID = conID
-		srv, _ := mandateTestServer(t, c)
-		seedMandateHistory(t, srv, 0)
-		srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
-		res := coreEvaluate(t, srv)
-		reasons := strings.Join(res.Reasons, " | ")
-		if res.Status != rpc.CoreStatusHold || !strings.Contains(reasons, "run `canary core resolve` and write the con_id") || strings.Contains(reasons, "mandate.core.con_id") || res.Sizing != nil {
-			t.Fatalf("con_id %v: %s %v", conID, res.Status, res.Reasons)
-		}
-		if _, ok := coreHistoryNeed(c); ok {
-			t.Fatal("an unpinned core reads a series")
-		}
+// Every answer the core cannot use holds it and names why: several lines
+// in the currency (each named, none chosen), none, a pinned id that is not
+// among the ISIN's lines, a line on a venue Canary has no calendar for, a
+// written exchange IBKR does not list it on, and a line other than the one
+// the core last used. A written con_id chooses among several and accepts a
+// changed line; a lookup that gets no answer keeps the line it had.
+func TestCoreContractHoldsOnWhatItCannotUse(t *testing.T) {
+	c := testCoreConstitution()
+	srv, _ := mandateTestServer(t, c)
+	resolve := func(listings []ibkrlib.Listing, err error) (*coreContract, string) {
+		t.Helper()
+		srv.coreListingsForTest = (&coreFakeListings{listings: listings, err: err}).lookup
+		srv.coreTargets.mu.Lock()
+		srv.coreTargets.pin = corePin{}
+		srv.coreTargets.mu.Unlock()
+		k := srv.coreResolve(t.Context(), c)
+		_, hold, _, _ := srv.corePinState(c.Mandate.Core)
+		return k, hold
+	}
+	xetra, london := coreTestListing(), coreTestLondonListing()
+	if k, hold := resolve([]ibkrlib.Listing{xetra, london}, nil); k != nil || !strings.Contains(hold, "IBKR lists 2 EUR lines under IE00B3ZW0K18: contract 9030 IBCF on IBIS; contract 9031 IXSE (class EXXT) on LSEETF") || !strings.Contains(hold, "write the con_id") {
+		t.Fatalf("several: %+v %q", k, hold)
+	}
+	if srv.coreUsed(t.Context(), core.ISIN, core.Currency) != nil {
+		t.Fatal("an ambiguous answer was remembered")
+	}
+	// Lines in another currency, or found only by symbol, are not the ISIN's.
+	usd := london
+	usd.ConID, usd.Currency = 9033, "USD"
+	bySymbol := xetra
+	bySymbol.ConID, bySymbol.ISIN, bySymbol.Forms = 9034, "", []string{"STK IBCF on IBIS"}
+	if k, hold := resolve([]ibkrlib.Listing{london, usd, bySymbol}, nil); k == nil || k.ConID != 9031 || hold != "" {
+		t.Fatalf("one EUR line by ISIN: %+v %q", k, hold)
+	}
+	// IBKR now lists another line: the core holds and names both.
+	if k, hold := resolve([]ibkrlib.Listing{xetra}, nil); k != nil || !strings.Contains(hold, "IBKR now lists contract 9030 IBCF on IBIS under IE00B3ZW0K18 in EUR; the core last used contract 9031 IXSE (class EXXT) on LSEETF") {
+		t.Fatalf("changed: %+v %q", k, hold)
+	}
+	// The owner's pin accepts it, and it is remembered.
+	c.Mandate.Core.ConID = new(coreTestConID)
+	if k, hold := resolve([]ibkrlib.Listing{xetra, london}, nil); k == nil || k.ConID != coreTestConID || hold != "" {
+		t.Fatalf("pinned among two: %+v %q", k, hold)
+	}
+	if used := srv.coreUsed(t.Context(), core.ISIN, core.Currency); used == nil || used.ConID != coreTestConID {
+		t.Fatalf("remembered %+v", used)
+	}
+	c.Mandate.Core.ConID = new(9099)
+	if k, hold := resolve([]ibkrlib.Listing{xetra, london}, nil); k != nil || !strings.Contains(hold, "the pinned contract 9099 is not among the EUR lines IBKR lists under IE00B3ZW0K18") {
+		t.Fatalf("pin not listed: %+v %q", k, hold)
+	}
+	c.Mandate.Core.ConID = nil
+	if k, hold := resolve(nil, ibkrlib.ErrNoListing); k != nil || !strings.Contains(hold, "IBKR lists no EUR line under IE00B3ZW0K18") {
+		t.Fatalf("none: %+v %q", k, hold)
+	}
+	unlisted := xetra
+	unlisted.PrimaryExch = "XYZEX"
+	if k, hold := resolve([]ibkrlib.Listing{unlisted}, nil); k != nil || !strings.Contains(hold, "Canary carries no exchange calendar for XYZEX") {
+		t.Fatalf("no calendar: %+v %q", k, hold)
+	}
+	// A written exchange must be one IBKR lists the line on; IBIS for the
+	// London line is the policy of 2026-10-16.
+	c.Mandate.Core.ConID = new(9031)
+	c.Mandate.Core.Exchange = "IBIS"
+	if k, hold := resolve([]ibkrlib.Listing{london}, nil); k != nil || !strings.Contains(hold, "the policy names exchange IBIS, and IBKR does not list contract 9031 IXSE (class EXXT) on LSEETF there") {
+		t.Fatalf("exchange not listed: %+v %q", k, hold)
+	}
+	c.Mandate.Core.Exchange = "SMART"
+	if k, hold := resolve([]ibkrlib.Listing{london}, nil); k == nil || hold != "" || k.PrimaryExch != "LSEETF" {
+		t.Fatalf("a written exchange IBKR lists: %+v %q", k, hold)
+	}
+	// No answer keeps the line, says so, and is asked again after 15 minutes.
+	fake := &coreFakeListings{err: ibkrlib.ErrIBKRUnavailable}
+	srv.coreListingsForTest = fake.lookup
+	srv.now = func() time.Time { return mandateTestNow.Add(corePinResolveEvery) }
+	if k := srv.coreResolve(t.Context(), c); k == nil || k.ConID != 9031 {
+		t.Fatalf("a lookup without an answer dropped the line: %+v", k)
+	}
+	if _, _, lookupErr, _ := srv.corePinState(c.Mandate.Core); lookupErr == "" {
+		t.Fatal("the failed lookup is not named")
+	}
+	srv.coreResolve(t.Context(), c)
+	srv.now = func() time.Time { return mandateTestNow.Add(corePinResolveEvery + corePinRetryAfter) }
+	srv.coreResolve(t.Context(), c)
+	if len(fake.asked) != 2 {
+		t.Fatalf("asked %d times, want 2", len(fake.asked))
+	}
+}
+
+// The line the core last used survives a restart: after one, IBKR
+// answering another line holds the core.
+func TestCoreContractRememberedAcrossARestart(t *testing.T) {
+	c := testCoreConstitution()
+	srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
+	srv.coreTargets = coreTargetStore{}
+	other := coreTestLondonListing()
+	coreAnswer(t, srv, other)
+	if _, hold, _, _ := srv.corePinState(c.Mandate.Core); !strings.Contains(hold, "the core last used contract 9030 IBCF on IBIS") {
+		t.Fatalf("after a restart: %q", hold)
+	}
+	if res := coreEvaluate(t, srv); res.Status != rpc.CoreStatusHold || res.Instrument.Resolved || !strings.Contains(strings.Join(res.Reasons, " "), "IBKR now lists contract 9031") {
+		t.Fatalf("evaluation: %s %v", res.Status, res.Reasons)
+	}
+	// D5 still leaves out the line the core last used.
+	if ids := srv.coreContractIDs(t.Context()); !slices.Equal(ids, []int{coreTestConID}) {
+		t.Fatalf("protection exclusion %v", ids)
 	}
 }

@@ -114,11 +114,17 @@ func loggingPositionMarket(c ibkrlib.Contract) (marketcal.Market, bool) {
 	if c.SecType != "STK" {
 		return "", false
 	}
-	venue := strings.ToUpper(strings.TrimSpace(c.PrimaryExch))
+	venue := strings.TrimSpace(c.PrimaryExch)
 	if venue == "" {
-		venue = strings.ToUpper(strings.TrimSpace(c.Exchange))
+		venue = c.Exchange
 	}
-	switch venue {
+	return venueMarket(venue)
+}
+
+// venueMarket is the cash-equity calendar of an IBKR listing exchange; no
+// fallback for SMART or an exchange the catalogue does not carry.
+func venueMarket(venue string) (marketcal.Market, bool) {
+	switch strings.ToUpper(strings.TrimSpace(venue)) {
 	case "NYSE", "NASDAQ", "ISLAND", "ARCA", "AMEX", "BATS", "IEX", "EDGEA", "EDGX":
 		return marketcal.MarketUSEquity, true
 	case "IBIS", "IBIS2", "XETRA":

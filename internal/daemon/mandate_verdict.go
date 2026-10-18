@@ -248,8 +248,9 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		evidence.PositionsAsOf = pos.AsOf
 		var reasons []string
 		in.Legs, in.NotModelled, in.FXNow, reasons = mandateLegsFromPositions(pos, base, now)
+		in.LineISINs = s.coreFundLines(ctx)
 		in.Reasons = append(in.Reasons, reasons...)
-		for _, need := range mandateHistoryNeeds(pos, base) {
+		for _, need := range mandateHistoryNeeds(pos, base, in.LineISINs) {
 			series := s.mandateHistorySeries(ctx, need.Key)
 			row := rpc.MandateSeriesEvidence{Key: need.Key, Missing: series == nil}
 			if series != nil {
@@ -755,7 +756,7 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 		return series, series != nil && !mandateSeriesStale(series, now) && len(series.Closes) >= mandate.Closes
 	}
 	var missing []mandateMissing
-	if returns := mandate.ReturnsSeries(sym, ccy); returns != sym {
+	if returns := mandate.ReturnsSeriesFor(sym, ccy, in.LineISINs[mandateConLegID(draft.Contract.ConID)]); returns != sym {
 		// A line moved by its proxy's returns (mandate.ReturnsProxies): the
 		// proxy is the index, which every verdict reads; its price is the
 		// held line's or the order's limit, never the proxy's close.

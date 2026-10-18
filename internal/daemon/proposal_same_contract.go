@@ -333,7 +333,7 @@ func (e *proposalEngine) sameContractChannels() func(rpc.TradeProposal) sameCont
 	}
 	attached := e.automatic.attached()
 	return func(p rpc.TradeProposal) sameContractChannel {
-		if !policy.preAuthorised(automaticBucketFor(p)) {
+		if !policy.preAuthorised(e.automaticBucket(p)) {
 			return sameContractManual
 		}
 		if !attached {

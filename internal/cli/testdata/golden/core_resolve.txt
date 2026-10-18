@@ -6,8 +6,9 @@ ISIN · IE00B3ZW0K18 · the rule's instrument · every currency
   con_id 900002 · IUSE · SMART, primary LSEETF · EUR · class IUSE · Synthetic
   Index Fund IUSE · found by STK by ISIN on SMART
 Pinned · [mandate.core] con_id not written
-Next · 2 listings match; none is chosen for you. Write the con_id of the line
-  you trade on IBIS (Xetra) into [mandate.core] with a higher policy_version.
+Next · 2 listings match; none is chosen for you. While more than one is in the
+  policy's currency, the core holds until you write the con_id of its line into
+  [mandate.core] with a higher policy_version.
 
 Asked
   STK by ISIN on SMART · 2 listings
@@ -27,8 +28,9 @@ ISIN · IE00B3ZW0K18 · the rule's instrument · every currency
   con_id 900002 · IUSE · SMART, primary LSEETF · EUR · class IUSE · Synthetic
   Index Fund IUSE · found by STK by ISIN on SMART
 Pinned · [mandate.core] con_id not written
-Next · 2 listings match; none is chosen for you. Write the con_id of the line
-  you trade on IBIS (Xetra) into [mandate.core] with a higher policy_version.
+Next · 2 listings match; none is chosen for you. While more than one is in the
+  policy's currency, the core holds until you write the con_id of its line into
+  [mandate.core] with a higher policy_version.
 
 \x1b[1mAsked\x1b[0m
   STK by ISIN on SMART · 2 listings

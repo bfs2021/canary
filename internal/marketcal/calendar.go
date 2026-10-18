@@ -53,6 +53,12 @@ func NormalizeMarket(v string) (Market, bool) {
 	}
 }
 
+// Label is a market's display name ("Xetra", "London SETS"); empty for a
+// market the catalogue does not carry.
+func Label(m Market) string {
+	return specs[m].label
+}
+
 // Calendar is the official-calendar query engine.
 type Calendar struct {
 	clock func() time.Time

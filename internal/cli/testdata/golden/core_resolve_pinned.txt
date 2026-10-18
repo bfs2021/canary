@@ -2,7 +2,8 @@
 Core resolve  2 LISTINGS for IE00B3ZW0K18
 ISIN · IE00B3ZW0K18 · from [mandate.core] · every currency
   con_id 900001 · IBCF · SMART, primary IBIS · EUR · class IBCF · Synthetic
-  Index Fund IBCF · found by STK by ISIN on SMART, STK IBCF on IBIS · PINNED
+  Index Fund IBCF · found by STK by ISIN on SMART, STK IBCF on IBIS · PINNED ·
+  THE CORE USES IT
   con_id 900002 · IUSE · SMART, primary LSEETF · EUR · class IUSE · Synthetic
   Index Fund IUSE · found by STK by ISIN on SMART
 Pinned · [mandate.core] con_id 900001
@@ -22,7 +23,8 @@ Read-only: nothing is chosen for you and the policy is not written.
 \x1b[1mCore resolve\x1b[0m  \x1b[32m\x1b[1m2 LISTINGS for IE00B3ZW0K18\x1b[0m\x1b[0m
 ISIN · IE00B3ZW0K18 · from [mandate.core] · every currency
   \x1b[32mcon_id 900001 · IBCF · SMART, primary IBIS · EUR · class IBCF · Synthetic\x1b[0m
-  \x1b[32mIndex Fund IBCF · found by STK by ISIN on SMART, STK IBCF on IBIS · PINNED\x1b[0m
+  \x1b[32mIndex Fund IBCF · found by STK by ISIN on SMART, STK IBCF on IBIS · PINNED ·\x1b[0m
+  \x1b[32mTHE CORE USES IT\x1b[0m
   con_id 900002 · IUSE · SMART, primary LSEETF · EUR · class IUSE · Synthetic
   Index Fund IUSE · found by STK by ISIN on SMART
 Pinned · [mandate.core] con_id 900001

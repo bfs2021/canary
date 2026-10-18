@@ -75,6 +75,9 @@ type Leg struct {
 	Strike            float64  `json:"strike,omitempty"`
 	TimeToExpiryYears float64  `json:"time_to_expiry_years,omitempty"`
 	IV                *float64 `json:"iv,omitempty"`
+	// ISIN names the fund behind the line when the daemon knows it (a
+	// position row carries none): Evaluate fills it from Input.LineISINs.
+	ISIN string `json:"isin,omitempty"`
 }
 
 // Series is one decision-grade daily close series, ascending by date.
@@ -107,6 +110,10 @@ type Input struct {
 	// Reasons are the daemon's own grounds for an unknown verdict (a stale
 	// positions read, an unproven base currency); any makes it unknown.
 	Reasons []string
+	// LineISINs names, by leg ID, the ISIN IBKR listed a contract under
+	// (the core's fund, resolved by ISIN): such a line takes the broad
+	// index gap and its fund's returns proxy whatever its broker symbol.
+	LineISINs map[string]string
 }
 
 // Risk is the simulated portfolio risk in base currency.
@@ -239,14 +246,14 @@ func Evaluate(in Input) Verdict {
 	if !in.Capital.Known {
 		v.Reasons = append(v.Reasons, in.Capital.Reasons...)
 	}
-	legs := mergeLegs(in.Legs)
+	legs := mergeLegs(in.Legs, in.LineISINs)
 	// Which series the book needs: every underlying's returns (its own, or
 	// its proxy's: ReturnsSeries), the index and every non-base currency.
 	needed := map[string]bool{IndexSymbol: true}
 	currencies := map[string]bool{}
 	for _, l := range legs {
 		if l.Underlying != "" {
-			needed[ReturnsSeries(l.Underlying, l.Currency)] = true
+			needed[LegReturnsSeries(l)] = true
 		}
 		if ccy := strings.ToUpper(l.Currency); ccy != "" && ccy != strings.ToUpper(in.BaseCurrency) {
 			currencies[ccy] = true
@@ -358,13 +365,17 @@ func legUnknown(l Leg) string {
 	return ""
 }
 
-func mergeLegs(in []Leg) []Leg {
+func mergeLegs(in []Leg, isins map[string]string) []Leg {
 	index := map[string]int{}
 	var out []Leg
 	for _, l := range in {
 		l.Right = strings.ToUpper(strings.TrimSpace(l.Right))
 		l.Currency = strings.ToUpper(strings.TrimSpace(l.Currency))
 		l.Underlying = strings.ToUpper(strings.TrimSpace(l.Underlying))
+		if isin, ok := isins[l.ID]; ok && l.ID != "" && l.ISIN == "" {
+			l.ISIN = isin
+		}
+		l.ISIN = strings.ToUpper(strings.TrimSpace(l.ISIN))
 		if i, ok := index[l.ID]; ok && l.ID != "" {
 			out[i].Quantity += l.Quantity
 			continue
@@ -455,7 +466,7 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 	legPnL := make([][]float64, len(legs))
 	values := make([]float64, len(legs))
 	for i, l := range legs {
-		r := returns["u:"+ReturnsSeries(l.Underlying, l.Currency)]
+		r := returns["u:"+LegReturnsSeries(l)]
 		var rfx []float64
 		if l.Currency != "" && l.Currency != base {
 			rfx = returns["fx:"+l.Currency]
@@ -499,7 +510,7 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 			u = &UnderlyingReport{Underlying: l.Underlying}
 			byUnderlying[l.Underlying] = u
 			order = append(order, l.Underlying)
-			returnsOf[l.Underlying] = ReturnsSeries(l.Underlying, l.Currency)
+			returnsOf[l.Underlying] = LegReturnsSeries(l)
 		}
 		u.ValueBase += rep.ValueBase
 		u.ContributionPct += rep.ContributionPct
@@ -599,7 +610,7 @@ func broadIndexUnderlying(legs []Leg, underlying string) bool {
 		if l.Underlying != underlying {
 			continue
 		}
-		if !IsBroadIndex(l.Underlying, l.Currency) {
+		if !IsBroadIndexLine(l.Underlying, l.Currency, l.ISIN) {
 			return false
 		}
 		found = true

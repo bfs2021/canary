@@ -31,11 +31,13 @@ const (
 	SpecHash = "2408d09e618904c84219cacf6bc0f599e1a00ee3c4b04b0effbcc4521f45a441"
 )
 
-// The instrument core-ibcf-v1 is compiled for (owner decision 2026-10-14).
+// The instrument core-ibcf-v1 is compiled for (owner decision 2026-10-14):
+// the fund and its currency. Symbol is the owner's name for it; the
+// listing, IBKR's symbol and the venue come from IBKR's contract record for
+// the ISIN in that currency (owner decision 2026-10-18 08:06 CEST).
 const (
 	Symbol   = "IBCF"
 	ISIN     = "IE00B3ZW0K18"
-	Exchange = "IBIS"
 	Currency = "EUR"
 )
 

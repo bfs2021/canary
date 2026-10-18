@@ -81,13 +81,26 @@ type CorePolicyView struct {
 	Unapproved   []string `json:"unapproved,omitempty"`
 }
 
-// CoreInstrument is the instrument the compiled rule trades.
+// CoreInstrument is the instrument the compiled rule trades: the fund and
+// currency the policy names, and the contract IBKR lists under that ISIN in
+// that currency once it is resolved. Symbol is IBKR's symbol for the
+// resolved line (the rule's own name for the fund before); Exchange is the
+// listing's primary exchange, where the series is read, and Calendar the
+// exchange calendar its sessions and decision days are judged on.
 type CoreInstrument struct {
 	Symbol   string `json:"symbol"`
 	ISIN     string `json:"isin"`
 	ConID    int    `json:"con_id,omitempty"`
-	Exchange string `json:"exchange"`
+	Exchange string `json:"exchange,omitempty"`
 	Currency string `json:"currency"`
+	// Resolved says IBKR's contract record names the line below; false
+	// while the core holds on its contract.
+	Resolved      bool      `json:"resolved"`
+	LocalSymbol   string    `json:"local_symbol,omitempty"`
+	TradingClass  string    `json:"trading_class,omitempty"`
+	Calendar      string    `json:"calendar,omitempty"`
+	CalendarLabel string    `json:"calendar_label,omitempty"`
+	ResolvedAt    time.Time `json:"resolved_at,omitzero"`
 }
 
 // CoreDecision is the month's decision: the signal, and when it was frozen.
@@ -143,6 +156,10 @@ type CoreEvidence struct {
 	Missing   bool      `json:"missing,omitempty"`
 	// Calendar names the exchange calendar and its coverage.
 	Calendar string `json:"calendar,omitempty"`
+	// ReadError is IBKR's answer to the last failed series read, while no
+	// read has succeeded since; ReadErrorAt is when it came.
+	ReadError   string    `json:"read_error,omitempty"`
+	ReadErrorAt time.Time `json:"read_error_at,omitzero"`
 }
 
 // FetchCoreTarget reads the daemon's core target. The daemon evaluates it
@@ -204,8 +221,10 @@ type CoreListing struct {
 	// ISIN is the one IBKR's frame named; empty when it named none.
 	ISIN  string   `json:"isin,omitempty"`
 	Forms []string `json:"forms"`
-	// Pinned says [mandate.core] con_id names this listing.
+	// Pinned says [mandate.core] con_id names this listing; Used says the
+	// core reads and would trade it (its last resolution).
 	Pinned bool `json:"pinned,omitempty"`
+	Used   bool `json:"used,omitempty"`
 }
 
 // CoreResolveAttempt is one request form and IBKR's answer: line (with how

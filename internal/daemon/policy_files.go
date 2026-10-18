@@ -1347,16 +1347,19 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # month under the compiled rule and shows it in canary core; in this
 # release it proposes nothing and places no order. Its volatility share is
 # core_vol_pct above; it also needs index_gap_shock_pct in [mandate]. Every
-# key is yours; a missing one holds the core and is named there. con_id
-# stays 0 until you run canary core resolve and write the id it lists for
-# the Xetra line. con_id is IBKR's contract id for the ISIN on IBIS. The
-# numbers are the design's proposals.
+# key is yours; a missing one holds the core and is named there. The fund
+# is named by isin and currency: Canary reads the line IBKR lists under the
+# ISIN in that currency on its primary exchange and judges it on that
+# exchange's calendar. con_id and exchange are optional: con_id chooses
+# when IBKR lists more than one line (canary core resolve lists them), and
+# a written exchange must be a venue IBKR lists the line on. The numbers
+# are the design's proposals.
 # [mandate.core]
 # rule = "core-ibcf-v1"
 # isin = "IE00B3ZW0K18"
-# con_id = 0
-# exchange = "IBIS"
 # currency = "EUR"
+# con_id = 0
+# exchange = "LSEETF"
 # scale_pct = 25.0
 # band_pct = 10.0
 # min_order_base = 2500.0

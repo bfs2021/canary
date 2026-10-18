@@ -311,7 +311,7 @@ func TestMandateGateMeasuresANameTheBookDoesNotHold(t *testing.T) {
 	if got := requested(); !slices.Equal(got, []string{"u:SYNC"}) {
 		t.Fatalf("requested %v", got)
 	}
-	needs := srv.mandateHistoryNeedsWithRequests(mandateTestPositions(100), "EUR", mandateTestNow)
+	needs := srv.mandateHistoryNeedsWithRequests(t.Context(), mandateTestPositions(100), "EUR", mandateTestNow)
 	if !slices.ContainsFunc(needs, func(n mandateHistoryNeed) bool {
 		return n.Key == "u:SYNC" && n.Contract.Symbol == "SYNC" && n.Contract.ConID == 9100
 	}) {
@@ -735,7 +735,7 @@ func TestMandateHistoryRefreshOncePerSessionAndFreshness(t *testing.T) {
 		t.Fatal("a series two sessions behind, or none, must be stale")
 	}
 	// The needs of a book: every underlying, the index and the base pair.
-	needs := mandateHistoryNeeds(mandateTestPositions(100), "EUR")
+	needs := mandateHistoryNeeds(mandateTestPositions(100), "EUR", nil)
 	var keys []string
 	for _, n := range needs {
 		keys = append(keys, n.Key)
@@ -855,7 +855,7 @@ func TestMandateMeasuresIBCFOnTheIndex(t *testing.T) {
 	seedMandateHistory(t, srv, 0)
 	pos := mandateTestPositions(100)
 	pos.Stocks = append(pos.Stocks, rpc.PositionView{Symbol: "IBCF", SecType: rpc.SecTypeStock, ConID: 9020, Currency: "EUR", PrimaryExch: "IBIS", Quantity: 200, Multiplier: 1, Mark: 50})
-	for _, need := range mandateHistoryNeeds(pos, "EUR") {
+	for _, need := range mandateHistoryNeeds(pos, "EUR", nil) {
 		if need.Key == "u:IBCF" {
 			t.Fatalf("the book reads an IBCF series: %+v", need)
 		}

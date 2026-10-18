@@ -8,9 +8,11 @@ import (
 // BroadIndexInstrument is one instrument the index gap shock applies to: a
 // fund or an index over hundreds of companies, which no single company's
 // news can gap by a one-name stress (owner decision D4, 2026-10-14: "12%
-// for broad index funds"; internal-docs/design/core-sleeve.md). A position
-// row carries no ISIN, so a line matches by its broker symbol and its
-// currency together; the ISIN names the fund behind every listing.
+// for broad index funds"; internal-docs/design/core-sleeve.md). A line
+// matches by its ISIN where the daemon knows it (a contract IBKR listed
+// under the ISIN, Input.LineISINs), else by its broker symbol and its
+// currency together: a position row carries no ISIN, and one fund trades
+// under other symbols on other venues.
 type BroadIndexInstrument struct {
 	Symbol     string
 	Currencies []string
@@ -62,6 +64,19 @@ func IsBroadIndex(symbol, currency string) bool {
 	return false
 }
 
+// IsBroadIndexLine reports whether a line is on the broad index list: by
+// its ISIN when known, in any currency (one fund), else as IsBroadIndex.
+func IsBroadIndexLine(symbol, currency, isin string) bool {
+	if isin = strings.ToUpper(strings.TrimSpace(isin)); isin != "" {
+		for _, b := range BroadIndexInstruments {
+			if b.ISIN == isin {
+				return true
+			}
+		}
+	}
+	return IsBroadIndex(symbol, currency)
+}
+
 // GapShockPctFor is the gap one underlying is stressed by: the index gap
 // for a broad index when the owner wrote one, else the one-name gap.
 func (p Policy) GapShockPctFor(broadIndex bool) float64 {
@@ -76,6 +91,9 @@ func (p Policy) GapShockPctFor(broadIndex bool) float64 {
 type ReturnsProxy struct {
 	Symbol   string
 	Currency string
+	// ISIN matches the fund's other listings in Currency: a line IBKR
+	// lists under it (Input.LineISINs) takes the proxy too.
+	ISIN string
 	// Series is the underlying whose decision-grade returns the line takes.
 	Series string
 	Why    string
@@ -84,11 +102,13 @@ type ReturnsProxy struct {
 // ReturnsProxies is the fixed list (core sleeve design review S5,
 // 2026-10-14). IBCF holds the S&P 500 hedged to EUR at fund level, so in
 // EUR it moves with the index's local-currency return and carries no USD
-// leg; its own Xetra close at 17:30 CET is four and a half hours before
-// the US close every other US line is measured at, which would understate
-// its correlation with them. SPY's returns put it on the book's clock.
+// leg; its own close at 17:30 CET (Xetra, and London's EUR line at 16:30
+// London) is four and a half hours before the US close every other US
+// line is measured at, which would understate its correlation with them.
+// SPY's returns put it on the book's clock. Every EUR listing of the fund
+// matches by ISIN.
 var ReturnsProxies = []ReturnsProxy{
-	{Symbol: "IBCF", Currency: "EUR", Series: IndexSymbol, Why: "EUR-hedged S&P 500 fund: SPY's local-currency returns, on the US close"},
+	{Symbol: "IBCF", Currency: "EUR", ISIN: "IE00B3ZW0K18", Series: IndexSymbol, Why: "EUR-hedged S&P 500 fund: SPY's local-currency returns, on the US close"},
 }
 
 // ReturnsSeries names the series a line's daily returns are read from: its
@@ -102,3 +122,20 @@ func ReturnsSeries(underlying, currency string) string {
 	}
 	return u
 }
+
+// ReturnsSeriesFor is ReturnsSeries with the line's ISIN: a line IBKR lists
+// under a proxied fund's ISIN, in that proxy's currency, takes the proxy
+// whatever its broker symbol.
+func ReturnsSeriesFor(underlying, currency, isin string) string {
+	if i, c := strings.ToUpper(strings.TrimSpace(isin)), strings.ToUpper(strings.TrimSpace(currency)); i != "" {
+		for _, p := range ReturnsProxies {
+			if p.ISIN == i && p.Currency == c {
+				return p.Series
+			}
+		}
+	}
+	return ReturnsSeries(underlying, currency)
+}
+
+// LegReturnsSeries is the series a leg's daily returns are read from.
+func LegReturnsSeries(l Leg) string { return ReturnsSeriesFor(l.Underlying, l.Currency, l.ISIN) }

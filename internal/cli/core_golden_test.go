@@ -7,9 +7,10 @@ import (
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
-// goldenCore is a synthetic core target: the 30 September decision with
-// the trend on and the 15% floor binding, a first buy cut by the mandate's
-// headroom. Every figure is synthetic.
+// goldenCore is a synthetic core target on a Xetra line: the 31 August
+// decision with the trend on and the 15% floor binding, a first buy cut by
+// the mandate's headroom. The policy names the fund by ISIN and currency;
+// the contract is IBKR's. Every figure is synthetic.
 func goldenCore() rpc.CoreTargetResult {
 	conID := 9030
 	scale, band, minimum, maxValue, coreVol := 100.0, 10.0, 2500.0, 40.0, 6.0
@@ -19,9 +20,10 @@ func goldenCore() rpc.CoreTargetResult {
 	return rpc.CoreTargetResult{AsOf: goldenAt, Active: true, Status: rpc.CoreStatusReady, ReadOnly: true,
 		Rule: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash, PolicyRule: core.RuleID,
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: "sha256:synthetic"},
-		Policy: &rpc.CorePolicyView{Rule: core.RuleID, ISIN: core.ISIN, ConID: &conID, Exchange: core.Exchange, Currency: core.Currency,
+		Policy: &rpc.CorePolicyView{Rule: core.RuleID, ISIN: core.ISIN, Currency: core.Currency,
 			ScalePct: &scale, BandPct: &band, MinOrderBase: &minimum, MaxValuePct: &maxValue, CoreVolPct: &coreVol},
-		Instrument: &rpc.CoreInstrument{Symbol: core.Symbol, ISIN: core.ISIN, ConID: conID, Exchange: core.Exchange, Currency: core.Currency},
+		Instrument: &rpc.CoreInstrument{Symbol: core.Symbol, ISIN: core.ISIN, ConID: conID, Exchange: "IBIS", Currency: core.Currency, Resolved: true, TradingClass: core.Symbol,
+			Calendar: "de_xetra", CalendarLabel: "Xetra", ResolvedAt: goldenAt.Add(-2 * time.Hour)},
 		Decision: &rpc.CoreDecision{Status: core.StatusOK, Decision: "2026-08-31", WindowFrom: "2025-08-26",
 			MonthEnds:      []string{"2025-11-28", "2025-12-30", "2026-01-30", "2026-02-27", "2026-03-31", "2026-04-30", "2026-05-29", "2026-06-30", "2026-07-31", "2026-08-31"},
 			MonthEndCloses: []float64{86.39, 89.83, 88.91, 85.3, 86.39, 89.03, 90.02, 92.62, 90.53, 95.95},
@@ -76,7 +78,7 @@ func goldenCoreResolve() rpc.CoreResolveResult {
 			{Form: "STK IBCF on IBIS2", Outcome: "rejected", Code: 200, Message: "No security definition has been found for the request"},
 			{Form: "STK IBCF on SMART (primary IBIS)", Outcome: "no_line", Message: "the 1 lines IBKR answered name another ISIN"},
 		},
-		Message: "2 listings match; none is chosen for you. Write the con_id of the line you trade on IBIS (Xetra) into [mandate.core] with a higher policy_version."}
+		Message: "2 listings match; none is chosen for you. While more than one is in the policy's currency, the core holds until you write the con_id of its line into [mandate.core] with a higher policy_version."}
 }
 
 // goldenCoreResolvePinned is the same lookup with the policy's con_id among
@@ -85,7 +87,7 @@ func goldenCoreResolvePinned() rpc.CoreResolveResult {
 	res := goldenCoreResolve()
 	res.ISINSource = "policy"
 	res.PinnedConID, res.PinnedFound = new(900001), true
-	res.Listings[0].Pinned = true
+	res.Listings[0].Pinned, res.Listings[0].Used = true, true
 	res.Message = "[mandate.core] con_id 900001 is among the listings; nothing to write."
 	return res
 }
@@ -100,12 +102,25 @@ func goldenCoreResolveNone() rpc.CoreResolveResult {
 		Message: "IBKR found no listing for IE00B5BMR087; every form's answer is listed. Check the ISIN, or ask again with --currency."}
 }
 
-// goldenCoreUnpinned holds until the owner writes the resolved con_id.
-func goldenCoreUnpinned() rpc.CoreTargetResult {
+// goldenCoreAmbiguous holds: IBKR lists two lines under the ISIN in the
+// policy's currency, and none is chosen for the owner.
+func goldenCoreAmbiguous() rpc.CoreTargetResult {
 	res := goldenCoreHold()
-	res.Reasons = []string{"the core's contract is not pinned: run `canary core resolve` and write the con_id of its Xetra listing into [mandate.core] with a higher policy_version"}
-	res.Instrument.ConID = 0
-	res.Policy.ConID = new(0)
-	res.Evidence = nil
+	res.Reasons = []string{"IBKR lists 2 EUR lines under IE00B3ZW0K18: contract 900001 IBCF on IBIS; contract 900002 IXSE (class EXXT) on LSEETF. None is chosen for you: write the con_id of the core's line into [mandate.core] with a higher policy_version"}
+	res.Instrument = &rpc.CoreInstrument{Symbol: core.Symbol, ISIN: core.ISIN, Currency: core.Currency}
+	res.Evidence, res.NextDecision, res.Holding = nil, "", &rpc.CoreHolding{}
+	return res
+}
+
+// goldenCoreLondon holds on a London line whose series read IBKR refused.
+func goldenCoreLondon() rpc.CoreTargetResult {
+	res := goldenCoreHold()
+	refusedAt := goldenAt.Add(-3 * time.Hour)
+	refusal := "No security definition has been found for the request"
+	res.Reasons = []string{"no IXSE daily history: the last read of contract 900002 IXSE (class EXXT) on LSEETF failed at " + refusedAt.UTC().Format(time.DateTime) + " UTC: " + refusal}
+	res.Instrument = &rpc.CoreInstrument{Symbol: "IXSE", ISIN: core.ISIN, ConID: 900002, Exchange: "LSEETF", Currency: core.Currency, Resolved: true, TradingClass: "EXXT",
+		Calendar: "uk_lse", CalendarLabel: "London SETS", ResolvedAt: goldenAt.Add(-2 * time.Hour)}
+	res.Holding = &rpc.CoreHolding{}
+	res.Evidence = &rpc.CoreEvidence{SeriesKey: "core:con:900002", Missing: true, Calendar: "uk_lse", ReadError: refusal, ReadErrorAt: refusedAt}
 	return res
 }

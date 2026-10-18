@@ -438,6 +438,31 @@ func automaticBucketFor(p rpc.TradeProposal) string {
 	}
 }
 
+// automaticBucket is automaticBucketFor with the core's exclusion (owner
+// decision D5, 2026-10-18 08:06 CEST): protection's automatic sales leave
+// out the core sleeve's contract, so a protection sale cannot lower the
+// holding the next decision would buy back. The mandate's forced reduction
+// still covers it, and its rows are still served for the owner's hand.
+func (e *proposalEngine) automaticBucket(p rpc.TradeProposal) string {
+	bucket := automaticBucketFor(p)
+	if bucket == "" || bucket == preAuthorisedBucketMandateReduction || !e.coreLine(p) {
+		return bucket
+	}
+	return ""
+}
+
+// coreLine reports whether a row trades the core sleeve's contract.
+func (e *proposalEngine) coreLine(p rpc.TradeProposal) bool {
+	if e == nil || e.server == nil || p.Contract.ConID <= 0 {
+		return false
+	}
+	return slices.Contains(e.server.coreContractIDs(context.Background()), p.Contract.ConID)
+}
+
+// automaticCoreExcludedReason supersedes a waiting record of the core's
+// contract outside the forced reduction.
+const automaticCoreExcludedReason = "the core sleeve's contract is outside protection's automatic sales (owner decision D5); the mandate's forced reduction still covers it"
+
 // automaticPolicy returns the active policy when it is safe to act on; a
 // drifted or errored policy pre-authorises nothing.
 func (e *proposalEngine) automaticPolicy() (protectionPolicy, bool) {
@@ -582,6 +607,8 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 				reason = proposalBlockedReason(snap, prop)
 			case queued[rec.Key]:
 				reason = automaticQueuedReason
+			case rec.Bucket != preAuthorisedBucketMandateReduction && e.coreLine(prop):
+				reason = automaticCoreExcludedReason
 			case policyOK && !policy.preAuthorised(rec.Bucket):
 				reason = "bucket is no longer pre-authorised by the active policy"
 			case !policyOK:
@@ -599,7 +626,7 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 			return events
 		}
 		for _, prop := range snap.Proposals {
-			bucket := automaticBucketFor(prop)
+			bucket := e.automaticBucket(prop)
 			if !policy.preAuthorised(bucket) || !proposalUnblocked(snap, prop) || queued[prop.Key] {
 				continue
 			}
@@ -678,7 +705,7 @@ func automaticEpisodePrior(records map[string]*automaticSubmissionRecord, key, e
 func (e *proposalEngine) automaticWillCreate(snap rpc.TradeProposalSnapshot, policy protectionPolicy) bool {
 	queued := e.queuedLiveKeys(snap.Proposals)
 	for _, prop := range snap.Proposals {
-		if !policy.preAuthorised(automaticBucketFor(prop)) || !proposalUnblocked(snap, prop) || queued[prop.Key] {
+		if !policy.preAuthorised(e.automaticBucket(prop)) || !proposalUnblocked(snap, prop) || queued[prop.Key] {
 			continue
 		}
 		if _, exists := e.automatic.get(prop.Key, prop.Revision); !exists {
@@ -1283,7 +1310,7 @@ func (e *proposalEngine) automaticSubmitBlockers(prop rpc.TradeProposal) []rpc.T
 		return []rpc.TradingBlocker{{Code: "daemon_origin_unauthorised", Message: "automatic submission requires the daemon scheduler"}}
 	}
 	grant := e.server.automaticGrant.Load()
-	bucket := automaticBucketFor(prop)
+	bucket := e.automaticBucket(prop)
 	if grant == nil || grant.Key != prop.Key || grant.Revision != prop.Revision || grant.Bucket != bucket {
 		return []rpc.TradingBlocker{{Code: "daemon_origin_unauthorised", Message: "automatic submission grant does not name this proposal key, revision and bucket", Action: "Submit through `canary proposals submit` from a human terminal instead."}}
 	}
@@ -1505,7 +1532,7 @@ func (e *proposalEngine) Veto(ctx context.Context, p rpc.TradeProposalVetoParams
 				result = rpc.TradeProposalVetoResult{Accepted: false, Key: key, Revision: revision, Message: "no automatic submission is pending for this proposal key at this revision", AsOf: now}
 				return nil
 			}
-			bucket := automaticBucketFor(*served)
+			bucket := e.automaticBucket(*served)
 			if !policyOK || !policy.preAuthorised(bucket) {
 				result = rpc.TradeProposalVetoResult{Accepted: false, Key: key, Revision: served.Revision, Message: "this proposal's bucket is not pre-authorised; nothing submits itself, so there is nothing to veto", AsOf: now}
 				return nil
@@ -1560,7 +1587,7 @@ func (e *proposalEngine) decorateAutomatic(snap *rpc.TradeProposalSnapshot) {
 	now := e.clock()
 	for i := range snap.Proposals {
 		prop := &snap.Proposals[i]
-		bucket := automaticBucketFor(*prop)
+		bucket := e.automaticBucket(*prop)
 		pre := policyOK && policy.preAuthorised(bucket)
 		if rec, ok := e.automatic.served(*prop); ok {
 			prop.Automatic = rec.view(pre, now)

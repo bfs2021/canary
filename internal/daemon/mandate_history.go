@@ -59,13 +59,18 @@ type mandateHistorySeries struct {
 	// Source the broker's basis label.
 	FetchedAt time.Time `json:"fetched_at"`
 	Source    string    `json:"source,omitempty"`
+	// Market is the calendar the series is judged fresh on, when the need
+	// named one (the core's listing exchange); empty is the US calendar.
+	Market marketcal.Market `json:"market,omitempty"`
 }
 
-// mandateHistoryNeed is one series the book needs: its key and the contract
-// the broker is asked for.
+// mandateHistoryNeed is one series the book needs: its key, the contract
+// the broker is asked for and, for the core's series, the calendar of its
+// listing exchange.
 type mandateHistoryNeed struct {
 	Key      string
 	Contract rpc.ContractParams
+	Market   marketcal.Market
 }
 
 type mandateHistoryAttempt struct {
@@ -73,6 +78,13 @@ type mandateHistoryAttempt struct {
 	session   ibkrlib.ConnectorSessionBinding
 	attempts  int
 	succeeded bool
+}
+
+// mandateHistoryFailure is a series' last failed read, kept until a read
+// succeeds, so a hold can name the broker's answer.
+type mandateHistoryFailure struct {
+	at  time.Time
+	err string
 }
 
 // mandateHistoryStore caches the series in memory, loading each from SQLite
@@ -83,6 +95,7 @@ type mandateHistoryStore struct {
 	revisions map[string]int64
 	loaded    map[string]bool
 	attempts  map[string]mandateHistoryAttempt
+	failures  map[string]mandateHistoryFailure
 	// requested holds series an order asked for that the book does not
 	// need (a name or currency not held yet), read on the same background
 	// lane and budget until they are fresh or mandateHistoryRequestKeep
@@ -138,8 +151,8 @@ func (s *Server) mandateHistoryRequests(now time.Time) []mandateHistoryNeed {
 
 // mandateHistoryNeedsWithRequests is what one background pass reads: the
 // book's needs, then the standing requests the book does not already need.
-func (s *Server) mandateHistoryNeedsWithRequests(pos *rpc.PositionsResult, base string, now time.Time) []mandateHistoryNeed {
-	needs := mandateHistoryNeeds(pos, base)
+func (s *Server) mandateHistoryNeedsWithRequests(ctx context.Context, pos *rpc.PositionsResult, base string, now time.Time) []mandateHistoryNeed {
+	needs := mandateHistoryNeeds(pos, base, s.coreFundLines(ctx))
 	for _, req := range s.mandateHistoryRequests(now) {
 		if !slices.ContainsFunc(needs, func(n mandateHistoryNeed) bool { return n.Key == req.Key }) {
 			needs = append(needs, req)
@@ -155,9 +168,10 @@ func mandateHistoryScope(key string) string {
 
 // mandateHistoryNeeds lists the series a positions read needs: every held
 // stock and ETF (a line on mandate.ReturnsProxies reads its proxy's, the
-// index), the underlying of every held option, the index proxy and the
-// base currency's pair against every other held currency.
-func mandateHistoryNeeds(pos *rpc.PositionsResult, base string) []mandateHistoryNeed {
+// index, also when lines names its ISIN by leg ID), the underlying of every
+// held option, the index proxy and the base currency's pair against every
+// other held currency.
+func mandateHistoryNeeds(pos *rpc.PositionsResult, base string, lines map[string]string) []mandateHistoryNeed {
 	base = normCcy(base)
 	needs := map[string]mandateHistoryNeed{}
 	add := func(need mandateHistoryNeed) {
@@ -175,7 +189,7 @@ func mandateHistoryNeeds(pos *rpc.PositionsResult, base string) []mandateHistory
 			}
 			sym := normSym(row.Symbol)
 			currencies[normCcy(row.Currency)] = true
-			if mandate.ReturnsSeries(sym, row.Currency) != sym {
+			if mandate.ReturnsSeriesFor(sym, row.Currency, lines[mandateLegID(row)]) != sym {
 				continue // moved by its proxy's returns (mandate.ReturnsProxies), which the book always reads
 			}
 			add(mandateHistoryNeed{Key: "u:" + sym, Contract: rpc.ContractParams{ConID: row.ConID, Symbol: sym, SecType: "STK", Currency: normCcy(row.Currency), Exchange: "SMART", PrimaryExch: strings.ToUpper(strings.TrimSpace(row.PrimaryExch))}})
@@ -286,11 +300,12 @@ func mandateLastSessionsIn(now time.Time, market marketcal.Market) (last, previo
 }
 
 // mandateSeriesMarket is the calendar a series' freshness is judged on:
-// the core sleeve's own series (core_target.go) on Xetra's, every series
-// the book reads on the US one.
-func mandateSeriesMarket(key string) marketcal.Market {
-	if strings.HasPrefix(key, coreSeriesKeyPrefix) {
-		return marketcal.MarketDEXetra
+// the one its read named (the core sleeve's own series, core_target.go, on
+// its listing exchange's), else the US one every series the book reads is
+// judged on.
+func mandateSeriesMarket(series *mandateHistorySeries) marketcal.Market {
+	if series != nil && series.Market != "" {
+		return series.Market
 	}
 	return marketcal.MarketUSEquity
 }
@@ -299,12 +314,13 @@ func mandateSeriesMarket(key string) marketcal.Market {
 // session, so the evening after a close is current until the refresh
 // lands and the next morning is not. For the book the US calendar stands
 // in for every venue (a European daily bar dates its own session, one
-// holiday apart at most); the core's series is judged on Xetra's.
+// holiday apart at most); the core's series is judged on its listing
+// exchange's.
 func mandateSeriesStale(series *mandateHistorySeries, now time.Time) bool {
 	if series == nil || len(series.Dates) == 0 {
 		return true
 	}
-	last, previous, ok := mandateLastSessionsIn(now, mandateSeriesMarket(series.Key))
+	last, previous, ok := mandateLastSessionsIn(now, mandateSeriesMarket(series))
 	if !ok {
 		return true
 	}
@@ -318,7 +334,7 @@ func mandateSeriesDue(series *mandateHistorySeries, now time.Time) bool {
 	if series == nil || len(series.Dates) == 0 {
 		return true
 	}
-	last, _, ok := mandateLastSessionsIn(now, mandateSeriesMarket(series.Key))
+	last, _, ok := mandateLastSessionsIn(now, mandateSeriesMarket(series))
 	return ok && series.Dates[len(series.Dates)-1] < last
 }
 
@@ -371,15 +387,13 @@ func (s *Server) refreshMandateHistoryOnce(ctx context.Context) {
 	if pos.Portfolio != nil {
 		base = pos.Portfolio.BaseCurrency
 	}
-	needs := s.mandateHistoryNeedsWithRequests(pos, base, s.nowUTC())
-	if policy := s.riskPolicies.snapshot().policy; policy != nil {
-		if need, ok := coreHistoryNeed(policy); ok {
-			// Asked by contract id first, so the read names the contract as
-			// IBKR does (core_resolve.go).
-			if need, ok = s.coreResolvedNeed(ctx, policy, need); ok {
-				needs = append(needs, need)
-			}
-		}
+	// The core's contract first, from IBKR's record for its ISIN, so the
+	// book's needs know its line and the core's read names the listing as
+	// IBKR does (core_resolve.go).
+	coreLine := s.coreResolve(ctx, s.riskPolicies.snapshot().policy)
+	needs := s.mandateHistoryNeedsWithRequests(ctx, pos, base, s.nowUTC())
+	if coreLine != nil {
+		needs = append(needs, coreSeriesNeed(coreLine))
 	}
 	for _, need := range needs {
 		if ctx.Err() != nil {
@@ -395,7 +409,7 @@ func (s *Server) refreshMandateHistoryOnce(ctx context.Context) {
 func (s *Server) refreshMandateSeries(ctx context.Context, c *ibkrlib.Connector, need mandateHistoryNeed) {
 	now := s.nowUTC()
 	series := s.mandateHistorySeries(ctx, need.Key)
-	if !mandateSeriesDue(series, now) {
+	if !mandateSeriesDue(series, now) && (need.Market == "" || series.Market == need.Market) {
 		return
 	}
 	session, ok := c.CaptureHistoricalSession()
@@ -417,23 +431,56 @@ func (s *Server) refreshMandateSeries(ctx context.Context, c *ibkrlib.Connector,
 	st.attempts[need.Key] = attempt
 	st.mu.Unlock()
 
-	readCtx, cancel := context.WithTimeout(ibkrlib.WithRequestPriority(ctx, ibkrlib.PriorityBackground), mandateHistoryRefreshWindow)
-	fresh, err := s.fetchMandateSeries(readCtx, need, now)
-	cancel()
-	if err != nil {
-		if ctx.Err() == nil && s.logger != nil && !errors.Is(err, ibkrlib.ErrIBKRUnavailable) {
-			s.logger.Warnf("mandate history %s: %v; the verdict reads unknown until a read succeeds", need.Key, err)
-		}
+	if !s.readMandateSeries(ctx, need, now) {
 		return
-	}
-	if err := s.saveMandateSeries(ctx, fresh); err != nil && s.logger != nil {
-		s.logger.Warnf("mandate history %s: read %d closes but the database save failed: %v", need.Key, len(fresh.Closes), err)
 	}
 	st.mu.Lock()
 	attempt = st.attempts[need.Key]
 	attempt.succeeded = true
 	st.attempts[need.Key] = attempt
 	st.mu.Unlock()
+}
+
+// readMandateSeries reads one series on the background lane and keeps it.
+// A failed read, other than a gateway that is down or a stop, is kept as
+// the series' last failure (the broker's answer, for a hold to name) until
+// a read succeeds.
+func (s *Server) readMandateSeries(ctx context.Context, need mandateHistoryNeed, now time.Time) bool {
+	readCtx, cancel := context.WithTimeout(ibkrlib.WithRequestPriority(ctx, ibkrlib.PriorityBackground), mandateHistoryRefreshWindow)
+	fresh, err := s.fetchMandateSeries(readCtx, need, now)
+	cancel()
+	st := &s.mandateHistory
+	if err != nil {
+		if ctx.Err() == nil && !errors.Is(err, ibkrlib.ErrIBKRUnavailable) {
+			st.mu.Lock()
+			if st.failures == nil {
+				st.failures = map[string]mandateHistoryFailure{}
+			}
+			st.failures[need.Key] = mandateHistoryFailure{at: now, err: errText(err)}
+			st.mu.Unlock()
+			if s.logger != nil {
+				s.logger.Warnf("mandate history %s: %v; the verdict reads unknown until a read succeeds", need.Key, err)
+			}
+		}
+		return false
+	}
+	if err := s.saveMandateSeries(ctx, fresh); err != nil && s.logger != nil {
+		s.logger.Warnf("mandate history %s: read %d closes but the database save failed: %v", need.Key, len(fresh.Closes), err)
+	}
+	st.mu.Lock()
+	delete(st.failures, need.Key)
+	st.mu.Unlock()
+	return true
+}
+
+// mandateSeriesFailure is a series' last failed read since its last
+// successful one: the broker's answer and when it came.
+func (s *Server) mandateSeriesFailure(key string) (string, time.Time) {
+	st := &s.mandateHistory
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	f := st.failures[key]
+	return f.err, f.at
 }
 
 // fetchMandateSeries reads mandateHistoryFetchDays of daily closes through
@@ -453,7 +500,7 @@ func (s *Server) fetchMandateSeries(ctx context.Context, need mandateHistoryNeed
 	if res.Interval != "1 day" {
 		return nil, fmt.Errorf("broker answered with %s bars, not daily", res.Interval)
 	}
-	series := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: need.Key, Contract: res.Contract, FetchedAt: res.AsOf, Source: res.Source}
+	series := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: need.Key, Contract: res.Contract, FetchedAt: res.AsOf, Source: res.Source, Market: need.Market}
 	for _, p := range res.Points {
 		if !isFinitePrice(p.Value) || math.IsNaN(p.Value) {
 			return nil, fmt.Errorf("invalid close on %s", p.At.UTC().Format(time.DateOnly))

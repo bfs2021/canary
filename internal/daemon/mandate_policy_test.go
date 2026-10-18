@@ -274,7 +274,7 @@ func TestMandateCoreTable(t *testing.T) {
 			}
 		})
 	}
-	// con_id 0 is "not resolved yet": accepted, and the core holds.
+	// con_id 0 lets the ISIN decide: accepted.
 	version++
 	writePolicyTestFile(t, path, strings.Replace(strings.Replace(written, "policy_version = 7", fmt.Sprintf("policy_version = %d", version), 1), "con_id = 9030", "con_id = 0", 1))
 	m.reload()
@@ -297,7 +297,8 @@ func TestMandateCoreTable(t *testing.T) {
 	if got.status != rpc.RiskPolicyStatusActive {
 		t.Fatalf("half-written: %s %q", got.status, got.message)
 	}
-	if keys := strings.Join(got.policy.Mandate.CoreUnapprovedKeys(), " "); !strings.Contains(keys, "mandate.core.con_id") || strings.Contains(keys, "mandate.core.rule") || !strings.Contains(keys, "mandate.index_gap_shock_pct") {
+	if keys := strings.Join(got.policy.Mandate.CoreUnapprovedKeys(), " "); !strings.Contains(keys, "mandate.core.isin") || strings.Contains(keys, "mandate.core.rule") || !strings.Contains(keys, "mandate.index_gap_shock_pct") ||
+		strings.Contains(keys, "mandate.core.con_id") || strings.Contains(keys, "mandate.core.exchange") {
 		t.Fatalf("core keys %s", keys)
 	}
 	if all := strings.Join(got.policy.UnapprovedKeys(), " "); strings.Contains(all, "mandate.core") {
@@ -305,5 +306,15 @@ func TestMandateCoreTable(t *testing.T) {
 	}
 	if !strings.Contains(string(ConstitutionPolicyTemplate("test")), "# [mandate.core]") {
 		t.Fatal("the template lacks [mandate.core]")
+	}
+	// The table may name only the fund and its currency (owner decision
+	// 2026-10-18): con_id and exchange are optional, and complete without.
+	version++
+	isinOnly := strings.Replace(strings.Replace(written, "con_id = 9030\n", "", 1), "exchange = \"IBIS\"\n", "", 1)
+	writePolicyTestFile(t, path, strings.Replace(isinOnly, "policy_version = 7", fmt.Sprintf("policy_version = %d", version), 1))
+	m.reload()
+	got = m.snapshot()
+	if got.status != rpc.RiskPolicyStatusActive || got.policy.Mandate.Core.ConID != nil || got.policy.Mandate.Core.Exchange != "" || len(got.policy.Mandate.CoreUnapprovedKeys()) != 0 {
+		t.Fatalf("isin and currency only: %s %q %+v", got.status, got.message, got.policy.Mandate.Core)
 	}
 }

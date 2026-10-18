@@ -1,7 +1,8 @@
 # canary core · COLUMNS=80 · colour off
 Core  HOLD
-Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IBCF IE00B3ZW0K18 on
-  IBIS, contract 9030
+Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
+Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
+  the ISIN
 Action · the core holds: buys stop, and a sale the rule wants goes to you for
   review
 
@@ -20,8 +21,9 @@ Read-only: the core proposes nothing and places no order in this phase. It is
   a beta allocation with a drawdown filter that you chose, not an edge claim.
 # canary core · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mCore\x1b[0m  \x1b[33m\x1b[1mHOLD\x1b[0m\x1b[0m
-Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IBCF IE00B3ZW0K18 on
-  IBIS, contract 9030
+Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
+Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
+  the ISIN
 Action · the core holds: buys stop, and a sale the rule wants goes to you for
   review
 

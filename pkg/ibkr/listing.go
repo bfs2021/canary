@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -54,6 +55,17 @@ type Listing struct {
 	Forms          []string
 }
 
+// FoundByISIN reports whether one of the request's by-ISIN forms answered
+// the listing: IBKR listed it under the ISIN asked, whether or not its
+// frame names an ISIN. A line found only by contract id or by symbol is
+// not evidence of the ISIN.
+func (l Listing) FoundByISIN() bool {
+	return slices.ContainsFunc(l.Forms, func(f string) bool { return strings.Contains(f, listingISINForm) })
+}
+
+// listingISINForm marks the by-ISIN forms' labels.
+const listingISINForm = " by ISIN"
+
 // ErrNoListing means no request form found a line for the request.
 var ErrNoListing = errors.New("no listing for the request")
 
@@ -96,8 +108,8 @@ func (r ListingRequest) forms() ([]bondWireForm, error) {
 	}
 	if isin != "" {
 		forms = append(forms,
-			bondWireForm{label: secType + " by ISIN on SMART", contract: Contract{SecType: secType, Exchange: "SMART", Currency: ccy, SecIDType: BondIdentifierISIN, SecID: isin}},
-			bondWireForm{label: secType + " by ISIN, no exchange", contract: Contract{SecType: secType, Currency: ccy, SecIDType: BondIdentifierISIN, SecID: isin}})
+			bondWireForm{label: secType + listingISINForm + " on SMART", contract: Contract{SecType: secType, Exchange: "SMART", Currency: ccy, SecIDType: BondIdentifierISIN, SecID: isin}},
+			bondWireForm{label: secType + listingISINForm + ", no exchange", contract: Contract{SecType: secType, Currency: ccy, SecIDType: BondIdentifierISIN, SecID: isin}})
 	}
 	for _, raw := range r.Symbols {
 		sym := strings.ToUpper(strings.TrimSpace(raw))

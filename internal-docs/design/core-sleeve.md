@@ -2,7 +2,9 @@
 
 Written: 2026-10-14 16:50 CEST. Revised 2026-10-14 18:30 CEST: the owner's
 answers to D1 to D4, the independent design review folded in (section
-"Design review"), and phase 1 built.
+"Design review"), and phase 1 built. Revised 2026-10-18 CEST: the owner's
+decision of 08:06 CEST on the core's venue and on D5 (sections 1, 3 and
+7), built on Canary branch `core-venue`.
 Status: phase 1 built (read-only: the target is served, nothing is
 proposed or sent) with the two mandate-gate fixes the review requires;
 phases 2 and 3 are design. Buying stays off until the owner arms Fully
@@ -33,6 +35,14 @@ From the owner's chat of 2026-10-14; the mandate as recorded in
   safety review, then code; buying stays off until the owner arms Fully
   armed on their device.
 - 06:26 CEST: "The system should run by itself within risk boundaries."
+- 2026-10-18 08:06 CEST, verbatim: "Accept all three: give the machine its
+  own seat (replacing D1 and largest-contributor-first), put s1 into its
+  six-month shadow test, and go for the core venue fix with the core fund
+  out of protection's automatic sales." The last clause is recorded here:
+  the venue fix (the policy names only the fund and the currency; IBKR's
+  contract record names the listing, its venue and its calendar) and D5 as
+  proposed (section 7). The first clause is recorded with the mandate's
+  seats; the second belongs to the lab.
 
 Answers of 2026-10-14 (relayed with the build request, verbatim where
 quoted):
@@ -66,8 +76,9 @@ for one instrument.
 1. The core holds IBCF while IBCF's month-end close is above its 10-month
    average, sized so its own volatility is at most its 6% share of the
    budget base × room and its value at most 40% of the budget base ×
-   room. It rebalances monthly on the Xetra calendar with a 10% no-trade
-   band. Trend off sells to zero, and the cash returns to the sweep.
+   room. It rebalances monthly on the calendar of the exchange IBKR lists
+   it on (London today, section 1) with a 10% no-trade band. Trend off
+   sells to zero, and the cash returns to the sweep.
 2. Canary computes the target as a daemon-owned verdict (`core.target`,
    parity-tested against the lab's Python) and serves each order as one
    proposal row (bucket `core_rebalance`). Desk decides nothing and sizes
@@ -101,10 +112,10 @@ answered here; "built" means phase 1 carries it, with a test.
 | S2 | Lab accounting | The design's 1995-2015 turnover run (five configurations) is logged with `lab prior`; the 10% band was picked on that turnover; "S&P 500 only" is recorded as hindsight-prone; a new s0 version matching the rule is registered | Built in the lab: registry seq 29-31 |
 | S3 | Costs beyond commission and spread | Whipsaw, tax on realised gains, Vorabpauschale and hedge carry, each with a number or "unknown" | "Turnover and cost" below |
 | S4 | The typed buy exception | Bound like `cashSweepOpenException`: to the `core_rebalance` row, its sized quantity and a cost at most the funded EUR; netted against every working IBCF order, the owner's included; 0.95 and the gap headroom re-checked at submit; held on `book_changed` | Phase 2 item 8 (design only) |
-| S5 | IBCF closes at 17:30 CET, the US at 22:00: on its own closes the mandate understates its correlation with US names | The mandate moves IBCF with SPY's local-currency returns, no FX leg (EUR-hedged class); the ±8% price cross-check uses SPY's move over the two US sessions spanning IBCF's day | Built: `mandate.ReturnsProxies`, `core.Guard` |
+| S5 | IBCF closes at 17:30 CET, the US at 22:00: on its own closes the mandate understates its correlation with US names | The mandate moves IBCF with SPY's local-currency returns, no FX leg (EUR-hedged class); the ±8% price cross-check uses SPY's move over the two US sessions spanning IBCF's day. Since 2026-10-18 every EUR line IBKR lists under the ISIN matches by contract, whatever its symbol (the London line closes at the same instant) | Built: `mandate.ReturnsProxies`, `Input.LineISINs`, `core.Guard` |
 | S6 | Sales | A trend-off remainder does not wait a month: it continues in the next sessions until sold. A data hold stops buys and sends any sale the rule wants to the owner | Phase 2 item 7; phase 1 serves the hold |
-| S7 | Series | Requested on IBIS, not SMART, keyed by contract id; an unheld core series never makes the book's verdict stale; freshness on Xetra's calendar; a fixed input window | Built: key `core:con:<id>`, `mandateSeriesMarket`, `core.WindowCloses` |
-| S8 | Calendar | The order window skips sessions the US is closed (wide spreads on Xetra's S&P 500 funds); the send time is clamped before an early close | Phase 2 item 7 |
+| S7 | Series | Requested on the listing's primary exchange, not SMART, keyed by contract id; an unheld core series never makes the book's verdict stale; freshness on that exchange's calendar; a fixed input window. Until 2026-10-18 the venue was the policy's IBIS, on which IBKR does not list the contract it pinned | Built: key `core:con:<id>`, `coreSeriesNeed`, `mandateSeriesMarket`, `core.WindowCloses` |
+| S8 | Calendar | The order window skips sessions the US is closed (wide spreads on European S&P 500 fund lines); the send time is clamped before an early close, and on London's early closes, which end before the US open, the session is skipped instead | Phase 2 item 7 |
 
 Notes the review raised, with their rules:
 
@@ -123,9 +134,9 @@ Notes the review raised, with their rules:
   ceiling: an edit within a month can only lower it.
 - **Protection's scope would sell the core.** Protection proposals cover
   every held line, IBCF included; a protection sale lowers the holding and
-  the next decision may buy back under the headroom. Whether the pinned
-  contract leaves protection's automatic scope (the forced reduction still
-  covering it) is for the owner before phase 2 (proposed D5).
+  the next decision may buy back under the headroom. Decided 2026-10-18
+  (D5, section 7): the core's contract leaves protection's automatic sales;
+  the forced reduction still covers it. Built.
 - **An Auto lock on IBCF stops core sales too**, not only buys: it locks
   the instrument. A trend-off sale waits while it stands (corrected in
   section 3).
@@ -136,21 +147,49 @@ Notes the review raised, with their rules:
 
 ### Instrument and series
 
-- Instrument: IBCF, ISIN IE00B3ZW0K18, Xetra (IBKR exchange `IBIS`), EUR,
-  security type STK, accumulating. The policy pins IBKR's contract id and
-  the ISIN; every preview and a daily check compare IBKR's contract
-  details (symbol, ISIN, currency, primary exchange, security type) with
-  the pin.
-- Signal series: IBCF's own daily Xetra closes from IBKR historical data,
+- Instrument: the iShares S&P 500 EUR Hedged UCITS ETF (Acc), ISIN
+  IE00B3ZW0K18, in EUR, security type STK, accumulating; IBCF is the
+  owner's name for it. The policy names the fund and the currency; IBKR's
+  contract record names the rest (owner decision 2026-10-18 08:06 CEST).
+  On 2026-10-16 IBKR listed one line under the ISIN: the London EUR line
+  (trading class EUET, primary exchange `LSEETF`), under another symbol;
+  no Xetra line (`canary core resolve`).
+- Venue and calendar from IBKR's record (built, `core_resolve.go`). On the
+  background lane, every six hours, the daemon asks IBKR for every line
+  under the ISIN in the policy's currency and uses the one it lists. It
+  reads the series for that contract id with IBKR's symbol on the line's
+  primary exchange, and judges sessions, freshness and the decision day on
+  that exchange's calendar (`marketcal` `uk_lse` for London, `de_xetra`
+  for Xetra; a primary exchange without an embedded calendar holds). It
+  holds, naming every candidate, when IBKR lists more than one line in the
+  currency, and holds when the line differs from the one the core last
+  used (kept in the database), until the owner chooses by writing
+  `con_id`. A written `con_id` must be one of the ISIN's lines; a written
+  `exchange` must be a venue IBKR lists the line on (the primary exchange
+  or a valid exchange), else the core holds and says so, so a policy that
+  still carries both keeps loading. A lookup that gets no answer keeps the
+  line found before and is asked again after 15 minutes. `canary core`
+  shows the contract, its venue and its calendar.
+- Signal series: the line's own daily closes from IBKR historical data,
   kept in the mandate's decision-grade history store (`mandate_history.go`)
-  under its own key `core:con:<contract id>`, requested on `IBIS` by
-  contract id (never SMART), whether held or not, and judged fresh on
-  Xetra's calendar (review S7). The book's verdict never reads it, so it
-  can never make that verdict stale: the mandate measures a held IBCF line
-  on SPY's returns (review S5, section 3). A series whose echoed contract
-  id is not the pin holds. The fund accumulates, so its close is a
-  total-return series of the EUR-hedged S&P 500 with the hedge carry and
-  fees inside: the rule judges what the sleeve earns.
+  under its own key `core:con:<contract id>`, stamped with the calendar it
+  is judged on, requested on the primary exchange by contract id (never
+  SMART), whether held or not, and judged fresh on that exchange's
+  calendar (review S7). A series kept for another calendar is read again.
+  A read IBKR refuses is named in the hold with IBKR's answer and its time
+  until a read succeeds. The book's verdict never reads it, so it can
+  never make that verdict stale: the mandate measures a held line of the
+  fund on SPY's returns (review S5, section 3), matched by contract. A
+  series whose echoed contract id is not the core's holds. The fund
+  accumulates, so its close is a total-return series of the EUR-hedged
+  S&P 500 with the hedge carry and fees inside: the rule judges what the
+  sleeve earns.
+- Why the calendar follows the listing: London and Xetra differ. In 2026
+  London was closed on 4 May, 25 May and 31 August, when Xetra traded, and
+  open on 1 May, when Xetra was closed. London closes judged on Xetra's
+  calendar would hold every month whose 253-session window holds such a
+  day ("no close on 2026-05-04", "a bar on 2026-05-01"): every month
+  (`TestCoreTargetOnTheLondonLine`).
 - No live fallback series. IBCF has traded since 2010, more than every
   live input needs (the store keeps 320 closes; the rule needs 253). A
   missing, stale or suspect IBCF series holds the month. The rule never
@@ -161,20 +200,24 @@ Notes the review raised, with their rules:
 
 ### Decision date
 
-The last Xetra session of each month, from `marketcal` `de_xetra` (the
-official calendar, covered 2026-01-01 to 2028-12-31; for example 30
-December when the 31st is closed). The target is computed once that
-session's close is in the store, from 18:00 Europe/Berlin, on closes up to
-and including it, and is then frozen for the month with the digest of its
-window (`core_target_drift` holds a later reading that differs). A running
-month is never decided.
+The last session of each month on the line's exchange calendar: London
+SETS (`uk_lse`) for the London line, Xetra (`de_xetra`) for a Xetra line,
+both official and covered 2026-01-01 to 2028-12-31. London's last session
+can differ from Xetra's: 28 August 2026 (31 August is a bank holiday);
+31 December is an early close at 12:30 London and still the decision day.
+The target is computed once that session's close is in the store, from
+half an hour after its scheduled close (17:00 London, 18:00 Berlin, on a
+regular London or Xetra day; 13:00 London on 31 December), on closes up
+to and including it, and is then frozen for the month with the digest of
+its window (`core_target_drift` holds a later reading that differs). A
+running month is never decided.
 
 Fixed input window (review S7): the last 253 calendar sessions to the
 decision day, 252 daily returns, for both volatilities and the month-ends.
 Where the embedded calendar covers a day, it decides which days are
 sessions; before its coverage the series' own dates stand. A session
 without a close holds the month; it is never filled, and a bar on a day
-Xetra was closed holds too. The store re-reads the whole series each
+the exchange was closed holds too. The store re-reads the whole series each
 session, so a broker gap repairs itself on the next read; a persistent one
 holds every month whose window contains it.
 
@@ -240,7 +283,8 @@ broker's current position projection confirms. A row is served only when:
   (proposed band 10%);
 - |D| × mid ≥ `min_order_base` (proposed 2,500 EUR, so IBKR's per-order
   minimum commission stays near 0.1% of the order; an assumption from
-  IBKR's published Xetra rates, to calibrate from fills), except the
+  IBKR's published Xetra rates, which London's EUR line need not share,
+  to calibrate from fills in W1), except the
   sell-all, which always sells every share;
 - no core order is working, unacknowledged or of unknown outcome.
 
@@ -249,7 +293,12 @@ as above and waits when what is left is below the minimum.
 
 ### Window and order terms
 
-- Window: the first five Xetra sessions after the decision day. At most
+Re-checked for the London line on 2026-10-18 (the owner's venue
+decision): each rule below was written for Xetra, and each holds or is
+restated for London, on the embedded calendars for 2026 to 2028.
+
+- Window: the first five sessions on the line's exchange calendar after
+  the decision day that the US also trades. At most
   one core order per session, with the episode
   `core:<account>:<mode>:<YYYY-MM>:<session date>`. A remainder after a
   partial fill or an expired DAY order becomes the next session's D,
@@ -257,23 +306,47 @@ as above and waits when what is left is below the minimum.
   topped up. What is left of a buy when the window ends waits for next
   month; what is left of a sale to zero does not wait (review S6): it
   continues in the next sessions until the holding is zero.
-- US-closed sessions are skipped (review S8): on a US holiday Xetra's S&P
-  500 funds quote wide, so no core order is sent that day, and the window
-  counts only sessions both markets trade.
+- US-closed sessions are skipped (review S8): on a US holiday European
+  S&P 500 fund lines quote wide, London's as Xetra's, since their market
+  makers hedge in US instruments, so no core order is sent that day, and
+  the window counts only sessions both markets trade. Holds for London:
+  in 2026 to 2028 it skips Independence Day (3 July 2026, 5 July 2027,
+  4 July 2028) and Labor Day (7 September 2026, 6 September 2027,
+  4 September 2028) in the July and September windows. London's own bank
+  holidays are not sessions and never count.
 - Due time: 15:45 Europe/Berlin (`send_after`), after the US cash open,
-  when Xetra's S&P 500 ETF quotes are tightest; on an early close it is
-  clamped to an hour before that close (review S8). The row is visible
+  when European S&P 500 ETF quotes are tightest. Holds for London: it is
+  14:45 London all year (the UK and Germany change clocks on the same
+  days), a quarter of an hour after the US open (13:30 or 14:30 London,
+  the earlier in the weeks the US is on summer time and Europe is not)
+  and 1 hour 45 minutes before London's 16:30 close. The row is visible
   from the open. Five sessions also give a bill redemption time to settle
   before a buy that needs its cash.
+- Early close (review S8): on Xetra the send time is clamped to an hour
+  before an early close. London's early closes end at 12:30 London (24
+  and 31 December 2026 and 2027, 22 and 29 December 2028), before the US
+  open, so an hour before is a time when the 15:45 reasoning fails: on
+  the London line an early-close session is skipped like a US-closed one,
+  not clamped. None falls inside a window in 2026 to 2028 (a window is the
+  first sessions of a month); 31 December 2026 and 2027 and 29 December
+  2028 are decision days, decided from 13:00 London.
+- Price guard (built, `core.Guard`): a daily move beyond ±8% needs SPY's
+  move over the two US sessions spanning the line's day, at half the size
+  and the same sign. Holds for London unchanged: London's 16:30 close is
+  17:30 CET, the same instant as Xetra's and four and a half hours before
+  the US close, so the span (from the US close before the line's previous
+  session to the first US close on or after its own day) is the same; the
+  guard reads the line's own session dates.
 - Terms: LMT, DAY, regular session; the limit is the live mid snapped to
   the tick grid without crossing the mid against the owner (a buy rounds
   down, a sale up); IBKR Adaptive at the owner's priority where Canary
-  admits it; SMART with primary exchange `IBIS`. No market order, no
+  admits it; SMART with the line's primary exchange (`LSEETF` for the
+  London line), as IBKR's record names it. No market order, no
   repricing, no chasing. A limit more than 10% from P_m holds the row as a
   probable data or contract error.
 - Canary's Adaptive shape is US-only today: `reduceAdaptiveSupported`
   requires USD, and `validateAdaptiveOrder` in `pkg/ibkr` requires SMART.
-  Whether IBKR accepts Adaptive for IBCF routed SMART is assumption A1, to
+  Whether IBKR accepts Adaptive for the fund's line routed SMART is assumption A1, to
   verify by WhatIf in paper. A refusal is decided (D2, "Yes, for the core
   only"): core orders then use a plain DAY limit at the mid, tick-snapped,
   never crossing it, never repriced; every other automatic order keeps
@@ -384,7 +457,7 @@ selection only.
 | Concern | Owner | How |
 |---|---|---|
 | Rule, monthly target, evidence | Canary verdict `core.target` (built) | Pure evaluator `internal/core`; a frozen monthly state document with its input digest; `canary core` and `canary_core`, read-only; listed in `TestOnlyTheDaemonEvaluates` |
-| The exact order | Canary proposal engine, bucket `core_rebalance` | Sizes D; applies the band, minimum, funding and headroom; nets and merges with other rows; Xetra readiness |
+| The exact order | Canary proposal engine, bucket `core_rebalance` | Sizes D; applies the band, minimum, funding and headroom; nets and merges with other rows; readiness on the line's exchange calendar |
 | The decision to send | A: the owner on the device. B: the Desk controller under the Fully armed mandate | Desk never computes a size or a price |
 | Execution | Canary's existing order path | Every gate, the order journal, the wire guard |
 | Durable progress (B only) | Torok | The existing controller records |
@@ -446,13 +519,14 @@ Phase 1, read-only, no change to the write path, built on Canary branch
 | 0b | Mandate: the incremental additions gate refuses an addition that creates or deepens a gap-cap breach (B1) | Built, `cdbf8ef8` |
 | 0c | Mandate: IBCF measured on SPY's local-currency returns (S5) | Built, `342582ee` |
 | 1 | `[mandate.core]` schema: inactive when absent; a missing key holds the core and names it, never in the constitution's approval list; fingerprinted | Built, `e0421bb1` |
-| 2 | The history store keeps the core instrument's series, held or not, on IBIS by contract id, fresh on Xetra's calendar (S7) | Built, `e0421bb1` |
+| 2 | The history store keeps the core instrument's series, held or not, by contract id on the line's primary exchange, fresh on that exchange's calendar (S7) | Built, `e0421bb1`; venue and calendar from IBKR's record since `core-venue` (2026-10-18) |
 | 3 | `internal/core` evaluator and the parity fixture test; data guards; the headroom bisection; the band and minimum | Built, `293fb222` |
 | 4 | `core.target` verdict, frozen monthly state with `core_target_drift`, RPC, `canary core` (goldens), `canary_core`, `TestOnlyTheDaemonEvaluates` | Built, `e0421bb1` |
 | 5 | Scorecard resolver: the core instrument's fills and `proposal:core_rebalance` go to sleeve `core`, reported, never gated (S1) | Moved to phase 2 |
 | 6 | Desk: the core's line on Risk › Mandate (target, holding, trend, next decision), with no IC, e-value or "established" (S1) | Moved to phase 2 (Desk) |
 
-Resolution (2026-10-14, branch `core-resolve`): the live daemon could not
+Resolution (2026-10-14, branch `core-resolve`; its pin on IBIS is
+superseded by the venue fix below): the live daemon could not
 resolve Xetra funds by symbol (`symbol_inactive: no security definition`
 for IBCF, SXR8, EUNL and IUSE on IBIS, IBIS2 and SMART). The owner pins the
 core by contract id, found by ISIN with `canary core resolve`, which lists
@@ -464,11 +538,22 @@ contract id sent with a symbol IBKR does not use for it is refused. Why
 the symbol lookups fail is for the live check: the resolver's trace shows
 IBKR's answer per form.
 
-Phase 1 knows its limits: the ISIN is checked against the compiled rule
-and the contract id against the series' echo, not yet against IBKR's
-contract details (W1); the decision needs the decision day's own bar and
-waits for it; before the embedded Xetra calendar's coverage (2026) the
-series' own dates stand.
+Venue fix (2026-10-18, branch `core-venue`, owner decision 08:06 CEST):
+the policy of 2026-10-16 (v11) pinned a contract id on `IBIS`; that
+contract is IBKR's only line for the ISIN, the London EUR line (primary
+`LSEETF`), and every series read on IBIS was refused with "No security
+definition" (06:41, 06:57 and 07:13 CEST), while the hold said only "no
+IBCF daily history yet". The core now finds its contract by ISIN and
+currency, reads it on its primary exchange, judges it on that exchange's
+calendar and names a refused read (section 1); the policy names only the
+fund and the currency.
+
+Phase 1 knows its limits: IBKR's record names the line under the ISIN
+(checked every six hours), and the contract id is checked against the
+series' echo; the daily contract-details check at preview is phase 2
+(12a); the decision needs the decision day's own bar and waits for it;
+before the embedded calendar's coverage (2026) the series' own dates
+stand.
 
 Then witness W0 (section 6).
 
@@ -481,8 +566,8 @@ Phase 2, option A:
 | 9 | Core buys require a known incremental mandate evaluation (section 3) | S |
 | 10 | The sweep's planned need from the core's pending buy | S |
 | 11 | Desk: the row's notice and its review through the existing prepared-proposal confirmation; the matcher accepts the row | S |
-| 12a | Items 5 and 6 above; the contract-details check of the pin (symbol, ISIN, EUR, IBIS, STK) daily | S |
-| 12b | Owner decision D5 (proposed): whether the pinned contract leaves protection's automatic scope | — |
+| 12a | Items 5 and 6 above; the contract-details check of the core's line at preview (the line IBKR lists under the ISIN, EUR, its primary exchange, STK) | S |
+| 12b | D5, decided 2026-10-18: the core's contract is outside protection's automatic sales | Built, `core-venue` |
 
 Then witnesses W1 (paper) and W2 (live ramp).
 
@@ -535,7 +620,7 @@ the 9.99% cap at full room, and both scale with room.
 ### The core's own share
 
 By the formula, the sleeve's own volatility is at most S on σ_E and on
-σ_252, both measured on IBCF's own Xetra closes, which carry what the
+σ_252, both measured on the line's own closes, which carry what the
 sleeve earns. The mandate measures the same line on SPY's returns, on the
 US clock of the rest of the book (review S5); the headroom uses the
 mandate's measure. Phase 2 adds the core's standalone risk (the mandate's
@@ -596,6 +681,20 @@ stop new core buys at the final gate and cancel nothing. An Auto lock on
 IBCF locks the instrument, so it stops core sales as well as buys; a
 trend-off sale waits while it stands (review note).
 
+### Protection (D5, built 2026-10-18)
+
+Protection's automatic sales leave out the core's contract (the line in
+use and the one the core last used): a pre-authorised trailing stop or
+budget reduction on it is still served as a row for the owner's hand, but
+gets no automatic record and does not read pre-authorised, a record
+waiting from before the core used the line is superseded with the reason,
+and the final submit gate refuses it (`proposalEngine.automaticBucket`).
+The mandate's forced reduction still submits its rows on the line under
+`mandate_reduction`, and the owner's own orders and queued authorisations
+are unchanged. When Desk's controller is served under Protection (phase
+3, items 12 and 15), its protection sales need the same exclusion; core
+sales as the rule's own rows are not protection sales.
+
 ## 4. The FX rule
 
 ### Measure
@@ -649,7 +748,7 @@ Invariants, each with a synthetic test in section 6:
    Torok never supply a size or a price.
 2. One frozen target per month, persisted with the digest of its inputs.
    A recomputation that differs holds the month (`core_target_drift`).
-3. At most one core order per Xetra session, and none while a core order
+3. At most one core order per session, and none while a core order
    is working, unacknowledged or of unknown outcome.
 4. Every quantity is the target minus the confirmed holding; a partial
    fill never makes a new target or tops up past it.
@@ -674,9 +773,9 @@ Invariants, each with a synthetic test in section 6:
 | Restart | Target and digest persisted; the order journal resolves unknown sends before any new core row; under B the controller reconciles before it runs |
 | Stale data | A decision needs the decision day's bar; a buy needs a verdict at most five minutes old, equity within `capital.max_equity_age_minutes`, current positions and a live two-sided quote; the frozen target expires with its window |
 | Whipsaw | Monthly evaluation only, no flip within a month, the band; about one flip a year at about 10 bp of K. A buffer around the average would be a new lab variant, never a live tweak |
-| Market closed, holidays | The Xetra calendar sets the decision day, the window and readiness; half days follow it; past its coverage (2028-12-31) the core holds |
+| Market closed, holidays | The line's exchange calendar (London SETS today) sets the decision day, the window and readiness; half days follow it; a primary exchange without an embedded calendar holds; past its coverage (2028-12-31) the core holds |
 | Bad ETF price | A daily move beyond ±8% that SPY's move over the two US sessions spanning IBCF's day (from the US close before its previous session to the first US close on or after its own day, review S5) does not show at half the size and the same sign, a missing session bar, a bar on a closed day, σ outside 5–100%, or a limit more than 10% from P_m holds the month for review (built but the limit check, which is phase 2) |
-| Wrong contract | Contract id and ISIN pinned; IBKR's details must match symbol, ISIN, EUR, `IBIS` and STK; a second held line with the same ISIN under another contract id holds |
+| Wrong contract | The contract is the one line IBKR lists under the ISIN in EUR; several lines hold and name each, a line other than the one last used holds, a written con_id must be among the ISIN's lines and a written exchange a venue IBKR lists it on; a held line of the fund under another contract id holds (built) |
 | Currency mismatch | The order currency is EUR, the pin's and the account base's; funding only from settled EUR; a core order never creates a conversion or a debit; a non-EUR base holds |
 | Mandate unknown at the decision | The target needs only the verdict's capital; a buy still needs a fresh `within` when it is sent; sales go |
 | The owner trades IBCF by hand | The instrument is reserved to the core: its fills count as the core's, the next decision corrects the holding, and while an owner IBCF order works no core row is served (phase 2 nets every core row against it) |
@@ -763,10 +862,12 @@ Live witness, each step only after the one before:
 
 - **W0, shadow.** At least one month-end, two preferred, with the verdict
   served read-only in the live account and compared with the lab's
-  recomputation on independent closes (Yahoo's IBCF.DE): the same trend,
-  σ within 0.5 points, Q within 1%. The lab's R2 shadow log starts here.
+  recomputation on independent closes (Yahoo's IBCF.DE, the fund's Xetra
+  line, which closes at the same instant as London's, 17:30 CET; the lab
+  aligns the two on the sessions both trade): the same trend, σ within
+  0.5 points, Q within 1%. The lab's R2 shadow log starts here.
 - **W1, paper.** One buy and one sale through A in the paper account:
-  contract resolution by ISIN, Xetra readiness and the 15:45 due time,
+  contract resolution by ISIN, London readiness and the 15:45 due time,
   IBKR's answer on Adaptive (A1), tick snapping, settlement (A3), the
   sweep's planned need, the scorecard sleeve and the receipts.
 - **W2, live under A.** `scale_pct` 25, then 50, then 100, one monthly
@@ -783,8 +884,9 @@ volatility, or a rolling 24-month net Sharpe below 0 while the static
 mix's is above 0.5), or realised costs above twice the cost model.
 
 Assumptions to verify before the step that needs them: A1, IBKR accepts
-IBCF with Adaptive routed SMART (W1); A2, IBKR's daily IBCF bars equal the
-Xetra closing auction price (W0, against the exchange's close); A3, IBCF
+the fund's line with Adaptive routed SMART (W1); A2, IBKR's daily bars of the line equal the
+closing auction price of the line's exchange, London's for the London
+line (W0, against the exchange's close); A3, IBCF
 settles T+2 and a Bubill redemption settles inside the window (W1).
 
 ## 7. Owner decisions
@@ -813,15 +915,30 @@ Decided 2026-10-14 (the questions as asked, the answers verbatim):
   UCITS funds IBCF (IE00B3ZW0K18), SXR8 and CSPX (IE00B5BMR087), VUSA
   (IE00B3XXRP09), VUAA (IE00BFMXXD54), EUNL, IWDA and SWDA (IE00B4L5Y983),
   VWCE (IE00BK5BQT80), VWRL and VGWL (IE00B3RBWM25). A line not on the list
-  keeps 25%, the stricter stress; an addition is a reviewed change.
+  keeps 25%, the stricter stress; an addition is a reviewed change. Since
+  2026-10-18 a line also matches by the ISIN IBKR lists its contract
+  under (the core's lines, `mandate.Input.LineISINs`), so the fund's
+  London line takes the 12% whatever its symbol.
 
-Open, proposed for the owner before phase 2:
+Decided 2026-10-18 08:06 CEST, the owner's words: "Accept all three: give
+the machine its own seat (replacing D1 and largest-contributor-first), put
+s1 into its six-month shadow test, and go for the core venue fix with the
+core fund out of protection's automatic sales." Recorded here for the
+last clause:
 
+- **Venue.** The policy names only the fund and the currency: `isin`
+  and `currency` in `[mandate.core]`, with `con_id` and `exchange`
+  optional. Canary takes the contract, its venue and its calendar from
+  IBKR's record for the ISIN in that currency, stops and holds naming
+  every candidate when IBKR lists more than one, and holds when the line
+  differs from the one last used (section 1). Built on `core-venue`.
 - **D5. Does the pinned contract leave protection's automatic scope?**
-  Protection proposals cover every held line; a protection sale of IBCF
-  lowers the holding and the next decision may buy back under the
-  headroom. Proposal: exclude the pinned contract from protection's
-  automatic sales; the mandate's forced reduction still covers it.
+  Protection proposals cover every held line; a protection sale of the
+  core's line lowers the holding and the next decision may buy back
+  under the headroom. Proposed: exclude the core's contract from
+  protection's automatic sales; the mandate's forced reduction still
+  covers it. Accepted ("the core fund out of protection's automatic
+  sales"). Built on `core-venue` (section 3, "Protection").
 
 ## Proposed policy
 
@@ -835,10 +952,10 @@ out); the build brief's `[core]` is this `[mandate.core]`.
 ```toml
 [mandate.core]                  # absent: the core is inactive
 rule            = "core-ibcf-v1" # compiled; carries the lab spec hash
-con_id          = 0              # IBKR contract id, written after resolving the ISIN on IBIS
-isin            = "IE00B3ZW0K18"
-exchange        = "IBIS"         # Xetra
+isin            = "IE00B3ZW0K18" # the fund; IBKR's record names its line
 currency        = "EUR"
+# con_id        = 0              # optional: chooses among several lines IBKR lists
+# exchange      = "LSEETF"       # optional: must be a venue IBKR lists the line on
 scale_pct       = 25             # ramp: 25, then 50, then 100; 0 suspends
 band_pct        = 10
 min_order_base  = 2500
@@ -870,7 +987,9 @@ internal/core/                     pure evaluator; parity fixture test
 internal/core/testdata/            synthetic fixture shared with the lab
 internal/rpc/core.go               core.target method and result types
 internal/daemon/core_target.go     verdict, frozen monthly state, cadence
-internal/daemon/mandate_history.go keeps the core instrument's series (Xetra freshness)
+internal/daemon/core_resolve.go    the contract from IBKR's record for the ISIN (2026-10-18)
+internal/daemon/mandate_history.go keeps the core instrument's series (the line's calendar)
+internal/daemon/proposal_automatic.go  D5: the core's line outside protection's automatic sales
 internal/daemon/mandate_verdict.go the gap-cap check on additions (B1)
 internal/risk/mandate.go           [mandate.core] and index_gap_shock_pct
 internal/cli/core.go               canary core [--json]

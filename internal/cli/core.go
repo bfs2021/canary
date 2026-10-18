@@ -88,14 +88,14 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	if len(spec) > 12 {
 		spec = spec[:12]
 	}
-	instrument := ""
+	fund := ""
 	if in := res.Instrument; in != nil {
-		instrument = fmt.Sprintf("%s %s on %s", in.Symbol, in.ISIN, in.Exchange)
-		if in.ConID > 0 {
-			instrument += fmt.Sprintf(", contract %d", in.ConID)
-		}
+		fund = strings.TrimSpace(in.ISIN + " " + in.Currency)
 	}
-	riskReadLine(env, "Rule", res.Rule, "spec "+res.SpecID+" "+spec, instrument)
+	riskReadLine(env, "Rule", res.Rule, "spec "+res.SpecID+" "+spec, fund)
+	if in := res.Instrument; in != nil {
+		riskReadLine(env, "Contract", coreContractLine(*in)...)
+	}
 	if a != nil {
 		action := a.Why
 		if a.Quantity > 0 && a.Kind != core.ActionHold {
@@ -141,8 +141,11 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 		}
 	}
 	if h := res.Holding; h != nil {
-		source := map[string]string{"mark": "mark", "close": "last close"}[h.PriceSource]
-		riskReadLine(env, "Holding", coreShares(h.Shares)+" ("+mandateAmount(h.ValueBase, ccy)+")", "price "+corePrice(h.Price)+" "+source)
+		price := "no price yet"
+		if h.Price > 0 {
+			price = "price " + corePrice(h.Price) + " " + map[string]string{"mark": "mark", "close": "last close"}[h.PriceSource]
+		}
+		riskReadLine(env, "Holding", coreShares(h.Shares)+" ("+mandateAmount(h.ValueBase, ccy)+")", price)
 	}
 	if a != nil && a.Kind != core.ActionHold && res.Policy != nil && res.Policy.BandPct != nil && res.Policy.MinOrderBase != nil {
 		band := fmt.Sprintf("%s%% of the target (%.0f %s)", fmtPctNum(*res.Policy.BandPct), a.BandShares, pluralWord(int(math.Round(a.BandShares)), "share", "shares"))
@@ -163,7 +166,7 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 		riskReadLine(env, "Mandate", line...)
 	}
 	if res.NextDecision != "" {
-		riskReadLine(env, "Next decision", res.NextDecision+" after the Xetra close")
+		riskReadLine(env, "Next decision", res.NextDecision+" after the "+coreVenue(res.Instrument)+" close")
 	}
 	if d := res.Decision; d != nil && len(d.MonthEnds) > 0 {
 		fmt.Fprintln(env.Stdout, "\n"+env.bold("Month-ends"))
@@ -175,19 +178,51 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	}
 	fmt.Fprintln(env.Stdout, "\n"+env.bold("Evidence"))
 	if e := res.Evidence; e != nil {
+		calendar := coreVenue(res.Instrument) + " calendar"
 		switch {
 		case e.Missing:
-			riskWarnReadLine(env, "  "+e.SeriesKey, "no history yet")
+			riskWarnReadLine(env, "  "+e.SeriesKey, "no history yet", calendar)
 		case e.Stale:
-			riskWarnReadLine(env, "  "+e.SeriesKey, fmt.Sprintf("stale: %d closes to %s", e.Closes, e.LastClose), "read "+formatTimeShort(e.FetchedAt.Local()), "Xetra calendar")
+			riskWarnReadLine(env, "  "+e.SeriesKey, fmt.Sprintf("stale: %d closes to %s", e.Closes, e.LastClose), "read "+formatTimeShort(e.FetchedAt.Local()), calendar)
 		default:
-			riskReadLine(env, "  "+e.SeriesKey, fmt.Sprintf("%d closes to %s", e.Closes, e.LastClose), "read "+formatTimeShort(e.FetchedAt.Local()), "Xetra calendar")
+			riskReadLine(env, "  "+e.SeriesKey, fmt.Sprintf("%d closes to %s", e.Closes, e.LastClose), "read "+formatTimeShort(e.FetchedAt.Local()), calendar)
+		}
+		if e.ReadError != "" {
+			riskWarnReadLine(env, "  Last read", "failed "+formatTimeShort(e.ReadErrorAt.Local()), e.ReadError)
 		}
 	}
 	if m := res.Mandate; m != nil && !m.EvaluatedAt.IsZero() {
 		riskReadLine(env, "  Mandate verdict", formatTimeShort(m.EvaluatedAt.Local()))
 	}
 	riskReadLine(env, "", "Read-only: the core proposes nothing and places no order in this phase. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
+}
+
+// coreContractLine is the contract the core reads and would trade, as
+// IBKR's record for the ISIN names it, and the calendar it is judged on;
+// before IBKR has answered, the fund the policy names and that it is not
+// resolved.
+func coreContractLine(in rpc.CoreInstrument) []string {
+	if !in.Resolved {
+		line := []string{"not resolved"}
+		if in.ConID > 0 {
+			line = append(line, fmt.Sprintf("con_id %d written in [mandate.core]", in.ConID))
+		}
+		return line
+	}
+	name := in.Symbol
+	if in.TradingClass != "" && in.TradingClass != in.Symbol {
+		name += " (class " + in.TradingClass + ")"
+	}
+	return []string{fmt.Sprintf("%d %s on %s, %s", in.ConID, name, in.Exchange, in.Currency), nonEmpty(in.CalendarLabel, in.Calendar) + " calendar", "from IBKR's record for the ISIN"}
+}
+
+// coreVenue names the core's exchange calendar for a line: its label once
+// the contract is resolved, else "exchange".
+func coreVenue(in *rpc.CoreInstrument) string {
+	if in == nil || !in.Resolved {
+		return "exchange"
+	}
+	return nonEmpty(in.CalendarLabel, nonEmpty(in.Calendar, in.Exchange))
 }
 
 // fmtPctNum prints a percentage number without a trailing zero fraction.
@@ -199,9 +234,10 @@ func fmtPctNum(v float64) string {
 }
 
 // runCoreResolve lists every listing IBKR knows for the core's ISIN (the
-// flag's, else the one [mandate.core] pins, else the compiled rule's) so
-// the owner can write its contract id. Read-only: it never chooses a
-// listing and never writes the policy.
+// flag's, else the one [mandate.core] names, else the compiled rule's) and
+// marks the one the core uses, so the owner can choose among several by
+// writing its contract id. Read-only: it never chooses a listing and never
+// writes the policy.
 func runCoreResolve(ctx context.Context, env *Env, args []string) int {
 	fs := flagSet(env, "core resolve")
 	jsonOut := fs.Bool("json", false, "emit the typed listings")
@@ -259,6 +295,10 @@ func renderCoreResolve(env *Env, res rpc.CoreResolveResult) {
 		style := func(s string) string { return s }
 		if l.Pinned {
 			parts = append(parts, "PINNED")
+			style = env.green
+		}
+		if l.Used {
+			parts = append(parts, "THE CORE USES IT")
 			style = env.green
 		}
 		riskDisplayLine(env, "  ", briefJoin(parts...), style)

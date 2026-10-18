@@ -16,32 +16,73 @@ import (
 	"github.com/osauer/canary/v2/internal/marketcal"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 // The core sleeve's target (phase 1, read-only), witnessed on synthetic
-// books: the mandate test server, its seeded histories and a synthetic
-// IBCF series on Xetra's calendar. mandateTestNow is Wednesday 14 October
-// 2026, 17:00 Berlin: the latest decision is 30 September, the next 30
-// October.
+// books: the mandate test server, its seeded histories, a synthetic IBKR
+// answer for the fund's ISIN and a synthetic series on the listing
+// exchange's calendar (Xetra-shaped unless a test says London).
+// mandateTestNow is Wednesday 14 October 2026, 17:00 Berlin: the latest
+// decision is 30 September, the next 30 October.
 
 const coreTestConID = 9030
 
+// testCoreConstitution names the fund by ISIN and currency only, as the
+// owner's decision of 2026-10-18 has the policy do.
 func testCoreConstitution() *risk.Constitution {
 	c := testMandateConstitution()
-	c.Mandate.Core = &risk.ConstitutionMandateCore{Rule: core.RuleID, ISIN: core.ISIN, ConID: new(coreTestConID), Exchange: core.Exchange, Currency: core.Currency,
+	c.Mandate.Core = &risk.ConstitutionMandateCore{Rule: core.RuleID, ISIN: core.ISIN, Currency: core.Currency,
 		ScalePct: new(100.0), BandPct: new(10.0), MinOrderBase: new(2500.0), MaxValuePct: new(40.0)}
 	c.Mandate.IndexGapShockPct = new(12.0) // the owner's D4
 	c.Capital.BaseCurrency = "EUR"
 	return c
 }
 
+// coreTestListing is IBKR's synthetic answer for the ISIN: one EUR line on
+// Xetra, found by ISIN.
+func coreTestListing() ibkrlib.Listing {
+	return ibkrlib.Listing{ConID: coreTestConID, Symbol: core.Symbol, SecType: "STK", Exchange: "SMART", PrimaryExch: "IBIS", Currency: core.Currency, TradingClass: core.Symbol,
+		ISIN: core.ISIN, ValidExchanges: "SMART,IBIS", Forms: []string{"STK by ISIN on SMART"}}
+}
+
+// coreTestLondonListing is a synthetic London EUR line of the fund under
+// another symbol and trading class.
+func coreTestLondonListing() ibkrlib.Listing {
+	return ibkrlib.Listing{ConID: 9031, Symbol: "IXSE", SecType: "STK", Exchange: "SMART", PrimaryExch: "LSEETF", Currency: core.Currency, TradingClass: "EXXT",
+		ValidExchanges: "SMART,LSEETF", Forms: []string{"STK by ISIN on SMART", "STK by ISIN, no exchange"}}
+}
+
+// coreAnswer makes IBKR answer the given listings and resolves the core
+// again, as the background lane would.
+func coreAnswer(t *testing.T, srv *Server, listings ...ibkrlib.Listing) *coreFakeListings {
+	t.Helper()
+	fake := &coreFakeListings{listings: listings}
+	if len(listings) == 0 {
+		fake.err = ibkrlib.ErrNoListing
+	}
+	srv.coreListingsForTest = fake.lookup
+	srv.coreTargets.mu.Lock()
+	srv.coreTargets.pin = corePin{}
+	srv.coreTargets.mu.Unlock()
+	srv.coreResolve(t.Context(), srv.riskPolicies.snapshot().policy)
+	return fake
+}
+
 // coreTestDates are 320 sessions to the last completed Xetra session:
 // Xetra's own calendar where it is embedded, weekdays before.
 func coreTestDates(t *testing.T) []string {
 	t.Helper()
-	last, _, ok := mandateLastSessionsIn(mandateTestNow, marketcal.MarketDEXetra)
+	return coreTestDatesOn(t, marketcal.MarketDEXetra)
+}
+
+// coreTestDatesOn are 320 sessions to the last completed session of a
+// market: its embedded calendar from 2026, weekdays before.
+func coreTestDatesOn(t *testing.T, market marketcal.Market) []string {
+	t.Helper()
+	last, _, ok := mandateLastSessionsIn(mandateTestNow, market)
 	if !ok {
-		t.Fatal("no completed Xetra session")
+		t.Fatal("no completed session")
 	}
 	cal := marketcal.NewWithClock(func() time.Time { return mandateTestNow })
 	var out []string
@@ -53,7 +94,7 @@ func coreTestDates(t *testing.T) []string {
 			}
 			continue
 		}
-		res, err := cal.Query(marketcal.Query{Market: marketcal.MarketDEXetra, Date: d, Days: 1})
+		res, err := cal.Query(marketcal.Query{Market: market, Date: d, Days: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -68,10 +109,16 @@ func coreTestDates(t *testing.T) []string {
 // the 30 September decision) and about 12% volatility (the 15% floor binds).
 func coreTestSeries(t *testing.T, drift float64) *mandateHistorySeries {
 	t.Helper()
-	dates := coreTestDates(t)
+	return coreTestSeriesOn(t, coreTestListing(), marketcal.MarketDEXetra, coreTestDates(t), drift)
+}
+
+// coreTestSeriesOn is the same walk for a listing, read for a market's
+// calendar on the given dates.
+func coreTestSeriesOn(t *testing.T, l ibkrlib.Listing, market marketcal.Market, dates []string, drift float64) *mandateHistorySeries {
+	t.Helper()
 	r := rand.New(rand.NewPCG(31, 32))
-	s := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: coreSeriesKey(coreTestConID), Dates: dates, FetchedAt: mandateTestNow.Add(-time.Hour), Source: "test",
-		Contract: rpc.ContractParams{ConID: coreTestConID, Symbol: core.Symbol, Currency: core.Currency, Exchange: core.Exchange}}
+	s := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: coreSeriesKey(l.ConID), Dates: dates, FetchedAt: mandateTestNow.Add(-time.Hour), Source: "test", Market: market,
+		Contract: rpc.ContractParams{ConID: l.ConID, Symbol: l.Symbol, Currency: l.Currency, Exchange: l.PrimaryExch}}
 	price := 80.0
 	for range dates {
 		s.Closes = append(s.Closes, math.Round(price*100)/100)
@@ -81,8 +128,8 @@ func coreTestSeries(t *testing.T, drift float64) *mandateHistorySeries {
 }
 
 // coreTestServer is the mandate test server with [mandate.core], a
-// database for the frozen months, the book's histories and the core's
-// series.
+// database for the frozen months, the book's histories, IBKR's answer for
+// the ISIN (one Xetra line), resolved, and the core's series.
 func coreTestServer(t *testing.T, c *risk.Constitution, pos *rpc.PositionsResult, drift float64) *Server {
 	t.Helper()
 	srv, _ := mandateTestServer(t, c)
@@ -97,6 +144,7 @@ func coreTestServer(t *testing.T, c *risk.Constitution, pos *rpc.PositionsResult
 		t.Fatal(err)
 	}
 	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
+	coreAnswer(t, srv, coreTestListing())
 	return srv
 }
 
@@ -110,7 +158,7 @@ func coreEvaluate(t *testing.T, srv *Server) *rpc.CoreTargetResult {
 
 func withIBCF(pos *rpc.PositionsResult, shares, mark float64) *rpc.PositionsResult {
 	out := *pos
-	out.Stocks = append(slices.Clone(pos.Stocks), rpc.PositionView{Symbol: core.Symbol, SecType: rpc.SecTypeStock, ConID: coreTestConID, Currency: core.Currency, PrimaryExch: core.Exchange, Quantity: shares, Multiplier: 1, Mark: mark})
+	out.Stocks = append(slices.Clone(pos.Stocks), rpc.PositionView{Symbol: core.Symbol, SecType: rpc.SecTypeStock, ConID: coreTestConID, Currency: core.Currency, PrimaryExch: "IBIS", Quantity: shares, Multiplier: 1, Mark: mark})
 	return &out
 }
 
@@ -155,6 +203,9 @@ func TestCoreTargetFirstBuyAtTheRuleTarget(t *testing.T) {
 	}
 	if res.Evidence == nil || res.Evidence.SeriesKey != coreSeriesKey(coreTestConID) || res.Evidence.Stale || res.Evidence.Calendar != "de_xetra" {
 		t.Fatalf("evidence %+v", res.Evidence)
+	}
+	if in := res.Instrument; in == nil || !in.Resolved || in.ConID != coreTestConID || in.Exchange != "IBIS" || in.Calendar != "de_xetra" || in.CalendarLabel != "Xetra" {
+		t.Fatalf("instrument %+v", res.Instrument)
 	}
 }
 
@@ -201,7 +252,7 @@ func TestCoreTargetBuyCutToTheGapCapMargin(t *testing.T) {
 		t.Fatalf("one share more still fits: %.0f <= %.0f", loss, core.HeadroomFactor*capBase)
 	}
 	// The cut buy passes the mandate gate the order would meet.
-	draft := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: a.Quantity, LimitPrice: price, Contract: rpc.ContractParams{ConID: coreTestConID, Symbol: core.Symbol, SecType: "STK", Currency: core.Currency, PrimaryExch: core.Exchange}}
+	draft := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: a.Quantity, LimitPrice: price, Contract: rpc.ContractParams{ConID: coreTestConID, Symbol: core.Symbol, SecType: "STK", Currency: core.Currency, PrimaryExch: "IBIS"}}
 	if blocker := srv.mandateBudgetGate(draft, mandateOpen); blocker != nil {
 		t.Fatalf("the headroom-cut buy is refused by the gate: %+v", blocker)
 	}
@@ -243,9 +294,11 @@ func TestCoreTargetFrozenMonthDriftAndCeiling(t *testing.T) {
 		t.Fatalf("first: %s %v", first.Status, first.Reasons)
 	}
 	frozenAt, target := first.Decision.FrozenAt, first.Sizing.Target
-	// A restart: the frozen month is read back from the database.
+	// A restart: the frozen month is read back from the database, once the
+	// background lane has resolved the contract again.
 	srv.coreTargets = coreTargetStore{}
 	srv.now = func() time.Time { return mandateTestNow.Add(time.Hour) }
+	coreAnswer(t, srv, coreTestListing())
 	again := coreEvaluate(t, srv)
 	if !again.Decision.FrozenAt.Equal(frozenAt) || again.Sizing.Target != target {
 		t.Fatalf("after a restart: frozen %v target %d, want %v %d", again.Decision.FrozenAt, again.Sizing.Target, frozenAt, target)
@@ -311,7 +364,14 @@ func TestCoreTargetHolds(t *testing.T) {
 		{"another rule", func(c *risk.Constitution, _ *Server) { c.Mandate.Core.Rule = "core-ibcf-v2" }, `rule "core-ibcf-v2"`},
 		{"another ISIN", func(c *risk.Constitution, _ *Server) { c.Mandate.Core.ISIN = "IE00B5BMR087" }, "compiled for IE00B3ZW0K18"},
 		{"base currency", func(c *risk.Constitution, _ *Server) { c.Capital.BaseCurrency = "USD" }, "base currency USD is not EUR"},
-		{"no series", func(c *risk.Constitution, _ *Server) { c.Mandate.Core.ConID = new(9031) }, "no IBCF daily history yet"},
+		{"no series", func(c *risk.Constitution, s *Server) {
+			// The owner pins another line IBKR lists: no series is kept for it yet.
+			c.Mandate.Core.ConID = new(9031)
+			other := coreTestListing()
+			other.ConID = 9031
+			coreAnswer(t, s, coreTestListing(), other)
+		}, "no IBCF daily history yet; the desk reads it on IBIS"},
+		{"not resolved", func(_ *risk.Constitution, s *Server) { s.coreTargets.pin = corePin{} }, "the core's contract is not resolved yet"},
 		{"stale series", func(_ *risk.Constitution, s *Server) {
 			series := *s.mandateHistorySeries(context.Background(), coreSeriesKey(coreTestConID))
 			series.Dates, series.Closes = series.Dates[:len(series.Dates)-3], series.Closes[:len(series.Closes)-3]
@@ -321,12 +381,12 @@ func TestCoreTargetHolds(t *testing.T) {
 			series := *s.mandateHistorySeries(context.Background(), coreSeriesKey(coreTestConID))
 			series.Contract.ConID = 9999
 			_ = s.saveMandateSeries(context.Background(), &series)
-		}, "is not the pinned contract"},
+		}, "is not the core's contract 9030"},
 		{"second line", func(_ *risk.Constitution, s *Server) {
 			pos := withIBCF(mandateTestPositions(100), 5, 100)
 			pos.Stocks[len(pos.Stocks)-1].ConID = 9032
 			s.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
-		}, "a second IBCF line"},
+		}, "a second line of the fund (IBCF) is held under con:9032"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -343,10 +403,13 @@ func TestCoreTargetHolds(t *testing.T) {
 	// (30 October 2026 is on CET, UTC+1).
 	c := testCoreConstitution()
 	srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
-	if latest, _, _ := coreDecisionDays(time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC)); latest != "2026-09-30" {
+	if latest, _, _ := coreDecisionDays(time.Date(2026, 10, 30, 15, 0, 0, 0, time.UTC), marketcal.MarketDEXetra); latest != "2026-09-30" {
 		t.Fatalf("before 18:00 on 30 October the latest decision is %s", latest)
 	}
-	if latest, next, _ := coreDecisionDays(time.Date(2026, 10, 30, 17, 30, 0, 0, time.UTC)); latest != "2026-10-30" || next != "2026-11-30" {
+	if latest, next, _ := coreDecisionDays(time.Date(2026, 10, 30, 16, 59, 0, 0, time.UTC), marketcal.MarketDEXetra); latest != "2026-09-30" || next != "2026-10-30" {
+		t.Fatalf("at 17:59 on 30 October: %s next %s", latest, next)
+	}
+	if latest, next, _ := coreDecisionDays(time.Date(2026, 10, 30, 17, 30, 0, 0, time.UTC), marketcal.MarketDEXetra); latest != "2026-10-30" || next != "2026-11-30" {
 		t.Fatalf("after 18:00 on 30 October: %s next %s", latest, next)
 	}
 	srv.now = func() time.Time { return time.Date(2026, 10, 30, 17, 30, 0, 0, time.UTC) }
@@ -360,8 +423,10 @@ func TestCoreTargetHolds(t *testing.T) {
 func TestCoreTargetAbsentChangesNothing(t *testing.T) {
 	c := testMandateConstitution()
 	srv, _ := mandateTestServer(t, c)
-	if _, ok := coreHistoryNeed(c); ok {
-		t.Fatal("a core series is read without [mandate.core]")
+	fake := &coreFakeListings{listings: []ibkrlib.Listing{coreTestListing()}}
+	srv.coreListingsForTest = fake.lookup
+	if srv.coreResolve(t.Context(), c) != nil || len(fake.asked) != 0 || srv.coreFundLines(t.Context()) != nil || srv.coreContractIDs(t.Context()) != nil {
+		t.Fatal("IBKR is asked for a core contract without [mandate.core]")
 	}
 	res, err := srv.handleCoreTarget(t.Context(), &rpc.Request{})
 	if err != nil || res.Active || res.Status != rpc.CoreStatusInactive || !strings.Contains(res.Message, "no [mandate.core]") || !res.ReadOnly {
@@ -371,9 +436,9 @@ func TestCoreTargetAbsentChangesNothing(t *testing.T) {
 	if len(srv.coreTargets.frozen) != 0 {
 		t.Fatal("an inactive core froze a month")
 	}
-	// The core series is judged fresh on Xetra's calendar, the book's on
-	// the US one.
-	if mandateSeriesMarket(coreSeriesKey(1)) != marketcal.MarketDEXetra || mandateSeriesMarket("u:SPY") != marketcal.MarketUSEquity {
+	// The core series is judged fresh on the calendar its read named, the
+	// book's on the US one.
+	if mandateSeriesMarket(&mandateHistorySeries{Key: coreSeriesKey(1), Market: marketcal.MarketUKLSE}) != marketcal.MarketUKLSE || mandateSeriesMarket(&mandateHistorySeries{Key: "u:SPY"}) != marketcal.MarketUSEquity {
 		t.Fatal("series markets")
 	}
 	// A half-written table names its keys in the core only, never in the
