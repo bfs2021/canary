@@ -185,3 +185,56 @@ func TestExecDetailsEndRequestIDReadsBothEncodings(t *testing.T) {
 		t.Fatalf("short frame request id = %d, want 0", got)
 	}
 }
+
+// The filter's tail follows the server version: from 200 (TWS API 10.30) the
+// gateway reads lastNDays and the specificDates count after side, and a frame
+// that stopped at side made it read the next frame's bytes as those fields
+// (2026-10-18: "Error reading request. Unable to parse field: 'Client Req Id'
+// for input string: 'MART'" once a minute on the executions poll, the request
+// after it lost). Below 200 the frame still ends at side.
+func TestFetchExecutionsFrameEndsWhereTheServerVersionSays(t *testing.T) {
+	for _, tc := range []struct {
+		version int
+		fields  int
+		tail    []string
+	}{{199, 10, nil}, {200, 12, []string{"", "0"}}, {maxClientVersion, 12, []string{"", "0"}}} {
+		t.Run(strconv.Itoa(tc.version), func(t *testing.T) {
+			c := readyBrokerEvidenceTestConnector(t)
+			conn := c.conn
+			setServerVersionReady(conn, tc.version)
+			c.ensureHandlersRegistered(conn)
+			writer := &captureWriter{wrote: make(chan struct{}, 1)}
+			conn.writer = bufio.NewWriterSize(writer, 64*1024)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_, _ = c.FetchExecutions(context.Background(), "DU1234567", 5*time.Second)
+			}()
+			select {
+			case <-writer.wrote:
+			case <-time.After(5 * time.Second):
+				t.Fatal("reqExecutions frame was not written")
+			}
+			frame := writer.last()
+			if len(frame) < 8 || int(binary.BigEndian.Uint32(frame[4:8])) != reqExecutions {
+				t.Fatalf("frame %x", frame)
+			}
+			// version, request id, clientId, acctCode, time, symbol, secType,
+			// exchange, side, then the tail; the last split is the empty
+			// string after the final terminator.
+			fields := bytes.Split(frame[8:], []byte{0})
+			if len(fields) != tc.fields || string(fields[0]) != "3" || string(fields[3]) != "DU1234567" || string(fields[8]) != "" {
+				t.Fatalf("server %d: fields %q, want %d with the filter through side", tc.version, fields, tc.fields)
+			}
+			if tc.tail != nil && (string(fields[9]) != tc.tail[0] || string(fields[10]) != tc.tail[1]) {
+				t.Fatalf("server %d: tail %q %q, want lastNDays unset and no specific dates", tc.version, fields[9], fields[10])
+			}
+			reqID, err := strconv.Atoi(string(fields[1]))
+			if err != nil {
+				t.Fatalf("request id %q", fields[1])
+			}
+			conn.processMessage(conn.encodeMsg(msgExecDetailsEnd, "1", strconv.Itoa(reqID)))
+			<-done
+		})
+	}
+}

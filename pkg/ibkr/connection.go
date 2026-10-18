@@ -1453,6 +1453,10 @@ const (
 	minServerVerProtoBufPlaceOrder = 203
 	protoBufMsgID                  = 200
 
+	// Version 200 = MIN_SERVER_VER_PARAMETRIZED_DAYS_OF_EXECUTIONS (TWS API
+	// 10.30): reqExecutions carries lastNDays and specificDates after side.
+	minServerVerParametrizedDaysOfExecutions = 200
+
 	minServerVerManualOrderTime  = 169
 	minServerVerRFQFields        = 187
 	minServerVerUndoRFQFields    = 190

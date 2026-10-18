@@ -123,7 +123,19 @@ func (c *Connector) FetchExecutions(ctx context.Context, account string, timeout
 	// client ID and empty fields leave those dimensions unfiltered; only the
 	// account is pinned. The broker still decides which clients' executions
 	// this API client may see.
-	msg := conn.encodeMsg(reqExecutions, 3, reqID, 0, strings.TrimSpace(account), "", "", "", "", "")
+	fields := []any{reqExecutions, 3, reqID, 0, strings.TrimSpace(account), "", "", "", "", ""}
+	if conn.serverVersion >= minServerVerParametrizedDaysOfExecutions {
+		// From server version 200 the filter ends with lastNDays (unset: an
+		// empty field, as the broker's own clients send it) and the count of
+		// specificDates (none). The gateway reads these two fields whatever
+		// the frame's length: a frame that stopped at side made it read the
+		// next request's bytes as them, so once a minute on the poll it
+		// answered error 320 ("Unable to parse field: 'Client Req Id' for
+		// input string: 'MART'") and the request after the poll was lost
+		// (2026-10-18, every build since the poll shipped).
+		fields = append(fields, "", 0)
+	}
+	msg := conn.encodeMsg(fields...)
 	if err := conn.sendMessageWithTypeContext(ctx, msg, RequestTypeGeneral); err != nil {
 		cleanup()
 		return ExecutionsSnapshot{AsOf: time.Now().UTC(), RequestID: reqID}, fmt.Errorf("request executions: %w", err)
