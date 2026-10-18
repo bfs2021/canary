@@ -700,3 +700,48 @@ func TestMandateReductionAbsentMandateChangesNothing(t *testing.T) {
 		t.Fatalf("snapshot names the mandate: %s (%v)", raw, err)
 	}
 }
+
+// A kept order says why it is below the cut, in the figures of this cycle:
+// under a cap that no longer binds, the kept size is named and the clause is
+// never empty; under a cap that still binds but has moved, the order is the
+// kept size and the clause names it, not the cap alone (quality loop,
+// 2026-10-19: "sell 94 of 150 contracts now (the batch asks for 150; )" and
+// "hold one order to 111" beside an order of 110).
+func TestMandateCycleQuantityKeptOrderNamesItsOwnSize(t *testing.T) {
+	t.Parallel()
+	row := mandateReductionCall("SYNA", 9701, 150, 100, 100, 10, "20270115")
+	in := mandateReductionInput{MaxOrderNotional: 1e9}
+	// The cap no longer binds (a notional of 1e9 admits the whole cut): the
+	// order kept from last cycle must still say so.
+	c := &mandateCut{row: row, full: 150, step: 1, units: 150, prevUnits: 150, prevQty: 94}
+	qty, waits := mandateCycleQuantity(c, in, "EUR")
+	if qty != 94 || !strings.Contains(waits, "kept at 94") {
+		t.Fatalf("kept under a cap that no longer binds: %d %q", qty, waits)
+	}
+	// The cap binds at 111 now (111 × 1,000 per contract) and the order is
+	// kept at 110: the clause names 110.
+	in.MaxOrderNotional = 111 * 1000
+	c = &mandateCut{row: row, full: 150, step: 1, units: 150, prevUnits: 150, prevQty: 110}
+	qty, waits = mandateCycleQuantity(c, in, "EUR")
+	if qty != 110 || !strings.Contains(waits, "hold one order to 111") || !strings.Contains(waits, "kept at 110") {
+		t.Fatalf("kept under a moved cap: %d %q", qty, waits)
+	}
+	// Nothing kept: the cap alone speaks; a whole cut says nothing.
+	c = &mandateCut{row: row, full: 150, step: 1, units: 150}
+	if qty, waits = mandateCycleQuantity(c, in, "EUR"); qty != 111 || !strings.Contains(waits, "hold one order to 111") || strings.Contains(waits, "kept") {
+		t.Fatalf("capped: %d %q", qty, waits)
+	}
+	in.MaxOrderNotional = 1e9
+	if qty, waits = mandateCycleQuantity(c, in, "EUR"); qty != 150 || waits != "" {
+		t.Fatalf("whole cut: %d %q", qty, waits)
+	}
+	// The row carries the clause: never an empty parenthesis.
+	engine := &proposalEngine{}
+	kept := &mandateCut{id: mandateLegID(row), leg: mandate.Leg{ID: mandateLegID(row), Kind: mandate.KindOption, Quantity: 150}, row: row, full: 150, step: 1, units: 150, prevUnits: 150, prevQty: 94, rank: 1, phase: rpc.MandatePhaseRisk}
+	fixture := mandateReductionFixture(t, mandateReductionBook(row), 1.3, 1e9, 2)
+	qty, waits = mandateCycleQuantity(kept, fixture, "EUR")
+	p := engine.mandateReductionRow(defaultProtectionPolicy(), rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, mandateTestNow, fixture, &rpc.TradeProposalMandateStatus{}, mandateBatch{cuts: []*mandateCut{kept}}, kept, qty, waits, "EUR")
+	if strings.Contains(p.Reason, "; )") || !strings.Contains(p.Reason, "the batch asks for 150; this order is kept at 94") {
+		t.Fatalf("row reason: %s", p.Reason)
+	}
+}

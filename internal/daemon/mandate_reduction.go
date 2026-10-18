@@ -1318,17 +1318,33 @@ func mandateOrderLimit(row rpc.PositionView, base string, maxOrderNotional, capB
 // (a buyback goes first and must fill before the shares it frees are sold),
 // held to the order caps; a kept cut keeps its order while the caps still
 // admit it, so a moving mark does not re-size it. waits says why the order
-// is below the cut.
+// is below the cut, and names the order as it is kept, not the cap of the
+// cycle that set it (2026-10-19: a kept order under a cap that no longer
+// binds read "the batch asks for 150; " with nothing after, and one kept at
+// 110 under a cap now at 111 named the 111).
 func mandateCycleQuantity(c *mandateCut, in mandateReductionInput, base string) (int, string) {
-	qty, waits := c.units, ""
-	if limit := mandateOrderLimit(c.row, base, in.MaxOrderNotional, in.OrderCapBase); limit > 0 && qty > limit {
+	qty := c.units
+	limit := mandateOrderLimit(c.row, base, in.MaxOrderNotional, in.OrderCapBase)
+	capped := limit > 0 && qty > limit
+	if capped {
 		qty = limit
-		waits = fmt.Sprintf("the order caps hold one order to %d, and the next cycle measures the rest", limit)
 	}
-	if c.units == c.prevUnits && c.prevQty > 0 && c.prevQty <= qty {
+	kept := c.units == c.prevUnits && c.prevQty > 0 && c.prevQty < qty
+	if kept {
 		qty = c.prevQty
 	}
-	return max(0, min(qty, c.full)), waits
+	qty = max(0, min(qty, c.full))
+	waits := ""
+	switch {
+	case qty >= c.units:
+	case kept && capped:
+		waits = fmt.Sprintf("the order caps hold one order to %d; this order is kept at %d, the size the caps admitted last cycle, so a moving mark does not re-size it, and the next cycle measures the rest", limit, qty)
+	case kept:
+		waits = fmt.Sprintf("this order is kept at %d, the size the order caps admitted last cycle, so a moving mark does not re-size it; the next cycle measures the rest", qty)
+	case capped:
+		waits = fmt.Sprintf("the order caps hold one order to %d, and the next cycle measures the rest", limit)
+	}
+	return qty, waits
 }
 
 // mandateReductionRow builds one row of the batch: a reduce-only order of
