@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.23.1 — Unreleased
+
+### What's new
+
+The mandate no longer mistakes the broker's P&L clock for money. A daemon
+reconnect or the weekend reset can move the broker's daily P&L figure by a
+whole day's P&L while the account's equity stands still; the flow check read
+that jump as an undeclared deposit or withdrawal and held the room, and with
+it every machine addition, until a statement covered the day. A flow moves
+equity, so the check now needs an equity move beyond its threshold before it
+suspects one, and a suspicion from before this rule clears on the next
+reading when the equity has not moved since. A real deposit or withdrawal is
+still caught.
+
+### Fixed
+
+- The mandate verdict read unknown after a daemon restart or over a weekend although no money moved: the flow check charged a jump in the broker's daily P&L figure as a cash flow while the equity was unchanged. It now requires an equity move beyond the flow threshold, journals the equity move with every suspicion (`equity_move_base`), and clears a record from before this rule when the equity has not moved since (`legacy_flat_equity`). Nothing changes for a real deposit or withdrawal, which still holds the room until it is declared or a statement covers its day.
+
 ## v3.23.0 — 2026-10-18 21:10 CEST
 
 ### What's new

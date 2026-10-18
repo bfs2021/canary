@@ -405,8 +405,16 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   while the broker's figure was already the new day's zero, and the
   difference charged a whole down day to a flow; every machine sleeve was
   refused from Friday night on, and Saturday's statement did not clear it,
-  below). More than max(1% of equity, 1,000 in base currency) is a
-  suspected flow (`flow_suspect`, journaled `mandate_flow_suspected`); the
+  below). A flow moves the equity: only a reading whose equity move, net of
+  declared flows, is itself beyond the threshold can raise a suspicion
+  (2026-10-18 21:30 CEST: two readings with the equity unchanged to the euro
+  and the broker's figure a day's P&L apart, one at a daemon reconnect on a
+  Sunday, read as flows and held the room for days; a record raised before
+  this rule clears on the next reading when the equity has not moved beyond
+  the threshold since its base, `legacy_flat_equity` in the journal). More
+  than max(1% of equity, 1,000 in base currency) unexplained, on such a
+  move, is a suspected flow (`flow_suspect`, journaled
+  `mandate_flow_suspected` with `equity_move_base`); the
   floor stands for the accruals a broker posts to cash that its daily P&L
   may not carry (interest, a dividend, a fee), and a flow that small moves
   the budget by under 150 a year at the 15% target. While suspected the

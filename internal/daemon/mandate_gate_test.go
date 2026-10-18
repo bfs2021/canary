@@ -1136,3 +1136,73 @@ func TestMandateGatePreviewPassesABillAndRefusesABond(t *testing.T) {
 		t.Fatalf("note buy under a reduce verdict: %v (%v), want mandate_budget", err, codes)
 	}
 }
+
+// A deposit or withdrawal moves the equity; the broker's daily P&L figure can
+// jump by a day's P&L while the equity stands still (a daemon reconnect on a
+// Sunday, the reset at the broker's own hour). On 2026-10-18 two such jumps
+// read as cash flows and held the room for days. The check now needs an
+// equity move beyond the threshold to suspect anything, and still catches a
+// flow that moves the equity.
+func TestMandateFlowCheckIgnoresAPnLJumpWhileEquityStandsStill(t *testing.T) {
+	utc := func(day, hour, minute int) time.Time { return time.Date(2026, 10, day, hour, minute, 0, 0, time.UTC) }
+	clock := utc(18, 14, 0)
+	st := newTestRiskCapitalStore(t)
+	st.now = func() time.Time { return clock }
+	c := testMandateConstitution()
+	reconcileNow(t, st)
+	read := func(at time.Time, equity, pnl float64) {
+		clock = at.Add(time.Second)
+		observeWithPnL(st, c, equity, pnl, at)
+	}
+	read(utc(18, 14, 0), 300000, 15000) // Sunday afternoon: the figure still carries Friday's P&L
+	read(utc(18, 17, 54), 300000, 5000) // the daemon reconnects: the figure is a day's P&L lower, the equity unchanged
+	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); !got.Known {
+		t.Fatalf("a P&L jump with the equity unchanged read as a flow: %v", got.Reasons)
+	}
+	read(utc(18, 18, 0), 300000, -5000)
+	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); !got.Known {
+		t.Fatalf("a second jump with the equity unchanged read as a flow: %v", got.Reasons)
+	}
+	read(utc(18, 18, 10), 320000, -5000) // a deposit: the equity moves with no P&L
+	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known || len(got.Reasons) == 0 || !strings.Contains(got.Reasons[0], "a cash flow is suspected") {
+		t.Fatalf("a deposit passed: %+v", got)
+	}
+}
+
+// A suspicion raised before the equity-move rule, with the equity never moved
+// beyond the threshold since its base, was the broker's figure alone and
+// clears on the next reading; a suspicion raised by a real equity move stays
+// even when the market later moves the equity back.
+func TestMandateLegacyFlatEquitySuspicionClears(t *testing.T) {
+	utc := func(day, hour, minute int) time.Time { return time.Date(2026, 10, day, hour, minute, 0, 0, time.UTC) }
+	for _, tc := range []struct {
+		name     string
+		moveBase float64
+		cleared  bool
+	}{{"legacy record, equity flat", 0, true}, {"real move, equity back at the base", 20000, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := utc(18, 14, 0)
+			st := newTestRiskCapitalStore(t)
+			st.now = func() time.Time { return clock }
+			c := testMandateConstitution()
+			reconcileNow(t, st)
+			read := func(at time.Time, equity, pnl float64) {
+				clock = at.Add(time.Second)
+				observeWithPnL(st, c, equity, pnl, at)
+			}
+			read(utc(18, 14, 0), 300000, 15000)
+			st.mu.Lock()
+			m := st.state.Mandate
+			m.FlowSuspect = &mandateFlowSuspect{At: utc(18, 17, 54), Base: *m.Last, PnLSince: -10000, Unexplained: 10000, ThresholdAt: 3000, MoveBase: tc.moveBase}
+			st.mu.Unlock()
+			if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known {
+				t.Fatalf("the injected suspicion is not held: %+v", got)
+			}
+			read(utc(18, 18, 0), 300000, 5000)
+			got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock)
+			if got.Known != tc.cleared {
+				t.Fatalf("known %v, want %v: %v", got.Known, tc.cleared, got.Reasons)
+			}
+		})
+	}
+}

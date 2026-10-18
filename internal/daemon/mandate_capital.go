@@ -95,6 +95,10 @@ type mandateFlowSuspect struct {
 	PnLSince    float64         `json:"pnl_since_base"`
 	Unexplained float64         `json:"unexplained_base"`
 	ThresholdAt float64         `json:"threshold_base"`
+	// MoveBase is the equity move, net of declared flows, of the reading that
+	// raised the suspicion: always beyond the threshold since 2026-10-18, as
+	// a flow moves equity. Zero marks a record raised before that rule.
+	MoveBase float64 `json:"move_base,omitempty"`
 }
 
 // mandateFlowFloorBase is the least unexplained move, in base currency,
@@ -170,13 +174,21 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 		if m.Last != nil {
 			s.PnLSince += mandatePnLStep(*m.Last, pnl, equityBase-m.Last.EquityBase-(flows-m.Last.FlowsBase), band)
 		}
-		s.Unexplained = equityBase - s.Base.EquityBase - (flows - s.Base.FlowsBase) - s.PnLSince
+		moveSince := equityBase - s.Base.EquityBase - (flows - s.Base.FlowsBase)
+		s.Unexplained = moveSince - s.PnLSince
 		explained := math.Abs(s.Unexplained) <= threshold
 		statement := !st.state.StatementCoverageTo.IsZero() && mandateSessionDate(s.At) <= st.state.StatementCoverageTo.UTC().Format(time.DateOnly)
-		if explained || statement {
+		// A record raised before 2026-10-18 21:30 CEST could come from the
+		// broker's P&L figure alone, with the equity standing still (a daemon
+		// restart or the weekend reset moved the figure by a day's P&L while
+		// equity moved by nothing): where the equity has not moved beyond the
+		// threshold since the base, no flow happened and the record clears.
+		legacy := s.MoveBase == 0 && math.Abs(moveSince) <= threshold
+		if explained || statement || legacy {
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_cleared",
 				"suspected_at": s.At.UTC(), "unexplained_base": s.Unexplained, "equity_base": equityBase, "flows_base": flows, "by_statement": statement && !explained,
+				"equity_move_base": moveSince, "legacy_flat_equity": legacy && !explained && !statement,
 				"policy_fingerprint": constitutionFingerprint(c),
 			})
 			m.FlowSuspect = nil
@@ -184,11 +196,16 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 	} else if m.Last != nil {
 		move := equityBase - m.Last.EquityBase - (flows - m.Last.FlowsBase)
 		step := mandatePnLStep(*m.Last, pnl, move, band)
-		if unexplained := move - step; math.Abs(unexplained) > threshold {
-			m.FlowSuspect = &mandateFlowSuspect{At: asOf, Base: *m.Last, PnLSince: step, Unexplained: unexplained, ThresholdAt: threshold}
+		// A deposit or withdrawal moves the equity by at least the threshold;
+		// a P&L figure that jumps while the equity stands still is the
+		// broker's P&L clock (a reset, a reconnect), never money (2026-10-18:
+		// two readings with the equity unchanged to the euro and the figure a
+		// day's P&L apart read as flows and held the room for days).
+		if unexplained := move - step; math.Abs(move) > threshold && math.Abs(unexplained) > threshold {
+			m.FlowSuspect = &mandateFlowSuspect{At: asOf, Base: *m.Last, PnLSince: step, Unexplained: unexplained, ThresholdAt: threshold, MoveBase: move}
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_suspected",
-				"unexplained_base": unexplained, "pnl_move_base": step, "pnl_reported": pnl.DailyBase != nil, "threshold_base": threshold,
+				"unexplained_base": unexplained, "pnl_move_base": step, "equity_move_base": move, "pnl_reported": pnl.DailyBase != nil, "threshold_base": threshold,
 				"equity_base": equityBase, "equity_as_of": asOf.UTC(),
 				"policy_fingerprint": constitutionFingerprint(c),
 			})
