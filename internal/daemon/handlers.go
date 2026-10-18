@@ -3554,6 +3554,7 @@ func (s *Server) statusHealthSnapshot() *rpc.HealthResult {
 	res.Members = s.membersHealth()
 	res.Trading = *s.handleTradingStatus()
 	res.PushDelivery = s.pushDeliveryProof.current()
+	res.Executions = s.executionVisibilityHealth(ep)
 	configuredAccount := ""
 	port := ep.Port
 	if s.cfg != nil {

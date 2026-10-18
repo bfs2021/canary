@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 
 	"github.com/osauer/canary/v2/internal/rpc"
 	"strings"
@@ -343,5 +345,79 @@ func TestProposalAutomaticColumnNamesTheSettlingHold(t *testing.T) {
 	held := formatProposalAutomaticColumn(&rpc.TradeProposalAutomatic{PreAuthorised: true, State: rpc.TradeProposalAutomaticPending, HeldAt: time.Date(2026, 9, 25, 14, 0, 0, 0, time.UTC)})
 	if !strings.Contains(held, "held while a hand order placed or modified since this proposal appeared works") {
 		t.Fatalf("held column = %q", held)
+	}
+}
+
+type statusExecutionsConn struct{ res rpc.HealthResult }
+
+func (c statusExecutionsConn) Call(_ context.Context, method string, _ any, out any) error {
+	if method == rpc.MethodStatusHealth {
+		*out.(*rpc.HealthResult) = c.res
+	}
+	return nil
+}
+func (statusExecutionsConn) Stream(context.Context, string, any, func(json.RawMessage) error) error {
+	return nil
+}
+
+// The JSON carries the same facts as the Executions row: the verdict, when it
+// was proven, the client id and the TWS setting that widens visibility.
+func TestStatusJSONCarriesExecutionVisibility(t *testing.T) {
+	provenAt := time.Date(2026, 10, 18, 13, 35, 0, 0, time.UTC)
+	for _, test := range []struct {
+		name string
+		row  rpc.ExecutionVisibilityHealth
+		want map[string]any
+	}{
+		{name: "proven", row: rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityAllClients, ProvenAt: provenAt, ClientID: 15, Setting: rpc.ExecutionVisibilitySetting},
+			want: map[string]any{"visibility": "all_clients", "proven_at": "2026-10-18T13:35:00Z", "client_id": float64(15), "setting": rpc.ExecutionVisibilitySetting}},
+		{name: "unproven", row: rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityUnproven, ClientID: 15, Setting: rpc.ExecutionVisibilitySetting, Action: "set it"},
+			want: map[string]any{"visibility": "own_orders_unproven", "client_id": float64(15), "setting": rpc.ExecutionVisibilitySetting, "action": "set it"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			res := rpc.HealthResult{Connected: true, Verdict: rpc.HealthVerdict{State: "READY"}, Executions: &test.row}
+			env := &Env{Conn: statusExecutionsConn{res}, Stdout: &out, Stderr: &bytes.Buffer{}}
+			if code := runStatus(t.Context(), env, []string{"--json"}); code != 0 {
+				t.Fatalf("exit %d: %s", code, out.String())
+			}
+			var got struct {
+				Executions map[string]any `json:"executions"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range test.want {
+				if got.Executions[key] != want {
+					t.Fatalf("executions.%s = %v, want %v\n%s", key, got.Executions[key], want, out.String())
+				}
+			}
+			if _, present := got.Executions["proven_at"]; present != !test.row.ProvenAt.IsZero() {
+				t.Fatalf("proven_at present = %v: %s", present, out.String())
+			}
+			if len(got.Executions) != len(test.want) {
+				t.Fatalf("unexpected executions keys: %s", out.String())
+			}
+		})
+	}
+}
+
+func TestRenderStatusExecutionsRow(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		row  rpc.ExecutionVisibilityHealth
+		want string
+	}{
+		{rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityAllClients, ProvenAt: time.Date(2026, 10, 18, 13, 35, 0, 0, time.Local), ClientID: 15}, "Executions     all clients (proven 13:35)"},
+		{rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityAllClients, ClientID: 15}, "Executions     all clients\n"},
+		{rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityUnproven, ClientID: 15}, "Executions     this client's own orders only · set TWS Master API client ID to\n               15 to see hand and other-client fills"},
+	} {
+		var out bytes.Buffer
+		env := &Env{Stdout: &out, Stderr: &bytes.Buffer{}}
+		res := &rpc.HealthResult{Verdict: rpc.HealthVerdict{State: "READY"}, Connected: true, Executions: &test.row}
+		renderStatusText(env, res, nil)
+		if !strings.Contains(out.String(), test.want) {
+			t.Fatalf("missing %q in\n%s", test.want, out.String())
+		}
 	}
 }

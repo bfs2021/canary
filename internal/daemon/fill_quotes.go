@@ -55,15 +55,17 @@ type fillQuoteFill struct {
 }
 
 // fillQuotePoll is the last reqExecutions outcome; otherClientsSeen is sticky
-// for the same account, broker mode and API client once another client appears.
+// for the same account, broker mode and API client once another client
+// appears, and otherClientsSeenAt is the poll that first saw one.
 type fillQuotePoll struct {
-	scope            brokerStateScope
-	clientID         int
-	at               time.Time
-	complete         bool
-	executions       int
-	err              string
-	otherClientsSeen bool
+	scope              brokerStateScope
+	clientID           int
+	at                 time.Time
+	complete           bool
+	executions         int
+	err                string
+	otherClientsSeen   bool
+	otherClientsSeenAt time.Time
 }
 
 // fillQuoteRead is what one exact-contract quote read returned.
@@ -158,10 +160,20 @@ func (rt *fillQuoteRuntime) pop() (fillQuoteFill, bool) {
 func (rt *fillQuoteRuntime) recordPoll(p fillQuotePoll) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if sameBrokerScope(p.scope, rt.poll.scope) && p.clientID == rt.poll.clientID {
-		p.otherClientsSeen = p.otherClientsSeen || rt.poll.otherClientsSeen
+	if sameBrokerScope(p.scope, rt.poll.scope) && p.clientID == rt.poll.clientID && rt.poll.otherClientsSeen {
+		p.otherClientsSeen, p.otherClientsSeenAt = true, rt.poll.otherClientsSeenAt
 	}
 	rt.poll = p
+}
+
+// pollFor is the retained poll state when it belongs to this account, broker
+// mode and client scope, and a blank poll otherwise.
+func (rt *fillQuoteRuntime) pollFor(status rpc.TradingStatus) fillQuotePoll {
+	poll := rt.pollStatus()
+	if !sameBrokerScope(poll.scope, brokerStateScope{Account: status.Account, Mode: status.Mode}) || poll.clientID != status.ClientID {
+		return fillQuotePoll{}
+	}
+	return poll
 }
 
 func (rt *fillQuoteRuntime) pollStatus() fillQuotePoll {
@@ -516,7 +528,7 @@ func (s *Server) pollAccountExecutions(ctx context.Context) {
 			continue
 		}
 		if ev.ClientIDPresent && ev.ClientID != status.ClientID {
-			outcome.otherClientsSeen = true
+			outcome.otherClientsSeen, outcome.otherClientsSeenAt = true, now
 		}
 		rt.enqueue(fillQuoteFillFromExecution(ev, status, now))
 	}
@@ -674,10 +686,7 @@ func (s *Server) handleReportingCosts(_ context.Context, req *rpc.Request) (*rpc
 	polling := false
 	if s.fillQuotes != nil {
 		records = s.fillQuotes.list(status.Account, status.Mode)
-		poll = s.fillQuotes.pollStatus()
-		if !sameBrokerScope(poll.scope, brokerStateScope{Account: status.Account, Mode: status.Mode}) || poll.clientID != status.ClientID {
-			poll = fillQuotePoll{}
-		}
+		poll = s.fillQuotes.pollFor(status)
 		polling = true
 	}
 	result := buildReportingCosts(records, p.Month, status.Mode, status.ClientID, poll, polling, now)
@@ -776,14 +785,36 @@ func buildReportingCosts(records []rpc.FillQuoteRecord, month, mode string, clie
 	result.Observation = rpc.ExecutionObservation{
 		Polling: polling, IntervalSeconds: int(fillQuotePollEvery / time.Second),
 		LastPollAt: poll.at.UTC(), LastPollComplete: poll.complete, LastPollExecutions: poll.executions, LastPollError: poll.err,
-		Visibility: rpc.ExecutionVisibilityUnproven,
 	}
-	if poll.otherClientsSeen {
-		result.Observation.Visibility = rpc.ExecutionVisibilityAllClients
-	} else {
-		result.Observation.Action = fmt.Sprintf("Only this client's own executions have been seen. Fills entered in TWS or by other API clients reach Canary when TWS Global Configuration → API → Settings → Master API client ID is Canary's client id (%d); the owner decides that setting.", clientID)
-	}
+	visibility := executionVisibility(clientID, poll)
+	result.Observation.Visibility, result.Observation.ProvenAt, result.Observation.Action = visibility.Visibility, visibility.ProvenAt, visibility.Action
 	return result
+}
+
+// executionVisibility is the verdict the costs report and `canary status`
+// share: proven by an execution from another client id, never assumed.
+func executionVisibility(clientID int, poll fillQuotePoll) rpc.ExecutionVisibilityHealth {
+	v := rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityUnproven, ClientID: clientID, Setting: rpc.ExecutionVisibilitySetting}
+	if poll.otherClientsSeen {
+		v.Visibility = rpc.ExecutionVisibilityAllClients
+		if !poll.otherClientsSeenAt.IsZero() {
+			v.ProvenAt = poll.otherClientsSeenAt.UTC()
+		}
+		return v
+	}
+	v.Action = fmt.Sprintf("Only this client's own executions have been seen. Fills entered in TWS or by other API clients reach Canary when %s is Canary's client id (%d); the owner decides that setting.", rpc.ExecutionVisibilitySetting, clientID)
+	return v
+}
+
+// executionVisibilityHealth is the `canary status` row, read from the same
+// poll state the costs report reads; nil while the store is not bound.
+func (s *Server) executionVisibilityHealth(ep discover.Endpoint) *rpc.ExecutionVisibilityHealth {
+	if s == nil || s.fillQuotes == nil {
+		return nil
+	}
+	status := s.fillQuoteAccountStatus(ep)
+	v := executionVisibility(status.ClientID, s.fillQuotes.pollFor(status))
+	return &v
 }
 
 func sortedCostTotals(totals map[string]*rpc.CostTotal) []rpc.CostTotal {

@@ -7,10 +7,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
+	"github.com/osauer/canary/v2/internal/discover"
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
@@ -284,5 +286,49 @@ func TestFillQuoteStoredRecordsAreListedByAccountAndMode(t *testing.T) {
 	}
 	if got := s.fillQuotes.list("DU1234567", "live"); len(got) != 0 {
 		t.Fatalf("live list = %+v, want none", got)
+	}
+}
+
+// Visibility is proven by the poll that first saw another client's execution
+// and stays proven, with that poll's time, across later polls of the same
+// scope; another account, mode or client id starts unproven again.
+func TestExecutionVisibilityIsProvenOnceAndKeepsItsTime(t *testing.T) {
+	t.Parallel()
+	rt := &fillQuoteRuntime{records: map[string]fillQuoteStored{}, claimed: map[string]bool{}}
+	scope := brokerStateScope{Account: "DU0000000", Mode: rpc.AccountModePaper}
+	status := rpc.TradingStatus{Account: scope.Account, Mode: scope.Mode, ClientID: 15}
+	first := time.Date(2026, 10, 18, 11, 35, 0, 0, time.UTC)
+
+	unproven := executionVisibility(15, rt.pollFor(status))
+	if unproven.Visibility != rpc.ExecutionVisibilityUnproven || unproven.ClientID != 15 || unproven.Setting != rpc.ExecutionVisibilitySetting || !unproven.ProvenAt.IsZero() {
+		t.Fatalf("unproven verdict: %+v", unproven)
+	}
+	if !strings.Contains(unproven.Action, rpc.ExecutionVisibilitySetting) || !strings.Contains(unproven.Action, "(15)") {
+		t.Fatalf("unproven action must name the setting and the client id: %q", unproven.Action)
+	}
+
+	rt.recordPoll(fillQuotePoll{scope: scope, clientID: 15, at: first, complete: true, otherClientsSeen: true, otherClientsSeenAt: first})
+	rt.recordPoll(fillQuotePoll{scope: scope, clientID: 15, at: first.Add(time.Minute), complete: true})
+	proven := executionVisibility(15, rt.pollFor(status))
+	if proven.Visibility != rpc.ExecutionVisibilityAllClients || !proven.ProvenAt.Equal(first) || proven.Action != "" {
+		t.Fatalf("proven verdict: %+v", proven)
+	}
+
+	other := status
+	other.ClientID = 7
+	if got := executionVisibility(7, rt.pollFor(other)); got.Visibility != rpc.ExecutionVisibilityUnproven || !got.ProvenAt.IsZero() {
+		t.Fatalf("another client id must start unproven: %+v", got)
+	}
+	rt.recordPoll(fillQuotePoll{scope: brokerStateScope{Account: "DU1234567", Mode: rpc.AccountModePaper}, clientID: 15, at: first.Add(2 * time.Minute), complete: true})
+	if got := executionVisibility(15, rt.pollFor(status)); got.Visibility != rpc.ExecutionVisibilityUnproven {
+		t.Fatalf("another account must not inherit the proof: %+v", got)
+	}
+
+	s := &Server{fillQuotes: rt}
+	if s.executionVisibilityHealth(discover.Endpoint{}) == nil {
+		t.Fatal("status row must be served once the store is bound")
+	}
+	if (&Server{}).executionVisibilityHealth(discover.Endpoint{}) != nil {
+		t.Fatal("status row must be absent while the store is not bound")
 	}
 }

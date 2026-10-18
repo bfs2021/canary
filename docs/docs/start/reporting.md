@@ -1,6 +1,6 @@
 # Set up broker reporting
 
-Updated: 2026-10-02
+Updated: 2026-10-18 21:55 CEST
 
 Canary needs one **Activity Flex Query** from Interactive Brokers. This is the
 broker-reporting foundation for reconciliation, statement-derived equity,
@@ -319,6 +319,16 @@ definition problem rather than merely waiting for IBKR.
 An empty section is not proof that every field was selected. Canary keeps its
 field choices unproved until a real row arrives. Do not manufacture a trade,
 transfer, or corporate action just to populate it.
+
+## See the fills you enter by hand
+
+The execution cost report (`canary reporting costs`) and the decision
+scorecard measure the fills IBKR reports to Canary's API client, and TWS
+reports fills entered in TWS or by other API clients only to its master
+client. To see them, set **Global Configuration → API → Settings → Master API
+client ID** in TWS to Canary's client ID (`15` unless you pinned another);
+`canary status` then shows an `Executions` row reading `all clients` once the
+first such fill has been seen, and `this client's own orders only` until then.
 
 ## Fix an existing incomplete query safely
 

@@ -111,7 +111,7 @@ Compare rallies and reversals with daily SPX/SPY/QQQ prices, a fixed 11-share-li
 
 ## `canary_status`
 
-Read daemon, gateway, storage, and source health. Use for connectivity or degraded-input diagnosis; use canary_brief for the desk decision surface.
+Read daemon, gateway, storage, and source health, and which of the account's executions reach Canary (executions: all_clients once a fill from TWS or another API client has been seen, otherwise own_orders_unproven with the TWS Master API client ID setting that widens it, which the owner decides). Use for connectivity or degraded-input diagnosis; use canary_brief for the desk decision surface.
 
 *No parameters.*
 

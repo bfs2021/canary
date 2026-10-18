@@ -147,7 +147,7 @@ var Tools = []Tool{
 		Name:               "canary_status",
 		RPCMethods:         []string{rpc.MethodStatusHealth},
 		Title:              "Canary Status",
-		Description:        "Read daemon, gateway, storage, and source health. Use for connectivity or degraded-input diagnosis; use canary_brief for the desk decision surface.",
+		Description:        "Read daemon, gateway, storage, and source health, and which of the account's executions reach Canary (executions: all_clients once a fill from TWS or another API client has been seen, otherwise own_orders_unproven with the TWS Master API client ID setting that widens it, which the owner decides). Use for connectivity or degraded-input diagnosis; use canary_brief for the desk decision surface.",
 		MonitorDescription: "Use only to diagnose why canary_brief is unavailable or degraded. Read-only.",
 		JSONSchema:         schemaObject(nil, nil),
 		Handler: func(ctx context.Context, conn *dial.Conn, _ json.RawMessage) (json.RawMessage, error) {

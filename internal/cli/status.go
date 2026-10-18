@@ -140,6 +140,9 @@ func renderStatusText(env *Env, res *rpc.HealthResult, alerts *rpc.AlertCandidat
 	if res.Trading.Mode != "" {
 		statusHealthRow(env, out, "Trading", formatTradingStatusValue(env, res.Trading))
 	}
+	if res.Executions != nil {
+		statusHealthRow(env, out, "Executions", formatExecutionVisibilityValue(env, *res.Executions))
+	}
 	if alerts != nil {
 		if value := formatAlertCoverageValue(env, alerts.Coverage); value != "" {
 			statusHealthRow(env, out, "Alerts", value)
@@ -190,6 +193,21 @@ func renderStatusText(env *Env, res *rpc.HealthResult, alerts *rpc.AlertCandidat
 	}
 	statusHealthRow(env, out, "Colors", env.dim("Amber = row needs attention; Gateway verdict is separate."))
 	fmt.Fprintln(out)
+}
+
+// formatExecutionVisibilityValue says which of the account's fills reach
+// Canary. Visibility is proven by a fill from another client, never assumed,
+// so the unproven row names the TWS setting that widens it; the owner
+// decides that setting.
+func formatExecutionVisibilityValue(env *Env, v rpc.ExecutionVisibilityHealth) string {
+	if v.Visibility == rpc.ExecutionVisibilityAllClients {
+		value := "all clients"
+		if !v.ProvenAt.IsZero() {
+			value += " (proven " + v.ProvenAt.Local().Format("15:04") + ")"
+		}
+		return env.green(value)
+	}
+	return env.yellow(fmt.Sprintf("this client's own orders only · set TWS Master API client ID to %d to see hand and other-client fills", v.ClientID))
 }
 
 // formatPortRejectionValue renders the port_rejecting phase as one fact:

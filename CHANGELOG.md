@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.23.2 — Unreleased
+
+### What's new
+
+`canary status` now says whether the fills you enter in TWS reach Canary,
+and names the TWS setting that lets them, so the execution cost report and
+the scorecard are not silently missing your hand fills.
+
+### Added
+
+- `canary status` carries an `Executions` row: `this client's own orders only · set TWS Master API client ID to N to see hand and other-client fills` until the daemon has seen a fill from another API client or TWS, then `all clients (proven HH:MM)`; `--json` and `canary_status` carry the same facts under `executions` (`visibility`, `proven_at`, `client_id`, `setting`, `action`), read from the execution poll the cost report already reports. `canary reporting costs` names the proving poll's time beside its visibility verdict (`observation.proven_at`). The reporting, install and first-session pages explain the setting.
+
 ## v3.23.1 — 2026-10-18 21:30 CEST
 
 ### What's new

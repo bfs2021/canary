@@ -1,6 +1,6 @@
 # Your first session
 
-Updated: 2026-09-30 21:23 CEST
+Updated: 2026-10-18 21:55 CEST
 
 This walkthrough uses only read-only commands. It assumes Canary is installed
 and a local IB Gateway or TWS session is available. [Install and first
@@ -15,7 +15,10 @@ canary status
 Start with the connected account mode and gateway endpoint, then read storage,
 subsystem, data-farm, and background-task health. An idle daemon is neutral; a
 normal command starts it on demand. Missing or stale source evidence remains a
-warning or unavailable state rather than becoming a clean result.
+warning or unavailable state rather than becoming a clean result. The
+`Executions` row says whether fills you enter in TWS reach Canary: they do only
+once TWS's Master API client ID is Canary's client ID, as [Install and first
+run](install.md#check-it-worked-canary-status) explains.
 
 A ready Gateway does not configure IBKR statements. Before relying on Recon,
 statement-derived equity, or Canary Edge, complete [Set up broker

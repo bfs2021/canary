@@ -1,6 +1,6 @@
 # Install and first run
 
-Updated: 2026-10-05 22:20 CEST
+Updated: 2026-10-18 21:55 CEST
 
 `canary` is one Go binary. It carries the terminal CLI, a local stdio MCP server, and the background daemon that holds the connection to your own IB Gateway or TWS session. Nothing is hosted, and no Python or Java runtime is involved.
 
@@ -86,10 +86,14 @@ Session        DU0000000 via 127.0.0.1:4001 (tls=false, discovered), client 15
 Market data    Live
 Daemon         v1.0.0, up 30m42s
 TWS            API server 178
+Executions     this client's own orders only · set TWS Master API client ID to
+               15 to see hand and other-client fills
 SPX members    cache:2026-05-22, 503 names
 ```
 
 The badge on the first line is `READY`, `STARTING`, `ATTENTION`, or `OFFLINE`. `discovered` on the Session row means the port came from the probe; `pinned` means it came from your config file. Rows for data farms, market access, background work, subsystems, trading, and data quality appear only when they have something to say, and a `Next concern` row appears only when there is one.
+
+The `Executions` row says which of the account's fills reach Canary. TWS reports fills entered by hand or by other API clients only to its master client, so the execution cost report and the decision scorecard see them only after you set **Global Configuration → API → Settings → Master API client ID** in TWS to Canary's client ID; the row reads `all clients (proven HH:MM)` once the first such fill has been seen, and `canary status --json` carries the same facts under `executions`.
 
 The `Market access` row is the one place a missing IBKR market-data subscription shows up by name, instead of surfacing separately in each feature that needed the data:
 

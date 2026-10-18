@@ -94,7 +94,11 @@ func renderReportingCosts(env *Env, result *rpc.ReportingCostsResult) {
 		}
 		fmt.Fprintln(out, line)
 	}
-	fmt.Fprintf(out, "  visibility %s\n", obs.Visibility)
+	visibility := obs.Visibility
+	if !obs.ProvenAt.IsZero() {
+		visibility += " (proven " + obs.ProvenAt.Local().Format("15:04:05 MST") + ")"
+	}
+	fmt.Fprintf(out, "  visibility %s\n", visibility)
 	if obs.Action != "" {
 		displayWrapped(env, "  "+obs.Action)
 	}

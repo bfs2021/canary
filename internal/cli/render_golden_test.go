@@ -680,6 +680,7 @@ func goldenHealthReady(trading rpc.TradingStatus) rpc.HealthResult {
 		Subsystems:       []rpc.SubsystemHealth{{Name: "regime", Status: "ready"}, {Name: "breadth", Status: "ready"}, {Name: "rulebook", Status: "ready"}},
 		Members:          rpc.MembersHealth{Source: "fixture", AsOf: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Count: 500, RefreshState: "healthy"},
 		Trading:          trading,
+		Executions:       &rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityAllClients, ProvenAt: goldenAt.Add(-25 * time.Minute), ClientID: 7, Setting: rpc.ExecutionVisibilitySetting},
 		DataHealth:       &rpc.DataHealthResult{Summary: rpc.DataHealthSummary{State: "current", Label: "12 of 12 sources current"}},
 	}
 }
@@ -691,6 +692,8 @@ func goldenHealthAttention() rpc.HealthResult {
 	res.DataFarms = []rpc.DataFarmHealth{{Name: "ushmds", Type: "hmds", Status: "broken", Code: 2105}}
 	res.MarketDataAccess = []rpc.MarketDataAccessHealth{{RouteKey: "SYNB", Symbol: "SYNB", Code: 354, Reason: rpc.MarketDataAccessNotSubscribed, ObservedAt: goldenAt, RetryAt: goldenAt.Add(30 * time.Minute)}}
 	res.BackendLink = &rpc.BackendLinkHealth{Losses: 2, LossesInMaintenanceWindow: 1, LastOutageSeconds: 30, LongestOutageSeconds: 90}
+	res.Executions = &rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityUnproven, ClientID: 7, Setting: rpc.ExecutionVisibilitySetting,
+		Action: "Only this client's own executions have been seen. Fills entered in TWS or by other API clients reach Canary when TWS Global Configuration → API → Settings → Master API client ID is Canary's client id (7); the owner decides that setting."}
 	res.AnswerPath = []rpc.ConnectionAnswerPath{{Lane: "history", State: rpc.AnswerPathStalled, StalledSince: goldenAt.Add(-10 * time.Minute), RedialDue: goldenAt.Add(5 * time.Minute)}}
 	res.BackgroundTasks = []rpc.BackgroundTaskStatus{{Name: "gamma-zero"}}
 	res.Subsystems = []rpc.SubsystemHealth{{Name: "regime", Status: "ready"}, {Name: "gamma", Status: "degraded", Message: "model inputs partial"}, {Name: "breadth", Status: "warming", Progress: 40}}

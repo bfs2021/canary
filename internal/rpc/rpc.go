@@ -2480,6 +2480,11 @@ type HealthResult struct {
 	// reported: last push sent, last device acknowledgement, and why it is
 	// silent. Absent when no app host has ever reported.
 	PushDelivery *PushDeliveryStatus `json:"push_delivery,omitempty"`
+	// Executions says which of the account's executions reach this daemon:
+	// every client's once a fill from another API client or TWS has been seen,
+	// otherwise this client's own orders only, with the TWS setting that widens
+	// it. Absent when the fill-quote store is not bound.
+	Executions *ExecutionVisibilityHealth `json:"executions,omitempty"`
 }
 
 // Trading status values describe MCP exposure and live-override readiness;

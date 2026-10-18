@@ -314,7 +314,7 @@
     },
     {
       "name": "canary_status",
-      "description": "Daemon, gateway, account, and subsystem health for troubleshooting data freshness or connectivity.",
+      "description": "Daemon, gateway, account, and subsystem health for troubleshooting data freshness or connectivity, and whether fills entered in TWS reach Canary (proven, or the TWS Master API client ID setting that widens it).",
       "inputSchema": {
         "type": "object",
         "properties": {}

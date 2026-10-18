@@ -1,6 +1,6 @@
 # Fill quotes and the execution cost report
 
-Updated: 2026-10-18 (first version, branch `fill-quotes`)
+Updated: 2026-10-18 21:55 CEST (status row, branch `execution-visibility`)
 
 Canary kept no quote at any order or fill, so the spread the desk pays was
 unmeasured and the scorecard reported `slippage_reason: no_fill_quote` for
@@ -79,6 +79,15 @@ designs for both cases and lets the daemon prove which one holds:
   then names the setting that widens it: TWS Global Configuration → API →
   Settings → Master API client ID = Canary's client id. The owner decides
   that setting; Canary never changes TWS configuration.
+- The same verdict is where a user looks first (2026-10-18): `canary status`
+  carries an `Executions` row (`this client's own orders only · set TWS
+  Master API client ID to N to see hand and other-client fills`, or `all
+  clients (proven HH:MM)`), `--json` and `canary_status` carry it under
+  `executions` (`visibility`, `proven_at`, `client_id`, `setting`, `action`),
+  and `observation.proven_at` in the costs report names the poll that first
+  saw another client's execution. One helper (`executionVisibility`) builds
+  both from the retained poll state; the proof and its time are sticky for
+  the same account, broker mode and client id and start over for any other.
 
 Consequence to decide before flipping the master client setting: a live
 `execDetails` for an order Canary did not place would then reach the

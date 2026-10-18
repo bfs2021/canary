@@ -38,6 +38,10 @@ const (
 	// seen; TWS may be withholding the rest (non-master API client).
 	ExecutionVisibilityAllClients = "all_clients"
 	ExecutionVisibilityUnproven   = "own_orders_unproven"
+	// ExecutionVisibilitySetting names the TWS setting that lets this client
+	// see fills entered in TWS or by other API clients. The owner decides it;
+	// Canary never changes TWS configuration.
+	ExecutionVisibilitySetting = "TWS Global Configuration → API → Settings → Master API client ID"
 
 	CostClassStock  = "stock"
 	CostClassOption = "option"
@@ -184,7 +188,24 @@ type ExecutionObservation struct {
 	LastPollExecutions int       `json:"last_poll_executions"`
 	LastPollError      string    `json:"last_poll_error,omitempty"`
 	Visibility         string    `json:"visibility"`
-	Action             string    `json:"action,omitempty"`
+	// ProvenAt is the poll that first saw an execution from another client in
+	// this account, broker mode and client scope; zero while unproven.
+	ProvenAt time.Time `json:"proven_at,omitzero"`
+	Action   string    `json:"action,omitempty"`
+}
+
+// ExecutionVisibilityHealth is the `canary status` row for which of the
+// account's executions reach this daemon. Visibility is proven, never
+// assumed: ExecutionVisibilityAllClients once an execution from another API
+// client or TWS has been seen in this account, broker mode and client scope
+// (ProvenAt is the poll that saw it), otherwise ExecutionVisibilityUnproven
+// with Setting, the TWS setting that widens it, and Action, what to do.
+type ExecutionVisibilityHealth struct {
+	Visibility string    `json:"visibility"`
+	ProvenAt   time.Time `json:"proven_at,omitzero"`
+	ClientID   int       `json:"client_id"`
+	Setting    string    `json:"setting"`
+	Action     string    `json:"action,omitempty"`
 }
 
 var costsMonthPattern = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`)
