@@ -330,3 +330,19 @@ func TestPlanForRequiresEd25519Signature(t *testing.T) {
 }
 
 var _ = io.Discard
+
+func TestDefaultUpdateDestinationCannotSplitInstallation(t *testing.T) {
+	home := t.TempDir()
+	canonical := filepath.Join(home, ".local", "bin", "canary")
+	if _, err := defaultInstallDirForExecutable(home, canonical); err != nil {
+		t.Fatal(err)
+	}
+	custom := filepath.Join(home, "custom apps", "bin", "canary")
+	if _, err := defaultInstallDirForExecutable(home, custom); err == nil || !strings.Contains(err.Error(), "CANARY_INSTALL_DIR") {
+		t.Fatalf("custom path err=%v", err)
+	}
+	t.Setenv("CANARY_INSTALL_DIR", filepath.Dir(custom))
+	if got, err := ResolveInstallDir(); err != nil || got != filepath.Dir(custom) {
+		t.Fatalf("override=%s %v", got, err)
+	}
+}

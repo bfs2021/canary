@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -72,6 +73,122 @@ func TestSetupHelpAndInvalidArgumentsDoNotWrite(t *testing.T) {
 			entries, err := os.ReadDir(home)
 			if err != nil || len(entries) != 0 {
 				t.Fatal("help/invalid setup mutated home")
+			}
+		})
+	}
+}
+
+func TestSetupKeepsCredentialBackupsPrivate(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("desktop setup is macOS-only")
+	}
+	t.Setenv("HOME", t.TempDir())
+	path, err := claudeDesktopConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	input := []byte(`{"mcpServers":{"other":{"command":"synthetic","env":{"SYNTHETIC_TOKEN":"not-a-real-secret"}}}}`)
+	if err := os.WriteFile(path, input, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if code := setupClaudeDesktop(); code != 0 {
+			t.Fatalf("setup exit %d", code)
+		}
+	}
+	backups, err := filepath.Glob(path + ".bak-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 2 {
+		t.Errorf("got %d backups, want two collision-free backups", len(backups))
+	}
+	for _, backup := range backups {
+		info, err := os.Stat(backup)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("backup permissions = %o", info.Mode().Perm())
+		}
+		data, err := os.ReadFile(backup)
+		if err != nil || !strings.Contains(string(data), "not-a-real-secret") {
+			t.Fatal("backup lost original secret")
+		}
+	}
+}
+
+func TestSetupBackupSecuresOldFilesWithoutFollowingSymlinks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude_desktop_config.json")
+	old := path + ".bak-20261018-000000"
+	if err := os.WriteFile(old, []byte("synthetic old backup"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "untouched")
+	if err := os.WriteFile(outside, []byte("untouched"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, path+".bak-link"); err != nil {
+		t.Fatal(err)
+	}
+	if err := secureClaudeDesktopBackups(path); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := writeClaudeDesktopBackup(path, []byte("synthetic new backup"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{old, backup} {
+		info, err := os.Stat(name)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("backup not private: %s %v", name, err)
+		}
+	}
+	info, err := os.Stat(outside)
+	if err != nil || info.Mode().Perm() != 0644 {
+		t.Fatal("followed backup symlink")
+	}
+}
+
+func TestSetupSecuresOrphanedBackupsBeforeReadingConfig(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("desktop setup is macOS-only")
+	}
+	for _, config := range []string{"", "invalid JSON", `{"mcpServers":null}`} {
+		t.Run(config, func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			path, err := claudeDesktopConfigPath()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			backup := path + ".bak-legacy"
+			if err := os.WriteFile(backup, []byte("synthetic secret"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if config != "" {
+				if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			code := setupClaudeDesktop()
+			if (config == "" && code != 0) || (config != "" && code != 1) {
+				t.Fatalf("exit %d", code)
+			}
+			info, err := os.Stat(backup)
+			if err != nil || info.Mode().Perm() != 0600 {
+				t.Fatal("old backup remains exposed")
+			}
+			if config != "" {
+				data, _ := os.ReadFile(path)
+				if string(data) != config {
+					t.Fatal("invalid current config changed")
+				}
 			}
 		})
 	}

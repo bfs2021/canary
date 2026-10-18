@@ -220,17 +220,31 @@ IBKR's documented Flex Web Service exposes two operations: trigger a report for 
 
 If you need to configure an installation that cannot run the interactive
 wizard, store the token without shell-history exposure. The commands below
-prompt silently. Your token is read into memory, written to a file with mode
+work in Bash and Zsh and prompt silently. Cancelled or empty input leaves an
+existing token unchanged. A successful read replaces it atomically. Your token is read into memory, written to a file with mode
 `0600`, then removed from the shell variable. The token itself never appears in
 the command line or history.
 
-```zsh
-mkdir -p ~/.config/ibkr
-chmod 700 ~/.config/ibkr
-read -rs 'flex_token?Paste Flex token: '; printf '\n'
-(umask 077; printf '%s\n' "$flex_token" > ~/.config/ibkr/flex-token)
-unset flex_token
-chmod 600 ~/.config/ibkr/flex-token
+```sh
+(
+  set -eu
+  umask 077
+  mkdir -p "$HOME/.config/ibkr"
+  chmod 700 "$HOME/.config/ibkr"
+  printf 'Paste Flex token: '
+  IFS= read -rs flex_token || { printf '\nToken unchanged: input cancelled.\n' >&2; exit 1; }
+  printf '\n'
+  case "$flex_token" in
+    *[![:space:]]*) ;;
+    *) printf 'Token unchanged: empty input.\n' >&2; exit 1 ;;
+  esac
+  token_tmp=$(mktemp "$HOME/.config/ibkr/flex-token.XXXXXX")
+  trap 'rm -f "$token_tmp"; unset flex_token' EXIT
+  trap 'exit 1' HUP INT TERM
+  printf '%s\n' "$flex_token" > "$token_tmp"
+  unset flex_token
+  mv -f "$token_tmp" "$HOME/.config/ibkr/flex-token"
+)
 ```
 
 Open `~/.config/ibkr/config.toml` in an editor and add:

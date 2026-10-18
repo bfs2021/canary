@@ -22,7 +22,7 @@ const (
 
 func runMCP(args []string) int {
 	profile, code := parseMCPArgs(args, os.Stdout, os.Stderr)
-	if code != 0 {
+	if code != 0 || profile == "" {
 		return code
 	}
 
@@ -54,7 +54,7 @@ func parseMCPArgs(args []string, stdout, stderr io.Writer) (mcp.Profile, int) {
 	fs.Usage = func() { printMCPUsage(stdout) }
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			return mcp.ProfileFull, 0
+			return "", 0
 		}
 		return mcp.ProfileFull, 2
 	}

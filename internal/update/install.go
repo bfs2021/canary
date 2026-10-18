@@ -31,7 +31,7 @@ const defaultInstallSubdir = ".local/bin"
 
 // ResolveInstallDir returns the directory where the updated `canary`
 func ResolveInstallDir() (string, error) {
-	// docgen:env CANARY_INSTALL_DIR | Override the install directory for `canary update`. Defaults to `$HOME/.local/bin`. The release pipeline uses this to sandbox dog-food installs to a temporary directory.
+	// docgen:env CANARY_INSTALL_DIR | Override the install directory for `canary update`. Defaults to `$HOME/.local/bin` only when the running binary is installed there; custom installations require an explicit override. The release pipeline uses this to sandbox dog-food installs to a temporary directory.
 	if _, retired := os.LookupEnv("IBKR_INSTALL_DIR"); retired {
 		return "", errors.New("IBKR_INSTALL_DIR was retired by the Canary rename; use CANARY_INSTALL_DIR")
 	}
@@ -42,7 +42,29 @@ func ResolveInstallDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve $HOME: %w", err)
 	}
-	return filepath.Join(home, defaultInstallSubdir), nil
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("locate running executable: %w", err)
+	}
+	return defaultInstallDirForExecutable(home, exe)
+}
+
+// defaultInstallDirForExecutable refuses a split installation rather than
+// reporting success while the executable on the user's PATH stays unchanged.
+// An explicit CANARY_INSTALL_DIR is handled above and remains authoritative.
+func defaultInstallDirForExecutable(home, executable string) (string, error) {
+	dir := filepath.Join(home, defaultInstallSubdir)
+	target := filepath.Join(dir, productidentity.Executable)
+	resolve := func(path string) string {
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			return real
+		}
+		return filepath.Clean(path)
+	}
+	if resolve(target) != resolve(executable) {
+		return "", fmt.Errorf("running executable %q differs from default update destination %q; set CANARY_INSTALL_DIR to %q to update this installation explicitly (MCPB installs must be updated through their host)", executable, target, filepath.Dir(executable))
+	}
+	return dir, nil
 }
 
 // CacheDir returns the update cache directory: where the tarball,

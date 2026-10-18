@@ -15,7 +15,7 @@ if ! command -v canary >/dev/null 2>&1; then
 	if command -v ibkr >/dev/null 2>&1; then
 		printf '\n[Canary plugin] A retired `ibkr` executable is on PATH, but hooks will not invoke it. Install the canonical `canary` executable, remove the retired entry, then restart your Claude Code session.\n\n' >&2
 	else
-		printf '\n[Canary plugin] The `canary` binary is not on your PATH.\nInstall Canary with one of:\n  curl -fsSL https://raw.githubusercontent.com/osauer/canary/main/install.sh | sh\n  make install   (from a checkout of github.com/osauer/canary)\nThen restart your Claude Code session.\n\n' >&2
+		printf '\n[Canary plugin] The `canary` binary is not on your PATH.\nInstall Canary with one of:\n  curl -fsSL https://raw.githubusercontent.com/osauer/canary/main/install.sh | sh\n  make install GO_TAGS=""   (from a checkout of github.com/osauer/canary)\nThen restart your Claude Code session.\n\n' >&2
 	fi
 	exit 0
 fi

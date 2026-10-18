@@ -230,13 +230,36 @@ func (s *Server) mandateHistorySeries(ctx context.Context, key string) *mandateH
 			if err == nil && ok {
 				var saved mandateHistorySeries
 				if json.Unmarshal(doc.JSON, &saved) == nil && saved.Version == mandateHistoryDocVer && saved.Key == key && validMandateSeries(saved) == nil {
-					st.series[key] = &saved
+					st.series[key] = completedMandateSeries(&saved)
 					st.revisions[key] = doc.Revision
 				}
 			}
 		}
 	}
 	return st.series[key]
+}
+
+// completedMandateSeries also sanitizes documents retained by older builds:
+// a bar dated after the last session completed at fetch time is not a close.
+// Keep the original persisted observation until the normal refresh replaces it.
+func completedMandateSeries(series *mandateHistorySeries) *mandateHistorySeries {
+	last, _, covered := mandateLastSessionsIn(series.FetchedAt, mandateSeriesMarket(series))
+	if !covered {
+		return nil
+	}
+	n := len(series.Dates)
+	for n > 0 && series.Dates[n-1] > last {
+		n--
+	}
+	if n == 0 {
+		return nil
+	}
+	if n == len(series.Dates) {
+		return series
+	}
+	out := *series
+	out.Dates, out.Closes = slices.Clone(series.Dates[:n]), slices.Clone(series.Closes[:n])
+	return &out
 }
 
 func validMandateSeries(s mandateHistorySeries) error {
@@ -535,6 +558,13 @@ func (s *Server) fetchMandateSeries(ctx context.Context, need mandateHistoryNeed
 	}
 	if err := validMandateSeries(*series); err != nil {
 		return nil, err
+	}
+	if series.FetchedAt.After(now) {
+		series.FetchedAt = now
+	}
+	series = completedMandateSeries(series)
+	if series == nil {
+		return nil, errors.New("no completed daily bars")
 	}
 	return series, nil
 }

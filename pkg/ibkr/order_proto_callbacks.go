@@ -16,6 +16,7 @@ const (
 )
 
 type inboundOrderProtoSummary struct {
+	conID                int
 	modifyTermsKnown     bool
 	modifyUnsupported    string
 	openClose            string
@@ -192,6 +193,7 @@ func inboundProtoBaseFields(baseMsgID, wireMsgID int) []string {
 
 func appendContractSummaryFields(fields []string, summary inboundOrderProtoSummary) []string {
 	return append(fields,
+		"conId="+strconv.Itoa(summary.conID),
 		"symbol="+summary.symbol,
 		"secType="+summary.secType,
 		"expiry="+summary.expiry,
@@ -344,6 +346,12 @@ func parseExecDetailsProtoCallback(body []byte) (inboundOrderProtoSummary, error
 func parseInboundContractProto(body []byte, summary *inboundOrderProtoSummary) error {
 	return forEachProtoField(body, func(fieldNumber, wireType int, value []byte) error {
 		switch fieldNumber {
+		case 1:
+			v, err := protoVarintValue(fieldNumber, wireType, value)
+			if err != nil {
+				return err
+			}
+			summary.conID = int(int32(v))
 		case 2:
 			summary.symbol = string(value)
 		case 3:

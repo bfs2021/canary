@@ -56,6 +56,13 @@ func RunUpdate(ctx context.Context, args []string, version string, stdin io.Read
 	if exit, ok := parseUpdateFlags(args, &opts, stdout, stderr); !ok {
 		return exit
 	}
+	if updateTradingBuild && !opts.check {
+		renderTradingUpdateRefusal(stderr)
+		return 2
+	}
+	if updateTradingBuild {
+		fmt.Fprintln(stderr, "canary update: checking standard read-only releases; trading builds require the verified trading archive or a source rebuild")
+	}
 	return runUpdateCore(ctx, &opts, fetchLatestReleaseAdapter, runInstallAdapter, restartInstalledStackAdapter)
 }
 
@@ -168,15 +175,14 @@ func runUpdateCore(ctx context.Context, opts *updateOptions, fetch fetchFunc, do
 }
 
 // promptRestart reads stdin for a [Y/n] response. Defaults to Y on
-// enter / EOF (matches the design's "Default Y on enter" matrix
-// entry). Returns true to restart.
+// enter. EOF without a response is cancellation, never approval.
 func promptRestart(in io.Reader, out io.Writer) bool {
 	fmt.Fprint(out, "Restart the local app/daemon stack now? [Y/n] ")
 	br := bufio.NewReader(in)
 	line, err := br.ReadString('\n')
-	if err != nil && line == "" {
-		// EOF before any input — treat as "Y" (the default).
-		return true
+	if err != nil && strings.TrimSpace(line) == "" {
+		// No response was supplied.
+		return false
 	}
 	line = strings.TrimSpace(strings.ToLower(line))
 	if line == "" || line == "y" || line == "yes" {
@@ -226,20 +232,11 @@ func normalizeVersion(v string) string {
 	return v
 }
 
-// isStdinTTY reports whether stdin is a real terminal. Mirrors the
-// pattern used in internal/cli/color.go (os.ModeCharDevice). Tests
-// pass a *bytes.Buffer so the type assertion fails and isTTY=false,
-// which matches headless / piped-input behaviour.
+// isStdinTTY requires terminal ioctls to succeed; character devices such as
+// /dev/null cannot grant human origin or interactive restart approval.
 func isStdinTTY(in io.Reader) bool {
 	f, ok := in.(*os.File)
-	if !ok {
-		return false
-	}
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
+	return ok && isTerminalFD(int(f.Fd()))
 }
 
 // --- production adapters (thin shims so runUpdateCore stays pure). ---
@@ -266,4 +263,8 @@ func restartInstalledStackAdapterUsing(ctx context.Context, installedExecutable 
 		err:     stderr,
 	}
 	return runRestartStackCore(ctx, opts, daemonFactory(installedExecutable), appFactory(installedExecutable), restartStackBehavior{startDaemonWhenMissing: false})
+}
+
+func renderTradingUpdateRefusal(out io.Writer) {
+	fmt.Fprintln(out, "canary update: this trading build cannot use the standard read-only update channel; install the verified trading release archive or rebuild with make install. To deliberately switch to read-only, use the standard installer.")
 }

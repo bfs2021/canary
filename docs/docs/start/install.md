@@ -64,7 +64,7 @@ Go, Make and the versions declared in the repository are required.
 6. Lists the archive before extracting it. Anything beyond `canary`, `LICENSE`, and `README.md` is rejected, and a symlinked `canary` is rejected too.
 7. Installs the binary mode 0755 into `~/.local/bin`, or into `CANARY_INSTALL_DIR` if you set one.
 8. Clears the macOS `com.apple.quarantine` attribute so Gatekeeper does not block the first run.
-9. Adds `~/.local/bin` to your shell rc when it is missing from `PATH`, picking the file from `$SHELL`: `.zshrc`, `.bashrc`, `config.fish`, or `.profile`. Open a new terminal afterwards, or source that file, before the shell finds `canary`. Setting `CANARY_INSTALL_DIR` suppresses the edit entirely, and you manage `PATH` yourself.
+9. Adds `~/.local/bin` when it is missing from `PATH`. For Bash it updates `.bashrc` and the first existing login file (`.bash_profile`, `.bash_login`, or `.profile`), creating `.bash_profile` if none exists. For Zsh it updates `${ZDOTDIR:-$HOME}/.zshrc`; fish uses `${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish`; other shells use `.profile`. Open a new terminal afterwards. A custom `CANARY_INSTALL_DIR` leaves shell configuration to you.
 10. Runs `canary version` and warns if the installed binary reports something other than the version it just fetched.
 
 Prefer to read it first: `curl -fsSL https://raw.githubusercontent.com/osauer/canary/main/install.sh -o install.sh`, then `less install.sh`, then `sh install.sh`.

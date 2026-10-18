@@ -35,6 +35,18 @@ The CLI then:
 3. SHA-verifies the tarball.
 4. Atomically replaces `~/.local/bin/canary`. Prior bytes exist only in hidden transaction staging and are deleted after publication; no runnable rollback binary is retained because daemon state migrations are forward-only.
 
+Custom shell installations must keep `CANARY_INSTALL_DIR` set to their install
+directory when updating. Without it, Canary refuses a destination that differs
+from the executable you invoked, so an update cannot silently leave that binary
+behind. MCPB installations use their host's extension update path below.
+
+Trading builds refuse the standard updater's install action because that channel
+contains read-only binaries. To retain trading capability, download and verify
+the matching `canary-trading-vX.Y.Z-<os>-<arch>.tar.gz` from the release, then use
+the manual replacement/activation path above, or build the chosen tag with
+`make install` and restart. A deliberate switch to read-only uses the standard
+installer. `canary update --check` can still check the standard channel.
+
 At the end, the updater can restart the local processes that were already
 running. It uses the same app-first stack path as `canary restart`: a running app
 is restarted and verified on the installed binary before the daemon is touched.
@@ -70,6 +82,8 @@ In non-interactive contexts (cron, systemd timers, CI, stdin-redirected shells) 
 canary update --restart        # restart a running app first, then a running daemon
 canary update --no-restart     # leave both processes as-is; print a restart-pending hint
 ```
+
+Closing an interactive restart prompt without a response cancels the restart.
 
 Running `canary update` from a non-TTY *without* either flag exits non-zero with `ambiguous in non-interactive mode` and does not install. This is deliberate: silent default-to-N would be a footgun for systemd timers expecting auto-restart.
 

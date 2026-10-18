@@ -34,7 +34,7 @@ Install the CLI first, then restart Claude Code:
   curl -fsSL https://raw.githubusercontent.com/osauer/canary/main/install.sh | sh
 
 For local development from a checkout:
-  make install
+  make install GO_TAGS=""
 
 You can also set CANARY_BIN=/absolute/path/to/canary before starting Claude Code.
 EOF

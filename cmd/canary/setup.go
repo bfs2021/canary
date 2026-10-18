@@ -101,6 +101,11 @@ func setupClaudeDesktop() int {
 		return 1
 	}
 
+	if err := secureClaudeDesktopBackups(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "canary setup: secure existing backups: %v\n", err)
+		return 1
+	}
+
 	binPath, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s setup: locate own binary: %v\n", productidentity.Executable, err)
@@ -128,9 +133,8 @@ func setupClaudeDesktop() int {
 			return 1
 		}
 		// Backup so the user has a one-step rollback.
-		stamp := time.Now().Format("20060102-150405")
-		backup := configPath + ".bak-" + stamp
-		if err := os.WriteFile(backup, data, 0o644); err != nil {
+		backup, err := writeClaudeDesktopBackup(configPath, data)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s setup: backup %s: %v\n", productidentity.Executable, backup, err)
 			return 1
 		}
@@ -154,7 +158,7 @@ func setupClaudeDesktop() int {
 		fmt.Fprintf(os.Stderr, "%s setup: encode config: %v\n", productidentity.Executable, err)
 		return 1
 	}
-	if err := os.WriteFile(configPath, out, 0o644); err != nil {
+	if err := os.WriteFile(configPath, out, 0o600); err != nil {
 		fmt.Fprintf(os.Stderr, "%s setup: write %s: %v\n", productidentity.Executable, configPath, err)
 		return 1
 	}

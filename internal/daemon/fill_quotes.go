@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
+	"github.com/osauer/canary/v2/internal/discover"
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
@@ -54,8 +55,10 @@ type fillQuoteFill struct {
 }
 
 // fillQuotePoll is the last reqExecutions outcome; otherClientsSeen is sticky
-// for the daemon's lifetime once an execution from another client appears.
+// for the same account, broker mode and API client once another client appears.
 type fillQuotePoll struct {
+	scope            brokerStateScope
+	clientID         int
 	at               time.Time
 	complete         bool
 	executions       int
@@ -155,7 +158,9 @@ func (rt *fillQuoteRuntime) pop() (fillQuoteFill, bool) {
 func (rt *fillQuoteRuntime) recordPoll(p fillQuotePoll) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	p.otherClientsSeen = p.otherClientsSeen || rt.poll.otherClientsSeen
+	if sameBrokerScope(p.scope, rt.poll.scope) && p.clientID == rt.poll.clientID {
+		p.otherClientsSeen = p.otherClientsSeen || rt.poll.otherClientsSeen
+	}
 	rt.poll = p
 }
 
@@ -210,10 +215,14 @@ func (rt *fillQuoteRuntime) list(account, mode string) []rpc.FillQuoteRecord {
 		if account != "" && stored.Account != account {
 			continue
 		}
-		if mode != "" && !strings.EqualFold(stored.Record.Mode, mode) {
+		record := stored.Record
+		// All older rows used order-entry authority, including contradictory
+		// paper/live settings. The concrete stored account owns its identity.
+		record.Mode = accountModeForStatus(0, stored.Account)
+		if mode != "" && !strings.EqualFold(record.Mode, mode) {
 			continue
 		}
-		out = append(out, stored.Record)
+		out = append(out, record)
 	}
 	rt.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool {
@@ -335,7 +344,7 @@ func fillQuoteFillFromJournal(ev orderJournalEvent, source string) fillQuoteFill
 	execAt, execSource := fillQuoteExecTime(ev.ExecTime, ev.At.UTC())
 	rec := rpc.FillQuoteRecord{
 		Version: fillQuoteVersion, ExecID: strings.TrimSpace(ev.ExecID), Source: source, Seen: rpc.FillQuoteSeenCallback,
-		Mode: strings.ToLower(strings.TrimSpace(ev.Mode)), OrderRef: strings.TrimSpace(ev.OrderRef), PermID: ev.PermID,
+		Mode: accountModeForStatus(0, ev.Account), OrderRef: strings.TrimSpace(ev.OrderRef), PermID: ev.PermID,
 		Contract: fillQuoteContract(ev.ConID, ev.Symbol, ev.SecType, ev.Currency, ev.LocalSymbol, ev.TradingClass, ev.Expiry, ev.Strike, ev.Right, ev.Multiplier),
 		Venue:    strings.TrimSpace(ev.Exchange), Side: fillQuoteSide(ev.ExecSide, ev.Action), Quantity: ev.ExecShares, Price: ev.LastFillPrice,
 		ExecTime: execAt, ExecTimeSource: execSource, ObservedAt: ev.At.UTC(),
@@ -355,10 +364,14 @@ func fillQuoteFillFromExecution(ev ibkrlib.OrderLifecycleEvent, status rpc.Tradi
 	if (ev.ClientIDPresent && ev.ClientID == status.ClientID) || (!ev.ClientIDPresent && strings.TrimSpace(ev.OrderRef) != "") {
 		source = rpc.FillQuoteSourceCanary
 	}
+	account := strings.TrimSpace(ev.Account)
+	if account == "" {
+		account = status.Account
+	}
 	execAt, execSource := fillQuoteExecTime(ev.ExecTime, now)
 	rec := rpc.FillQuoteRecord{
 		Version: fillQuoteVersion, ExecID: strings.TrimSpace(ev.ExecID), Source: source, Seen: rpc.FillQuoteSeenPoll,
-		Mode: strings.ToLower(strings.TrimSpace(status.Mode)), OrderRef: strings.TrimSpace(ev.OrderRef), PermID: ev.PermID,
+		Mode: accountModeForStatus(status.GatewayPort, account), OrderRef: strings.TrimSpace(ev.OrderRef), PermID: ev.PermID,
 		Contract: fillQuoteContract(ev.ConID, ev.Symbol, ev.SecType, ev.Currency, ev.LocalSymbol, ev.TradingClass, ev.Expiry, ev.Strike, ev.Right, ev.Multiplier),
 		Venue:    strings.TrimSpace(ev.Exchange), Side: fillQuoteSide(ev.ExecutionSide, ""), Quantity: ev.Shares, Price: ev.Price,
 		ExecTime: execAt, ExecTimeSource: execSource, ObservedAt: now.UTC(),
@@ -366,10 +379,7 @@ func fillQuoteFillFromExecution(ev ibkrlib.OrderLifecycleEvent, status rpc.Tradi
 	if ev.ClientIDPresent {
 		rec.ClientID = new(ev.ClientID)
 	}
-	account := strings.TrimSpace(ev.Account)
-	if account == "" {
-		account = status.Account
-	}
+
 	return fillQuoteFill{account: account, record: rec}
 }
 
@@ -453,6 +463,15 @@ func (s *Server) captureQueuedFillQuotes(ctx context.Context) {
 	}
 }
 
+// fillQuoteAccountStatus separates broker account identity from order-entry
+// authority. Auto-discovered accounts use the same scope rule as broker state.
+func (s *Server) fillQuoteAccountStatus(ep discover.Endpoint) rpc.TradingStatus {
+	status := s.tradingStatus(ep)
+	scope := brokerStateScopeFromSnapshot(status.Account, ep.Account, status.GatewayPort, s.connectedGatewayAccount())
+	status.Account, status.Mode = scope.Account, scope.Mode
+	return status
+}
+
 // pollAccountExecutions asks the broker for the day's executions and queues
 // every one not yet retained. Which clients' executions come back is TWS's
 // decision; the report says what has been proven.
@@ -462,23 +481,26 @@ func (s *Server) pollAccountExecutions(ctx context.Context) {
 		return
 	}
 	now := s.orderNow()
-	authority, err := s.setupMarkoutBrokerAuthority()
-	if err != nil {
-		rt.recordPoll(fillQuotePoll{at: now, err: "broker_unavailable"})
-		return
-	}
 	s.mu.Lock()
 	ep := s.endpoint
 	s.mu.Unlock()
-	status := s.tradingStatus(ep)
-	if strings.TrimSpace(status.Account) == "" {
-		rt.recordPoll(fillQuotePoll{at: now, err: "account_unknown"})
+	status := s.fillQuoteAccountStatus(ep)
+	outcome := fillQuotePoll{at: now, scope: brokerStateScope{Account: status.Account, Mode: status.Mode}, clientID: status.ClientID}
+	if !brokerScopeAccountConcrete(status.Account) {
+		outcome.err = "account_unknown"
+		rt.recordPoll(outcome)
+		return
+	}
+	authority, err := s.setupMarkoutBrokerAuthority()
+	if err != nil {
+		outcome.err = "broker_unavailable"
+		rt.recordPoll(outcome)
 		return
 	}
 	pollCtx, cancel := context.WithTimeout(ibkrlib.WithRequestPriority(ctx, ibkrlib.PriorityBackground), fillQuotePollBudget)
 	snap, err := authority.connector.FetchExecutions(pollCtx, status.Account, fillQuotePollBudget)
 	cancel()
-	outcome := fillQuotePoll{at: now, complete: snap.Complete, executions: len(snap.Executions)}
+	outcome.complete, outcome.executions = snap.Complete, len(snap.Executions)
 	switch {
 	case err == nil:
 	case errors.Is(err, context.DeadlineExceeded):
@@ -643,7 +665,7 @@ func (s *Server) handleReportingCosts(_ context.Context, req *rpc.Request) (*rpc
 	s.mu.Lock()
 	ep := s.endpoint
 	s.mu.Unlock()
-	status := s.tradingStatus(ep)
+	status := s.fillQuoteAccountStatus(ep)
 	if !brokerScopeAccountConcrete(status.Account) {
 		return nil, errBadRequest("execution costs unavailable: select one concrete broker account")
 	}
@@ -653,6 +675,9 @@ func (s *Server) handleReportingCosts(_ context.Context, req *rpc.Request) (*rpc
 	if s.fillQuotes != nil {
 		records = s.fillQuotes.list(status.Account, status.Mode)
 		poll = s.fillQuotes.pollStatus()
+		if !sameBrokerScope(poll.scope, brokerStateScope{Account: status.Account, Mode: status.Mode}) || poll.clientID != status.ClientID {
+			poll = fillQuotePoll{}
+		}
 		polling = true
 	}
 	result := buildReportingCosts(records, p.Month, status.Mode, status.ClientID, poll, polling, now)

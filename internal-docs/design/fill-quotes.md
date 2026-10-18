@@ -75,7 +75,7 @@ designs for both cases and lets the daemon prove which one holds:
   source `broker`.
 - Visibility is proven, not assumed: `observation.visibility` is
   `all_clients` once any execution from another client id has been seen in
-  this daemon's lifetime, otherwise `own_orders_unproven`, and the report
+  this account, broker mode and API client scope, otherwise `own_orders_unproven`, and the report
   then names the setting that widens it: TWS Global Configuration → API →
   Settings → Master API client ID = Canary's client id. The owner decides
   that setting; Canary never changes TWS configuration.
@@ -134,3 +134,8 @@ scorecard itself is not changed by this work.
   `reqAllOpenOrders` is; its acceptance by the live TWS build and the
   encoding of the answer (legacy or protobuf, both parsed) are to be
   witnessed on the live daemon after install.
+
+Account scope comes from the concrete configured or broker-confirmed account.
+Paper/live is the broker account identity, independent of order-entry control.
+Legacy fill rows are projected using their stored account identity, preserving
+the original observations. Disabling trading never removes historical fills.
