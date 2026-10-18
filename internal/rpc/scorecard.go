@@ -103,7 +103,9 @@ type ScorecardResult struct {
 }
 
 // ScorecardSleeve is the sequential evidence for one sleeve at one horizon.
-// Every figure carries its sample; a gate word never stands alone.
+// Every figure carries its sample; a gate word never stands alone. The
+// evidence unit is the name-week: one underlying in one ISO entry week;
+// overlapping horizons shrink the units to an effective sample.
 type ScorecardSleeve struct {
 	Sleeve  string `json:"sleeve"`
 	Stream  string `json:"stream"`
@@ -113,25 +115,53 @@ type ScorecardSleeve struct {
 	Gated     bool `json:"gated"`
 	Decisions int  `json:"decisions"`
 	Scored    int  `json:"scored"`
-	// Clusters is the number of sleeve × entry-week clusters with a score.
-	Clusters int      `json:"clusters"`
-	MeanZ    *float64 `json:"mean_z,omitempty"`
-	SumZ     float64  `json:"sum_z"`
-	// Posterior on IC with prior N(0, 0.1²) and unit variance per cluster.
-	PosteriorMean *float64 `json:"posterior_mean,omitempty"`
-	PosteriorSD   *float64 `json:"posterior_sd,omitempty"`
-	PAbove005     *float64 `json:"p_ic_above_0_05,omitempty"`
-	PAbove010     *float64 `json:"p_ic_above_0_10,omitempty"`
-	// EValue is the mixture-SPRT e-value while the running sum is positive;
-	// EValueAgainst is true when the sum is not positive and the e-value is
-	// reported as 0.
-	EValue        float64        `json:"e_value"`
-	EValueAgainst bool           `json:"e_value_against"`
-	Gate          string         `json:"gate,omitempty"`
-	Gates         ScorecardGates `json:"gates"`
-	// ClustersToEstablish projects, at the current mean z per cluster, how
-	// many clusters the e-value gate needs; nil when the mean is not positive.
+	// SectorAdjusted counts the scored decisions whose z is net of the
+	// name's sector fund as well as the market.
+	SectorAdjusted int `json:"sector_adjusted"`
+	// Units is the number of name-week units with a score; Weeks the
+	// distinct entry weeks among them; EffectiveUnits the units after the
+	// overlap covariance (n²/V). Clusters repeats Units under the key the
+	// week-cluster gate used; deprecated, removed one release after v3.24.
+	Units          int     `json:"units"`
+	Weeks          int     `json:"weeks"`
+	EffectiveUnits float64 `json:"effective_units"`
+	Clusters       int     `json:"clusters"`
+	// DirectionalScore is the mean z per unit: the measure the gates are
+	// about. MeanZ repeats it under its old key (deprecated, one release).
+	DirectionalScore *float64 `json:"directional_score,omitempty"`
+	MeanZ            *float64 `json:"mean_z,omitempty"`
+	SumZ             float64  `json:"sum_z"`
+	// Posterior on the directional score with prior N(0, 0.1²) over the
+	// effective sample: P(score > 0), P(score > 0.05) and P(score > 0.10).
+	// PAbove005 and PAbove010 repeat the last two under the keys that named
+	// the score "IC" (deprecated, one release).
+	PosteriorMean  *float64 `json:"posterior_mean,omitempty"`
+	PosteriorSD    *float64 `json:"posterior_sd,omitempty"`
+	PScoreAbove0   *float64 `json:"p_score_above_0,omitempty"`
+	PScoreAbove005 *float64 `json:"p_score_above_0_05,omitempty"`
+	PScoreAbove010 *float64 `json:"p_score_above_0_10,omitempty"`
+	PAbove005      *float64 `json:"p_ic_above_0_05,omitempty"`
+	PAbove010      *float64 `json:"p_ic_above_0_10,omitempty"`
+	// EValue is the mixture-SPRT e-value for information while the running
+	// sum is positive; EValueAgainst is true when the sum is not positive
+	// and the e-value is reported as 0. FutilityEValue is the likelihood
+	// ratio of no information against the smallest score worth a risk
+	// allocation; it grows while the decisions carry none.
+	EValue         float64        `json:"e_value"`
+	EValueAgainst  bool           `json:"e_value_against"`
+	FutilityEValue float64        `json:"futility_e_value"`
+	Gate           string         `json:"gate,omitempty"`
+	Gates          ScorecardGates `json:"gates"`
+	// UnitsToEstablish projects, at the current score per unit, how many
+	// effective units the e-value gate needs; WeeksToEstablish converts
+	// that at the sleeve's own pace of effective units per entry week.
+	// ClustersToEstablish repeats UnitsToEstablish (deprecated, one
+	// release). All nil when the score is not positive.
+	UnitsToEstablish    *int                        `json:"units_to_establish,omitempty"`
+	WeeksToEstablish    *int                        `json:"weeks_to_establish,omitempty"`
 	ClustersToEstablish *int                        `json:"clusters_to_establish,omitempty"`
+	Placebo             *ScorecardPlacebo           `json:"placebo,omitempty"`
+	Slippage            *ScorecardSlippageSummary   `json:"slippage,omitempty"`
 	Wrapper             *ScorecardWrapperSummary    `json:"wrapper,omitempty"`
 	RealisedVsImplied   *ScorecardRealisedVsImplied `json:"realised_vs_implied,omitempty"`
 	// LongPutRealisedVsImplied is the realised-vs-implied median of the
@@ -146,17 +176,70 @@ type ScorecardSleeve struct {
 
 // ScorecardGates discloses each component of the established gate.
 type ScorecardGates struct {
-	EValue          bool     `json:"e_value"`
+	EValue    bool `json:"e_value"`
+	Units     bool `json:"units"`
+	Weeks     bool `json:"weeks"`
+	Posterior bool `json:"posterior"`
+	// Placebo is true when no more than the allowed share of sign-shuffled
+	// replicates reaches the statistical bar (or the sample is too small for
+	// the bar at all).
+	Placebo      bool `json:"placebo"`
+	HalvesAgree  bool `json:"halves_agree"`
+	MarketsAgree bool `json:"markets_agree"`
+	// Clusters repeats Units (deprecated, one release).
 	Clusters        bool     `json:"clusters"`
-	Posterior       bool     `json:"posterior"`
-	HalvesAgree     bool     `json:"halves_agree"`
-	MarketsAgree    bool     `json:"markets_agree"`
 	FirstHalfMeanZ  *float64 `json:"first_half_mean_z,omitempty"`
 	SecondHalfMeanZ *float64 `json:"second_half_mean_z,omitempty"`
 	UpMarketMeanZ   *float64 `json:"up_market_mean_z,omitempty"`
 	DownMarketMeanZ *float64 `json:"down_market_mean_z,omitempty"`
-	UpClusters      int      `json:"up_clusters"`
-	DownClusters    int      `json:"down_clusters"`
+	UpUnits         int      `json:"up_units"`
+	DownUnits       int      `json:"down_units"`
+	// UpClusters and DownClusters repeat UpUnits and DownUnits (deprecated,
+	// one release).
+	UpClusters   int `json:"up_clusters"`
+	DownClusters int `json:"down_clusters"`
+}
+
+// ScorecardPlacebo is the sign-shuffle placebo: the units' signs are
+// redrawn at random Replicates times and the statistical bar (e-value,
+// posterior and effective sample) is re-read each time. Established counts
+// the replicates that reached it; StandardisedSD is the standard deviation
+// of the shuffled standardised sums, about 1 when the overlap covariance is
+// calibrated and below it when the covariance is conservative.
+type ScorecardPlacebo struct {
+	Replicates     int     `json:"replicates"`
+	Established    int     `json:"established"`
+	Rate           float64 `json:"rate"`
+	StandardisedSD float64 `json:"standardised_sd"`
+}
+
+// ScorecardSlippageSummary sums the half-spread the stream's decisions paid
+// from the quotes retained at their fills, in base currency, with the
+// decisions that carried none by reason.
+type ScorecardSlippageSummary struct {
+	Decisions      int            `json:"decisions"`
+	Quoted         int            `json:"quoted"`
+	HalfSpreadBase float64        `json:"half_spread_base"`
+	MeanBp         *float64       `json:"mean_bp,omitempty"`
+	Unquoted       map[string]int `json:"unquoted"`
+}
+
+// ScorecardSlippage is the half-spread one decision paid: measured from
+// the retained quote (Status measured) or unknown with the reason.
+type ScorecardSlippage struct {
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+	// Match is exec_id when the statement's execution ids met retained
+	// records, time when the retained fill on the same contract nearest in
+	// time (within the daemon's tolerance) stood in.
+	Match          string   `json:"match,omitempty"`
+	Fills          int      `json:"fills,omitempty"`
+	Quoted         int      `json:"quoted,omitempty"`
+	HalfSpread     *float64 `json:"half_spread,omitempty"`
+	Currency       string   `json:"currency,omitempty"`
+	HalfSpreadBase *float64 `json:"half_spread_base,omitempty"`
+	Bp             *float64 `json:"bp,omitempty"`
+	GapMS          *int64   `json:"gap_ms,omitempty"`
 }
 
 // ScorecardWrapperSummary is the mean option wrapper P&L with a bootstrap
@@ -197,11 +280,17 @@ type ScorecardDecision struct {
 	Currency    string                   `json:"currency,omitempty"`
 	// NotionalBase is the changed quantity at the fill price, in base
 	// currency at execution FX.
-	NotionalBase *float64                `json:"notional_base,omitempty"`
-	ExecutedAt   time.Time               `json:"executed_at"`
-	ClusterKey   string                  `json:"cluster_key"`
-	Entry        ScorecardEntry          `json:"entry"`
-	Scores       []ScorecardHorizonScore `json:"scores"`
+	NotionalBase *float64  `json:"notional_base,omitempty"`
+	ExecutedAt   time.Time `json:"executed_at"`
+	// ClusterKey is the sleeve × entry-week key; UnitKey adds the
+	// underlying, the name-week unit this decision's z contributes to.
+	ClusterKey string                  `json:"cluster_key"`
+	UnitKey    string                  `json:"unit_key"`
+	Entry      ScorecardEntry          `json:"entry"`
+	Scores     []ScorecardHorizonScore `json:"scores"`
+	// Slippage is the half-spread paid at the fill, from the retained
+	// quote; it does not depend on the horizon.
+	Slippage *ScorecardSlippage `json:"slippage,omitempty"`
 }
 
 // ScorecardOptionContract identifies an option leg.
@@ -225,10 +314,17 @@ type ScorecardEntry struct {
 	MarketRSquared *float64 `json:"market_r_squared,omitempty"`
 	// IndexBasis is list or r_squared when the underlying is scored as an
 	// index; empty for a single name.
-	IndexBasis string   `json:"index_basis,omitempty"`
-	ImpliedVol *float64 `json:"implied_vol,omitempty"`
-	Delta      *float64 `json:"delta,omitempty"`
-	Reason     string   `json:"reason,omitempty"`
+	IndexBasis string `json:"index_basis,omitempty"`
+	// MarketAdjustment is spy_sector when the single-name z is net of the
+	// market and the name's sector fund (Sector, SectorFund), spy when only
+	// the market could be removed (SectorReason says why).
+	MarketAdjustment string   `json:"market_adjustment,omitempty"`
+	Sector           string   `json:"sector,omitempty"`
+	SectorFund       string   `json:"sector_fund,omitempty"`
+	SectorReason     string   `json:"sector_reason,omitempty"`
+	ImpliedVol       *float64 `json:"implied_vol,omitempty"`
+	Delta            *float64 `json:"delta,omitempty"`
+	Reason           string   `json:"reason,omitempty"`
 }
 
 // ScorecardHorizonScore is one decision's score at one horizon, or the
@@ -243,6 +339,8 @@ type ScorecardHorizonScore struct {
 	UnderlyingReturn  *float64   `json:"underlying_return,omitempty"`
 	MarketReturn      *float64   `json:"market_return,omitempty"`
 	Beta              *float64   `json:"beta,omitempty"`
+	SectorBeta        *float64   `json:"sector_beta,omitempty"`
+	SectorReturn      *float64   `json:"sector_return,omitempty"`
 	IdioVolDaily      *float64   `json:"idio_vol_daily,omitempty"`
 	TotalVolDaily     *float64   `json:"total_vol_daily,omitempty"`
 	Z                 *float64   `json:"z,omitempty"`
@@ -250,8 +348,11 @@ type ScorecardHorizonScore struct {
 	RVIReason         string     `json:"realised_vs_implied_reason,omitempty"`
 	WrapperBase       *float64   `json:"wrapper_base,omitempty"`
 	WrapperReason     string     `json:"wrapper_reason,omitempty"`
-	SlippageBp        *float64   `json:"slippage_bp,omitempty"`
-	SlippageReason    string     `json:"slippage_reason,omitempty"`
+	// SlippageBp and SlippageReason repeat the decision's Slippage at each
+	// horizon (deprecated, one release): the half-spread does not depend on
+	// the horizon.
+	SlippageBp     *float64 `json:"slippage_bp,omitempty"`
+	SlippageReason string   `json:"slippage_reason,omitempty"`
 }
 
 // ScorecardCoverage makes the ledger and its gaps explicit.
@@ -271,6 +372,10 @@ type ScorecardCoverage struct {
 	Skipped         map[string]int `json:"skipped"`
 	ScoredByHorizon map[int]int    `json:"scored_by_horizon"`
 	UnknownByReason map[string]int `json:"unknown_by_reason"`
+	// SlippageQuoted counts the decisions with a measured half-spread;
+	// SlippageByReason the rest by reason.
+	SlippageQuoted   int            `json:"slippage_quoted"`
+	SlippageByReason map[string]int `json:"slippage_by_reason"`
 	// Superseded counts persisted ledger rows no longer in the current
 	// derivation (restated statements); they stay in the audit record.
 	Superseded int `json:"superseded"`
@@ -283,10 +388,12 @@ type ScorecardHistory struct {
 	Pending int `json:"pending"`
 	// Failures lists every name whose last history read failed since its
 	// last successful one, the market proxy first, then by symbol.
-	Failures      []ScorecardHistoryFailure `json:"failures,omitempty"`
-	MarketSymbol  string                    `json:"market_symbol"`
-	MarketBars    int                       `json:"market_bars"`
-	LastFetchedAt time.Time                 `json:"last_fetched_at,omitzero"`
+	Failures     []ScorecardHistoryFailure `json:"failures,omitempty"`
+	MarketSymbol string                    `json:"market_symbol"`
+	MarketBars   int                       `json:"market_bars"`
+	// SectorBars is the sessions held per sector fund the ledger needs.
+	SectorBars    map[string]int `json:"sector_bars,omitempty"`
+	LastFetchedAt time.Time      `json:"last_fetched_at,omitzero"`
 }
 
 // ScorecardHistoryFailure is one name whose last history read failed since
@@ -306,13 +413,19 @@ type ScorecardHistoryFailure struct {
 
 // ScorecardMethod travels with every result.
 type ScorecardMethod struct {
-	Direction           string  `json:"direction"`
-	Index               string  `json:"index"`
-	Streams             string  `json:"streams"`
-	Lookback            string  `json:"lookback"`
+	Direction        string `json:"direction"`
+	DirectionalScore string `json:"directional_score"`
+	Index            string `json:"index"`
+	Streams          string `json:"streams"`
+	Lookback         string `json:"lookback"`
+	Units            string `json:"units"`
+	Overlap          string `json:"overlap"`
+	// Clusters repeats Units (deprecated, one release).
 	Clusters            string  `json:"clusters"`
 	Posterior           string  `json:"posterior"`
 	EValue              string  `json:"e_value"`
+	Futility            string  `json:"futility"`
+	Placebo             string  `json:"placebo"`
 	Gates               string  `json:"gates"`
 	Wrapper             string  `json:"wrapper"`
 	RealisedVsImplied   string  `json:"realised_vs_implied"`

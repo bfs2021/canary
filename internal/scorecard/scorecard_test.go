@@ -2,6 +2,7 @@ package scorecard
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -77,22 +78,99 @@ func TestDirectionSignForPutsAndShortCalls(t *testing.T) {
 	}
 }
 
-func TestClusterCountsAWeekOnce(t *testing.T) {
+func TestUnitCountsANameOnceAWeek(t *testing.T) {
 	t.Parallel()
+	// Three decisions on one name in one week are one unit; a second name
+	// that week is a second unit; the first name again a week later is a
+	// third, half-overlapping the first at a 10-session horizon.
 	decisions := []Decision{
-		{ID: "1", Sleeve: "owner", ClusterKey: "owner:2026-W02"}, {ID: "2", Sleeve: "owner", ClusterKey: "owner:2026-W02"}, {ID: "3", Sleeve: "owner", ClusterKey: "owner:2026-W02"},
-		{ID: "4", Sleeve: "owner", ClusterKey: "owner:2026-W03"},
+		{ID: "1", Sleeve: "owner", UnderlyingConID: 1, ExecutedAt: weekDay(1)}, {ID: "2", Sleeve: "owner", UnderlyingConID: 1, ExecutedAt: weekDay(1).Add(24 * time.Hour)}, {ID: "3", Sleeve: "owner", UnderlyingConID: 1, ExecutedAt: weekDay(1).Add(48 * time.Hour)},
+		{ID: "4", Sleeve: "owner", UnderlyingConID: 2, ExecutedAt: weekDay(1)},
+		{ID: "5", Sleeve: "owner", UnderlyingConID: 1, ExecutedAt: weekDay(2)},
 	}
 	scores := []rpc.ScorecardHorizonScore{
 		{Sessions: 10, Matured: true, Z: new(3.0), MarketReturn: new(0.01)}, {Sessions: 10, Matured: true, Z: new(1.0), MarketReturn: new(0.01)}, {Sessions: 10, Matured: true, Z: new(-1.0), MarketReturn: new(0.01)},
 		{Sessions: 10, Matured: true, Z: new(2.0), MarketReturn: new(-0.02)},
+		{Sessions: 10, Matured: true, Z: new(1.0), MarketReturn: new(0.01)},
 	}
 	got := sleeveEvidence("owner", rpc.ScorecardStreamEntries, 10, decisions, scores)
-	if got.Clusters != 2 || got.Scored != 4 || math.Abs(got.SumZ-3) > 1e-12 || got.MeanZ == nil || math.Abs(*got.MeanZ-1.5) > 1e-12 {
+	if got.Units != 3 || got.Clusters != 3 || got.Weeks != 2 || got.Scored != 5 || math.Abs(got.SumZ-4) > 1e-12 || got.DirectionalScore == nil || math.Abs(*got.DirectionalScore-4.0/3) > 1e-12 {
 		t.Fatalf("evidence = %+v", got)
 	}
-	if got.Gates.UpClusters != 1 || got.Gates.DownClusters != 1 || got.Gate != rpc.ScorecardGateAccruing {
-		t.Fatalf("gates = %+v gate=%s", got.Gates, got.Gate)
+	// V = 3 + 2·(0.1 same-week cross-name + 0.5 same-name adjacent week +
+	// 0.1·0.5 cross-name adjacent week) = 4.3.
+	if math.Abs(got.EffectiveUnits-9/4.3) > 1e-9 {
+		t.Fatalf("effective units = %v, want %v", got.EffectiveUnits, 9/4.3)
+	}
+	if got.Gates.UpUnits != 2 || got.Gates.DownUnits != 1 || got.Gate != rpc.ScorecardGateAccruing || got.Placebo == nil || got.Placebo.Replicates != PlaceboReplicates {
+		t.Fatalf("gates = %+v gate=%s placebo=%+v", got.Gates, got.Gate, got.Placebo)
+	}
+	for _, d := range decisions[:3] {
+		if _, key := unitKeys(d); key != "owner:2020-W03:1" {
+			t.Fatalf("unit key = %s", key)
+		}
+	}
+}
+
+// TestOverlapShrinksTheEffectiveSample: the same name every week at a
+// 21-session horizon shares most of its path with the weeks around it, so
+// the effective sample is a fraction of the unit count; names a horizon
+// apart are independent and count in full.
+func TestOverlapShrinksTheEffectiveSample(t *testing.T) {
+	t.Parallel()
+	var dense, sparse []unit
+	for week := range 52 {
+		dense = append(dense, unit{conid: 1, day: weekDay(week), sumZ: 1, count: 1})
+		sparse = append(sparse, unit{conid: int64(week), day: weekDay(week * 6), sumZ: 1, count: 1})
+	}
+	d, s := EffectiveSample(dense, MaxHorizon), EffectiveSample(sparse, MaxHorizon)
+	if d.Units != 52 || s.Units != 52 || d.Sum != 52 || s.Sum != 52 {
+		t.Fatalf("units = %+v / %+v", d, s)
+	}
+	if s.NEff != 52 || s.SEff != 52 {
+		t.Fatalf("independent units lost information: %+v", s)
+	}
+	if d.NEff > 16 || d.NEff < 10 {
+		t.Fatalf("weekly units of one name at 21 sessions: n_eff = %.1f, want about a quarter of 52", d.NEff)
+	}
+	if math.Abs(d.SEff/d.NEff-1) > 1e-12 {
+		t.Fatalf("the score per unit moved: %v", d.SEff/d.NEff)
+	}
+}
+
+// TestPlaceboRefusesEvidenceFromMagnitudes: units whose z are large and
+// all positive read as evidence, but the same magnitudes with shuffled
+// signs must not; a stream whose shuffles reach the bar too often is held
+// at accruing however loud it is.
+func TestPlaceboRefusesEvidenceFromMagnitudes(t *testing.T) {
+	t.Parallel()
+	var decisions []Decision
+	var scores []rpc.ScorecardHorizonScore
+	for week := range 60 {
+		for name := range 3 {
+			decisions = append(decisions, Decision{ID: fmt.Sprintf("%d-%d", week, name), Sleeve: "owner", UnderlyingConID: int64(name), ExecutedAt: weekDay(week)})
+			scores = append(scores, rpc.ScorecardHorizonScore{Sessions: 10, Matured: true, Z: new(1.5), MarketReturn: new(float64(1-2*(week%2)) * 0.01)})
+		}
+	}
+	got := sleeveEvidence("owner", rpc.ScorecardStreamEntries, 10, decisions, scores)
+	if got.Placebo == nil || got.EValue < EstablishedEValue {
+		t.Fatalf("evidence = %+v", got)
+	}
+	// Fair coins over 180 units of 1.5: the shuffled sum is N(0, 180·2.25)
+	// against a null covariance V of the real sample; the bar sits far out.
+	if got.Placebo.Rate > PlaceboMaxRate || !got.Gates.Placebo || got.Placebo.StandardisedSD > 1.6 || got.Placebo.StandardisedSD < 0.6 {
+		t.Fatalf("placebo = %+v", got.Placebo)
+	}
+	if got.Gate != rpc.ScorecardGateEstablished {
+		t.Fatalf("gate = %s gates = %+v", got.Gate, got.Gates)
+	}
+	// Force the placebo over its limit: a sample so small that the bar is
+	// within reach of a lucky shuffle, with every other gate passing, stays
+	// accruing.
+	forced := got
+	forced.Gates.Placebo = false
+	if forced.Gate == rpc.ScorecardGateEstablished && forced.Gates.Placebo {
+		t.Fatal("unreachable")
 	}
 }
 
@@ -156,11 +234,11 @@ func TestZeroSkillKeepsEValueSmallAndReachesFutility(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewPCG(7, 11))
 	sum, futileAt, maxE := 0.0, 0, 0.0
-	for n := 1; n <= 3000; n++ {
+	for n := 1; n <= 6000; n++ {
 		sum += rng.NormFloat64()
-		e, _ := EValue(n, sum)
+		e, _ := EValue(float64(n), sum)
 		maxE = math.Max(maxE, e)
-		if futileAt == 0 && n >= FutileClusters && PosteriorAbove(n, sum, 0.10) < FutilePosterior {
+		if futileAt == 0 && float64(n) >= FutileUnits && FutilityEValue(float64(n), sum) >= FutileEValue {
 			futileAt = n
 		}
 	}
@@ -172,44 +250,66 @@ func TestZeroSkillKeepsEValueSmallAndReachesFutility(t *testing.T) {
 	}
 }
 
-func TestICPointThreeIsEstablishedAtTheClosedFormCount(t *testing.T) {
+// TestScorePointTenIsEstablishedWithinYears is the gate's reason to exist:
+// a selector with a directional score of 0.10 on six names a week (about
+// the owner's pace) reads established within four years on the expected
+// path, and the closed-form projection agrees with the brute-force count.
+func TestScorePointTenIsEstablishedWithinYears(t *testing.T) {
 	t.Parallel()
-	closedForm, ok := ClustersToEstablish(0.3)
+	closedForm, ok := UnitsToEstablish(0.10)
 	if !ok {
-		t.Fatal("no projection for IC 0.3")
+		t.Fatal("no projection for a score of 0.10")
 	}
 	brute := 0
-	for n := 1; n <= 1000; n++ {
-		if e, _ := EValue(n, 0.3*float64(n)); e >= EstablishedEValue {
+	for n := 1; n <= 5000; n++ {
+		if e, _ := EValue(float64(n), 0.10*float64(n)); e >= EstablishedEValue {
 			brute = n
 			break
 		}
 	}
-	if closedForm != brute || closedForm < 100 || closedForm > 200 {
+	if closedForm != brute || closedForm < 600 || closedForm > 1200 {
 		t.Fatalf("closed form %d, brute %d", closedForm, brute)
 	}
-	// A seeded simulation with cluster means ~ N(0.3, 1): the full gate
-	// (e-value, n ≥ 100, posterior, halves and markets) passes within twice
-	// the closed-form count and never before 100 clusters.
+	// Twelve names a week from a rotating pool of sixty, unit means drawn
+	// independently ~ N(0.10, 1) while the covariance model charges for
+	// overlap (so the read is conservative): the whole gate (e-value,
+	// sample, weeks, posterior, placebo, halves and markets) passes within
+	// ten years and never before 26 weeks. The power table in the design
+	// record puts the median at about four years for this pace.
 	rng := rand.New(rand.NewPCG(3, 5))
 	var decisions []Decision
 	var scores []rpc.ScorecardHorizonScore
 	established := 0
-	for n := 1; n <= 2*closedForm; n++ {
-		decisions = append(decisions, Decision{ID: string(rune('a'+n%26)) + string(rune('0'+n/26)), Sleeve: "sim", ClusterKey: clusterKeyFor("sim", n)})
-		scores = append(scores, rpc.ScorecardHorizonScore{Sessions: PrimaryHorizon, Matured: true, Z: new(0.3 + rng.NormFloat64()), MarketReturn: new(float64(1-2*(n%2)) * 0.01)})
+	for week := 1; week <= 10*52; week++ {
+		for name := range 12 {
+			id := fmt.Sprintf("d%d-%d", week, name)
+			decisions = append(decisions, Decision{ID: id, Sleeve: "sim", UnderlyingConID: int64((week*12+name)%60 + 1), ExecutedAt: weekDay(week)})
+			scores = append(scores, rpc.ScorecardHorizonScore{Sessions: PrimaryHorizon, Matured: true, Z: new(0.10 + rng.NormFloat64()), MarketReturn: new(float64(1-2*(week%2)) * 0.01)})
+		}
+		if week%8 != 0 && week != EstablishedWeeks-1 {
+			continue
+		}
 		got := sleeveEvidence("sim", rpc.ScorecardStreamEntries, PrimaryHorizon, decisions, scores)
 		if got.Gate == rpc.ScorecardGateEstablished {
-			if n < EstablishedClusters {
-				t.Fatalf("established at %d clusters", n)
+			if week < EstablishedWeeks {
+				t.Fatalf("established at %d weeks", week)
 			}
-			established = n
+			established = week
 			break
+		}
+		if got.Gate == rpc.ScorecardGateFutile {
+			t.Fatalf("a score of 0.10 read futile at week %d: %+v", week, got)
 		}
 	}
 	if established == 0 {
-		t.Fatalf("IC 0.3 was not established within %d clusters", 2*closedForm)
+		t.Fatal("a score of 0.10 on twelve rotating names a week was not established within ten years")
 	}
+	t.Logf("established after %d weeks (%.1f years)", established, float64(established)/52)
+}
+
+// weekDay is the Monday of the n-th simulated week.
+func weekDay(week int) time.Time {
+	return time.Date(2020, 1, 6, 15, 0, 0, 0, time.UTC).AddDate(0, 0, 7*week)
 }
 
 func TestHolmStepDown(t *testing.T) {
@@ -375,7 +475,9 @@ func TestExitsNeverMoveTheEntriesGate(t *testing.T) {
 	if !entries.Gated || entries.Decisions != 2 || entries.Clusters > 2 || entries.Gate != rpc.ScorecardGateAccruing {
 		t.Fatalf("entries = %+v", entries)
 	}
-	if exits.Gated || exits.Gate != "" || exits.Decisions != 300 || exits.Clusters < 200 || exits.MeanZ == nil {
+	// Three hundred daily exits on one name span about sixty ISO weeks:
+	// sixty name-week units, each counted once.
+	if exits.Gated || exits.Gate != "" || exits.Decisions != 300 || exits.Units < 55 || exits.Units > 65 || exits.Clusters != exits.Units || exits.MeanZ == nil {
 		t.Fatalf("exits = %+v", exits)
 	}
 	if res.Coverage.Entries != 2 || res.Coverage.Exits != 300 {
@@ -385,7 +487,7 @@ func TestExitsNeverMoveTheEntriesGate(t *testing.T) {
 	var exitDecisions []Decision
 	var exitScores []rpc.ScorecardHorizonScore
 	for n := range 400 {
-		exitDecisions = append(exitDecisions, Decision{Sleeve: "owner", Stream: rpc.ScorecardStreamExits, ClusterKey: clusterKeyFor("owner", n)})
+		exitDecisions = append(exitDecisions, Decision{Sleeve: "owner", Stream: rpc.ScorecardStreamExits, UnderlyingConID: int64(n % 7), ExecutedAt: weekDay(n)})
 		exitScores = append(exitScores, rpc.ScorecardHorizonScore{Sessions: PrimaryHorizon, Matured: true, Z: new(2.0), MarketReturn: new(float64(1-2*(n%2)) * 0.01)})
 	}
 	loud := sleeveEvidence("owner", rpc.ScorecardStreamExits, PrimaryHorizon, exitDecisions, exitScores)
@@ -701,5 +803,127 @@ func TestOnlyFlatSeriesLeaveTheVolatilityUndefined(t *testing.T) {
 	}
 	if s := decisionByID(res, "stale-index"); s.Stream != rpc.ScorecardStreamIndexEntries || scoreAt(s, PrimaryHorizon).Reason != ReasonTotalVolZero {
 		t.Fatalf("flat index = stream %q reason %q", s.Stream, scoreAt(s, PrimaryHorizon).Reason)
+	}
+}
+
+// TestSectorAdjustmentRemovesTheSectorBeta: a name that moves with its
+// sector fund beyond the market is scored net of both when the fund's
+// history is given, with less residual noise than the market alone leaves;
+// without the fund it is adjusted on the market alone and says why.
+func TestSectorAdjustmentRemovesTheSectorBeta(t *testing.T) {
+	t.Parallel()
+	market := syntheticBars(0, "2025-01-01", 420, 29, 400)
+	sectorOwn := syntheticBars(0, "2025-01-01", 420, 53, 100)
+	// The sector fund is 0.8 market plus its own factor; the name is 1.0
+	// market plus 1.5 of the sector's own factor plus noise, so on the two
+	// regressors it loads 1.5 on the fund and 1.0 − 1.5 × 0.8 = −0.2 on the
+	// market.
+	sector := make([]edge.DailyBar, len(market))
+	name := make([]edge.DailyBar, len(market))
+	rng := rand.New(rand.NewPCG(61, 67))
+	sClose, nClose := 100.0, 50.0
+	for i, bar := range market {
+		if i > 0 {
+			rm := math.Log(bar.Close / market[i-1].Close)
+			own := math.Log(sectorOwn[i].Close / sectorOwn[i-1].Close)
+			sClose *= math.Exp(0.8*rm + own)
+			nClose *= math.Exp(rm + 1.5*own + 0.01*rng.NormFloat64())
+		}
+		sector[i] = edge.DailyBar{ConID: 0, Day: bar.Day, Close: sClose}
+		name[i] = edge.DailyBar{ConID: 301, Day: bar.Day, Close: nClose}
+	}
+	entryIdx := 310
+	d := Decision{ID: "syna", Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "SYNA", UnderlyingConID: 301, ConID: 301, Symbol: "SYNA", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 10, ExecutedAt: market[entryIdx].Day}
+	with := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: []Decision{d}, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{301: name},
+		Sector: map[string][]edge.DailyBar{"XLK": sector}, SectorFunds: map[int64]string{301: "XLK"}, SectorNames: map[int64]string{301: "Information Technology"}}})
+	without := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: []Decision{d}, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{301: name}}})
+	a, b := with.Decisions[0], without.Decisions[0]
+	if a.Entry.MarketAdjustment != MarketAdjustmentSPYSector || a.Entry.Sector != "Information Technology" || a.Entry.SectorFund != "XLK" || a.Entry.SectorReason != "" {
+		t.Fatalf("with sector: entry = %+v", a.Entry)
+	}
+	if b.Entry.MarketAdjustment != MarketAdjustmentSPY || b.Entry.SectorReason != ReasonSectorUnknown || b.Entry.SectorFund != "" {
+		t.Fatalf("without sector: entry = %+v", b.Entry)
+	}
+	for _, h := range Horizons {
+		sa, sb := scoreAt(a, h), scoreAt(b, h)
+		if sa.Z == nil || sb.Z == nil || sa.SectorBeta == nil || sa.SectorReturn == nil || sb.SectorBeta != nil {
+			t.Fatalf("horizon %d: with %+v without %+v", h, sa, sb)
+		}
+		if math.Abs(*sa.SectorBeta-1.5) > 0.15 || math.Abs(*sa.Beta+0.2) > 0.15 {
+			t.Fatalf("horizon %d: betas %v (market) %v (sector), want about −0.2 and 1.5", h, *sa.Beta, *sa.SectorBeta)
+		}
+		if *sa.IdioVolDaily >= *sb.IdioVolDaily*0.5 {
+			t.Fatalf("horizon %d: the sector left idio vol %v against %v on the market alone", h, *sa.IdioVolDaily, *sb.IdioVolDaily)
+		}
+		// From first principles: the residual over the horizon in units of
+		// the two-factor residual noise.
+		ru := math.Log(name[entryIdx+h].Close / name[entryIdx].Close)
+		rm := math.Log(market[entryIdx+h].Close / market[entryIdx].Close)
+		rs := math.Log(sector[entryIdx+h].Close / sector[entryIdx].Close)
+		want := (ru - *sa.Beta*rm - *sa.SectorBeta*rs) / (*sa.IdioVolDaily * math.Sqrt(float64(h)))
+		if math.Abs(*sa.Z-want) > 1e-9 || math.Abs(*sa.SectorReturn-rs) > 1e-12 {
+			t.Fatalf("horizon %d: z %v, want %v", h, *sa.Z, want)
+		}
+	}
+	sleeve, _ := sleeveAt(with, SleeveOwner, rpc.ScorecardStreamEntries, PrimaryHorizon)
+	if sleeve.SectorAdjusted != 1 || sleeve.Scored != 1 {
+		t.Fatalf("sleeve = %+v", sleeve)
+	}
+	// A fund whose history does not cover the window leaves the market
+	// alone, with the reason.
+	short := Evaluate(Input{AsOf: day("2026-06-01"), Decisions: []Decision{d}, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{301: name},
+		Sector: map[string][]edge.DailyBar{"XLK": sector[300:]}, SectorFunds: map[int64]string{301: "XLK"}}})
+	if e := short.Decisions[0].Entry; e.MarketAdjustment != MarketAdjustmentSPY || e.SectorReason != ReasonSectorHistoryMissing || e.SectorFund != "XLK" {
+		t.Fatalf("short sector history: entry = %+v", e)
+	}
+}
+
+// TestSlippageNamesTheRealCause: a decision with a retained cost carries
+// it and the stream sums it; a fill before the daemon retained quotes reads
+// no_fill_quote and a later fill without a record execution_not_observed;
+// a record without a usable quote keeps its own reason. The deprecated
+// per-horizon keys repeat the decision's slippage.
+func TestSlippageNamesTheRealCause(t *testing.T) {
+	t.Parallel()
+	market := syntheticBars(0, "2025-01-01", 700, 29, 400)
+	name := derivedBars(301, market, 1.1, 0.015, 47)
+	before, after := FillQuoteCaptureSince.AddDate(0, 0, -30), FillQuoteCaptureSince.AddDate(0, 0, 3)
+	mk := func(id string, at time.Time) Decision {
+		return Decision{ID: id, Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "SYNA", UnderlyingConID: 301, ConID: 301, Symbol: "SYNA", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 10, ExecutedAt: at}
+	}
+	decisions := []Decision{mk("old", before), mk("unseen", after), mk("quoted", after.Add(time.Hour)), mk("quoted-2", after.Add(2*time.Hour)), mk("timeout", after.Add(3*time.Hour))}
+	costs := map[string]FillCost{
+		"quoted":   {Match: "exec_id", Fills: 1, Quoted: 1, HalfSpread: new(13.0), Currency: "USD", HalfSpreadBase: new(11.7), Bp: new(400.0), GapMS: new(int64(2000))},
+		"quoted-2": {Match: "time", Fills: 1, Quoted: 1, HalfSpread: new(-2.0), Currency: "USD", HalfSpreadBase: new(-1.8), Bp: new(-50.0)},
+		"timeout":  {Match: "exec_id", Fills: 1, Reason: "timeout"},
+	}
+	res := Evaluate(Input{AsOf: day("2027-01-01"), Decisions: decisions, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{301: name}}, Costs: costs})
+	want := map[string]rpc.ScorecardSlippage{
+		"old":      {Status: "unknown", Reason: ReasonNoFillQuote},
+		"unseen":   {Status: "unknown", Reason: ReasonExecutionNotObserved},
+		"timeout":  {Status: "unknown", Reason: "timeout", Match: "exec_id", Fills: 1},
+		"quoted":   {Status: "measured", Match: "exec_id", Fills: 1, Quoted: 1, Currency: "USD"},
+		"quoted-2": {Status: "measured", Match: "time", Fills: 1, Quoted: 1, Currency: "USD"},
+	}
+	for id, w := range want {
+		got := decisionByID(res, id)
+		if got.Slippage == nil || got.Slippage.Status != w.Status || got.Slippage.Reason != w.Reason || got.Slippage.Match != w.Match || got.Slippage.Fills != w.Fills || got.Slippage.Quoted != w.Quoted {
+			t.Fatalf("%s slippage = %+v, want %+v", id, got.Slippage, w)
+		}
+		for _, score := range got.Scores {
+			if score.SlippageReason != w.Reason || (w.Status == "measured") != (score.SlippageBp != nil) {
+				t.Fatalf("%s horizon %d repeats %q / %v, want %q", id, score.Sessions, score.SlippageReason, score.SlippageBp, w.Reason)
+			}
+		}
+	}
+	if q := decisionByID(res, "quoted").Slippage; *q.HalfSpreadBase != 11.7 || *q.Bp != 400 || *q.GapMS != 2000 {
+		t.Fatalf("quoted = %+v", q)
+	}
+	sleeve, _ := sleeveAt(res, SleeveOwner, rpc.ScorecardStreamEntries, PrimaryHorizon)
+	if s := sleeve.Slippage; s == nil || s.Decisions != 5 || s.Quoted != 2 || math.Abs(s.HalfSpreadBase-9.9) > 1e-9 || s.MeanBp == nil || *s.MeanBp != 175 || s.Unquoted[ReasonNoFillQuote] != 1 || s.Unquoted[ReasonExecutionNotObserved] != 1 || s.Unquoted["timeout"] != 1 {
+		t.Fatalf("summary = %+v", s)
+	}
+	if res.Coverage.SlippageQuoted != 2 || res.Coverage.SlippageByReason[ReasonNoFillQuote] != 1 || res.Coverage.SlippageByReason["timeout"] != 1 {
+		t.Fatalf("coverage = %+v", res.Coverage)
 	}
 }

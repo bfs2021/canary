@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ import (
 
 // Schema, sleeve, horizon and estimation constants.
 const (
-	SchemaVersion = "canary-scorecard-v1"
+	SchemaVersion = "canary-scorecard-v2"
 
 	// SleeveOwner is the sleeve of hand and TWS trades: every decision
 	// without a strategy lineage.
@@ -39,8 +40,8 @@ const (
 	RiskFreeRate  = 0.04
 	DividendYield = 0.0
 
-	// PriorSD is the prior standard deviation on IC; Tau the mixture scale
-	// of the e-value.
+	// PriorSD is the prior standard deviation on the directional score (the
+	// mean z per name-week unit); Tau the mixture scale of the e-value.
 	PriorSD = 0.1
 	Tau     = 0.2
 
@@ -50,11 +51,37 @@ const (
 	// a selection score.
 	IndexRSquared = 0.9
 
-	EstablishedEValue    = 100.0
-	EstablishedClusters  = 100
-	EstablishedPosterior = 0.95
-	FutileClusters       = 60
-	FutilePosterior      = 0.05
+	// CrossNameResidualCorrelation is the residual correlation assumed
+	// between two different names whose horizons overlap, after the market
+	// and sector adjustment; the same name's overlapping units are fully
+	// correlated. It enters the overlap covariance that scales the
+	// effective sample (decision-scorecard.md, "Units and overlap").
+	CrossNameResidualCorrelation = 0.1
+
+	// EstablishedEValue, EstablishedUnits, EstablishedWeeks,
+	// EstablishedPosterior, FutileEValue and FutileUnits are the gate
+	// thresholds proposed on 2026-10-19 for the owner's decision
+	// (decision-scorecard.md, "Power"): established at an anytime-valid 5%
+	// (E ≥ 20) with at least 60 effective name-week units over at least 26
+	// entry weeks and a posterior of 97.5% that the score is positive;
+	// futile when the no-information likelihood ratio against FutilityScore
+	// reaches 20 over at least 60 effective units.
+	EstablishedEValue    = 20.0
+	EstablishedUnits     = 60.0
+	EstablishedWeeks     = 26
+	EstablishedPosterior = 0.975
+	FutileEValue         = 20.0
+	FutileUnits          = 60.0
+	// FutilityScore is the smallest directional score worth a risk
+	// allocation: 0.05 is a good selector (Grinold and Kahn), and the
+	// statistician's memo of 2026-10-18 puts the owner's allocation at
+	// 0.02 to 0.05.
+	FutilityScore = 0.05
+
+	// PlaceboReplicates sign-shuffles the units; PlaceboMaxRate is the share
+	// of shuffles that may reach the statistical bar before the gate holds.
+	PlaceboReplicates = 200
+	PlaceboMaxRate    = 0.05
 
 	BootstrapResamples = 1000
 
@@ -88,12 +115,18 @@ const (
 	ReasonImpliedVolUnknown        = "implied_vol_unknown"
 	ReasonMarkUnavailable          = "mark_unavailable"
 	ReasonFXUnknown                = "fx_unknown"
-	ReasonNoFillQuote              = "no_fill_quote"
-	ReasonNotOption                = "not_option"
-	ReasonIdioVolZero              = "idio_vol_zero"
-	ReasonTotalVolZero             = "total_vol_zero"
-	ReasonUnsupportedAsset         = "unsupported_asset"
-	ReasonZeroQuantity             = "zero_quantity"
+	// ReasonNoFillQuote marks a fill before the daemon retained quotes
+	// (FillQuoteCaptureSince); ReasonExecutionNotObserved a later fill the
+	// daemon never saw, so no quote was read for it.
+	ReasonNoFillQuote          = "no_fill_quote"
+	ReasonExecutionNotObserved = "execution_not_observed"
+	ReasonSectorUnknown        = "sector_unknown"
+	ReasonSectorHistoryMissing = "sector_history_unavailable"
+	ReasonNotOption            = "not_option"
+	ReasonIdioVolZero          = "idio_vol_zero"
+	ReasonTotalVolZero         = "total_vol_zero"
+	ReasonUnsupportedAsset     = "unsupported_asset"
+	ReasonZeroQuantity         = "zero_quantity"
 
 	// OriginLifecycle marks a fill the broker's option lifecycle produced.
 	OriginLifecycle = "lifecycle"
@@ -101,6 +134,76 @@ const (
 
 // Horizons is the closed set of post-entry session lenses.
 var Horizons = [...]int{5, PrimaryHorizon, MaxHorizon}
+
+// FillQuoteCaptureSince is the day the daemon began retaining a quote at
+// every fill (fill-quotes.md). A fill before it has no quote and never will;
+// a later fill without one was not observed by the daemon.
+var FillQuoteCaptureSince = time.Date(2026, 10, 18, 0, 0, 0, 0, time.UTC)
+
+// Market adjustments of a single-name score.
+const (
+	MarketAdjustmentSPY       = "spy"
+	MarketAdjustmentSPYSector = "spy_sector"
+)
+
+// sectorFunds maps each GICS sector to the fund that stands for it in the
+// market adjustment: one series per sector, collected on the history lane.
+var sectorFunds = map[string]string{
+	"Information Technology": "XLK",
+	"Financials":             "XLF",
+	"Health Care":            "XLV",
+	"Consumer Discretionary": "XLY",
+	"Consumer Staples":       "XLP",
+	"Energy":                 "XLE",
+	"Industrials":            "XLI",
+	"Materials":              "XLB",
+	"Utilities":              "XLU",
+	"Real Estate":            "XLRE",
+	"Communication Services": "XLC",
+}
+
+// SectorFund is the fund that stands for a GICS sector; empty when the
+// sector is unknown.
+func SectorFund(sector string) string {
+	return sectorFunds[strings.TrimSpace(sector)]
+}
+
+// SectorFundSymbols lists every sector fund, sorted.
+func SectorFundSymbols() []string {
+	out := make([]string, 0, len(sectorFunds))
+	for _, symbol := range sectorFunds {
+		out = append(out, symbol)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// FillCost is the half-spread one decision paid, from the quote the daemon
+// retained at its fill(s): by execution id when the statement's execution
+// ids match retained records, else the retained fill on the same contract
+// nearest in time. The pure core only sums and reports it.
+type FillCost struct {
+	// Match is exec_id or time; Fills is the decision's execution count and
+	// Quoted how many carried a usable two-sided quote.
+	Match  string
+	Fills  int
+	Quoted int
+	// HalfSpread is (fill − mid) × side × quantity × multiplier summed over
+	// the quoted fills, in the contract currency; HalfSpreadBase the same in
+	// base currency at each fill's FX, nil when a rate is missing. Bp is the
+	// quantity-weighted half-spread in basis points of the mid.
+	HalfSpread     *float64
+	Currency       string
+	HalfSpreadBase *float64
+	Bp             *float64
+	// GapMS is how long after the fill the quote was read (the worst of the
+	// quoted fills).
+	GapMS *int64
+	// Reason says why nothing was measured: the retained record's own reason
+	// when the quote was unavailable, fx_unavailable when only the base sum
+	// is missing.
+	Reason string
+}
 
 // indexUnderlyings is the fixed list of broad index products whose
 // decisions are market timing and hedges, scored on the index's own total
@@ -146,8 +249,12 @@ type Decision struct {
 	PositionBefore  float64         `json:"position_before"`
 	PositionAfter   float64         `json:"position_after"`
 	PathUnbalanced  bool            `json:"path_unbalanced,omitempty"`
-	ClusterKey      string          `json:"cluster_key"`
-	Lineage         Lineage         `json:"lineage"`
+	// ClusterKey is sleeve × ISO week of entry (the week key); UnitKey adds
+	// the underlying: one name-week unit of evidence. Both are derived at
+	// evaluation when a persisted row lacks them.
+	ClusterKey string  `json:"cluster_key"`
+	UnitKey    string  `json:"unit_key,omitempty"`
+	Lineage    Lineage `json:"lineage"`
 }
 
 // OptionContract identifies an option leg.
@@ -281,12 +388,19 @@ func BuildLedger(ev edge.ChangeEvidence, resolve SleeveResolver) ([]Decision, ma
 				}
 			}
 		}
-		year, week := d.ExecutedAt.ISOWeek()
-		d.ClusterKey = fmt.Sprintf("%s:%04d-W%02d", sleeve, year, week)
+		d.ClusterKey, d.UnitKey = unitKeys(d)
 		d.ID = decisionID(d)
 		out = append(out, d)
 	}
 	return out, skipped
+}
+
+// unitKeys derives the week key (sleeve × ISO entry week) and the unit key
+// (the week key × underlying contract) of a decision.
+func unitKeys(d Decision) (clusterKey, unitKey string) {
+	year, week := d.ExecutedAt.ISOWeek()
+	clusterKey = fmt.Sprintf("%s:%04d-W%02d", d.Sleeve, year, week)
+	return clusterKey, fmt.Sprintf("%s:%d", clusterKey, d.UnderlyingConID)
 }
 
 // DirectionSign is the underlying-direction sign of a fill: +1 for long

@@ -29,9 +29,10 @@ const (
 	scorecardBarsStateKind        = "scorecard_bars"
 	scorecardPublicationStateKind = "scorecard_publication"
 	scorecardBarsVersion          = 1
-	// scorecardPublicationVersion 2 separates the index streams; a version 1
-	// publication scored index decisions as single names and is not served.
-	scorecardPublicationVersion = 2
+	// scorecardPublicationVersion 3 carries the name-week gate, the sector
+	// adjustment and the fill-quote slippage; an older publication read the
+	// week-cluster gate and is not served.
+	scorecardPublicationVersion = 3
 
 	// scorecardMaxFetchesPerPass bounds the IBKR history requests one pass
 	// books on the background lane (60 per 10 minutes shared with every
@@ -64,6 +65,9 @@ type scorecardBarCache struct {
 	ScopeFingerprint string                        `json:"scope_fingerprint"`
 	Names            map[string]scorecardBarSeries `json:"names"`
 	Market           scorecardBarSeries            `json:"market"`
+	// Sectors holds one series per sector fund the ledger needs, by fund
+	// symbol, read on the same lane and cadence as the market proxy.
+	Sectors map[string]scorecardBarSeries `json:"sectors,omitempty"`
 }
 
 type scorecardBarSeries struct {
@@ -202,14 +206,16 @@ func (s *Server) rebuildScorecard(ctx context.Context) error {
 	if cache.ScopeFingerprint != scopeFingerprint {
 		cache = scorecardBarCache{Version: scorecardBarsVersion, ScopeFingerprint: scopeFingerprint, Names: map[string]scorecardBarSeries{}}
 	}
-	pending, err := s.fetchScorecardNeeds(ctx, &cache, scorecardHistoryNeeds(ledger, cache, now), now)
+	sectorFunds, sectorNames := scorecardSectorMap(ledger, nil)
+	pending, err := s.fetchScorecardNeeds(ctx, &cache, scorecardHistoryNeeds(ledger, sectorFunds, cache, now), now)
 	if err != nil {
 		return err
 	}
 	history, state := scorecardHistoryFromCache(cache, pending)
+	history.SectorFunds, history.SectorNames = sectorFunds, sectorNames
 	result := scorecard.Evaluate(scorecard.Input{
 		AsOf: now, EvidenceTo: scorecardEvidenceTo(projected), BaseCurrency: base, Decisions: ledger, History: history,
-		Marks: evidence.Marks, Events: evidence.Events, Skipped: skipped, Superseded: superseded, HistoryState: state,
+		Marks: evidence.Marks, Events: evidence.Events, Costs: s.scorecardFillCosts(ledger), Skipped: skipped, Superseded: superseded, HistoryState: state,
 	})
 	switch {
 	case pending > 0:
@@ -223,9 +229,11 @@ func (s *Server) rebuildScorecard(ctx context.Context) error {
 	return s.saveScorecardPublication(ctx, scorecardPublication{ScopeFingerprint: scopeFingerprint, EvidenceFingerprint: projected.Fingerprint, Result: result})
 }
 
-// scorecardHistoryNeed is one history fetch the ledger still needs.
+// scorecardHistoryNeed is one history fetch the ledger still needs: the
+// market proxy, a sector fund (both by symbol) or a name by contract.
 type scorecardHistoryNeed struct {
 	market   bool
+	sector   bool
 	conid    int64
 	symbol   string
 	currency string
@@ -234,10 +242,12 @@ type scorecardHistoryNeed struct {
 }
 
 // scorecardHistoryNeeds lists the names whose cached history does not yet
-// cover their decisions, the market proxy first, then by earliest decision.
+// cover their decisions: the market proxy first, then one series per
+// sector fund the ledger's names belong to (at most one per sector, read
+// once per session like the market), then the names by earliest decision.
 // A name read today is not read again today; a name whose read failed is
 // asked again at its retry time.
-func scorecardHistoryNeeds(ledger []scorecard.Decision, cache scorecardBarCache, now time.Time) []scorecardHistoryNeed {
+func scorecardHistoryNeeds(ledger []scorecard.Decision, sectorFunds map[int64]string, cache scorecardBarCache, now time.Time) []scorecardHistoryNeed {
 	type span struct {
 		symbol, currency string
 		earliest, latest time.Time
@@ -270,6 +280,38 @@ func scorecardHistoryNeeds(ledger []scorecard.Decision, cache scorecardBarCache,
 	var out []scorecardHistoryNeed
 	if !earliestAll.IsZero() && scorecardSeriesStale(cache.Market, earliestAll, latestAll, now) {
 		out = append(out, scorecardHistoryNeed{market: true, symbol: "SPY", currency: "USD", lookback: scorecardLookback(earliestAll, now), earliest: earliestAll})
+	}
+	// A sector fund is needed from the earliest decision of any name in its
+	// sector to the latest; funds are read in symbol order.
+	type sectorSpan struct{ earliest, latest time.Time }
+	sectors := map[string]*sectorSpan{}
+	for conid, fund := range sectorFunds {
+		item := spans[conid]
+		if item == nil {
+			continue
+		}
+		span := sectors[fund]
+		if span == nil {
+			span = &sectorSpan{earliest: item.earliest, latest: item.latest}
+			sectors[fund] = span
+		}
+		if item.earliest.Before(span.earliest) {
+			span.earliest = item.earliest
+		}
+		if item.latest.After(span.latest) {
+			span.latest = item.latest
+		}
+	}
+	funds := make([]string, 0, len(sectors))
+	for fund := range sectors {
+		funds = append(funds, fund)
+	}
+	sort.Strings(funds)
+	for _, fund := range funds {
+		span := sectors[fund]
+		if scorecardSeriesStale(cache.Sectors[fund], span.earliest, span.latest, now) {
+			out = append(out, scorecardHistoryNeed{sector: true, symbol: fund, currency: "USD", lookback: scorecardLookback(span.earliest, now), earliest: span.earliest})
+		}
 	}
 	ids := make([]int64, 0, len(spans))
 	for conid := range spans {
@@ -340,7 +382,10 @@ func (s *Server) fetchScorecardNeeds(ctx context.Context, cache *scorecardBarCac
 		}
 		key := strconv.FormatInt(need.conid, 10)
 		prev := cache.Market
-		if !need.market {
+		switch {
+		case need.sector:
+			prev = cache.Sectors[need.symbol]
+		case !need.market:
 			prev = cache.Names[key]
 		}
 		series, err := s.fetchScorecardSeries(ctx, prev, need, now)
@@ -351,9 +396,15 @@ func (s *Server) fetchScorecardNeeds(ctx context.Context, cache *scorecardBarCac
 		if err != nil && scorecardFailureWarnDue(prev, now) {
 			s.warnf("decision scorecard: history read for %s (conid %d) failed: %v; %s, next try %s", need.symbol, need.conid, err, scorecardKeptWords(prev), series.RetryAt.UTC().Format(time.RFC3339))
 		}
-		if need.market {
+		switch {
+		case need.market:
 			cache.Market = series
-		} else {
+		case need.sector:
+			if cache.Sectors == nil {
+				cache.Sectors = map[string]scorecardBarSeries{}
+			}
+			cache.Sectors[need.symbol] = series
+		default:
 			cache.Names[key] = series
 		}
 		if err := s.saveScorecardBarCache(ctx, *cache); err != nil {
@@ -363,8 +414,9 @@ func (s *Server) fetchScorecardNeeds(ctx context.Context, cache *scorecardBarCac
 	return len(needs) - fetched, nil
 }
 
-// fetchScorecardSeries reads one name's daily closes on the background lane:
-// the exact contract first, then the symbol route for an index underlying.
+// fetchScorecardSeries reads one series' daily closes on the background
+// lane: the market proxy and the sector funds by symbol, a name by its exact
+// contract first, then the symbol route for an index underlying.
 // A success replaces the bars and stamps the session; a failure keeps the
 // last success's bars and records the broker's answer with the time the
 // name is asked again. The error is returned for the caller's own decision.
@@ -375,7 +427,7 @@ func (s *Server) fetchScorecardSeries(ctx context.Context, prev scorecardBarSeri
 	series.ConID, series.Symbol, series.Currency = need.conid, need.symbol, need.currency
 	var bars []edgecore.DailyBar
 	var err error
-	if need.market {
+	if need.market || need.sector {
 		bars, err = s.fetchEdgeMarketBars(readCtx, need.symbol, need.lookback)
 	} else {
 		bars, err = s.fetchEdgeBars(readCtx, edgeContractSpec{ConID: need.conid, Symbol: need.symbol, Currency: need.currency}, need.lookback)
@@ -431,6 +483,23 @@ func scorecardHistoryFromCache(cache scorecardBarCache, pending int) (scorecard.
 	state := rpc.ScorecardHistory{Names: len(cache.Names), Pending: pending, LastFetchedAt: scorecardLastFetch(cache)}
 	if cache.Market.Failure != "" {
 		state.Failures = append(state.Failures, scorecardHistoryFailure(cache.Market))
+	}
+	if len(cache.Sectors) > 0 {
+		history.Sector = make(map[string][]edgecore.DailyBar, len(cache.Sectors))
+		funds := make([]string, 0, len(cache.Sectors))
+		for fund := range cache.Sectors {
+			funds = append(funds, fund)
+		}
+		sort.Strings(funds)
+		for _, fund := range funds {
+			series := cache.Sectors[fund]
+			if series.Failure != "" {
+				state.Failures = append(state.Failures, scorecardHistoryFailure(series))
+			}
+			if len(series.Bars) > 0 {
+				history.Sector[fund] = append([]edgecore.DailyBar(nil), series.Bars...)
+			}
+		}
 	}
 	var failed []rpc.ScorecardHistoryFailure
 	for _, series := range cache.Names {
@@ -493,6 +562,11 @@ func scorecardNormalizeBars(bars []edgecore.DailyBar, conid int64) []edgecore.Da
 
 func scorecardLastFetch(cache scorecardBarCache) time.Time {
 	last := cache.Market.FetchedAt
+	for _, series := range cache.Sectors {
+		if series.FetchedAt.After(last) {
+			last = series.FetchedAt
+		}
+	}
 	for _, series := range cache.Names {
 		if series.FetchedAt.After(last) {
 			last = series.FetchedAt

@@ -86,16 +86,21 @@ func renderScorecard(env *Env, res rpc.ScorecardResult, horizon int) {
 	riskReadLine(env, "Coverage", fmt.Sprintf("%d decisions in the ledger", res.Coverage.Ledger), fmt.Sprintf("%d stock", res.Coverage.Stocks), fmt.Sprintf("%d option", res.Coverage.Options),
 		fmt.Sprintf("%d entries", res.Coverage.Entries), fmt.Sprintf("%d exits", res.Coverage.Exits),
 		fmt.Sprintf("%d index entries", res.Coverage.IndexEntries), fmt.Sprintf("%d index exits", res.Coverage.IndexExits), scorecardCounts("rule-originated, in no owner stream", res.Coverage.RuleOriginated),
-		scorecardCounts("skipped", res.Coverage.Skipped), scorecardCounts("unknown", res.Coverage.UnknownByReason))
+		scorecardCounts("skipped", res.Coverage.Skipped), scorecardCounts("unknown", res.Coverage.UnknownByReason),
+		fmt.Sprintf("%d with a fill quote", res.Coverage.SlippageQuoted), scorecardCounts("without", res.Coverage.SlippageByReason))
 	history := fmt.Sprintf("%d names", res.History.Names)
 	if res.History.Missing > 0 || res.History.Pending > 0 {
 		history = fmt.Sprintf("%d names, %d without history, %d still to fetch", res.History.Names, res.History.Missing, res.History.Pending)
 	}
-	riskReadLine(env, "History", history, fmt.Sprintf("%s %d sessions", res.History.MarketSymbol, res.History.MarketBars))
+	sectors := ""
+	if n := len(res.History.SectorBars); n > 0 {
+		sectors = fmt.Sprintf("%d sector %s", n, pluralWord(n, "fund", "funds"))
+	}
+	riskReadLine(env, "History", history, fmt.Sprintf("%s %d sessions", res.History.MarketSymbol, res.History.MarketBars), sectors)
 	renderScorecardHistoryFailures(env, res.History.Failures)
 	fmt.Fprintln(out)
-	riskReadLine(env, "Reading", "z is the underlying's move from the close of the fill's session, net of its market exposure, in units of its own daily noise; positive means the move went the decision's way. On an index (SPY, SPX, QQQ and the like, or a name that moves with SPY at R² 0.90 or more) z is the index's whole move in units of its whole daily noise. Entries (opens and adds) carry the gates; exits (trims and exits) and the index streams are reported, never gated. Each entry week counts once. The e-value is the weight of evidence for information in the decisions (100 is the bar); the posterior gives the chance the true mean z per week exceeds 0.05 and 0.10.")
-	riskReadLine(env, "", "A sleeve is established only when every gate on its entries passes; until then nothing here says whether the decisions carry information. Fills made by Canary's rules or the broker's lifecycle are the rule sleeve and count for no one. Read-only review of past fills; it places no orders.")
+	riskReadLine(env, "Reading", "z is the underlying's move from the close of the fill's session, net of its exposure to the market and, where the name has one, to its sector fund, in units of its own daily noise; positive means the move went the decision's way. On an index (SPY, SPX, QQQ and the like, or a name that moves with SPY at R² 0.90 or more) z is the index's whole move in units of its whole daily noise. Entries (opens and adds) carry the gates; exits (trims and exits) and the index streams are reported, never gated. One name in one entry week is one unit of evidence; units whose horizons overlap count less, so the effective sample is smaller than the unit count. The directional score is the mean z per unit; it is not a correlation. The e-value is the weight of evidence for information in the decisions (20 is the bar); the posterior gives the chance the true score exceeds 0, 0.05 and 0.10; the futility e-value weighs no information against a score of 0.05, the smallest worth a risk allocation.")
+	riskReadLine(env, "", "A sleeve is established only when every gate on its entries passes, the sign-shuffle placebo included; until then nothing here says whether the decisions carry information. Slippage is the half-spread paid against the quote retained at the fill; fills before 18 Oct 2026 have none. Fills made by Canary's rules or the broker's lifecycle are the rule sleeve and count for no one. Read-only review of past fills; it places no orders.")
 }
 
 // renderScorecardHistoryFailures names each name whose last history read
@@ -169,22 +174,36 @@ func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
 		riskDisplayLine(env, env.bold("Sleeve "+s.Sleeve+" · entries")+"  ", gate, func(t string) string { return riskTone(env, tone, env.bold(t)) })
 		riskDisplayLine(env, "  ", scorecardGateWords(s), nil)
 	}
-	riskReadLine(env, "  Sample", fmt.Sprintf("%d decisions", s.Decisions), fmt.Sprintf("%d scored", s.Scored), fmt.Sprintf("%d entry weeks (each counts once)", s.Clusters))
-	if s.Clusters == 0 {
+	adjusted := ""
+	if s.Scored > 0 && !scorecardIndexStream(s.Stream) {
+		adjusted = fmt.Sprintf("%d of %d net of the sector fund too", s.SectorAdjusted, s.Scored)
+	}
+	riskReadLine(env, "  Sample", fmt.Sprintf("%d decisions", s.Decisions), fmt.Sprintf("%d scored", s.Scored), fmt.Sprintf("%d name-weeks (each name counts once a week)", s.Units), fmt.Sprintf("%.1f effective after overlap", s.EffectiveUnits), fmt.Sprintf("%d %s", s.Weeks, pluralWord(s.Weeks, "week", "weeks")), adjusted)
+	if s.Units == 0 {
+		renderScorecardSlippage(env, s.Slippage, base)
 		return
 	}
-	riskReadLine(env, "  Mean z per week", scorecardSigned(s.MeanZ, 2), fmt.Sprintf("running sum %+.1f", s.SumZ))
+	riskReadLine(env, "  Directional score", scorecardSigned(s.DirectionalScore, 2)+" per name-week", fmt.Sprintf("running sum %+.1f", s.SumZ), fmt.Sprintf("posterior %s ± %.2f", scorecardSigned(s.PosteriorMean, 3), deref(s.PosteriorSD)))
 	eValue := "0 (against)"
 	if !s.EValueAgainst {
 		eValue = fmt.Sprintf("%.1f of %.0f", s.EValue, scorecard.EstablishedEValue)
 	}
-	riskReadLine(env, "  Evidence", "e-value "+eValue, "P(IC > 0.05) "+scorecardProb(s.PAbove005), "P(IC > 0.10) "+scorecardProb(s.PAbove010))
-	if s.Gated && s.ClustersToEstablish != nil {
-		riskReadLine(env, "  Distance", fmt.Sprintf("at this mean the e-value gate needs about %d weeks; the sample gate needs %d", *s.ClustersToEstablish, scorecard.EstablishedClusters))
+	riskReadLine(env, "  Evidence", "e-value "+eValue, "P(score > 0) "+scorecardProb(s.PScoreAbove0), "P(score > 0.05) "+scorecardProb(s.PScoreAbove005), "P(score > 0.10) "+scorecardProb(s.PScoreAbove010), fmt.Sprintf("futility e-value %.1f of %.0f", s.FutilityEValue, scorecard.FutileEValue))
+	if s.Gated && s.UnitsToEstablish != nil {
+		pace := ""
+		if s.WeeksToEstablish != nil {
+			pace = fmt.Sprintf(", about %d weeks at this pace", *s.WeeksToEstablish)
+		}
+		riskReadLine(env, "  Distance", fmt.Sprintf("at this score the e-value gate needs about %d effective name-weeks%s; the sample gate needs %.0f over %d weeks", *s.UnitsToEstablish, pace, scorecard.EstablishedUnits, scorecard.EstablishedWeeks))
 	}
 	halves := "halves " + scorecardSigned(s.Gates.FirstHalfMeanZ, 2) + " / " + scorecardSigned(s.Gates.SecondHalfMeanZ, 2)
-	markets := fmt.Sprintf("up markets %s (%d) / down %s (%d)", scorecardSigned(s.Gates.UpMarketMeanZ, 2), s.Gates.UpClusters, scorecardSigned(s.Gates.DownMarketMeanZ, 2), s.Gates.DownClusters)
-	riskReadLine(env, "  Consistency", halves, markets)
+	markets := fmt.Sprintf("up markets %s (%d) / down %s (%d)", scorecardSigned(s.Gates.UpMarketMeanZ, 2), s.Gates.UpUnits, scorecardSigned(s.Gates.DownMarketMeanZ, 2), s.Gates.DownUnits)
+	placebo := ""
+	if p := s.Placebo; p != nil && p.Replicates > 0 {
+		placebo = fmt.Sprintf("placebo: %d of %d sign-shuffles reach the bar (at most %.0f%% allowed)", p.Established, p.Replicates, 100*scorecard.PlaceboMaxRate)
+	}
+	riskReadLine(env, "  Consistency", halves, markets, placebo)
+	renderScorecardSlippage(env, s.Slippage, base)
 	if s.Wrapper != nil || s.RealisedVsImplied != nil || s.LongPutRealisedVsImplied != nil {
 		values := []string{}
 		if w := s.Wrapper; w != nil {
@@ -206,6 +225,27 @@ func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
 	}
 }
 
+// renderScorecardSlippage sums the half-spread the stream's decisions paid
+// from the quotes retained at their fills, and says why the rest have none.
+func renderScorecardSlippage(env *Env, s *rpc.ScorecardSlippageSummary, base string) {
+	if s == nil || s.Decisions == 0 {
+		return
+	}
+	values := []string{}
+	if s.Quoted > 0 {
+		values = append(values, fmt.Sprintf("half-spread paid %s over %d quoted of %d", formatMoneyCcyForPnL(s.HalfSpreadBase, base), s.Quoted, s.Decisions))
+		if s.MeanBp != nil {
+			values = append(values, fmt.Sprintf("mean %.1f bp of the mid", *s.MeanBp))
+		}
+	} else {
+		values = append(values, fmt.Sprintf("no quoted fill among %d", s.Decisions))
+	}
+	if unquoted := scorecardCounts("without", s.Unquoted); unquoted != "" {
+		values = append(values, unquoted)
+	}
+	riskReadLine(env, "  Slippage", values...)
+}
+
 func scorecardIndexStream(stream string) bool {
 	return stream == rpc.ScorecardStreamIndexEntries || stream == rpc.ScorecardStreamIndexExits
 }
@@ -215,7 +255,7 @@ func scorecardGateWords(s rpc.ScorecardSleeve) string {
 	case rpc.ScorecardGateEstablished:
 		return "Opens and adds: every gate passes, the evidence says these entries carry information at this horizon."
 	case rpc.ScorecardGateFutile:
-		return "Opens and adds: the evidence says these entries carry no usable information at this horizon; the posterior leaves under a 5% chance of a mean z above 0.10."
+		return "Opens and adds: the evidence says these entries carry no information worth a risk allocation at this horizon; no information is at least twenty times as likely as a directional score of 0.05."
 	default:
 		return "Opens and adds: not enough evidence yet to say either way."
 	}
@@ -314,6 +354,13 @@ func scorecardDecisionNote(d rpc.ScorecardDecision, score *rpc.ScorecardHorizonS
 		}
 		if score.RealisedVsImplied != nil {
 			parts = append(parts, fmt.Sprintf("moved %.1fx implied", *score.RealisedVsImplied))
+		}
+	}
+	if sl := d.Slippage; sl != nil && sl.Status == "measured" {
+		if sl.Bp != nil {
+			parts = append(parts, fmt.Sprintf("paid %.1f bp", *sl.Bp))
+		} else if sl.HalfSpreadBase != nil {
+			parts = append(parts, "paid "+formatMoneyCcyForPnL(*sl.HalfSpreadBase, base))
 		}
 	}
 	return strings.Join(parts, ", ")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -65,7 +66,15 @@ func TestScorecardHistoryNeedsPlanMarketFirstOncePerSession(t *testing.T) {
 		{ID: "c", UnderlyingConID: 1, Underlying: "SYNA", Currency: "USD", ExecutedAt: time.Date(2026, 10, 1, 15, 0, 0, 0, time.UTC)},
 		{ID: "d", UnderlyingConID: 0, Underlying: "", ExecutedAt: now},
 	}
-	needs := scorecardHistoryNeeds(ledger, scorecardBarCache{Names: map[string]scorecardBarSeries{}}, now)
+	// Both names are Information Technology: one sector fund serves them,
+	// read after the market and before the names, from the earliest entry.
+	sectorFunds := map[int64]string{1: "XLK", 2: "XLK"}
+	needs := scorecardHistoryNeeds(ledger, sectorFunds, scorecardBarCache{Names: map[string]scorecardBarSeries{}}, now)
+	if len(needs) != 4 || !needs[0].market || !needs[1].sector || needs[1].symbol != "XLK" || needs[1].lookback != needs[0].lookback || needs[2].conid != 1 || needs[3].conid != 2 {
+		t.Fatalf("needs = %+v", needs)
+	}
+	// Without a sector map only the market and the names are read.
+	needs = scorecardHistoryNeeds(ledger, nil, scorecardBarCache{Names: map[string]scorecardBarSeries{}}, now)
 	if len(needs) != 3 || !needs[0].market || needs[1].conid != 1 || needs[2].conid != 2 {
 		t.Fatalf("needs = %+v", needs)
 	}
@@ -83,20 +92,22 @@ func TestScorecardHistoryNeedsPlanMarketFirstOncePerSession(t *testing.T) {
 	cache := scorecardBarCache{Names: map[string]scorecardBarSeries{
 		"1": {ConID: 1, Failure: "historical data timeout for SYNA after 45s", FailedAt: now.Add(-time.Hour), Failures: 1, RetryAt: now.Add(time.Hour)},
 		"2": {ConID: 2, FetchedAt: now.AddDate(0, 0, -1), Lookback: 443, Bars: covered},
-	}, Market: scorecardBarSeries{FetchedAt: now.Add(-time.Hour), Lookback: 900, Bars: covered}}
-	if needs := scorecardHistoryNeeds(ledger, cache, now); len(needs) != 0 {
+	}, Market: scorecardBarSeries{FetchedAt: now.Add(-time.Hour), Lookback: 900, Bars: covered},
+		Sectors: map[string]scorecardBarSeries{"XLK": {Symbol: "XLK", FetchedAt: now.Add(-time.Hour), Lookback: 900, Bars: covered}}}
+	if needs := scorecardHistoryNeeds(ledger, sectorFunds, cache, now); len(needs) != 0 {
 		t.Fatalf("needs after today's fetches = %+v", needs)
 	}
 	// At its retry time the failed name is asked again, alone.
-	if needs := scorecardHistoryNeeds(ledger, cache, now.Add(time.Hour)); len(needs) != 1 || needs[0].conid != 1 {
+	if needs := scorecardHistoryNeeds(ledger, sectorFunds, cache, now.Add(time.Hour)); len(needs) != 1 || needs[0].conid != 1 {
 		t.Fatalf("needs at the retry time = %+v", needs)
 	}
-	// Tomorrow the market advances (the October decision is immature) and
-	// the failed name is still due; the matured, covered name is not, and
-	// a short listing fetched with the full lookback is not asked again.
+	// Tomorrow the market and the sector fund advance (the October decision
+	// is immature) and the failed name is still due; the matured, covered
+	// name is not, and a short listing fetched with the full lookback is not
+	// asked again.
 	tomorrow := now.AddDate(0, 0, 1)
-	needs = scorecardHistoryNeeds(ledger, cache, tomorrow)
-	if len(needs) != 2 || !needs[0].market || needs[1].conid != 1 {
+	needs = scorecardHistoryNeeds(ledger, sectorFunds, cache, tomorrow)
+	if len(needs) != 3 || !needs[0].market || !needs[1].sector || needs[2].conid != 1 {
 		t.Fatalf("needs tomorrow = %+v", needs)
 	}
 	short := scorecardBarSeries{ConID: 2, FetchedAt: now.AddDate(0, 0, -1), Lookback: 443, Bars: covered[400:]}
@@ -289,5 +300,82 @@ func TestScorecardFetchPassKeepsBarsOnFailureAndStopsWhenTheGatewayIsAway(t *tes
 	fixed, err := srv.fetchScorecardSeries(t.Context(), again, needs[0], now.Add(6*time.Hour))
 	if err != nil || len(fixed.Bars) != 1 || fixed.Failure != "" || fixed.Failures != 0 || !fixed.RetryAt.IsZero() || !fixed.FetchedAt.Equal(now.Add(6*time.Hour)) {
 		t.Fatalf("recovered series = %+v, %v", fixed, err)
+	}
+}
+
+// TestScorecardSectorMapNamesOneFundPerSector: a name in the registry gets
+// its sector fund once however many decisions it has; a name off the list
+// and an index underlying get none.
+func TestScorecardSectorMapNamesOneFundPerSector(t *testing.T) {
+	t.Parallel()
+	registry := map[string]string{"SYNA": "Information Technology", "SYNB": "Health Care"}
+	sectorOf := func(symbol string) (string, bool) {
+		sector, ok := registry[symbol]
+		return sector, ok
+	}
+	ledger := []scorecard.Decision{
+		{UnderlyingConID: 1, Underlying: "SYNA"}, {UnderlyingConID: 1, Underlying: "SYNA"}, {UnderlyingConID: 2, Underlying: "SYNB"},
+		{UnderlyingConID: 3, Underlying: "SYNX"}, {UnderlyingConID: 4, Underlying: "SPY"}, {UnderlyingConID: 0, Underlying: "SYNA"},
+	}
+	funds, names := scorecardSectorMap(ledger, sectorOf)
+	if len(funds) != 2 || funds[1] != "XLK" || funds[2] != "XLV" || names[1] != "Information Technology" || names[2] != "Health Care" {
+		t.Fatalf("funds = %v names = %v", funds, names)
+	}
+}
+
+// TestScorecardFillCostsMatchByExecutionIDThenByTime: a decision whose
+// statement execution ids met retained records sums their half-spreads; one
+// without such ids takes the retained fill on the same contract nearest in
+// time within five minutes, and none further away; a record whose quote was
+// unavailable carries its reason and no cost.
+func TestScorecardFillCostsMatchByExecutionIDThenByTime(t *testing.T) {
+	t.Parallel()
+	s, _ := newFillQuoteTestServer(t, filepath.Join(t.TempDir(), "daemon.db"))
+	at := fillQuoteTestAt
+	quoted := func(execID string, conID int, execAt time.Time, price, mid float64, side string, qty float64) rpc.FillQuoteRecord {
+		return rpc.FillQuoteRecord{Version: fillQuoteVersion, ExecID: execID, Source: rpc.FillQuoteSourceBroker, Seen: rpc.FillQuoteSeenPoll,
+			Contract: rpc.ContractParams{ConID: conID, Symbol: "SYNX", SecType: "OPT", Currency: "USD", Multiplier: 100}, Side: side, Quantity: qty, Price: price, ExecTime: execAt, ObservedAt: execAt,
+			Quote:        rpc.FillQuote{Status: rpc.FillQuoteQuoted, Bid: new(mid - 0.05), Ask: new(mid + 0.05), Mid: new(mid), DataType: rpc.MarketDataLive, QuoteAt: execAt.Add(2 * time.Second), GapMS: new(int64(2000))},
+			BaseCurrency: "EUR", FXRate: new(0.9)}
+	}
+	for _, rec := range []rpc.FillQuoteRecord{
+		quoted("e-1", 900001, at, 1.30, 1.25, rpc.OrderActionBuy, 2),
+		quoted("e-2", 900001, at.Add(30*time.Second), 1.28, 1.25, rpc.OrderActionBuy, 1),
+		quoted("e-3", 900002, at.Add(2*time.Minute), 10.40, 10.50, rpc.OrderActionSell, 100),
+	} {
+		if err := s.fillQuotes.append("DU1234567", rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	unavailable := quoted("e-4", 900003, at, 5, 5, rpc.OrderActionBuy, 1)
+	unavailable.Quote = rpc.FillQuote{Status: rpc.FillQuoteUnavailable, Reason: "timeout"}
+	if err := s.fillQuotes.append("DU1234567", unavailable); err != nil {
+		t.Fatal(err)
+	}
+	ledger := []scorecard.Decision{
+		{ID: "by-exec", ConID: 900001, ExecutedAt: at, Lineage: scorecard.Lineage{ExecutionIDs: []string{"e-1", "e-2", "e-missing"}}},
+		{ID: "by-time", ConID: 900002, ExecutedAt: at.Add(4 * time.Minute), Lineage: scorecard.Lineage{ExecutionIDs: []string{"statement-only"}}},
+		{ID: "too-far", ConID: 900002, ExecutedAt: at.Add(20 * time.Minute)},
+		{ID: "unquoted", ConID: 900003, ExecutedAt: at, Lineage: scorecard.Lineage{ExecutionIDs: []string{"e-4"}}},
+	}
+	costs := s.scorecardFillCosts(ledger)
+	byExec := costs["by-exec"]
+	// (1.30 − 1.25) × 2 × 100 + (1.28 − 1.25) × 1 × 100 = 13 USD, 11.70 EUR;
+	// 400 bp and 240 bp weighted 2:1.
+	if byExec.Match != "exec_id" || byExec.Fills != 3 || byExec.Quoted != 2 || byExec.HalfSpread == nil || math.Abs(*byExec.HalfSpread-13) > 1e-9 || byExec.HalfSpreadBase == nil || math.Abs(*byExec.HalfSpreadBase-11.7) > 1e-9 || byExec.Currency != "USD" || byExec.Bp == nil || math.Abs(*byExec.Bp-1040.0/3) > 1e-6 || byExec.GapMS == nil || *byExec.GapMS != 2000 || byExec.Reason != "" {
+		t.Fatalf("by exec id = %+v (half %v base %v bp %v)", byExec, derefFloat(byExec.HalfSpread), derefFloat(byExec.HalfSpreadBase), derefFloat(byExec.Bp))
+	}
+	byTime := costs["by-time"]
+	// A sell of 100 contracts at 10.40 against a mid of 10.50 pays
+	// 0.10 × 100 × 100 = 1,000 USD.
+	if byTime.Match != "time" || byTime.Fills != 1 || byTime.Quoted != 1 || byTime.HalfSpread == nil || math.Abs(*byTime.HalfSpread-1000) > 1e-9 {
+		t.Fatalf("by time = %+v", byTime)
+	}
+	if _, ok := costs["too-far"]; ok {
+		t.Fatal("a fill twenty minutes from the retained one was matched")
+	}
+	unq := costs["unquoted"]
+	if unq.Quoted != 0 || unq.HalfSpread != nil || unq.Reason != "timeout" {
+		t.Fatalf("unquoted = %+v", unq)
 	}
 }

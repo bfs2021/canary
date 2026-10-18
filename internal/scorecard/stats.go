@@ -57,6 +57,58 @@ func ols(x, y []float64) fit {
 	return out
 }
 
+// fit2 is an OLS regression of y on two regressors with an intercept: the
+// market and the name's sector fund. ok is false below four observations or
+// when the regressors are collinear (the sector fund is the market, or
+// either did not move).
+type fit2 struct {
+	beta1, beta2 float64
+	// residualSD has n−3 degrees of freedom.
+	residualSD float64
+	n          int
+	ok         bool
+}
+
+func ols2(x1, x2, y []float64) fit2 {
+	n := len(y)
+	if len(x1) != n || len(x2) != n || n < 4 {
+		return fit2{n: n}
+	}
+	var m1, m2, my float64
+	for i := range n {
+		m1 += x1[i]
+		m2 += x2[i]
+		my += y[i]
+	}
+	m1, m2, my = m1/float64(n), m2/float64(n), my/float64(n)
+	var s11, s22, s12, s1y, s2y float64
+	for i := range n {
+		d1, d2, dy := x1[i]-m1, x2[i]-m2, y[i]-my
+		s11 += d1 * d1
+		s22 += d2 * d2
+		s12 += d1 * d2
+		s1y += d1 * dy
+		s2y += d2 * dy
+	}
+	det := s11*s22 - s12*s12
+	// Collinear regressors leave the two-factor fit undefined: a relative
+	// determinant below 1e-9 of its scale is treated as singular.
+	if s11 <= 0 || s22 <= 0 || det <= 1e-9*s11*s22 {
+		return fit2{n: n}
+	}
+	out := fit2{n: n, ok: true}
+	out.beta1 = (s22*s1y - s12*s2y) / det
+	out.beta2 = (s11*s2y - s12*s1y) / det
+	alpha := my - out.beta1*m1 - out.beta2*m2
+	var sse float64
+	for i := range n {
+		e := y[i] - alpha - out.beta1*x1[i] - out.beta2*x2[i]
+		sse += e * e
+	}
+	out.residualSD = math.Sqrt(sse / float64(n-3))
+	return out
+}
+
 func mean(values []float64) float64 {
 	if len(values) == 0 {
 		return 0
@@ -108,39 +160,57 @@ func bootstrapMeanCI(values []float64, resamples int) (low, high float64) {
 	return at(0.025), at(0.975)
 }
 
-// PosteriorIC returns the posterior mean and standard deviation of IC after n
-// cluster means summing to s, under the prior N(0, PriorSD²) and unit
-// variance per cluster mean.
-func PosteriorIC(n int, s float64) (mean, sd float64) {
-	precision := 1/(PriorSD*PriorSD) + float64(n)
-	return s / precision, 1 / math.Sqrt(precision)
+// The sequential statistics take the effective sample: nEff independent
+// unit-variance units and their standardised running sum sEff, as
+// EffectiveSample derives them from the name-week units and their overlap
+// covariance. Without overlap nEff is the unit count and sEff the plain sum.
+
+// PosteriorScore returns the posterior mean and standard deviation of the
+// directional score (the mean z per unit) after an effective sample, under
+// the prior N(0, PriorSD²).
+func PosteriorScore(nEff, sEff float64) (mean, sd float64) {
+	precision := 1/(PriorSD*PriorSD) + nEff
+	return sEff / precision, 1 / math.Sqrt(precision)
 }
 
-// PosteriorAbove is P(IC > c) under that posterior.
-func PosteriorAbove(n int, s, c float64) float64 {
-	mean, sd := PosteriorIC(n, s)
+// PosteriorAbove is P(score > c) under that posterior.
+func PosteriorAbove(nEff, sEff, c float64) float64 {
+	mean, sd := PosteriorScore(nEff, sEff)
 	return 1 - normCDF((c-mean)/sd)
 }
 
-// EValue is the mixture-SPRT e-value after n clusters with running sum s,
-// reported only while s is positive; otherwise 0 and against is true.
-func EValue(n int, s float64) (e float64, against bool) {
-	if n <= 0 || s <= 0 {
+// EValue is the mixture-SPRT e-value for information in the decisions
+// (score > 0 against score = 0) after an effective sample, reported only
+// while the sum is positive; otherwise 0 and against is true.
+func EValue(nEff, sEff float64) (e float64, against bool) {
+	if nEff <= 0 || sEff <= 0 {
 		return 0, true
 	}
-	scale := 1 + float64(n)*Tau*Tau
-	return math.Exp(Tau*Tau*s*s/(2*scale)) / math.Sqrt(scale), false
+	scale := 1 + nEff*Tau*Tau
+	return math.Exp(Tau*Tau*sEff*sEff/(2*scale)) / math.Sqrt(scale), false
 }
 
-// ClustersToEstablish projects the cluster count at which the e-value gate
-// passes if every further cluster mean equals meanZ; ok is false when meanZ
-// is not positive or the count exceeds 100,000.
-func ClustersToEstablish(meanZ float64) (int, bool) {
-	if meanZ <= 0 || math.IsNaN(meanZ) {
+// FutilityEValue is the likelihood ratio of no information (score = 0)
+// against the smallest score worth a risk allocation (FutilityScore), after
+// an effective sample. It is a test martingale under a true score of
+// FutilityScore or more, so a sleeve with that much skill is called futile
+// with probability at most 1/FutileEValue, whenever the reading stops.
+func FutilityEValue(nEff, sEff float64) float64 {
+	if nEff <= 0 {
+		return 0
+	}
+	return math.Exp(-FutilityScore*sEff + FutilityScore*FutilityScore*nEff/2)
+}
+
+// UnitsToEstablish projects the effective unit count at which the e-value
+// gate passes if every further unit adds meanScore; ok is false when the
+// score is not positive or the count exceeds 100,000.
+func UnitsToEstablish(meanScore float64) (int, bool) {
+	if meanScore <= 0 || math.IsNaN(meanScore) {
 		return 0, false
 	}
 	for n := 1; n <= 100000; n++ {
-		if e, _ := EValue(n, meanZ*float64(n)); e >= EstablishedEValue {
+		if e, _ := EValue(float64(n), meanScore*float64(n)); e >= EstablishedEValue {
 			return n, true
 		}
 	}

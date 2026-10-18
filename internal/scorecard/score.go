@@ -10,11 +10,19 @@ import (
 )
 
 // History is the daily-close evidence behind the scores: each underlying by
-// exact contract id and the market proxy.
+// exact contract id, the market proxy, and one series per sector fund with
+// the sector each underlying belongs to.
 type History struct {
 	Underlying   map[int64][]edge.DailyBar
 	Market       []edge.DailyBar
 	MarketSymbol string
+	// Sector holds the sector funds' closes by fund symbol; SectorFunds names
+	// each underlying's fund and SectorNames its GICS sector, both by
+	// underlying contract id. An underlying absent from SectorFunds is
+	// adjusted on the market alone.
+	Sector      map[string][]edge.DailyBar
+	SectorFunds map[int64]string
+	SectorNames map[int64]string
 }
 
 // series is one normalized daily-close series with a day index.
@@ -122,21 +130,25 @@ func yearsToExpiry(expiry string, day time.Time) float64 {
 }
 
 // exposure is the pre-decision regression of daily underlying log returns on
-// the market, over at most LookbackSessions sessions ending the session
-// before entry. totalVol is the underlying's own daily volatility over the
-// same sessions; fitted is false when the market did not move across them.
+// the market, and on the market and the name's sector fund together, over at
+// most LookbackSessions sessions ending the session before entry. beta,
+// rSquared and totalVol come from the market-only fit (the index class reads
+// them); when the sector fund's history covers the window, sectorAdjusted is
+// true and beta, sectorBeta and idioVol come from the two-factor fit.
+// fitted is false when the market did not move across the window.
 type exposure struct {
-	beta, idioVol, totalVol, rSquared float64
-	fitted                            bool
-	sessions                          int
+	beta, sectorBeta, idioVol, totalVol, rSquared float64
+	fitted, sectorAdjusted                        bool
+	sectorReason                                  string
+	sessions                                      int
 }
 
-func estimateExposure(underlying, market series, entryIdx int) (exposure, string) {
+func estimateExposure(underlying, market, sector series, entryIdx int) (exposure, string) {
 	start := max(0, entryIdx-LookbackSessions)
 	if entryIdx-start < MinLookbackSessions {
 		return exposure{}, ReasonLookbackShort
 	}
-	var x, y []float64
+	var x, y, xs, ys, s []float64
 	for i := start + 1; i < entryIdx; i++ {
 		prev, cur := underlying.bars[i-1], underlying.bars[i]
 		mPrev, okPrev := market.at(prev.Day)
@@ -144,14 +156,37 @@ func estimateExposure(underlying, market series, entryIdx int) (exposure, string
 		if !okPrev || !okCur {
 			continue
 		}
-		x = append(x, math.Log(market.bars[mCur].Close/market.bars[mPrev].Close))
-		y = append(y, math.Log(cur.Close/prev.Close))
+		rm, ru := math.Log(market.bars[mCur].Close/market.bars[mPrev].Close), math.Log(cur.Close/prev.Close)
+		x = append(x, rm)
+		y = append(y, ru)
+		sPrev, okSPrev := sector.at(prev.Day)
+		sCur, okSCur := sector.at(cur.Day)
+		if okSPrev && okSCur {
+			xs = append(xs, rm)
+			ys = append(ys, ru)
+			s = append(s, math.Log(sector.bars[sCur].Close/sector.bars[sPrev].Close))
+		}
 	}
 	if len(x) < MinLookbackSessions {
 		return exposure{}, ReasonMarketHistoryUnavailable
 	}
 	f := ols(x, y)
-	return exposure{beta: f.beta, idioVol: f.residualSD, totalVol: f.totalSD, rSquared: f.rSquared, fitted: f.ok, sessions: f.n}, ""
+	out := exposure{beta: f.beta, idioVol: f.residualSD, totalVol: f.totalSD, rSquared: f.rSquared, fitted: f.ok, sessions: f.n}
+	switch {
+	case len(sector.bars) == 0:
+		out.sectorReason = ReasonSectorUnknown
+	case len(s) < MinLookbackSessions:
+		out.sectorReason = ReasonSectorHistoryMissing
+	default:
+		if two := ols2(xs, s, ys); two.ok && two.residualSD > 0 {
+			out.beta, out.sectorBeta, out.idioVol, out.sectorAdjusted = two.beta1, two.beta2, two.residualSD, true
+		} else {
+			// The fund did not move, or moves with the market exactly: the
+			// market alone carries the adjustment.
+			out.sectorReason = ReasonSectorHistoryMissing
+		}
+	}
+	return out, ""
 }
 
 // indexBasis classifies a decision's underlying before any score: list when
@@ -177,6 +212,7 @@ type scoreContext struct {
 	entryOK    bool
 	underlying series
 	market     series
+	sector     series
 	// exposure is estimated once per decision from pre-entry sessions;
 	// exposureReason says why it could not be. index scores z on the
 	// underlying's total volatility.
@@ -186,6 +222,8 @@ type scoreContext struct {
 	marks          []edge.ContractMark
 	events         []edge.ContractEvent
 	exits          []exitFill
+	cost           *FillCost
+	costReason     string
 }
 
 // exitFill is a later fill on the same contract that left it flat.
@@ -195,7 +233,12 @@ type exitFill struct {
 }
 
 func scoreHorizon(c scoreContext, h int) rpc.ScorecardHorizonScore {
-	out := rpc.ScorecardHorizonScore{Sessions: h, SlippageReason: ReasonNoFillQuote}
+	// The half-spread does not depend on the horizon; the deprecated
+	// per-horizon keys repeat the decision's slippage for one release.
+	out := rpc.ScorecardHorizonScore{Sessions: h, SlippageReason: c.costReason}
+	if c.cost != nil {
+		out.SlippageBp = c.cost.Bp
+	}
 	if !c.entryOK {
 		out.Reason = c.entry.Reason
 		return out
@@ -252,7 +295,20 @@ func scoreHorizon(c scoreContext, h int) rpc.ScorecardHorizonScore {
 		}
 		idio := exp.idioVol
 		out.IdioVolDaily = &idio
-		z = float64(c.decision.Sign) * (ru - exp.beta*rm) / (idio * math.Sqrt(float64(h)))
+		adjusted := ru - exp.beta*rm
+		if exp.sectorAdjusted {
+			sEntry, okSEntry := c.sector.at(entryBar.Day)
+			sHorizon, okSHorizon := c.sector.at(horizonBar.Day)
+			if !okSEntry || !okSHorizon {
+				out.Reason = ReasonSectorHistoryMissing
+				return out
+			}
+			rs := math.Log(c.sector.bars[sHorizon].Close / c.sector.bars[sEntry].Close)
+			sectorBeta := exp.sectorBeta
+			out.SectorReturn, out.SectorBeta = &rs, &sectorBeta
+			adjusted -= sectorBeta * rs
+		}
+		z = float64(c.decision.Sign) * adjusted / (idio * math.Sqrt(float64(h)))
 	}
 	out.Z = &z
 	if c.decision.Instrument != InstrumentOption {

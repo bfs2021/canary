@@ -121,9 +121,12 @@ verdict. Nothing names the account.
 
 `(*Server).FillQuoteByExecID(execID)` and
 `(*Server).FillQuoteNear(conID, at, tolerance)` return the retained
-`rpc.FillQuoteRecord` from the in-memory mirror of the store, so the
-scorecard can replace `no_fill_quote` with the quote at the fill. The
-scorecard itself is not changed by this work.
+`rpc.FillQuoteRecord` from the in-memory mirror of the store. Since
+2026-10-19 the scorecard reads them on every pass
+(`scorecardFillCosts`, decision-scorecard.md "Slippage"): every execution id
+of a ledger row first, else the retained fill on the same contract within
+five minutes; each decision carries the half-spread paid and each stream its
+sum, and `no_fill_quote` is kept only for fills before 2026-10-18.
 
 ## What it cannot know
 
