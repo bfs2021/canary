@@ -119,10 +119,10 @@ func TestFillQuoteCaptureRetainsTheQuoteOnceAndSurvivesRestart(t *testing.T) {
 	if rec.BaseCurrency != "EUR" || rec.FXRate == nil || *rec.FXRate != 0.9 || rec.FXSource != "cache" {
 		t.Fatalf("fx = %s %v %s", rec.BaseCurrency, rec.FXRate, rec.FXSource)
 	}
-	if _, ok := s.FillQuoteNear(900001, fillQuoteTestAt, 10*time.Second); !ok {
+	if _, ok := s.FillQuoteNear(900001, fillQuoteTestAt, 10*time.Second, nil); !ok {
 		t.Fatal("lookup by contract and time missed the fill")
 	}
-	if _, ok := s.FillQuoteNear(900001, fillQuoteTestAt.Add(time.Hour), 10*time.Second); ok {
+	if _, ok := s.FillQuoteNear(900001, fillQuoteTestAt.Add(time.Hour), 10*time.Second, nil); ok {
 		t.Fatal("lookup by contract and time matched outside the tolerance")
 	}
 

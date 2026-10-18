@@ -3,7 +3,10 @@
 Implementation record: 2026-10-14. Branch `decision-scorecard`. Gate
 redesign, sector adjustment and fill-quote slippage: 2026-10-19, branch
 `scorecard-gate` (the review of 2026-10-18, strategy engine map builds 3 and
-7). The thresholds in "Gates" are proposed; the owner decides them.
+7). Statement clock, placebo calibration, golden arithmetic and the
+quality loop's smaller findings: 2026-10-19, branch `scorecard-fixes`
+(quality-loop round 2, section B). The thresholds in "Gates" are proposed;
+the owner decides them.
 
 The scorecard measures trading skill per decision, for every strategy
 ("sleeve"), on one scale, starting with the owner's own trades. It is a
@@ -51,6 +54,18 @@ week key × underlying contract id: the name-week the decision's z counts in;
 derived at evaluation for rows persisted before 2026-10-19), and the lineage
 field `strategy_ref` (empty for hand and TWS trades; a Canary order_ref
 lineage fills it later).
+
+The execution time is the instant. The statement writes trade times on the
+broker's statement clock, US Eastern, and names no zone; until 2026-10-19
+the parser read them as UTC, so every served time sat four or five hours
+early and the fill-quote time match below missed by that much. The parser
+now places the wall clock in `flexstmt.StatementLocation` (America/New_York,
+verified against the retained statements: NYSE fills between 09:30 and
+16:00, Xetra fills between 03:00 and 11:30 on that clock, which no other
+zone explains). The decision id hashes the statement's wall clock, the value
+the ids of 2026-10-14 were hashed from, so the append-only ledger kept its
+ids; rows persisted before the fix carry the wall clock read as UTC in
+`executed_at`, and the served decision carries the instant.
 
 ### Streams: entries and exits
 
@@ -246,23 +261,31 @@ h sessions after entry.
   quantity × multiplier, summed over the decision's executions, in the
   contract currency and in base at each fill's FX, with the quantity-weighted
   basis points of the mid and the longest quote delay. The daemon matches by
-  execution id first (`FillQuoteByExecID` for every id in the row's lineage);
-  when none is retained, the retained fill on the same contract nearest in
-  time within five minutes stands in (`FillQuoteNear`; `slippage.match` =
-  `time`). Five minutes because the broker's execution time is kept to the
-  second and a receipt stands in for it only within a minute, one order's
-  partial fills on one contract rarely spread further, and two distinct
-  decisions on one contract minutes apart are rare in the statements. The
-  pure core only sums and reports (`Input.Costs`). `slippage_reason` names
+  execution id first (`FillQuoteByExecID` for every id in every row's
+  lineage); a row none of whose ids is retained then takes the retained
+  fill on the same contract nearest in time within five minutes, among the
+  records no row claimed by execution id, so one record never counts for
+  two decisions (`FillQuoteNear` with the claimed ids excluded;
+  `slippage.match` = `time`). Both sides are instants: the statement's
+  execution time is parsed in the statement's zone (above) and the record's
+  is the broker's execution time in UTC. Five minutes because the broker's
+  execution time is kept to the second and a receipt stands in for it only
+  within a minute, one order's partial fills on one contract rarely spread
+  further, and two distinct decisions on one contract minutes apart are rare
+  in the statements. The pure core only sums and reports (`Input.Costs`). `slippage_reason` names
   the real cause when nothing was measured: `no_fill_quote` only for a fill
   before 2026-10-18 (`scorecard.FillQuoteCaptureSince`, when capture began:
   such a fill has no quote and never will); `execution_not_observed` for a
   later fill the daemon never saw (TWS fills invisible to a non-master
   client, or the daemon down); otherwise the retained record's own reason
   (`timeout`, `quote_not_two_sided`, `quote_crossed`, `quote_not_live`, …);
-  `fx_unavailable` when the half-spread is known but not its base sum. The
-  decision carries it once (`slippage`); the per-horizon `slippage_bp` and
-  `slippage_reason` repeat it for one release (below, "Deprecations").
+  `fx_unavailable` when the half-spread is known but not its base sum (the
+  decision is `measured`; the stream counts it under `unquoted.fx_unavailable`
+  rather than in `quoted`, so `quoted` and `unquoted` together are the
+  stream's decisions, and its basis points, which need no rate, still enter
+  `mean_bp`). The decision carries it once (`slippage`); the per-horizon
+  `slippage_bp` and `slippage_reason` repeat it for one release (below,
+  "Deprecations").
 
 ## Evidence per sleeve and stream
 
@@ -284,7 +307,11 @@ two units' z is the overlapping share of the horizon, 1 − gap/h with the gap
 in calendar days against a horizon of 7h/5 days: fully for the same name,
 scaled by `CrossNameResidualCorrelation` = 0.1 across names (the residual
 correlation left after the market and sector adjustment; conservative for
-US large caps). Only entry days and h enter, never anything after entry.
+US large caps). Every unit of an index stream is the same name, the market:
+SPY, SPX, XSP and QQQ options sit on different contract ids but move
+together, so the cross-name discount would overstate the effective sample
+(fixed 2026-10-19; reported streams, never gated). Only entry days and h
+enter, never anything after entry.
 The null covariance V of the sum of n units (V ≥ n) gives the effective
 sample n_eff = n²/V and S_eff = S·n/V (`scorecard.EffectiveSample`); every
 sequential statistic reads the effective sample, and S_eff/n_eff is the
@@ -326,8 +353,16 @@ With the effective sample (n_eff, S_eff):
   stay out of reach: the share of shuffles reaching it must not exceed 5%
   (`PlaceboMaxRate`), else the evidence comes from the magnitudes, not the
   directions, and the sleeve is not established. The standardised sd of the
-  shuffled sums is reported (about 1 when the overlap covariance is
-  calibrated, below it when conservative).
+  shuffled sums against the null covariance (√(Σm²/V) in expectation) is
+  reported and bounded: about 1 when each unit's z has the unit variance
+  the scores assume, below it when the covariance is conservative, and
+  above `PlaceboMaxStandardisedSD` = 1.2 the stream is not established
+  either. The rate alone let a null understated by about 1.9× pass (the
+  e-value bar sits near 3σ; 5% of shuffles reach it only once the spread
+  nears 1.9), inflating both error rates; 1.2 leaves room for the ratio's
+  sampling noise at the sample gate (sd about 0.1 at 60 units) and for
+  fat-tailed residuals (added 2026-10-19, proposed with the other
+  thresholds).
 - Also the wrapper mean with a 95% bootstrap interval (1,000 resamples,
   seeded), the realised-vs-implied median, the bought-put median of
   index_entries, the sum of the half-spread paid with the decisions without
@@ -341,7 +376,8 @@ With the effective sample (n_eff, S_eff):
 - `established`: E ≥ 20 (`EstablishedEValue`), n_eff ≥ 60
   (`EstablishedUnits`) over at least 26 entry weeks (`EstablishedWeeks`, so
   one lucky quarter never establishes), P(score > 0) ≥ 0.975
-  (`EstablishedPosterior`), the placebo within 5%, and the same sign of mean
+  (`EstablishedPosterior`), the placebo within 5% and its spread within
+  1.2, and the same sign of mean
   z in both chronological halves of the units and in up- and down-market
   units (the sign of SPY's mean horizon return within the unit). Every
   component is disclosed (`gates`).
@@ -470,11 +506,17 @@ a name counts once a week however many decisions it holds, two names in a
 week are two units, and the effective sample follows the overlap covariance
 exactly; weekly units of one name at 21 sessions keep about a quarter of
 their count while units a horizon apart keep it all; the placebo passes
-loud, consistent signs and is a gate component; a name that loads on its
+loud, consistent signs and is a gate component; units of |z| 1.6 without
+overlap (spread 1.6, a null understated by that much) stay accruing though
+the rate alone is under 5%, while the same units at 1.0 pass; two
+index-stream units on different contracts in one week carry one effective
+unit; the decision id stays on the statement's wall clock; a name that loads on its
 sector fund is scored net of both betas with less residual noise than SPY
 alone leaves, says `spy_sector`, and falls back to `spy` with the reason
 when the fund is unknown or its history short; slippage names the real
-cause by date and record and the stream sums the measured half-spread; β
+cause by date and record and the stream sums the measured half-spread, a
+half-spread without an FX rate counted under `fx_unavailable` with its basis
+points in the mean; β
 and σ use only pre-decision sessions (a look-ahead sentinel in later bars
 changes nothing); Black-Scholes IV round-trips; direction sign for long and
 short puts and calls; missing history is unknown, not zero; a SPY option is scored on total
@@ -493,10 +535,21 @@ fund per sector after the market and before the names, once per session;
 the sector map names one fund per S&P 500 name and none for a name off the
 list or an index; fill costs match by execution id, then by contract and
 time within five minutes and not beyond, and keep an unavailable quote's
-reason; a failed read keeps the last closes,
+reason; a ledger built from a statement trade at 11:30 on the statement's
+clock meets a record at 15:30:20Z (read as UTC it would miss by four hours
+and be called `execution_not_observed`); a record claimed by execution id is
+not also the time stand-in for a second decision on the contract; a failed
+read keeps the last closes,
 leaves the session stamp alone and is retried at its retry time with the
 doubling wait, a gateway that is away ends the pass unmarked, the result
 lists the failures and the log warns once per name per day. `pkg/ibkr`: a
-lookback above a year is asked for in years. `internal/cli`: golden render.
+lookback above a year is asked for in years. `internal/flexstmt`: a trade
+at 15:30:45 on the statement's clock in January is 20:30:45Z, in July four
+hours later; report dates stay days. `internal/cli`: golden render, whose
+fixture derives every stream statistic from stated unit means through the
+core's exported functions (`goldenStream`), so the golden carries no number
+the arithmetic refuses (the fixture of 2026-10-19 did: e-value 1.2 where the
+sample gives 0.95, 136 units to the bar where the score gives 99, market
+splits that did not sum to the running sum).
 `internal/stress`: `TestOnlyTheDaemonEvaluates` names the scorecard
 evaluators.

@@ -663,9 +663,16 @@ func optionalDate(raw string) (time.Time, error) {
 	return parseFlexDate(raw)
 }
 
+// parseExecutionTime reads a trade's execution time as the instant it
+// names. The statement writes the broker's statement clock, US Eastern
+// time (StatementLocation), with no zone of its own; the parsed value is
+// that wall clock placed in the zone and returned in UTC, so it can be
+// compared with any other instant (a retained fill quote's execution time,
+// the daemon's own receipt). A date without a time is the day's start in
+// the same zone.
 func parseExecutionTime(dateTime, tradeDate, tradeTime string) (time.Time, error) {
 	if strings.TrimSpace(dateTime) != "" {
-		return parseFlexDate(dateTime)
+		return parseFlexDateIn(dateTime, StatementLocation())
 	}
 	tradeDate = strings.TrimSpace(tradeDate)
 	if tradeDate == "" {
@@ -673,12 +680,12 @@ func parseExecutionTime(dateTime, tradeDate, tradeTime string) (time.Time, error
 	}
 	tradeTime = strings.NewReplacer(":", "", " ", "").Replace(strings.TrimSpace(tradeTime))
 	if tradeTime == "" {
-		return parseFlexDate(tradeDate)
+		return parseFlexDateIn(tradeDate, StatementLocation())
 	}
 	if len(tradeTime) == 4 {
 		tradeTime += "00"
 	}
-	return parseFlexDate(tradeDate + ";" + tradeTime)
+	return parseFlexDateIn(tradeDate+";"+tradeTime, StatementLocation())
 }
 
 func brokerRecordID(kind string, values ...string) string {

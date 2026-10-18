@@ -19,32 +19,43 @@ import (
 const scorecardFillQuoteTolerance = 5 * time.Minute
 
 // scorecardFillCosts measures the half-spread each ledger decision paid from
-// the quotes the daemon retained at its fills: every execution id of the
-// decision is looked up first; when none is retained, the retained fill on
-// the same contract nearest in time within the tolerance stands in. A
-// decision without either is absent from the result, and the pure core
-// names the reason from its date.
+// the quotes the daemon retained at its fills: every execution id of every
+// decision is looked up first; a decision none of whose ids is retained then
+// takes the retained fill on the same contract nearest in time within the
+// tolerance, among the records no decision claimed by execution id, so one
+// record never counts for two decisions. The statement's execution time is
+// the instant the parser placed in the statement's zone, so it meets the
+// record's broker execution time directly. A decision without either match
+// is absent from the result, and the pure core names the reason from its
+// date.
 func (s *Server) scorecardFillCosts(ledger []scorecard.Decision) map[string]scorecard.FillCost {
 	if s == nil || s.fillQuotes == nil {
 		return nil
 	}
 	out := map[string]scorecard.FillCost{}
+	claimed := map[string]bool{}
+	var unmatched []scorecard.Decision
 	for _, d := range ledger {
 		var records []rpc.FillQuoteRecord
 		for _, execID := range d.Lineage.ExecutionIDs {
 			if rec, ok := s.FillQuoteByExecID(execID); ok {
 				records = append(records, rec)
+				claimed[rec.ExecID] = true
 			}
 		}
-		match := "exec_id"
 		if len(records) == 0 {
-			rec, ok := s.FillQuoteNear(int(d.ConID), d.ExecutedAt, scorecardFillQuoteTolerance)
-			if !ok {
-				continue
-			}
-			records, match = []rpc.FillQuoteRecord{rec}, "time"
+			unmatched = append(unmatched, d)
+			continue
 		}
-		out[d.ID] = scorecardFillCostFromRecords(records, match, max(len(d.Lineage.ExecutionIDs), len(records)))
+		out[d.ID] = scorecardFillCostFromRecords(records, "exec_id", max(len(d.Lineage.ExecutionIDs), len(records)))
+	}
+	for _, d := range unmatched {
+		rec, ok := s.FillQuoteNear(int(d.ConID), d.ExecutedAt, scorecardFillQuoteTolerance, claimed)
+		if !ok {
+			continue
+		}
+		claimed[rec.ExecID] = true
+		out[d.ID] = scorecardFillCostFromRecords([]rpc.FillQuoteRecord{rec}, "time", max(len(d.Lineage.ExecutionIDs), 1))
 	}
 	return out
 }
@@ -95,7 +106,7 @@ func scorecardFillCostFromRecords(records []rpc.FillQuoteRecord, match string, f
 	if baseOK {
 		out.HalfSpreadBase = &base
 	} else {
-		out.Reason = "fx_unavailable"
+		out.Reason = scorecard.ReasonFXUnavailable
 	}
 	if quantity > 0 && !math.IsNaN(weightedBp) {
 		out.Bp = new(weightedBp / quantity)

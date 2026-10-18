@@ -10,13 +10,14 @@ Sleeve owner · entries  ACCRUING
     fund too
   Directional score · +0.31 per name-week · running sum +2.8 · posterior
     +0.021 ± 0.10
-  Evidence · e-value 1.2 of 20 · P(score > 0) 0.59 · P(score > 0.05) 0.38 ·
-    P(score > 0.10) 0.20 · futility e-value 0.9 of 20
-  Distance · at this score the e-value gate needs about 136 effective
-    name-weeks, about 129 weeks at this pace; the sample gate needs 60 over 26
+  Evidence · e-value 1.0 of 20 · P(score > 0) 0.59 · P(score > 0.05) 0.38 ·
+    P(score > 0.10) 0.21 · futility e-value 0.9 of 20
+  Distance · at this score the e-value gate needs about 99 effective
+    name-weeks, about 94 weeks at this pace; the sample gate needs 60 over 26
     weeks
-  Consistency · halves +0.45 / +0.20 · up markets +0.52 (5) / down -0.10 (4) ·
-    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed)
+  Consistency · halves +0.45 / +0.20 · up markets +0.54 (5) / down +0.02 (4) ·
+    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed), shuffled
+    spread 0.41 of the noise the scores assume (at most 1.2)
   Slippage · half-spread paid € 41.30 over 3 quoted of 14 · mean 6.2 bp of the
     mid · without: execution not observed 1, no fill quote 10
   Options · wrapper mean -€ 412.50 (95% -€ 1,280.00 to € 310.00) over 5 ·
@@ -30,11 +31,12 @@ Sleeve owner · exits  REPORTED, NOT GATED
     week) · 3.6 effective after overlap · 4 weeks · 4 of 5 net of the sector
     fund too
   Directional score · -0.12 per name-week · running sum -0.5 · posterior
-    -0.005 ± 0.10
+    -0.004 ± 0.10
   Evidence · e-value 0 (against) · P(score > 0) 0.48 · P(score > 0.05) 0.29 ·
-    P(score > 0.10) 0.14 · futility e-value 1.1 of 20
-  Consistency · halves -0.30 / +0.06 · up markets -0.20 (2) / down +0.04 (2) ·
-    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed)
+    P(score > 0.10) 0.14 · futility e-value 1.0 of 20
+  Consistency · halves -0.30 / +0.06 · up markets -0.14 (2) / down -0.10 (2) ·
+    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed), shuffled
+    spread 0.27 of the noise the scores assume (at most 1.2)
   Slippage · no quoted fill among 7 · without: no fill quote 7
   Unknown · immature 2
 
@@ -44,12 +46,13 @@ Sleeve owner · index entries  REPORTED, NOT GATED
   Sample · 4 decisions · 3 scored · 3 name-weeks (each name counts once a
     week) · 2.1 effective after overlap · 3 weeks
   Directional score · +0.42 per name-week · running sum +1.3 · posterior
-    +0.012 ± 0.10
-  Evidence · e-value 1.0 of 20 · P(score > 0) 0.55 · P(score > 0.05) 0.35 ·
-    P(score > 0.10) 0.18 · futility e-value 0.9 of 20
-  Consistency · halves +0.90 / +0.18 · up markets -0.35 (2) / down +1.19 (1) ·
-    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed)
-  Slippage · half-spread paid € 12.60 over 1 quoted of 4 · mean 4.1 bp of the
+    +0.009 ± 0.10
+  Evidence · e-value 1.0 of 20 · P(score > 0) 0.53 · P(score > 0.05) 0.34 ·
+    P(score > 0.10) 0.18 · futility e-value 1.0 of 20
+  Consistency · halves +0.90 / +0.18 · up markets +0.28 (2) / down +0.71 (1) ·
+    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed), shuffled
+    spread 0.58 of the noise the scores assume (at most 1.2)
+  Slippage · half-spread paid € 4.30 over 1 quoted of 4 · mean 41.2 bp of the
     mid · without: no fill quote 3
   Options · wrapper mean -€ 220.00 (95% -€ 610.00 to € 140.00) over 3 ·
     realised/implied median 0.71 over 3 · bought puts realised/implied median
@@ -58,7 +61,7 @@ Sleeve owner · index entries  REPORTED, NOT GATED
 
 Latest decisions · 5 of 28
   DATE       NAME     ACT   SIDE      QTY      z  NOTE
-  2026-08-27 SPY P    open  buy         2  -0.48  index, wrapper -€ 310.40, moved 0.5x implied, paid 4.1 bp
+  2026-08-27 SPY P    open  buy         2  -0.48  index, wrapper -€ 310.40, moved 0.5x implied, paid 41.2 bp
   2026-08-26 SYND     exit  sell       25  +0.90  rule trailing stop, counts for no one
   2026-08-24 SYNA C   open  buy         3  +1.12  wrapper -€ 96.30, moved 0.6x implied
   2026-08-21 SYNB     trim  sell       40  -0.62
@@ -109,13 +112,14 @@ Horizon · 10 sessions after entry · primary 10 · others 5, 21
     fund too
   Directional score · +0.31 per name-week · running sum +2.8 · posterior
     +0.021 ± 0.10
-  Evidence · e-value 1.2 of 20 · P(score > 0) 0.59 · P(score > 0.05) 0.38 ·
-    P(score > 0.10) 0.20 · futility e-value 0.9 of 20
-  Distance · at this score the e-value gate needs about 136 effective
-    name-weeks, about 129 weeks at this pace; the sample gate needs 60 over 26
+  Evidence · e-value 1.0 of 20 · P(score > 0) 0.59 · P(score > 0.05) 0.38 ·
+    P(score > 0.10) 0.21 · futility e-value 0.9 of 20
+  Distance · at this score the e-value gate needs about 99 effective
+    name-weeks, about 94 weeks at this pace; the sample gate needs 60 over 26
     weeks
-  Consistency · halves +0.45 / +0.20 · up markets +0.52 (5) / down -0.10 (4) ·
-    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed)
+  Consistency · halves +0.45 / +0.20 · up markets +0.54 (5) / down +0.02 (4) ·
+    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed), shuffled
+    spread 0.41 of the noise the scores assume (at most 1.2)
   Slippage · half-spread paid € 41.30 over 3 quoted of 14 · mean 6.2 bp of the
     mid · without: execution not observed 1, no fill quote 10
   Options · wrapper mean -€ 412.50 (95% -€ 1,280.00 to € 310.00) over 5 ·
@@ -129,11 +133,12 @@ Horizon · 10 sessions after entry · primary 10 · others 5, 21
     week) · 3.6 effective after overlap · 4 weeks · 4 of 5 net of the sector
     fund too
   Directional score · -0.12 per name-week · running sum -0.5 · posterior
-    -0.005 ± 0.10
+    -0.004 ± 0.10
   Evidence · e-value 0 (against) · P(score > 0) 0.48 · P(score > 0.05) 0.29 ·
-    P(score > 0.10) 0.14 · futility e-value 1.1 of 20
-  Consistency · halves -0.30 / +0.06 · up markets -0.20 (2) / down +0.04 (2) ·
-    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed)
+    P(score > 0.10) 0.14 · futility e-value 1.0 of 20
+  Consistency · halves -0.30 / +0.06 · up markets -0.14 (2) / down -0.10 (2) ·
+    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed), shuffled
+    spread 0.27 of the noise the scores assume (at most 1.2)
   Slippage · no quoted fill among 7 · without: no fill quote 7
   Unknown · immature 2
 
@@ -143,12 +148,13 @@ Horizon · 10 sessions after entry · primary 10 · others 5, 21
   Sample · 4 decisions · 3 scored · 3 name-weeks (each name counts once a
     week) · 2.1 effective after overlap · 3 weeks
   Directional score · +0.42 per name-week · running sum +1.3 · posterior
-    +0.012 ± 0.10
-  Evidence · e-value 1.0 of 20 · P(score > 0) 0.55 · P(score > 0.05) 0.35 ·
-    P(score > 0.10) 0.18 · futility e-value 0.9 of 20
-  Consistency · halves +0.90 / +0.18 · up markets -0.35 (2) / down +1.19 (1) ·
-    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed)
-  Slippage · half-spread paid € 12.60 over 1 quoted of 4 · mean 4.1 bp of the
+    +0.009 ± 0.10
+  Evidence · e-value 1.0 of 20 · P(score > 0) 0.53 · P(score > 0.05) 0.34 ·
+    P(score > 0.10) 0.18 · futility e-value 1.0 of 20
+  Consistency · halves +0.90 / +0.18 · up markets +0.28 (2) / down +0.71 (1) ·
+    placebo: 0 of 200 sign-shuffles reach the bar (at most 5% allowed), shuffled
+    spread 0.58 of the noise the scores assume (at most 1.2)
+  Slippage · half-spread paid € 4.30 over 1 quoted of 4 · mean 41.2 bp of the
     mid · without: no fill quote 3
   Options · wrapper mean -€ 220.00 (95% -€ 610.00 to € 140.00) over 3 ·
     realised/implied median 0.71 over 3 · bought puts realised/implied median
@@ -157,7 +163,7 @@ Horizon · 10 sessions after entry · primary 10 · others 5, 21
 
 \x1b[1mLatest decisions · 5 of 28\x1b[0m
   DATE       NAME     ACT   SIDE      QTY      z  NOTE
-  2026-08-27 SPY P    open  buy         2  -0.48  \x1b[2mindex, wrapper -€ 310.40, moved 0.5x implied, paid 4.1 bp\x1b[0m
+  2026-08-27 SPY P    open  buy         2  -0.48  \x1b[2mindex, wrapper -€ 310.40, moved 0.5x implied, paid 41.2 bp\x1b[0m
   2026-08-26 SYND     exit  sell       25  +0.90  \x1b[2mrule trailing stop, counts for no one\x1b[0m
   2026-08-24 SYNA C   open  buy         3  +1.12  \x1b[2mwrapper -€ 96.30, moved 0.6x implied\x1b[0m
   2026-08-21 SYNB     trim  sell       40  -0.62

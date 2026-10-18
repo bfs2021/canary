@@ -233,7 +233,11 @@ func decisionSlippage(d Decision, costs map[string]FillCost) rpc.ScorecardSlippa
 }
 
 // slippageSummary sums a stream's measured half-spreads in base currency
-// and counts the decisions without one by reason.
+// and counts the decisions without one by reason. Quoted counts the
+// decisions whose half-spread enters the base sum; a half-spread measured
+// without an FX rate is counted under fx_unavailable instead, so quoted and
+// unquoted together are the decisions, while its basis points (which need
+// no rate) still enter the mean.
 func slippageSummary(slippages []*rpc.ScorecardSlippage) *rpc.ScorecardSlippageSummary {
 	if len(slippages) == 0 {
 		return nil
@@ -249,15 +253,15 @@ func slippageSummary(slippages []*rpc.ScorecardSlippage) *rpc.ScorecardSlippageS
 			out.Unquoted[reason]++
 			continue
 		}
-		out.Quoted++
-		if s.HalfSpreadBase != nil {
-			out.HalfSpreadBase += *s.HalfSpreadBase
-		} else {
-			out.Unquoted[ReasonFXUnknown]++
-		}
 		if s.Bp != nil {
 			bps = append(bps, *s.Bp)
 		}
+		if s.HalfSpreadBase == nil {
+			out.Unquoted[firstNonEmpty(s.Reason, ReasonFXUnavailable)]++
+			continue
+		}
+		out.Quoted++
+		out.HalfSpreadBase += *s.HalfSpreadBase
 	}
 	if len(bps) > 0 {
 		m := mean(bps)
@@ -297,10 +301,13 @@ func exitsByContract(decisions []Decision) map[int64][]exitFill {
 
 // unit is one name-week of evidence: the decisions of one underlying in one
 // sleeve, stream and ISO entry week, counted once through their mean z.
+// market marks a unit of an index stream: every such unit is a position on
+// the market, whatever contract carried it, and overlaps the others fully.
 type unit struct {
 	key    string
 	week   string
 	conid  int64
+	market bool
 	day    time.Time
 	sumZ   float64
 	sumMkt float64
@@ -325,9 +332,12 @@ type Sample struct {
 // sessions. Under no information, two units' z share the residual returns
 // of the sessions their horizons overlap, so their covariance is the
 // overlapping share of h: 1 − gap/h on the same name, scaled by
-// CrossNameResidualCorrelation across names. Only entry days and h enter,
-// never anything after entry. The gap is measured in calendar days against
-// a horizon of 7h/5 days.
+// CrossNameResidualCorrelation across names. Index-stream units are all
+// the same name, the market: SPY, SPX, XSP and QQQ options sit on
+// different contract ids but move together, so a cross-name discount would
+// overstate their effective sample. Only entry days and h enter, never
+// anything after entry. The gap is measured in calendar days against a
+// horizon of 7h/5 days.
 func EffectiveSample(units []unit, h int) Sample {
 	n := len(units)
 	out := Sample{Units: n}
@@ -345,7 +355,7 @@ func EffectiveSample(units []unit, h int) Sample {
 				continue
 			}
 			rho := CrossNameResidualCorrelation
-			if a.conid == b.conid {
+			if a.conid == b.conid || (a.market && b.market) {
 				rho = 1
 			}
 			v += 2 * rho * (1 - gap/span)
@@ -364,6 +374,7 @@ func EffectiveSample(units []unit, h int) Sample {
 // the realised-vs-implied median of its bought puts.
 func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []rpc.ScorecardHorizonScore) rpc.ScorecardSleeve {
 	gated := stream == rpc.ScorecardStreamEntries
+	market := stream == rpc.ScorecardStreamIndexEntries || stream == rpc.ScorecardStreamIndexExits
 	out := rpc.ScorecardSleeve{Sleeve: name, Stream: stream, Horizon: h, Gated: gated, Decisions: len(decisions), Unknown: map[string]int{}}
 	if gated {
 		out.Gate = rpc.ScorecardGateAccruing
@@ -387,7 +398,7 @@ func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []r
 		}
 		u := byKey[d.UnitKey]
 		if u == nil {
-			u = &unit{key: d.UnitKey, week: d.ClusterKey, conid: d.UnderlyingConID, day: dayStart(d.ExecutedAt)}
+			u = &unit{key: d.UnitKey, week: d.ClusterKey, conid: d.UnderlyingConID, market: market, day: dayStart(d.ExecutedAt)}
 			byKey[d.UnitKey] = u
 		}
 		if day := dayStart(d.ExecutedAt); day.Before(u.day) {
@@ -480,7 +491,7 @@ func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []r
 	}
 	placebo := placeboTest(units, sample)
 	out.Placebo = &placebo
-	gates.Placebo = placebo.Rate <= PlaceboMaxRate
+	gates.Placebo = placebo.Rate <= PlaceboMaxRate && placebo.StandardisedSD <= PlaceboMaxStandardisedSD
 	out.Gates = gates
 	if !gated {
 		return out
@@ -500,8 +511,10 @@ func sleeveEvidence(name, stream string, h int, decisions []Decision, scores []r
 // (seeded, so the same evidence yields the same placebo) and re-reads the
 // statistical bar on the same effective sample. Under no information the
 // sign choice is a coin, so the bar must stay out of reach; a sleeve whose
-// shuffles reach it more often than PlaceboMaxRate draws its evidence from
-// the magnitudes, not the directions, and is not established.
+// shuffles reach it more often than PlaceboMaxRate, or whose shuffled sums
+// spread wider than the null covariance by more than
+// PlaceboMaxStandardisedSD, draws its evidence from the magnitudes, not the
+// directions, and is not established.
 func placeboTest(units []unit, sample Sample) rpc.ScorecardPlacebo {
 	out := rpc.ScorecardPlacebo{Replicates: PlaceboReplicates}
 	n := len(units)
@@ -591,12 +604,12 @@ func defaultMethod() rpc.ScorecardMethod {
 		Streams:             "Entries (open, add) ask whether the name moves with the decision and carry the gates and the Holm correction; exits (trim, exit) ask whether it moves against the position afterwards and are reported with the same statistics, never gated. Decisions on an index underlying form index_entries and index_exits (did the index move the way the decision positioned for?), reported with the same statistics plus the realised-vs-implied median of bought puts, never gated. Fills Canary's rules or the broker's lifecycle produced are the rule sleeve and count for no owner stream.",
 		Units:               units,
 		Clusters:            units,
-		Overlap:             "Units whose horizons overlap share returns: under no information the covariance of two units' z is the overlapping share of the horizon (1 − gap/h, the gap in calendar days against 7h/5), fully on the same name and at 0.1 across names. The null covariance V of the sum of n units gives n_eff = n²/V effective units and S_eff = S·n/V; every sequential statistic reads the effective sample.",
+		Overlap:             "Units whose horizons overlap share returns: under no information the covariance of two units' z is the overlapping share of the horizon (1 − gap/h, the gap in calendar days against 7h/5), fully on the same name (every index-stream unit is the market, one name) and at 0.1 across names. The null covariance V of the sum of n units gives n_eff = n²/V effective units and S_eff = S·n/V; every sequential statistic reads the effective sample.",
 		Posterior:           "Posterior on the directional score with prior N(0, 0.1²) and unit variance per effective unit: P(score > 0), P(score > 0.05) and P(score > 0.10).",
 		EValue:              "Mixture-SPRT e-value E = (1+n_eff·τ²)^(−1/2)·exp(τ²·S_eff²/(2(1+n_eff·τ²))), τ = 0.2, reported only while S_eff > 0, else 0 (against). It is the weight of evidence for information in the decisions and bounds the chance of a false established at 1/20 however often it is read.",
 		Futility:            "Futility e-value exp(−0.05·S_eff + 0.05²·n_eff/2): the likelihood of no information against a score of 0.05, the smallest worth a risk allocation. It grows while the decisions carry none and calls a sleeve with a score of 0.05 or more futile with probability at most 1/20.",
-		Placebo:             "The units' signs are redrawn at random 200 times (seeded) and the statistical bar re-read on the same effective sample; the share of shuffles reaching it must not exceed 5%, else the evidence comes from the magnitudes, not the directions.",
-		Gates:               "established: E ≥ 20, n_eff ≥ 60 effective units over ≥ 26 entry weeks, P(score > 0) ≥ 0.975, the placebo within 5%, and the same sign of mean z in both chronological halves and in up- and down-market units; futile: n_eff ≥ 60 and futility e-value ≥ 20; otherwise accruing. Holm correction across sleeves when more than one is live. Proposed 2026-10-19; the owner decides the thresholds.",
+		Placebo:             "The units' signs are redrawn at random 200 times (seeded) and the statistical bar re-read on the same effective sample; the share of shuffles reaching it must not exceed 5%, and the shuffled sums' standard deviation against the null covariance must not exceed 1.2 (about 1 when the unit noise is calibrated), else the evidence comes from the magnitudes, not the directions.",
+		Gates:               "established: E ≥ 20, n_eff ≥ 60 effective units over ≥ 26 entry weeks, P(score > 0) ≥ 0.975, the placebo within 5% and calibrated within 1.2, and the same sign of mean z in both chronological halves and in up- and down-market units; futile: n_eff ≥ 60 and futility e-value ≥ 20; otherwise accruing. Holm correction across sleeves when more than one is live. Proposed 2026-10-19; the owner decides the thresholds.",
 		Wrapper:             "Option P&L to the horizon, or to the exit or lifecycle event when earlier, minus the P&L of a static delta-equivalent stock position (delta at entry × multiplier × signed quantity), in base currency at execution FX; the option value is a statement mark on the horizon day, the closing fill, zero at expiration or intrinsic at exercise/assignment, never interpolated.",
 		RealisedVsImplied:   "|r_u| / (IV·√(h/252)), IV inverted from the fill by Black-Scholes at the execution-session close.",
 		Slippage:            "Half-spread paid, (fill − mid) × side × quantity × multiplier, from the quote the daemon retained at the fill: by execution id, else the retained fill on the same contract nearest in time within 5 minutes; summed per sleeve and stream in base currency. A fill before 2026-10-18 has no quote (no_fill_quote); a later fill without one was not observed by the daemon (execution_not_observed) or its quote was unavailable (the record's reason).",

@@ -182,7 +182,8 @@ type ScorecardGates struct {
 	Posterior bool `json:"posterior"`
 	// Placebo is true when no more than the allowed share of sign-shuffled
 	// replicates reaches the statistical bar (or the sample is too small for
-	// the bar at all).
+	// the bar at all) and the shuffled sums spread no wider than the null
+	// covariance allows (StandardisedSD within the bound).
 	Placebo      bool `json:"placebo"`
 	HalvesAgree  bool `json:"halves_agree"`
 	MarketsAgree bool `json:"markets_agree"`
@@ -215,7 +216,9 @@ type ScorecardPlacebo struct {
 
 // ScorecardSlippageSummary sums the half-spread the stream's decisions paid
 // from the quotes retained at their fills, in base currency, with the
-// decisions that carried none by reason.
+// decisions that carried none by reason. Quoted counts the decisions in the
+// base sum; a half-spread measured without an FX rate is under
+// fx_unavailable, so Quoted and Unquoted together are Decisions.
 type ScorecardSlippageSummary struct {
 	Decisions      int            `json:"decisions"`
 	Quoted         int            `json:"quoted"`

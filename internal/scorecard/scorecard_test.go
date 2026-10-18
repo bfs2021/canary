@@ -1,6 +1,8 @@
 package scorecard
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -156,21 +158,94 @@ func TestPlaceboRefusesEvidenceFromMagnitudes(t *testing.T) {
 	if got.Placebo == nil || got.EValue < EstablishedEValue {
 		t.Fatalf("evidence = %+v", got)
 	}
-	// Fair coins over 180 units of 1.5: the shuffled sum is N(0, 180·2.25)
-	// against a null covariance V of the real sample; the bar sits far out.
-	if got.Placebo.Rate > PlaceboMaxRate || !got.Gates.Placebo || got.Placebo.StandardisedSD > 1.6 || got.Placebo.StandardisedSD < 0.6 {
+	// Fair coins over 180 units of 1.5 against the null covariance V of the
+	// real sample (about 2.3 per unit with the weekly overlap): the shuffled
+	// sums spread about as the null says and the bar sits far out.
+	if got.Placebo.Rate > PlaceboMaxRate || !got.Gates.Placebo || got.Placebo.StandardisedSD > PlaceboMaxStandardisedSD || got.Placebo.StandardisedSD < 0.6 {
 		t.Fatalf("placebo = %+v", got.Placebo)
 	}
 	if got.Gate != rpc.ScorecardGateEstablished {
 		t.Fatalf("gate = %s gates = %+v", got.Gate, got.Gates)
 	}
-	// Force the placebo over its limit: a sample so small that the bar is
-	// within reach of a lucky shuffle, with every other gate passing, stays
-	// accruing.
-	forced := got
-	forced.Gates.Placebo = false
-	if forced.Gate == rpc.ScorecardGateEstablished && forced.Gates.Placebo {
-		t.Fatal("unreachable")
+}
+
+// TestPlaceboRefusesAnUnderstatedNull: units whose |z| is 1.6 with no
+// overlap (one name every three weeks, so V = n exactly) are evidence only
+// if the unit noise were 1; the shuffled sums spread 1.6 times wider than
+// the null covariance says, so the e-value and the posterior both read an
+// understated noise. The share of shuffles reaching the bar alone stays
+// under 5% (the bar near 3σ is 1.9σ on this spread); the calibration bound
+// holds the stream at accruing however loud the sum. The same units at 1.0
+// pass.
+func TestPlaceboRefusesAnUnderstatedNull(t *testing.T) {
+	t.Parallel()
+	build := func(magnitude float64) rpc.ScorecardSleeve {
+		var decisions []Decision
+		var scores []rpc.ScorecardHorizonScore
+		for i := range 80 {
+			decisions = append(decisions, Decision{ID: fmt.Sprintf("%d", i), Sleeve: "owner", UnderlyingConID: int64(i), ExecutedAt: weekDay(3 * i)})
+			scores = append(scores, rpc.ScorecardHorizonScore{Sessions: 10, Matured: true, Z: new(magnitude), MarketReturn: new(float64(1-2*(i%2)) * 0.01)})
+		}
+		return sleeveEvidence("owner", rpc.ScorecardStreamEntries, 10, decisions, scores)
+	}
+	loud := build(1.6)
+	if loud.EffectiveUnits != 80 || loud.EValue < EstablishedEValue || loud.Placebo == nil {
+		t.Fatalf("evidence = %+v", loud)
+	}
+	// 200 seeded shuffles read the spread to within about 5%.
+	if loud.Placebo.StandardisedSD < 1.45 || loud.Placebo.StandardisedSD > 1.75 {
+		t.Fatalf("standardised sd = %v, want about the magnitude 1.6 when V = n", loud.Placebo.StandardisedSD)
+	}
+	if loud.Placebo.Rate > PlaceboMaxRate {
+		t.Fatalf("rate = %v: the rate alone should let this spread through", loud.Placebo.Rate)
+	}
+	if loud.Gates.Placebo || loud.Gate != rpc.ScorecardGateAccruing {
+		t.Fatalf("an understated null passed: placebo gate %v, gate %s, placebo %+v", loud.Gates.Placebo, loud.Gate, loud.Placebo)
+	}
+	calibrated := build(1.0)
+	if calibrated.Placebo.StandardisedSD < 0.9 || calibrated.Placebo.StandardisedSD > 1.1 || !calibrated.Gates.Placebo || calibrated.Gate != rpc.ScorecardGateEstablished {
+		t.Fatalf("calibrated units were refused: gate %s, placebo %+v", calibrated.Gate, calibrated.Placebo)
+	}
+}
+
+// TestIndexStreamUnitsAreOneName: two index-stream units in one week on
+// different contracts (an SPX put and a SPY put) are one position on the
+// market and overlap fully, so the pair carries one effective unit; the
+// same two contracts in the entries stream would be discounted as two
+// names.
+func TestIndexStreamUnitsAreOneName(t *testing.T) {
+	t.Parallel()
+	decisions := []Decision{
+		{ID: "spx", Sleeve: "owner", UnderlyingConID: 1, ExecutedAt: weekDay(1)},
+		{ID: "spy", Sleeve: "owner", UnderlyingConID: 2, ExecutedAt: weekDay(1)},
+	}
+	scores := []rpc.ScorecardHorizonScore{{Sessions: 10, Matured: true, Z: new(1.0)}, {Sessions: 10, Matured: true, Z: new(1.0)}}
+	index := sleeveEvidence("owner", rpc.ScorecardStreamIndexEntries, 10, decisions, scores)
+	if index.Units != 2 || math.Abs(index.EffectiveUnits-1) > 1e-12 {
+		t.Fatalf("index entries: units %d effective %v, want 2 units carrying 1", index.Units, index.EffectiveUnits)
+	}
+	names := sleeveEvidence("owner", rpc.ScorecardStreamEntries, 10, decisions, scores)
+	if want := 4 / (2 + 2*CrossNameResidualCorrelation); math.Abs(names.EffectiveUnits-want) > 1e-12 {
+		t.Fatalf("entries: effective %v, want %v", names.EffectiveUnits, want)
+	}
+}
+
+// TestDecisionIDStaysOnTheStatementClock: the id hashes the statement's own
+// wall clock, the value the ids of 2026-10-14 were hashed from when the
+// parser still read it as UTC, so the append-only ledger keeps its ids now
+// that the execution time is the true instant (13:45:30Z is 09:45:30 on
+// the statement's Eastern clock in summer).
+func TestDecisionIDStaysOnTheStatementClock(t *testing.T) {
+	t.Parallel()
+	d := Decision{ConID: 900001, Side: SideBuy, Action: "open", Quantity: 10, ExecutedAt: time.Date(2026, 6, 15, 13, 45, 30, 0, time.UTC), Lineage: Lineage{RecordIDs: []string{"trade-synth-a", "trade-synth-b"}}}
+	h := sha256.New()
+	h.Write([]byte("canary.scorecard.decision.v1"))
+	for _, value := range []string{"900001", "2026-06-15T09:45:30Z", SideBuy, "open", "10", "trade-synth-a,trade-synth-b"} {
+		h.Write([]byte{0})
+		h.Write([]byte(value))
+	}
+	if want := "decision_" + hex.EncodeToString(h.Sum(nil)[:12]); decisionID(d) != want {
+		t.Fatalf("id = %s, want %s", decisionID(d), want)
 	}
 }
 
@@ -891,11 +966,15 @@ func TestSlippageNamesTheRealCause(t *testing.T) {
 	mk := func(id string, at time.Time) Decision {
 		return Decision{ID: id, Sleeve: SleeveOwner, Stream: rpc.ScorecardStreamEntries, Underlying: "SYNA", UnderlyingConID: 301, ConID: 301, Symbol: "SYNA", Instrument: InstrumentStock, Action: "open", Side: SideBuy, Sign: 1, Quantity: 10, ExecutedAt: at}
 	}
-	decisions := []Decision{mk("old", before), mk("unseen", after), mk("quoted", after.Add(time.Hour)), mk("quoted-2", after.Add(2*time.Hour)), mk("timeout", after.Add(3*time.Hour))}
+	decisions := []Decision{mk("old", before), mk("unseen", after), mk("quoted", after.Add(time.Hour)), mk("quoted-2", after.Add(2*time.Hour)), mk("timeout", after.Add(3*time.Hour)), mk("no-fx", after.Add(4*time.Hour))}
 	costs := map[string]FillCost{
 		"quoted":   {Match: "exec_id", Fills: 1, Quoted: 1, HalfSpread: new(13.0), Currency: "USD", HalfSpreadBase: new(11.7), Bp: new(400.0), GapMS: new(int64(2000))},
 		"quoted-2": {Match: "time", Fills: 1, Quoted: 1, HalfSpread: new(-2.0), Currency: "USD", HalfSpreadBase: new(-1.8), Bp: new(-50.0)},
 		"timeout":  {Match: "exec_id", Fills: 1, Reason: "timeout"},
+		// Measured in the contract currency, no FX rate at the quote: the
+		// decision is measured, the stream counts it under fx_unavailable
+		// and its basis points still enter the mean.
+		"no-fx": {Match: "exec_id", Fills: 1, Quoted: 1, HalfSpread: new(4.0), Currency: "USD", Bp: new(100.0), Reason: ReasonFXUnavailable},
 	}
 	res := Evaluate(Input{AsOf: day("2027-01-01"), Decisions: decisions, History: History{Market: market, Underlying: map[int64][]edge.DailyBar{301: name}}, Costs: costs})
 	want := map[string]rpc.ScorecardSlippage{
@@ -904,6 +983,7 @@ func TestSlippageNamesTheRealCause(t *testing.T) {
 		"timeout":  {Status: "unknown", Reason: "timeout", Match: "exec_id", Fills: 1},
 		"quoted":   {Status: "measured", Match: "exec_id", Fills: 1, Quoted: 1, Currency: "USD"},
 		"quoted-2": {Status: "measured", Match: "time", Fills: 1, Quoted: 1, Currency: "USD"},
+		"no-fx":    {Status: "measured", Match: "exec_id", Fills: 1, Quoted: 1, Currency: "USD", Reason: ReasonFXUnavailable},
 	}
 	for id, w := range want {
 		got := decisionByID(res, id)
@@ -920,10 +1000,10 @@ func TestSlippageNamesTheRealCause(t *testing.T) {
 		t.Fatalf("quoted = %+v", q)
 	}
 	sleeve, _ := sleeveAt(res, SleeveOwner, rpc.ScorecardStreamEntries, PrimaryHorizon)
-	if s := sleeve.Slippage; s == nil || s.Decisions != 5 || s.Quoted != 2 || math.Abs(s.HalfSpreadBase-9.9) > 1e-9 || s.MeanBp == nil || *s.MeanBp != 175 || s.Unquoted[ReasonNoFillQuote] != 1 || s.Unquoted[ReasonExecutionNotObserved] != 1 || s.Unquoted["timeout"] != 1 {
+	if s := sleeve.Slippage; s == nil || s.Decisions != 6 || s.Quoted != 2 || math.Abs(s.HalfSpreadBase-9.9) > 1e-9 || s.MeanBp == nil || *s.MeanBp != 150 || s.Unquoted[ReasonNoFillQuote] != 1 || s.Unquoted[ReasonExecutionNotObserved] != 1 || s.Unquoted["timeout"] != 1 || s.Unquoted[ReasonFXUnavailable] != 1 || s.Unquoted[ReasonFXUnknown] != 0 {
 		t.Fatalf("summary = %+v", s)
 	}
-	if res.Coverage.SlippageQuoted != 2 || res.Coverage.SlippageByReason[ReasonNoFillQuote] != 1 || res.Coverage.SlippageByReason["timeout"] != 1 {
+	if res.Coverage.SlippageQuoted != 3 || res.Coverage.SlippageByReason[ReasonNoFillQuote] != 1 || res.Coverage.SlippageByReason["timeout"] != 1 {
 		t.Fatalf("coverage = %+v", res.Coverage)
 	}
 }

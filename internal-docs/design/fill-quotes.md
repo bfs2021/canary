@@ -120,13 +120,16 @@ verdict. Nothing names the account.
 ## Lookup for the scorecard
 
 `(*Server).FillQuoteByExecID(execID)` and
-`(*Server).FillQuoteNear(conID, at, tolerance)` return the retained
-`rpc.FillQuoteRecord` from the in-memory mirror of the store. Since
-2026-10-19 the scorecard reads them on every pass
-(`scorecardFillCosts`, decision-scorecard.md "Slippage"): every execution id
-of a ledger row first, else the retained fill on the same contract within
-five minutes; each decision carries the half-spread paid and each stream its
-sum, and `no_fill_quote` is kept only for fills before 2026-10-18.
+`(*Server).FillQuoteNear(conID, at, tolerance, exclude)` return the retained
+`rpc.FillQuoteRecord` from the in-memory mirror of the store; `exclude`
+names execution ids another match already claimed. Since 2026-10-19 the
+scorecard reads them on every pass (`scorecardFillCosts`,
+decision-scorecard.md "Slippage"): every execution id of every ledger row
+first, then for the rows without one the unclaimed retained fill on the same
+contract within five minutes of the statement's execution time, which the
+parser places in the statement's zone (US Eastern) so the two instants meet;
+each decision carries the half-spread paid and each stream its sum, and
+`no_fill_quote` is kept only for fills before 2026-10-18.
 
 ## What it cannot know
 

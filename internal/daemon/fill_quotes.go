@@ -319,8 +319,9 @@ func (s *Server) FillQuoteByExecID(execID string) (rpc.FillQuoteRecord, bool) {
 }
 
 // FillQuoteNear returns the retained quote of the fill on conID whose
-// execution time is closest to at, within tolerance.
-func (s *Server) FillQuoteNear(conID int, at time.Time, tolerance time.Duration) (rpc.FillQuoteRecord, bool) {
+// execution time is closest to at, within tolerance, skipping the execution
+// ids in exclude (records another match already claimed).
+func (s *Server) FillQuoteNear(conID int, at time.Time, tolerance time.Duration, exclude map[string]bool) (rpc.FillQuoteRecord, bool) {
 	if s == nil || s.fillQuotes == nil || conID <= 0 || at.IsZero() || tolerance < 0 {
 		return rpc.FillQuoteRecord{}, false
 	}
@@ -330,7 +331,7 @@ func (s *Server) FillQuoteNear(conID int, at time.Time, tolerance time.Duration)
 	found := false
 	for _, stored := range s.fillQuotes.records {
 		rec := stored.Record
-		if rec.Contract.ConID != conID || rec.ExecTime.IsZero() {
+		if rec.Contract.ConID != conID || rec.ExecTime.IsZero() || exclude[rec.ExecID] {
 			continue
 		}
 		gap := rec.ExecTime.Sub(at).Abs()

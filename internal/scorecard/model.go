@@ -80,8 +80,22 @@ const (
 
 	// PlaceboReplicates sign-shuffles the units; PlaceboMaxRate is the share
 	// of shuffles that may reach the statistical bar before the gate holds.
-	PlaceboReplicates = 200
-	PlaceboMaxRate    = 0.05
+	// PlaceboMaxStandardisedSD bounds the standard deviation of the
+	// shuffled sums against the null covariance: under no information each
+	// unit's z has unit variance, so the shuffled sum has about the variance
+	// the covariance states and the ratio reads about 1 (below it when the
+	// covariance is conservative). A ratio above the bound says the
+	// magnitudes are larger than the null allows, the e-value and the
+	// posterior both read an understated noise, and the stream is not
+	// established however loud it is. The rate alone let a null understated
+	// by about 1.9× pass (the e-value bar sits near 3σ, so 5% of shuffles
+	// reach it only once the sd nears 1.9). 1.2 leaves room for the sampling
+	// noise of the ratio at the sample gate (sd about 0.1 at 60 units) and
+	// for fat-tailed residuals; proposed 2026-10-19 with the other gate
+	// thresholds, for the owner's decision.
+	PlaceboReplicates        = 200
+	PlaceboMaxRate           = 0.05
+	PlaceboMaxStandardisedSD = 1.2
 
 	BootstrapResamples = 1000
 
@@ -115,6 +129,10 @@ const (
 	ReasonImpliedVolUnknown        = "implied_vol_unknown"
 	ReasonMarkUnavailable          = "mark_unavailable"
 	ReasonFXUnknown                = "fx_unknown"
+	// ReasonFXUnavailable marks a decision whose half-spread was measured in
+	// the contract currency but has no base-currency sum: a fill without an
+	// FX rate at the quote.
+	ReasonFXUnavailable = "fx_unavailable"
 	// ReasonNoFillQuote marks a fill before the daemon retained quotes
 	// (FillQuoteCaptureSince); ReasonExecutionNotObserved a later fill the
 	// daemon never saw, so no quote was read for it.
@@ -459,8 +477,12 @@ func decisionID(d Decision) string {
 	h := sha256.New()
 	h.Write([]byte("canary.scorecard.decision.v1"))
 	// The sleeve is an attribute, not identity: a fill keeps its id when
-	// later lineage reclassifies it.
-	for _, value := range []string{strconv.FormatInt(d.ConID, 10), d.ExecutedAt.UTC().Format(time.RFC3339Nano), d.Side, d.Action, strconv.FormatFloat(d.Quantity, 'g', -1, 64), strings.Join(d.Lineage.RecordIDs, ",")} {
+	// later lineage reclassifies it. The execution time enters as the
+	// statement's own wall clock (flexstmt.StatementLocation), the value the
+	// ids of 2026-10-14 were hashed from when the parser still read it as
+	// UTC; the ledger is append-only, so the id must not move with the
+	// parser's zone.
+	for _, value := range []string{strconv.FormatInt(d.ConID, 10), d.ExecutedAt.In(flexstmt.StatementLocation()).Format("2006-01-02T15:04:05.999999999") + "Z", d.Side, d.Action, strconv.FormatFloat(d.Quantity, 'g', -1, 64), strings.Join(d.Lineage.RecordIDs, ",")} {
 		h.Write([]byte{0})
 		h.Write([]byte(value))
 	}

@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"math"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/rpc"
+	"github.com/osauer/canary/v2/internal/scorecard"
 )
 
 // goldenScorecard is a synthetic accruing scorecard: one owner sleeve with
@@ -11,49 +13,38 @@ import (
 // exits stream is not rendered), one rule-originated fill, stock, option and
 // index decisions, a few unknowns, and one decision with a measured
 // half-spread beside the fills before quote capture and one the daemon
-// never observed.
+// never observed. Each stream's statistics are derived from its stated unit
+// means by goldenStream, so the fixture carries no number the pure core's
+// arithmetic could not produce.
 func goldenScorecard() rpc.ScorecardResult {
 	at := goldenAt
 	entryDay := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
 	horizonDay := entryDay.AddDate(0, 0, 14)
 	entries := func(h int) rpc.ScorecardSleeve {
-		return rpc.ScorecardSleeve{
-			Sleeve: "owner", Stream: rpc.ScorecardStreamEntries, Horizon: h, Gated: true, Decisions: 14, Scored: 11, SectorAdjusted: 8, Units: 9, Weeks: 7, EffectiveUnits: 7.4, Clusters: 9, DirectionalScore: new(0.31), MeanZ: new(0.31), SumZ: 2.79,
-			PosteriorMean: new(0.021), PosteriorSD: new(0.096), PScoreAbove0: new(0.59), PScoreAbove005: new(0.38), PScoreAbove010: new(0.20), PAbove005: new(0.38), PAbove010: new(0.20),
-			EValue: 1.2, FutilityEValue: 0.9, Gate: rpc.ScorecardGateAccruing,
-			Gates:            rpc.ScorecardGates{Weeks: false, Placebo: true, FirstHalfMeanZ: new(0.45), SecondHalfMeanZ: new(0.20), HalvesAgree: true, UpMarketMeanZ: new(0.52), DownMarketMeanZ: new(-0.10), UpUnits: 5, DownUnits: 4, UpClusters: 5, DownClusters: 4},
-			UnitsToEstablish: new(136), WeeksToEstablish: new(129), ClustersToEstablish: new(136),
-			Placebo:           &rpc.ScorecardPlacebo{Replicates: 200, Established: 0, Rate: 0, StandardisedSD: 0.91},
+		return goldenStream(rpc.ScorecardSleeve{
+			Sleeve: "owner", Stream: rpc.ScorecardStreamEntries, Horizon: h, Gated: true, Decisions: 14, Scored: 11, SectorAdjusted: 8, Weeks: 7,
 			Slippage:          &rpc.ScorecardSlippageSummary{Decisions: 14, Quoted: 3, HalfSpreadBase: 41.3, MeanBp: new(6.2), Unquoted: map[string]int{"no_fill_quote": 10, "execution_not_observed": 1}},
 			Wrapper:           &rpc.ScorecardWrapperSummary{Count: 5, MeanBase: -412.5, CILow: -1280.0, CIHigh: 310.0},
 			RealisedVsImplied: &rpc.ScorecardRealisedVsImplied{Count: 5, Median: 0.84},
 			Unknown:           map[string]int{"immature": 2, "history_unavailable": 1},
-		}
+		}, 7.4, []goldenUnit{{0.9, true}, {0.3, false}, {0.5, true}, {0.1, false}, {0.6, true}, {-0.2, false}, {0.3, true}, {0.4, true}, {-0.11, false}})
 	}
 	exits := func(h int) rpc.ScorecardSleeve {
-		return rpc.ScorecardSleeve{
-			Sleeve: "owner", Stream: rpc.ScorecardStreamExits, Horizon: h, Decisions: 7, Scored: 5, SectorAdjusted: 4, Units: 4, Weeks: 4, EffectiveUnits: 3.6, Clusters: 4, DirectionalScore: new(-0.12), MeanZ: new(-0.12), SumZ: -0.48,
-			PosteriorMean: new(-0.005), PosteriorSD: new(0.098), PScoreAbove0: new(0.48), PScoreAbove005: new(0.29), PScoreAbove010: new(0.14), PAbove005: new(0.29), PAbove010: new(0.14),
-			EValueAgainst: true, FutilityEValue: 1.1,
-			Gates:    rpc.ScorecardGates{Placebo: true, FirstHalfMeanZ: new(-0.30), SecondHalfMeanZ: new(0.06), UpMarketMeanZ: new(-0.20), DownMarketMeanZ: new(0.04), UpUnits: 2, DownUnits: 2, UpClusters: 2, DownClusters: 2},
-			Placebo:  &rpc.ScorecardPlacebo{Replicates: 200, Established: 0, Rate: 0, StandardisedSD: 0.88},
+		return goldenStream(rpc.ScorecardSleeve{
+			Sleeve: "owner", Stream: rpc.ScorecardStreamExits, Horizon: h, Decisions: 7, Scored: 5, SectorAdjusted: 4, Weeks: 4,
 			Slippage: &rpc.ScorecardSlippageSummary{Decisions: 7, Quoted: 0, Unquoted: map[string]int{"no_fill_quote": 7}},
 			Unknown:  map[string]int{"immature": 2},
-		}
+		}, 3.6, []goldenUnit{{-0.5, true}, {-0.1, false}, {0.22, true}, {-0.10, false}})
 	}
 	indexEntries := func(h int) rpc.ScorecardSleeve {
-		return rpc.ScorecardSleeve{
-			Sleeve: "owner", Stream: rpc.ScorecardStreamIndexEntries, Horizon: h, Decisions: 4, Scored: 3, Units: 3, Weeks: 3, EffectiveUnits: 2.1, Clusters: 3, DirectionalScore: new(0.42), MeanZ: new(0.42), SumZ: 1.26,
-			PosteriorMean: new(0.012), PosteriorSD: new(0.099), PScoreAbove0: new(0.55), PScoreAbove005: new(0.35), PScoreAbove010: new(0.18), PAbove005: new(0.35), PAbove010: new(0.18),
-			EValue: 1.03, FutilityEValue: 0.95,
-			Gates:                    rpc.ScorecardGates{Placebo: true, FirstHalfMeanZ: new(0.90), SecondHalfMeanZ: new(0.18), HalvesAgree: true, UpMarketMeanZ: new(-0.35), DownMarketMeanZ: new(1.19), UpUnits: 2, DownUnits: 1, UpClusters: 2, DownClusters: 1},
-			Placebo:                  &rpc.ScorecardPlacebo{Replicates: 200, Established: 0, Rate: 0, StandardisedSD: 0.97},
-			Slippage:                 &rpc.ScorecardSlippageSummary{Decisions: 4, Quoted: 1, HalfSpreadBase: 12.6, MeanBp: new(4.1), Unquoted: map[string]int{"no_fill_quote": 3}},
+		return goldenStream(rpc.ScorecardSleeve{
+			Sleeve: "owner", Stream: rpc.ScorecardStreamIndexEntries, Horizon: h, Decisions: 4, Scored: 3, Weeks: 3,
+			Slippage:                 &rpc.ScorecardSlippageSummary{Decisions: 4, Quoted: 1, HalfSpreadBase: 4.3, MeanBp: new(41.2), Unquoted: map[string]int{"no_fill_quote": 3}},
 			Wrapper:                  &rpc.ScorecardWrapperSummary{Count: 3, MeanBase: -220.0, CILow: -610.0, CIHigh: 140.0},
 			RealisedVsImplied:        &rpc.ScorecardRealisedVsImplied{Count: 3, Median: 0.71},
 			LongPutRealisedVsImplied: &rpc.ScorecardRealisedVsImplied{Count: 2, Median: 0.63},
 			Unknown:                  map[string]int{"immature": 1},
-		}
+		}, 2.1, []goldenUnit{{0.90, true}, {-0.35, true}, {0.71, false}})
 	}
 	indexExits := func(h int) rpc.ScorecardSleeve {
 		return rpc.ScorecardSleeve{Sleeve: "owner", Stream: rpc.ScorecardStreamIndexExits, Horizon: h, EValueAgainst: true, Unknown: map[string]int{}}
@@ -65,9 +56,11 @@ func goldenScorecard() rpc.ScorecardResult {
 		Decisions: []rpc.ScorecardDecision{
 			{ID: "decision_4e5f607182930a1b", Sleeve: "owner", Stream: rpc.ScorecardStreamIndexEntries, Underlying: "SPY", Symbol: "SPY 260930P00600000", Instrument: "option", Option: &rpc.ScorecardOptionContract{Expiry: "2026-09-30", Strike: 600, Right: "put", Multiplier: 100},
 				Action: "open", Side: "buy", Sign: -1, Quantity: 2, FillPrice: new(6.10), Currency: "USD", NotionalBase: new(1098.0), ExecutedAt: entryDay.Add(3*24*time.Hour + 15*time.Hour), ClusterKey: "owner:2026-W35", UnitKey: "owner:2026-W35:756733",
-				Entry:    rpc.ScorecardEntry{SessionDay: new(entryDay.AddDate(0, 0, 3)), UnderlyingClose: new(641.2), MarketRSquared: new(1.0), IndexBasis: "list", ImpliedVol: new(0.17), Delta: new(-0.21)},
-				Scores:   []rpc.ScorecardHorizonScore{{Sessions: 5, Matured: true, Z: new(-0.35), TotalVolDaily: new(0.009), SlippageBp: new(4.1)}, {Sessions: 10, Matured: true, Z: new(-0.48), TotalVolDaily: new(0.009), RealisedVsImplied: new(0.52), WrapperBase: new(-310.4), SlippageBp: new(4.1)}, {Sessions: 21, Reason: "immature", SlippageBp: new(4.1)}},
-				Slippage: &rpc.ScorecardSlippage{Status: "measured", Match: "exec_id", Fills: 1, Quoted: 1, HalfSpread: new(5.0), Currency: "USD", HalfSpreadBase: new(4.3), Bp: new(4.1), GapMS: new(int64(2600))}},
+				Entry:  rpc.ScorecardEntry{SessionDay: new(entryDay.AddDate(0, 0, 3)), UnderlyingClose: new(641.2), MarketRSquared: new(1.0), IndexBasis: "list", ImpliedVol: new(0.17), Delta: new(-0.21)},
+				Scores: []rpc.ScorecardHorizonScore{{Sessions: 5, Matured: true, Z: new(-0.35), TotalVolDaily: new(0.009), SlippageBp: new(41.2)}, {Sessions: 10, Matured: true, Z: new(-0.48), TotalVolDaily: new(0.009), RealisedVsImplied: new(0.52), WrapperBase: new(-310.4), SlippageBp: new(41.2)}, {Sessions: 21, Reason: "immature", SlippageBp: new(41.2)}},
+				// Two contracts at 6.10 against a mid of 6.075: 0.025 × 2 × 100 = 5 USD,
+				// 41.2 bp of the mid, 4.30 EUR at 0.86.
+				Slippage: &rpc.ScorecardSlippage{Status: "measured", Match: "exec_id", Fills: 1, Quoted: 1, HalfSpread: new(5.0), Currency: "USD", HalfSpreadBase: new(4.3), Bp: new(41.2), GapMS: new(int64(2600))}},
 			{ID: "decision_3d4e5f6071829304", Sleeve: "rule", Stream: rpc.ScorecardStreamExits, Origin: "proposal:trailing_stop", Underlying: "SYND", Symbol: "SYND", Instrument: "stock",
 				Action: "exit", Side: "sell", Sign: -1, Quantity: 25, FillPrice: new(31.40), Currency: "USD", NotionalBase: new(706.5), ExecutedAt: entryDay.Add(2 * 24 * time.Hour), ClusterKey: "rule:2026-W35", UnitKey: "rule:2026-W35:4",
 				Entry:    rpc.ScorecardEntry{SessionDay: new(entryDay.AddDate(0, 0, 2)), UnderlyingClose: new(31.2), MarketAdjustment: "spy", SectorReason: "sector_unknown"},
@@ -108,4 +101,87 @@ func goldenScorecardBackfilling() rpc.ScorecardResult {
 		Coverage: rpc.ScorecardCoverage{RuleOriginated: map[string]int{}, Skipped: map[string]int{}, ScoredByHorizon: map[int]int{}, UnknownByReason: map[string]int{}},
 		History:  rpc.ScorecardHistory{MarketSymbol: "SPY"}, NotExecution: true,
 	}
+}
+
+// goldenUnit is one name-week unit of a fixture stream: its mean z and
+// whether the market rose over its horizon.
+type goldenUnit struct {
+	meanZ float64
+	up    bool
+}
+
+// goldenStream fills a fixture stream's statistics from its unit means in
+// chronological order and its effective sample, through the same functions
+// the pure core uses (scorecard.PosteriorScore, PosteriorAbove, EValue,
+// FutilityEValue, UnitsToEstablish), so the rendered numbers are the
+// arithmetic of the stated units: the running sum and directional score,
+// the halves and market splits, the gates and the projection. The placebo's
+// standardised sd is the expectation of a sign shuffle, √(Σm²/V) with V =
+// n²/n_eff; no shuffle at this sample can reach the bar (n_eff < 60).
+func goldenStream(s rpc.ScorecardSleeve, effective float64, units []goldenUnit) rpc.ScorecardSleeve {
+	n := len(units)
+	s.Units, s.Clusters, s.EffectiveUnits = n, n, effective
+	if n == 0 {
+		s.EValueAgainst = true
+		return s
+	}
+	var sum, sumSq float64
+	means := make([]float64, 0, n)
+	var up, down []float64
+	for _, u := range units {
+		sum += u.meanZ
+		sumSq += u.meanZ * u.meanZ
+		means = append(means, u.meanZ)
+		if u.up {
+			up = append(up, u.meanZ)
+		} else {
+			down = append(down, u.meanZ)
+		}
+	}
+	covariance := float64(n) * float64(n) / effective
+	sEff := sum * float64(n) / covariance
+	score := sum / float64(n)
+	s.SumZ = sum
+	s.DirectionalScore, s.MeanZ = &score, &score
+	pm, psd := scorecard.PosteriorScore(effective, sEff)
+	p0, p005, p010 := scorecard.PosteriorAbove(effective, sEff, 0), scorecard.PosteriorAbove(effective, sEff, 0.05), scorecard.PosteriorAbove(effective, sEff, 0.10)
+	s.PosteriorMean, s.PosteriorSD = &pm, &psd
+	s.PScoreAbove0, s.PScoreAbove005, s.PScoreAbove010, s.PAbove005, s.PAbove010 = &p0, &p005, &p010, &p005, &p010
+	s.EValue, s.EValueAgainst = scorecard.EValue(effective, sEff)
+	s.FutilityEValue = scorecard.FutilityEValue(effective, sEff)
+	if projected, ok := scorecard.UnitsToEstablish(score); ok {
+		s.UnitsToEstablish, s.ClustersToEstablish = &projected, &projected
+		if pace := effective / float64(s.Weeks); pace > 0 {
+			weeks := int(math.Ceil(float64(projected) / pace))
+			s.WeeksToEstablish = &weeks
+		}
+	}
+	gates := rpc.ScorecardGates{EValue: s.EValue >= scorecard.EstablishedEValue, Units: effective >= scorecard.EstablishedUnits, Weeks: s.Weeks >= scorecard.EstablishedWeeks, Posterior: p0 >= scorecard.EstablishedPosterior, UpUnits: len(up), DownUnits: len(down)}
+	gates.Clusters, gates.UpClusters, gates.DownClusters = gates.Units, gates.UpUnits, gates.DownUnits
+	if n >= 2 {
+		first, second := goldenMean(means[:n/2]), goldenMean(means[n/2:])
+		gates.FirstHalfMeanZ, gates.SecondHalfMeanZ = &first, &second
+		gates.HalvesAgree = first != 0 && second != 0 && math.Signbit(first) == math.Signbit(second)
+	}
+	if len(up) > 0 && len(down) > 0 {
+		upMean, downMean := goldenMean(up), goldenMean(down)
+		gates.UpMarketMeanZ, gates.DownMarketMeanZ = &upMean, &downMean
+		gates.MarketsAgree = upMean != 0 && downMean != 0 && math.Signbit(upMean) == math.Signbit(downMean)
+	}
+	sd := math.Sqrt(sumSq / covariance)
+	s.Placebo = &rpc.ScorecardPlacebo{Replicates: scorecard.PlaceboReplicates, Established: 0, Rate: 0, StandardisedSD: sd}
+	gates.Placebo = sd <= scorecard.PlaceboMaxStandardisedSD
+	s.Gates = gates
+	if s.Gated {
+		s.Gate = rpc.ScorecardGateAccruing
+	}
+	return s
+}
+
+func goldenMean(values []float64) float64 {
+	total := 0.0
+	for _, v := range values {
+		total += v
+	}
+	return total / float64(len(values))
 }

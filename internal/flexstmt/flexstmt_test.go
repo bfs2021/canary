@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseEdgeExecutionEvidenceAndCoverage(t *testing.T) {
@@ -211,5 +212,37 @@ func TestParseEquityRequiresAmountOnEveryRow(t *testing.T) {
 		} else if err != nil || len(statements) != 1 || len(statements[0].Equity) != 2 || statements[0].Equity[1].TotalBase != 0 {
 			t.Fatalf("explicit zero equity rejected: %v", err)
 		}
+	}
+}
+
+// TestTradeExecutionTimeIsTheStatementClockInEastern: the statement writes
+// trade times on the broker's Eastern clock without a zone; the parsed value
+// is that instant, five hours behind UTC in winter and four in summer, so it
+// can meet a retained fill quote's execution time. Report dates stay days.
+func TestTradeExecutionTimeIsTheStatementClockInEastern(t *testing.T) {
+	t.Parallel()
+	xml := `<FlexQueryResponse><FlexStatements><FlexStatement accountId="U-PRIVATE" fromDate="20260101" toDate="20260731" whenGenerated="20260801;010203">
+<Trades>
+<Trade accountId="U-PRIVATE" assetCategory="STK" currency="USD" symbol="AAA" conid="123" tradeID="t1" ibExecID="e1" dateTime="20260105;153045" tradeDate="20260105" reportDate="20260105" buySell="BUY" quantity="10" tradePrice="100" levelOfDetail="EXECUTION" />
+<Trade accountId="U-PRIVATE" assetCategory="STK" currency="USD" symbol="AAA" conid="123" tradeID="t2" ibExecID="e2" tradeDate="20260708" tradeTime="09:52:10" buySell="SELL" quantity="10" tradePrice="101" levelOfDetail="EXECUTION" />
+</Trades>
+<EquitySummaryInBase><EquitySummaryByReportDateInBase reportDate="20260105" total="10000"/></EquitySummaryInBase>
+</FlexStatement></FlexStatements></FlexQueryResponse>`
+	statements, err := Parse([]byte(xml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trades := statements[0].Trades
+	if len(trades) != 2 {
+		t.Fatalf("trades = %d", len(trades))
+	}
+	if want := time.Date(2026, 1, 5, 20, 30, 45, 0, time.UTC); !trades[0].ExecutedAt.Equal(want) {
+		t.Fatalf("winter execution = %s, want %s", trades[0].ExecutedAt, want)
+	}
+	if want := time.Date(2026, 7, 8, 13, 52, 10, 0, time.UTC); !trades[1].ExecutedAt.Equal(want) {
+		t.Fatalf("summer execution from tradeDate/tradeTime = %s, want %s", trades[1].ExecutedAt, want)
+	}
+	if want := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC); !trades[0].ReportDate.Equal(want) {
+		t.Fatalf("report date = %s, want the UTC day %s", trades[0].ReportDate, want)
 	}
 }

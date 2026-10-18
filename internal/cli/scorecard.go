@@ -200,7 +200,7 @@ func renderScorecardSleeve(env *Env, s rpc.ScorecardSleeve, base string) {
 	markets := fmt.Sprintf("up markets %s (%d) / down %s (%d)", scorecardSigned(s.Gates.UpMarketMeanZ, 2), s.Gates.UpUnits, scorecardSigned(s.Gates.DownMarketMeanZ, 2), s.Gates.DownUnits)
 	placebo := ""
 	if p := s.Placebo; p != nil && p.Replicates > 0 {
-		placebo = fmt.Sprintf("placebo: %d of %d sign-shuffles reach the bar (at most %.0f%% allowed)", p.Established, p.Replicates, 100*scorecard.PlaceboMaxRate)
+		placebo = fmt.Sprintf("placebo: %d of %d sign-shuffles reach the bar (at most %.0f%% allowed), shuffled spread %.2f of the noise the scores assume (at most %.1f)", p.Established, p.Replicates, 100*scorecard.PlaceboMaxRate, p.StandardisedSD, scorecard.PlaceboMaxStandardisedSD)
 	}
 	riskReadLine(env, "  Consistency", halves, markets, placebo)
 	renderScorecardSlippage(env, s.Slippage, base)

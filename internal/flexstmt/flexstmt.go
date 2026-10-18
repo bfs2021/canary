@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -314,8 +315,14 @@ func parseContext(ctx context.Context, data []byte) ([]Statement, error) {
 }
 
 // parseFlexDate accepts the Flex date shapes: "20260708", "2026-07-08",
-// each with an optional ";HHMMSS" time suffix.
-func parseFlexDate(v string) (time.Time, error) {
+// each with an optional ";HHMMSS" time suffix, read as a UTC calendar value:
+// report, settle and rate dates are days, not instants. A trade's execution
+// time is an instant and goes through parseExecutionTime instead.
+func parseFlexDate(v string) (time.Time, error) { return parseFlexDateIn(v, time.UTC) }
+
+// parseFlexDateIn reads a Flex date or date-time as a wall clock in loc and
+// returns the instant in UTC.
+func parseFlexDateIn(v string, loc *time.Location) (time.Time, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return time.Time{}, fmt.Errorf("empty date")
@@ -325,11 +332,41 @@ func parseFlexDate(v string) (time.Time, error) {
 	if strings.Contains(datePart, "-") {
 		layout = "2006-01-02"
 	}
+	var parsed time.Time
+	var err error
 	if hasTime {
-		return time.Parse(layout+";150405", datePart+";"+timePart)
+		parsed, err = time.ParseInLocation(layout+";150405", datePart+";"+timePart, loc)
+	} else {
+		parsed, err = time.ParseInLocation(layout, datePart, loc)
 	}
-	return time.Parse(layout, datePart)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
 }
+
+// statementLocationName is the zone of the broker's statement clock. IBKR
+// writes every Activity Flex trade time in US Eastern time, whatever the
+// exchange, and the statement names no zone: in the retained statements
+// (checked 2026-10-19) NYSE fills sit between 09:30 and 16:00 and Xetra
+// fills between 03:00 and 11:30 on this clock, which no other zone explains
+// (as UTC the NYSE fills would be pre-market; as exchange time the Xetra
+// fills would precede its open).
+const statementLocationName = "America/New_York"
+
+var statementLocation = sync.OnceValue(func() *time.Location {
+	loc, err := time.LoadLocation(statementLocationName)
+	if err != nil {
+		// cmd/canary embeds the zone database; a build without it falls back
+		// to standard time, off by an hour in summer rather than by the
+		// whole offset.
+		return time.FixedZone("EST", -5*3600)
+	}
+	return loc
+})
+
+// StatementLocation is the zone the statement's trade times are written in.
+func StatementLocation() *time.Location { return statementLocation() }
 
 // lineID prefers the broker transaction id; a line without one gets a
 // stable content hash so restatement supersede-by-id still works.

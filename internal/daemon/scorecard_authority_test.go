@@ -11,6 +11,7 @@ import (
 
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
 	edgecore "github.com/osauer/canary/v2/internal/edge"
+	"github.com/osauer/canary/v2/internal/flexstmt"
 	"github.com/osauer/canary/v2/internal/rpc"
 	"github.com/osauer/canary/v2/internal/scorecard"
 	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
@@ -377,5 +378,72 @@ func TestScorecardFillCostsMatchByExecutionIDThenByTime(t *testing.T) {
 	unq := costs["unquoted"]
 	if unq.Quoted != 0 || unq.HalfSpread != nil || unq.Reason != "timeout" {
 		t.Fatalf("unquoted = %+v", unq)
+	}
+}
+
+// TestScorecardFillCostsMeetTheStatementClockInItsZone: the statement writes
+// its trade time on the broker's Eastern clock (11:30:00) while the retained
+// record keeps the true instant (15:30:20 UTC, twenty seconds later). The
+// ledger built from that statement must meet the record within the
+// five-minute tolerance; read as UTC it would miss by four hours and the
+// decision would be called execution_not_observed.
+func TestScorecardFillCostsMeetTheStatementClockInItsZone(t *testing.T) {
+	t.Parallel()
+	s, _ := newFillQuoteTestServer(t, filepath.Join(t.TempDir(), "daemon.db"))
+	xml := `<FlexQueryResponse><FlexStatements><FlexStatement accountId="DU1234567" fromDate="20261019" toDate="20261019" whenGenerated="20261020;010203">
+<Trades><Trade accountId="DU1234567" assetCategory="STK" currency="USD" fxRateToBase="0.9" symbol="SYNX" conid="900002" tradeID="t1" ibOrderID="o1" ibExecID="statement-only" dateTime="20261019;113000" tradeDate="20261019" buySell="BUY" quantity="100" tradePrice="10.40" multiplier="1" ibCommission="-1" taxes="0" openCloseIndicator="O" levelOfDetail="EXECUTION" /></Trades>
+<EquitySummaryInBase><EquitySummaryByReportDateInBase reportDate="20261019" total="10000"/></EquitySummaryInBase>
+</FlexStatement></FlexStatements></FlexQueryResponse>`
+	statements, err := flexstmt.Parse([]byte(xml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := edgecore.PositionChanges(statements, "EUR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, _ := scorecard.BuildLedger(evidence, nil)
+	if len(ledger) != 1 {
+		t.Fatalf("ledger = %+v", ledger)
+	}
+	instant := time.Date(2026, 10, 19, 15, 30, 20, 0, time.UTC)
+	rec := rpc.FillQuoteRecord{Version: fillQuoteVersion, ExecID: "seen-by-poll", Source: rpc.FillQuoteSourceBroker, Seen: rpc.FillQuoteSeenPoll,
+		Contract: rpc.ContractParams{ConID: 900002, Symbol: "SYNX", SecType: "STK", Currency: "USD"}, Side: rpc.OrderActionBuy, Quantity: 100, Price: 10.40, ExecTime: instant, ObservedAt: instant,
+		Quote:        rpc.FillQuote{Status: rpc.FillQuoteQuoted, Bid: new(10.30), Ask: new(10.40), Mid: new(10.35), DataType: rpc.MarketDataLive, QuoteAt: instant.Add(2 * time.Second), GapMS: new(int64(2000))},
+		BaseCurrency: "EUR", FXRate: new(0.9)}
+	if err := s.fillQuotes.append("DU1234567", rec); err != nil {
+		t.Fatal(err)
+	}
+	cost, ok := s.scorecardFillCosts(ledger)[ledger[0].ID]
+	if !ok || cost.Match != "time" || cost.Quoted != 1 || cost.HalfSpread == nil || math.Abs(*cost.HalfSpread-5) > 1e-9 {
+		t.Fatalf("statement fill at 11:30 Eastern did not meet the record at 15:30:20Z: %+v (ledger executed at %s)", cost, ledger[0].ExecutedAt)
+	}
+}
+
+// TestScorecardFillCostsBindARecordOnce: a record a decision claimed by
+// execution id is not also the nearest-in-time stand-in for a second
+// decision on the same contract minutes later; that decision stays without
+// a cost, whichever order the ledger lists them in.
+func TestScorecardFillCostsBindARecordOnce(t *testing.T) {
+	t.Parallel()
+	s, _ := newFillQuoteTestServer(t, filepath.Join(t.TempDir(), "daemon.db"))
+	at := fillQuoteTestAt
+	rec := rpc.FillQuoteRecord{Version: fillQuoteVersion, ExecID: "e-1", Source: rpc.FillQuoteSourceBroker, Seen: rpc.FillQuoteSeenPoll,
+		Contract: rpc.ContractParams{ConID: 900001, Symbol: "SYNX", SecType: "OPT", Currency: "USD", Multiplier: 100}, Side: rpc.OrderActionBuy, Quantity: 2, Price: 1.30, ExecTime: at, ObservedAt: at,
+		Quote:        rpc.FillQuote{Status: rpc.FillQuoteQuoted, Bid: new(1.20), Ask: new(1.30), Mid: new(1.25), DataType: rpc.MarketDataLive, QuoteAt: at.Add(2 * time.Second), GapMS: new(int64(2000))},
+		BaseCurrency: "EUR", FXRate: new(0.9)}
+	if err := s.fillQuotes.append("DU1234567", rec); err != nil {
+		t.Fatal(err)
+	}
+	claimed := scorecard.Decision{ID: "by-exec", ConID: 900001, ExecutedAt: at.Add(2 * time.Minute), Lineage: scorecard.Lineage{ExecutionIDs: []string{"e-1"}}}
+	later := scorecard.Decision{ID: "statement-only", ConID: 900001, ExecutedAt: at.Add(time.Minute), Lineage: scorecard.Lineage{ExecutionIDs: []string{"not-retained"}}}
+	for _, ledger := range [][]scorecard.Decision{{claimed, later}, {later, claimed}} {
+		costs := s.scorecardFillCosts(ledger)
+		if got := costs["by-exec"]; got.Match != "exec_id" || got.Quoted != 1 {
+			t.Fatalf("exec-id match = %+v", got)
+		}
+		if got, ok := costs["statement-only"]; ok {
+			t.Fatalf("the record bound twice: %+v", got)
+		}
 	}
 }
