@@ -53,6 +53,23 @@ type ConstitutionMandateStrategy struct {
 	// at (25, 50 or 100), reserved only while live.
 	Stage    string   `toml:"stage" json:"stage,omitempty"`
 	ScalePct *float64 `toml:"scale_pct" json:"scale_pct,omitempty"`
+	// The evaluator's keys (internal-docs/design/strategy-evaluator.md),
+	// read by a parameterised rule such as timed-holding-v1 and held on
+	// when unwritten: the instrument by ISIN and currency (ConID and
+	// Exchange optional pins, as in [mandate.core]), the signal from the
+	// library, the no-trade band, the minimum order and the value cap.
+	ISIN         string   `toml:"isin" json:"isin,omitempty"`
+	ConID        *int     `toml:"con_id" json:"con_id,omitempty"`
+	Exchange     string   `toml:"exchange" json:"exchange,omitempty"`
+	Currency     string   `toml:"currency" json:"currency,omitempty"`
+	Signal       string   `toml:"signal" json:"signal,omitempty"`
+	BandPct      *float64 `toml:"band_pct" json:"band_pct,omitempty"`
+	MinOrderBase *float64 `toml:"min_order_base" json:"min_order_base,omitempty"`
+	MaxValuePct  *float64 `toml:"max_value_pct" json:"max_value_pct,omitempty"`
+	// KillDrawdownK is the kill rule's drawdown bound in units of sleeve
+	// capital K, as the lab's design run writes it; optional, and unwritten
+	// the kill rule cannot fire (strategy-evaluator.md §3).
+	KillDrawdownK *float64 `toml:"kill_drawdown_k" json:"kill_drawdown_k,omitempty"`
 }
 
 // StrategyEntry is one register entry in either form, as code reads it.
@@ -70,6 +87,19 @@ type StrategyEntry struct {
 	// runs in shadow.
 	Stage    string   `json:"stage,omitempty"`
 	ScalePct *float64 `json:"scale_pct,omitempty"`
+	// The evaluator's keys as the entry writes them (the core's from
+	// [mandate.core]); nil or empty while unwritten. KeyPrefix names the
+	// table the keys are read from ("mandate.core", "mandate.strategies.<id>").
+	KeyPrefix     string   `json:"key_prefix"`
+	ISIN          string   `json:"isin,omitempty"`
+	ConID         *int     `json:"con_id,omitempty"`
+	Exchange      string   `json:"exchange,omitempty"`
+	Currency      string   `json:"currency,omitempty"`
+	Signal        string   `json:"signal,omitempty"`
+	BandPct       *float64 `json:"band_pct,omitempty"`
+	MinOrderBase  *float64 `json:"min_order_base,omitempty"`
+	MaxValuePct   *float64 `json:"max_value_pct,omitempty"`
+	KillDrawdownK *float64 `json:"kill_drawdown_k,omitempty"`
 	// Unwritten names the keys whose absence holds the strategy.
 	Unwritten []string `json:"unwritten,omitempty"`
 }
@@ -83,7 +113,9 @@ func (m *ConstitutionMandate) Register() []StrategyEntry {
 	var out []StrategyEntry
 	if c := m.Core; c != nil {
 		e := StrategyEntry{ID: CoreStrategyID, Form: StrategyFormCore, Rule: c.Rule, SpecHash: c.SpecHash, Sleeve: CoreStrategyID,
-			AllocationKey: "mandate.sleeves.core_vol_pct", Stage: c.Stage, ScalePct: c.ScalePct, Unwritten: m.CoreUnapprovedKeys()}
+			AllocationKey: "mandate.sleeves.core_vol_pct", Stage: c.Stage, ScalePct: c.ScalePct, Unwritten: m.CoreUnapprovedKeys(),
+			KeyPrefix: "mandate.core", ISIN: c.ISIN, ConID: c.ConID, Exchange: c.Exchange, Currency: c.Currency,
+			BandPct: c.BandPct, MinOrderBase: c.MinOrderBase, MaxValuePct: c.MaxValuePct, KillDrawdownK: c.KillDrawdownK}
 		if m.Sleeves != nil {
 			e.AllocationPct = m.Sleeves.CoreVolPct
 		}
@@ -103,7 +135,9 @@ func (m *ConstitutionMandate) Register() []StrategyEntry {
 			continue
 		}
 		key := func(k string) string { return "mandate.strategies." + id + "." + k }
-		e := StrategyEntry{ID: id, Form: StrategyFormEntry, Rule: s.Rule, SpecHash: s.SpecHash, Sleeve: s.Sleeve, Stage: s.Stage, ScalePct: s.ScalePct}
+		e := StrategyEntry{ID: id, Form: StrategyFormEntry, Rule: s.Rule, SpecHash: s.SpecHash, Sleeve: s.Sleeve, Stage: s.Stage, ScalePct: s.ScalePct,
+			KeyPrefix: "mandate.strategies." + id, ISIN: s.ISIN, ConID: s.ConID, Exchange: s.Exchange, Currency: s.Currency, Signal: s.Signal,
+			BandPct: s.BandPct, MinOrderBase: s.MinOrderBase, MaxValuePct: s.MaxValuePct, KillDrawdownK: s.KillDrawdownK}
 		var missing []string
 		for _, k := range []struct {
 			name    string
@@ -193,6 +227,9 @@ func (m *ConstitutionMandate) validateRegister() error {
 		if v := s.ScalePct; v != nil && *v != 25 && *v != 50 && *v != 100 {
 			return fmt.Errorf("%s.scale_pct must be 25, 50 or 100 (the ladder's small, larger and full steps)", key)
 		}
+		if err := validateEvaluatorKeys(key, s.ISIN, s.ConID, s.Exchange, s.Currency, s.Signal, s.BandPct, s.MinOrderBase, s.MaxValuePct, s.KillDrawdownK); err != nil {
+			return err
+		}
 		if s.Sleeve != "" {
 			switch {
 			case !sleeveShape.MatchString(s.Sleeve):
@@ -238,4 +275,38 @@ func (m *ConstitutionMandate) validateRegister() error {
 
 func validStage(s string) bool {
 	return s == StageShadow || s == StageLive || s == StageSuspended
+}
+
+// validateEvaluatorKeys refuses an evaluator key of the wrong shape under
+// a table (internal-docs/design/strategy-evaluator.md §2); a missing key
+// is never refused here, it holds its strategy.
+func validateEvaluatorKeys(key, isin string, conID *int, exchange, currency, signal string, bandPct, minOrderBase, maxValuePct, killDrawdownK *float64) error {
+	finite := func(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+	if isin != "" && !isinShape(isin) {
+		return fmt.Errorf("%s.isin %q must be twelve upper-case letters and digits", key, isin)
+	}
+	if conID != nil && *conID < 0 {
+		return fmt.Errorf("%s.con_id must be an IBKR contract id, or 0 to let the ISIN decide", key)
+	}
+	for _, k := range []struct{ name, v string }{{"exchange", exchange}, {"currency", currency}, {"signal", signal}} {
+		if k.v != strings.TrimSpace(k.v) {
+			return fmt.Errorf("%s.%s %q carries spaces", key, k.name, k.v)
+		}
+	}
+	if exchange != strings.ToUpper(exchange) || currency != strings.ToUpper(currency) {
+		return fmt.Errorf("%s.exchange and %s.currency are written in upper case", key, key)
+	}
+	if v := bandPct; v != nil && (!finite(*v) || *v <= 0 || *v >= 100) {
+		return fmt.Errorf("%s.band_pct must be in (0, 100)", key)
+	}
+	if v := minOrderBase; v != nil && (!finite(*v) || *v < 0) {
+		return fmt.Errorf("%s.min_order_base must not be negative", key)
+	}
+	if v := maxValuePct; v != nil && (!finite(*v) || *v <= 0 || *v > 100) {
+		return fmt.Errorf("%s.max_value_pct must be in (0, 100]", key)
+	}
+	if v := killDrawdownK; v != nil && (!finite(*v) || *v <= 0) {
+		return fmt.Errorf("%s.kill_drawdown_k must be positive: the drawdown bound in units of sleeve capital", key)
+	}
+	return nil
 }

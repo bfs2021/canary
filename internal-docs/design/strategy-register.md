@@ -2,7 +2,9 @@
 
 Written: 2026-10-18 09:20 CEST. Revised 09:45 CEST after the independent
 review (section "Independent review"). Status: built (increments 1 to 4,
-section "Build"), 2026-10-18. Nothing here writes policy:
+section "Build"), 2026-10-18. Revised 18:40 CEST: the strategy evaluator
+(`strategy-evaluator.md`) runs every entry through one code path; sections
+1, 3, 4, 9 and 12 say what that changed. Nothing here writes policy:
 every entry and every promotion is the owner's, written by the owner into
 `risk-policy.toml`.
 
@@ -147,10 +149,14 @@ the owner wrote them, and no migration rewrites the owner's file. A
 | `stage` | `shadow`, `live` or `suspended` | optional: absent reads `shadow` (below) | required |
 | `scale_pct` | The scale the rule sizes at: 25 (small), 50 (larger), 100 (full), the lab's R3, R4 and established; reserved only while live | as today in [0, 100], 0 suspending, while `stage` is unwritten; once `stage` is written, 25, 50 or 100, and a suspension is `stage = "suspended"` | required in `shadow` and `live`, 25, 50 or 100; not read while `suspended` |
 
-The rule's own parameters are compiled with the rule version and are never
-keys. A rule that needs an owner number of its own adds its keys under its
-entry with the code that reads them; until then they are unknown keys and
-refuse the file.
+A compiled instance's parameters (the core's ten months, span 63, the 15%
+floor) are compiled with the rule version and are never keys. The
+evaluator's owner numbers are the entry's keys (`strategy-evaluator.md`
+§2): the parameterised rule `timed-holding-v1` reads `isin`, `currency`,
+`signal`, `band_pct`, `min_order_base` and `max_value_pct` from its entry,
+with `con_id`, `exchange` and `kill_drawdown_k` optional, and holds on one
+unwritten, named as `mandate.strategies.<id>.<key> unwritten`. Any other
+key is unknown and refuses the file.
 
 ### The core's two new keys
 
@@ -210,18 +216,23 @@ declared data is still collected while its rule is compiled (section 4).
 
 `internal/register` (pure) lists the rules this Canary carries:
 
-| Field | Meaning | core-ibcf-v1 |
-|---|---|---|
-| `ID`, `SpecID`, `SpecHash` | The rule and the lab spec it implements | `core.RuleID`, `core.SpecID`, `core.SpecHash` |
-| `Form` | `core` (only as `[mandate.core]`) or `entry` | `core` |
-| `Sends` | Whether this build serves the rule's orders (replaces `coreSendsOrders`) | false (phase 2 rows not built) |
-| `Bucket` | The proposal bucket of its rows, never pre-authorisable | `core_rebalance` |
-| `Data` | Its declared daily series and option chains (section 4) | its fund's daily closes on its listing, 253 sessions; no chains |
+| Field | Meaning | core-ibcf-v1 | timed-holding-v1 |
+|---|---|---|---|
+| `ID`, `SpecID`, `SpecHash` | The rule and the lab spec it implements | `core.RuleID`, `core.SpecID`, `core.SpecHash` | the id only: the entry cites its spec |
+| `Form` | `core` (only as `[mandate.core]`) or `entry` | `core` | `entry` |
+| `Sends` | Whether this build serves the rule's orders (replaces `coreSendsOrders`) | false (phase 2 rows not built) | false |
+| `Bucket` | The proposal bucket of its rows, never pre-authorisable | `core_rebalance` | `strategy_rebalance` |
+| `Data` | Its declared daily series and option chains (section 4) | its fund's daily closes on its listing, 253 sessions; no chains | from the entry: its fund's closes, 253 sessions |
+| `Parameterised`, `Instrument`, `Trend` | Whether the entry's keys supply the fund, the filter and the numbers; else the compiled ones | compiled: IE00B3ZW0K18 EUR, `trend-sma10m` | parameterised |
 
-A hash ties a rule id to a spec, not to its code. Each rule's parity fixture
-is therefore pinned to its rule and spec hash in a test, so a behaviour
-change that leaves the hash alone fails the parity test, and a new hash
-needs a new fixture.
+A hash ties a rule id to a spec, not to its code. A compiled instance's
+parity fixture is pinned to its rule and spec hash in a test, so a
+behaviour change that leaves the hash alone fails the parity test, and a new
+hash needs a new fixture. A parameterised rule carries no hash: the entry's
+`spec_hash` is the owner's citation, and the parity guarantee rests on the
+signal, each library filter being pinned to its lab fixture
+(`strategy-evaluator.md` §4). `register.Resolve` gives each entry what the
+evaluator runs: its instrument, filter, terms, spec and declared data.
 
 ## 2. Stages and the risk allocation
 
@@ -340,8 +351,9 @@ recomputation.
 The record is served on the strategy's own verdict: for the core, `shadow`
 on `core.target` (`canary core` shows a Shadow section, `canary_core`
 carries it): the stage, the paper position, the number of records and the
-newest twelve. Golden render `core_shadow.txt`. A generic `canary shadow`
-comes with the first strategy other than the core.
+newest twelve. Golden render `core_shadow.txt`. `canary strategy ID`
+serves any entry's verdict and record the same way (`strategy_shadow.txt`),
+built with the evaluator.
 
 ## 4. Strategies declare their data
 
@@ -370,11 +382,10 @@ mandate's history pass (`coreSeriesNeed` from the resolved contract). The
 pass is serial and the scheduled verdict waits for it, and the additions
 gate refuses a verdict older than five minutes, so a later rule's declared
 series must not join that pass: they get their own background loop after the
-verdict, their own key namespace (`decl:<rule>:<instrument>`, never a book
-key such as `u:SYM`, unless contract and calendar are identical), and a cap
-compiled with the rule; a test then pins that a large declaration never ages
-the verdict past its limit. That loop is built with the first rule that
-declares a series other than the core's.
+verdict, their own key namespace (`strategy:<id>:con:<contract id>`, never a
+book key such as `u:SYM`), one series per entry; a test pins that no such
+key enters the verdict's evidence. Built with the evaluator
+(`refreshStrategies`, after the verdict, one read per entry per refresh).
 
 Chains: the recorder's limits are unchanged (12 underlyings, four lines,
 the reserve, the pacing back-off). Priority: held option underlyings first,
@@ -505,7 +516,10 @@ otherwise the owner's.
 ## 9. Safety invariants
 
 1. No machine strategy reserves allocation or sends rows without an entry
-   the owner wrote, a compiled rule and a matching spec hash.
+   the owner wrote naming a compiled rule, a signal the library carries and
+   is parity-tested for, and the lab spec it cites: a compiled instance's
+   hash must match, a parameterised rule's is the citation
+   (`strategy-evaluator.md` §4).
 2. A missing key holds only its strategy and never changes the rest of the
    policy.
 3. Old files keep their fingerprints and their behaviour.
@@ -595,9 +609,10 @@ and `make check`:
    the declared chains, the plan's priority; changelog, goldens, docs.
 
 Not in this build: the `controller` kind, `intent` row terms (with phase
-2), a declared-series loop for later rules, a generic `canary shadow`, register
-sleeves in the scorecard and the resolver's round-trip fix (its own task),
-placement for non-core strategies.
+2), register sleeves in the scorecard and the resolver's round-trip fix (its
+own task), placement for non-core strategies. The declared-series loop and
+the generic surface (`canary strategy ID`) came with the evaluator
+(`strategy-evaluator.md`, 2026-10-18).
 
 Desk: `docs/strategy-engine.md` moves findings 2 to 5 from target to state;
 a re-pin only if Desk reads a new field.
@@ -634,12 +649,13 @@ An independent review of the first draft (2026-10-18, read-only, against
 ## Files
 
 ```
-internal/register/                     compiled rule catalogue, Resolve
-internal/risk/register.go              [mandate.strategies], Register(), validation
-internal/risk/mandate.go               the core's spec_hash and stage
+internal/register/                     compiled rule catalogue, Resolve (the evaluator's instance per entry)
+internal/risk/register.go              [mandate.strategies], Register(), validation, the evaluator's keys
+internal/risk/mandate.go               the core's spec_hash, stage and kill_drawdown_k
 internal/daemon/mandate_allocations.go the allocation plan from the register
-internal/daemon/core_target.go         the core's buy block and holds through the register
-internal/daemon/shadow_record.go       the shadow recorder and its read
+internal/daemon/strategy_target.go     the evaluator: every entry's verdict, the core first (was core_target.go)
+internal/daemon/core_resolve.go        one contract pin per instrument
+internal/daemon/shadow_record.go       the shadow recorder, its read and the kill rule's drawdown
 internal/rpc/shadow.go                 the shadow record's types
 internal/daemon/chain_recorder.go      declared chains, the off switch
 internal/chainrec/select.go            the plan's priority and sources

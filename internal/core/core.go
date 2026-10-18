@@ -1,18 +1,23 @@
-// Package core computes the core sleeve's monthly target: the mandate's
-// rule-based share in one broad index fund (internal-docs/design/core-sleeve.md).
-// The rule is core-ibcf-v1, the lab's s0_core_sleeve spec as registered on
-// 2026-10-14: IBCF held while its month-end close is above its 10-month
-// average, sized so its volatility is at most its share of the mandate's
-// budget. It is a beta allocation the owner chose with a drawdown filter,
-// not an edge claim.
+// Package core is the strategy evaluator's arithmetic
+// (internal-docs/design/strategy-evaluator.md): one fund held while a trend
+// filter from a small library says so, sized so its volatility is at most
+// its sleeve's risk allocation of the mandate's budget. The core sleeve
+// (internal-docs/design/core-sleeve.md) is its first instance, the rule
+// core-ibcf-v1: the lab's s0_core_sleeve spec as registered on 2026-10-14,
+// IBCF held while its month-end close is above its 10-month average. It is
+// a beta allocation the owner chose with a drawdown filter, not an edge
+// claim; every entry of the strategy register that names a filter from the
+// library is sized the same way.
 //
 // Only the daemon evaluates: it gathers the decision-grade closes, the
-// exchange calendar, the mandate's capital and the book, calls Measure,
-// SizeTarget, Headroom and Decide, and serves the result as core.target.
-// The package holds no state and performs no I/O. Its numbers are tested
-// against the lab's Python implementation through a shared fixture
-// (testdata/core_ibcf_v1_parity.json); a change on either side fails a
-// test, and the rule's parameters change only with a new rule version.
+// exchange calendar, the mandate's capital and the book, calls MeasureWith,
+// SizeTarget, Headroom and Decide, and serves the result as the strategy's
+// target. The package holds no state and performs no I/O. Its numbers are
+// tested against the lab's Python implementation through a shared fixture
+// (testdata/core_ibcf_v1_parity.json), which names no instrument: it proves
+// the filter and the sizing, so every entry on the same filter is tested by
+// it. A change on either side fails a test, and a filter's parameters
+// change only with a new library entry and its own fixture.
 package core
 
 import (
@@ -41,12 +46,13 @@ const (
 	Currency = "EUR"
 )
 
-// The rule's parameters: compiled with the rule version, never policy keys.
+// The evaluator's parameters: compiled, never policy keys.
 const (
 	// WindowCloses is the fixed input window: the last 253 sessions to the
 	// decision day, 252 daily returns.
 	WindowCloses = 253
-	// TrendMonths month-end closes, the decision's included, make SMA10.
+	// TrendMonths month-end closes, the decision's included, make the
+	// core's SMA10 (TrendSMA10).
 	TrendMonths = 10
 	// EWMASpan is the span of the exponentially weighted volatility.
 	EWMASpan = 63
@@ -56,6 +62,33 @@ const (
 	// AnnualDays annualises a daily volatility.
 	AnnualDays = 252
 )
+
+// Trend is one filter in the signal library: on when the decision close
+// is strictly above the mean of the last Months month-end closes, the
+// decision's included; not live before that many month-ends. A register
+// entry names a filter by ID; the lab's fixture for that filter proves
+// Canary reads it as the lab does.
+type Trend struct {
+	ID     string `json:"id"`
+	Months int    `json:"months"`
+}
+
+// TrendSMA10 is the core's filter and the library's first entry.
+var TrendSMA10 = Trend{ID: "trend-sma10m", Months: TrendMonths}
+
+// Trends is the signal library: every filter this Canary carries. A second
+// filter is added with its own lab fixture (strategy-evaluator.md §4).
+func Trends() []Trend { return []Trend{TrendSMA10} }
+
+// FindTrend returns the library's filter with the id, or false.
+func FindTrend(id string) (Trend, bool) {
+	for _, t := range Trends() {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return Trend{}, false
+}
 
 // Data guards: a decision outside them holds for review.
 const (
@@ -144,12 +177,22 @@ func month(date string) string {
 	return date[:7]
 }
 
-// Measure computes the signal at one decision day from the exchange
-// calendar's sessions and the instrument's closes (both ascending ISO
-// dates). The decision must be the last session of its month; the window
-// is the last WindowCloses calendar sessions to it, and a session without
-// a close holds the month: a missing bar is never filled.
+// CoreLabel is the core's digest label: its rule and the spec it
+// implements.
+const CoreLabel = RuleID + "|" + SpecHash
+
+// Measure is MeasureWith the core's filter, TrendSMA10, under its label.
 func Measure(calendar, dates []string, closes []float64, decision string) (Signal, Window) {
+	return MeasureWith(TrendSMA10, CoreLabel, calendar, dates, closes, decision)
+}
+
+// MeasureWith computes the signal under a trend filter at one decision day
+// from the exchange calendar's sessions and the instrument's closes (both
+// ascending ISO dates), digested under the strategy's label (DigestFor).
+// The decision must be the last session of its month; the window is the
+// last WindowCloses calendar sessions to it, and a session without a close
+// holds the month: a missing bar is never filled.
+func MeasureWith(trend Trend, label string, calendar, dates []string, closes []float64, decision string) (Signal, Window) {
 	sig := Signal{Status: StatusHold, Decision: decision}
 	k := -1
 	for i, d := range calendar {
@@ -190,11 +233,11 @@ func Measure(calendar, dates []string, closes []float64, decision string) (Signa
 		w.Closes[i] = c
 	}
 	ends := MonthEnds(window)
-	if len(ends) < TrendMonths || ends[len(ends)-1] != decision {
-		sig.Status, sig.Reason = StatusNotLive, fmt.Sprintf("needs %d month-ends", TrendMonths)
+	if len(ends) < trend.Months || ends[len(ends)-1] != decision {
+		sig.Status, sig.Reason = StatusNotLive, fmt.Sprintf("needs %d month-ends", trend.Months)
 		return sig, Window{}
 	}
-	ends = ends[len(ends)-TrendMonths:]
+	ends = ends[len(ends)-trend.Months:]
 	sum := 0.0
 	sig.MonthEndCloses = make([]float64, len(ends))
 	for i, d := range ends {
@@ -220,14 +263,20 @@ func Measure(calendar, dates []string, closes []float64, decision string) (Signa
 	default:
 		sig.Binding = Binding252
 	}
-	sig.Digest = Digest(w)
+	sig.Digest = DigestFor(label, w)
 	return sig, w
 }
 
-// Digest names the rule, the spec and the window's dates and closes.
-func Digest(w Window) string {
+// Digest names the core's rule, its spec and the window's dates and closes:
+// DigestFor under the core's label.
+func Digest(w Window) string { return DigestFor(CoreLabel, w) }
+
+// DigestFor names a strategy (its label: the rule, the spec it cites and,
+// for an entry, its filter and instrument) and the window's dates and
+// closes, so a frozen month whose inputs later read differently holds.
+func DigestFor(label string, w Window) string {
 	var b strings.Builder
-	b.WriteString(RuleID + "|" + SpecHash)
+	b.WriteString(label)
 	for i, d := range w.Dates {
 		b.WriteString("|" + d + "=" + strconv.FormatFloat(w.Closes[i], 'g', -1, 64))
 	}
@@ -282,20 +331,21 @@ func SigmaSample(r []float64) float64 {
 	return math.Sqrt(ss / float64(n-1) * AnnualDays)
 }
 
-// Sizing is what the target is sized on: the owner's numbers and the
+// Sizing is what the target is sized on: the sleeve's risk allocation (the
+// core's core_vol_pct, an entry's own), the owner's numbers and the
 // mandate's capital at the decision.
 type Sizing struct {
-	CoreVolPct  float64 `json:"core_vol_pct"`
-	ScalePct    float64 `json:"scale_pct"`
-	MaxValuePct float64 `json:"max_value_pct"`
-	BudgetBase  float64 `json:"budget_base"`
-	Room        float64 `json:"room"`
+	AllocationPct float64 `json:"allocation_pct"`
+	ScalePct      float64 `json:"scale_pct"`
+	MaxValuePct   float64 `json:"max_value_pct"`
+	BudgetBase    float64 `json:"budget_base"`
+	Room          float64 `json:"room"`
 }
 
 // Size is the target in money and shares.
 type Size struct {
-	// SleeveBudget is S = core_vol_pct / 100 × budget base × room, the
-	// sleeve's volatility share in base currency a year.
+	// SleeveBudget is S = allocation / 100 × budget base × room, the
+	// sleeve's risk allocation in base currency a year.
 	SleeveBudget float64 `json:"sleeve_budget"`
 	// Cap is max_value_pct / 100 × budget base × room.
 	Cap float64 `json:"cap"`
@@ -308,7 +358,7 @@ type Size struct {
 // SizeTarget sizes an ok signal. The order of the arithmetic is the lab's,
 // so the fixture matches to the last bit where it can.
 func SizeTarget(sig Signal, s Sizing) Size {
-	out := Size{SleeveBudget: s.CoreVolPct / 100 * s.BudgetBase * s.Room, Cap: s.MaxValuePct / 100 * s.BudgetBase * s.Room}
+	out := Size{SleeveBudget: s.AllocationPct / 100 * s.BudgetBase * s.Room, Cap: s.MaxValuePct / 100 * s.BudgetBase * s.Room}
 	if sig.Status != StatusOK || !sig.TrendOn || !(sig.Sigma > 0) || !(sig.Close > 0) {
 		return out
 	}
@@ -332,8 +382,16 @@ type Series struct {
 // the same sign. IBCF closes at 17:30 CET, before the US close, so its day
 // runs from the previous session's 17:30 to its own: the US close before
 // the previous session to the first US close on or after its own day
-// spans it (review S5).
+// spans it (review S5). GuardWith names the corroborating series.
 func Guard(sig Signal, w Window, index Series) []string {
+	return GuardWith(sig, w, index, "SPY")
+}
+
+// GuardWith is Guard with the corroborating series named: the instrument's
+// returns proxy where the mandate has one. An instrument without one (an
+// empty proxy) holds on every move beyond JumpPct, for review: nothing is
+// guessed.
+func GuardWith(sig Signal, w Window, index Series, proxy string) []string {
 	if sig.Status != StatusOK {
 		return nil
 	}
@@ -352,6 +410,10 @@ func Guard(sig Signal, w Window, index Series) []string {
 			continue
 		}
 		prev, day := w.Dates[i-1], w.Dates[i]
+		if proxy == "" {
+			reasons = append(reasons, fmt.Sprintf("a %+.1f%% close on %s has no index to corroborate it: a probable price error, held for review", r*100, day))
+			continue
+		}
 		from, to := -1, -1
 		for j, d := range index.Dates {
 			if d < prev {
@@ -362,12 +424,12 @@ func Guard(sig Signal, w Window, index Series) []string {
 			}
 		}
 		if from < 0 || to < 0 || !(index.Closes[from] > 0) {
-			reasons = append(reasons, fmt.Sprintf("a %+.1f%% close on %s waits for SPY's close to corroborate it", r*100, day))
+			reasons = append(reasons, fmt.Sprintf("a %+.1f%% close on %s waits for %s's close to corroborate it", r*100, day, proxy))
 			continue
 		}
 		ir := index.Closes[to]/index.Closes[from] - 1
 		if ir*r <= 0 || math.Abs(ir) < math.Abs(r)/2 {
-			reasons = append(reasons, fmt.Sprintf("a %+.1f%% close on %s is not in SPY's %+.1f%% over the same two days: a probable price error", r*100, day, ir*100))
+			reasons = append(reasons, fmt.Sprintf("a %+.1f%% close on %s is not in %s's %+.1f%% over the same two days: a probable price error", r*100, day, proxy, ir*100))
 		}
 	}
 	return reasons
@@ -425,6 +487,10 @@ type DecideInput struct {
 	// (Held + Headroom); BuyBlocked names why no buy may be sized at all.
 	Holdable   int
 	BuyBlocked string
+	// Symbol and Name are how a reason names the instrument and the
+	// strategy ("IBCF", "the core" when empty).
+	Symbol string
+	Name   string
 }
 
 // Decision is what the rule would do and why.
@@ -488,7 +554,14 @@ func Decide(in DecideInput) Decision {
 	q := min(d.Diff, in.Holdable-held)
 	if q <= 0 {
 		d.Kind, d.HeadroomCut = ActionWait, true
-		d.Why = fmt.Sprintf("no headroom: more %s would take the book past %.0f%% of the budget or a gap cap, or the core past its allocation", Symbol, HeadroomFactor*100)
+		symbol, name := in.Symbol, in.Name
+		if symbol == "" {
+			symbol = Symbol
+		}
+		if name == "" {
+			name = "the core"
+		}
+		d.Why = fmt.Sprintf("no headroom: more %s would take the book past %.0f%% of the budget or a gap cap, or %s past its allocation", symbol, HeadroomFactor*100, name)
 		return d
 	}
 	d.Quantity, d.OrderValue, d.HeadroomCut = q, value(q), q < d.Diff

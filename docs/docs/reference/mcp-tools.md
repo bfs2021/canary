@@ -4,7 +4,7 @@
 
 These are the tools `canary mcp` exposes to MCP clients (Claude Code, Claude Desktop, or any other MCP host). Every public tool uses the canonical `canary_*` namespace. Each entry lists the tool name an LLM picks against, the description the LLM reads to decide whether to invoke, and the parameter schema the LLM binds against.
 
-**41 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
+**42 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
 
 ## `canary_add`
 
@@ -255,6 +255,17 @@ Read the daemon's core sleeve target: the mandate's rule-based share in one broa
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
+| `refresh` | boolean | no | when true, the daemon reads the account and positions and measures the mandate again before deciding; false (the default) uses a mandate verdict younger than thirty seconds |
+
+## `canary_strategy`
+
+Read the daemon's target for one machine strategy of the strategy register by its id (`id`: "core" for the core sleeve, else the `[mandate.strategies.<id>]` table's key; `canary_mandate` lists them). It is the same verdict shape as canary_core for any entry: `rule` (the compiled rule, `timed-holding-v1` for an entry the owner parameterises), `signal` (the trend filter from the library, `trend-sma10m`), `spec_hash` (the lab spec the entry cites), `sleeve`, `instrument` (the fund by ISIN and currency as IBKR lists it), `decision`, `sizing` against the sleeve's risk allocation, `holding` (what the allocation plan places in the sleeve; nothing until an order path sends its rows), `action`, `stage`, `shadow` (its paper position and newest records) and `kill` (the kill rule's drawdown on the shadow record in units of sleeve capital, against `kill_drawdown_k` when written; past it the strategy holds and the owner suspends it). `status` is ready, hold (with `reasons`: an unwritten key, a filter the library lacks, a currency other than the account's base, an unresolved contract, a missing or stale series, an unknown mandate verdict, the kill bound) or inactive. Not the option combos of canary_strategies. Read-only: `read_only` is true, no entry proposes or places anything in this build; refresh=true measures the mandate again first.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `id` | string | **yes** | the strategy's id in the register: core, or the [mandate.strategies.<id>] table's key |
 | `refresh` | boolean | no | when true, the daemon reads the account and positions and measures the mandate again before deciding; false (the default) uses a mandate verdict younger than thirty seconds |
 
 ## `canary_brief`

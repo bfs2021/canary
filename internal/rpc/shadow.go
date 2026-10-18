@@ -55,6 +55,12 @@ type ShadowDecision struct {
 	TargetShares int     `json:"target_shares"`
 	ScalePct     float64 `json:"scale_pct"`
 	Digest       string  `json:"digest,omitempty"`
+	// Close is the decision close and SleeveBudget the sleeve's risk
+	// allocation in base money at the decision, so the kill rule's drawdown
+	// can be marked at each decision (strategy-evaluator.md §3); absent on
+	// records written before them.
+	Close        float64 `json:"close,omitempty"`
+	SleeveBudget float64 `json:"sleeve_budget,omitempty"`
 }
 
 // ShadowIntent is what the rule would do for ForSession on the shadow

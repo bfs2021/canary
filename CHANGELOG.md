@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The project adheres to 
 
 ### What's new
 
+One evaluator now runs every machine strategy in the register. The core
+sleeve's rule was the first and is unchanged; a second strategy is a table in
+the risk policy that names its fund, a signal from the library and the owner's
+numbers, and `canary strategy ID` shows what it would trade. Every entry runs
+in shadow at most: nothing is proposed or placed.
+
 The core sleeve can go live at a small stage. On each decision day (the
 last session of the month on the fund's London listing), a core written
 `stage = "live"` in `[mandate.core]` turns its month's decision into one
@@ -20,6 +26,8 @@ core in shadow until you write the stage.
 
 ### Added
 
+- The strategy evaluator (plan item 4 of the review of 2026-10-18; `internal-docs/design/strategy-evaluator.md`): one evaluator runs every entry of the strategy register and serves the verdict shape `core.target` has served since phase 1, so the mandate gate, the forced reduction, the shadow record and Desk's controller read one number per strategy. The core is its first instance and is unchanged: `canary core` renders byte for byte as before, and the lab's parity fixture and its pin stand. A later entry names its fund by `isin` and `currency` (the account's base currency in this build; `con_id` and `exchange` are optional pins), a `signal` from the library (`trend-sma10m`, the core's ten-month filter on month-end closes), `band_pct`, `min_order_base` and `max_value_pct` under the parameterised rule `timed-holding-v1`; it is sized against its sleeve's risk allocation at its scale, its contract is resolved by ISIN on the background lane, its series is read after the verdict under its own key (`strategy:<id>:con:<contract id>`, never in the book's verdict), its month is decided and its shadow record written beside the core's. An unwritten key, a filter the library lacks, another currency, an unresolved contract or a missing series holds that entry and names why. `canary strategy ID [--refresh] [--json]` (`strategy.target`, `canary_strategy`) shows any entry, the core included, and `canary mandate`'s register names each entry's fund and signal. The rule sends nothing, so every entry runs in shadow at most: no proposal, no order, no reservation.
+- The kill rule's drawdown test: a register entry, `[mandate.core]` included, may write `kill_drawdown_k`, the bound in units of sleeve capital the lab's design run writes. The evaluator marks the paper sleeve's equity at each decision on the shadow record and, past the bound, holds the strategy and names it: buys stop, a sale the rule wants goes to the owner, and the owner suspends. Unwritten, the kill rule cannot fire, as the lab spec says, and the verdict says so.
 - The core's monthly rows (`core_rebalance`, core-sleeve.md phase 2): one row
   a month while the core is live, with the decision's figures, the session it
   is for and the window on it; a buy passes `close_reduce_only` under its own
@@ -44,6 +52,7 @@ core in shadow until you write the stage.
 
 ### Changed
 
+- `canary core --json` and `strategy.target` name the sizing's allocation `allocation_pct` where `sizing.frozen_on` and `sizing.current_on` said `core_vol_pct`: the same number, the sleeve's risk allocation, for every strategy. The human render is unchanged.
 - The core's rule sends in the catalogue, so a core written `live` runs live
   and reserves its scale; `canary core` reads `read_only` false while live
   and its closing line says the row needs your confirmation. The window (five

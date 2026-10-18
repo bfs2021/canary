@@ -416,7 +416,7 @@ func coreRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources
 	if res.Sizing != nil {
 		on := res.Sizing.CurrentOn
 		details = append(details, fmt.Sprintf("target %s: %s%% of %s × room %s ÷ %s volatility, at most %s%%, at scale %s%%; frozen %s, lowered to today's capital",
-			pluralNoun(target, "share"), fmtPct(on.CoreVolPct), mandateMoney(on.BudgetBase, k.Currency), fmtPct(on.Room*100), fmtPct(d.Sigma*100), fmtPct(on.MaxValuePct), fmtPct(on.ScalePct), d.FrozenAt.UTC().Format(time.DateTime)))
+			pluralNoun(target, "share"), fmtPct(on.AllocationPct), mandateMoney(on.BudgetBase, k.Currency), fmtPct(on.Room*100), fmtPct(d.Sigma*100), fmtPct(on.MaxValuePct), fmtPct(on.ScalePct), d.FrozenAt.UTC().Format(time.DateTime)))
 	}
 	if res.Mandate != nil {
 		details = append(details, fmt.Sprintf("sized on the %s mandate verdict of %s, afresh at every generation", res.Mandate.Status, mandateClock(res.Mandate.EvaluatedAt)))
@@ -591,7 +591,8 @@ func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResu
 // decision with what became of its row in the proposal journal. In shadow,
 // suspended or on hold the verdict stays read-only.
 func (s *Server) coreFinish(ctx context.Context, res *rpc.CoreTargetResult, contract *coreContract, reg register.Resolved) *rpc.CoreTargetResult {
-	res.ReadOnly = reg.State != register.StateLive
+	// Only the core's rows are built: every other entry stays read-only.
+	res.ReadOnly = reg.Entry.Form != risk.StrategyFormCore || reg.State != register.StateLive
 	if res.ReadOnly || contract == nil {
 		return res
 	}

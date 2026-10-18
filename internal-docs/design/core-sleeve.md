@@ -5,7 +5,10 @@ answers to D1 to D4, the independent design review folded in (section
 "Design review"), and phase 1 built. Revised 2026-10-18: allocations replace D1
 (§3, §7). Revised 2026-10-18 CEST: the owner's decision of 08:06 CEST on
 the core's venue and on D5 (sections 1, 3 and 7), built on Canary branch
-`core-venue`. Revised 2026-10-18 18:55 CEST: phase 2 built on Canary
+`core-venue`. Revised 2026-10-18 18:40 CEST: `internal/core` is the
+strategy evaluator's arithmetic and the core its first instance
+(`strategy-evaluator.md`); the core's verdict, goldens and parity fixture
+are unchanged. Revised 2026-10-18 18:55 CEST: phase 2 built on Canary
 branch `core-rows` (section "Phase 2 as built").
 Status: phases 1 and 2 built. Phase 1 serves the target read-only; phase 2
 serves each month's decision as one proposal row the owner confirms on a
@@ -461,7 +464,7 @@ selection only.
 
 | Concern | Owner | How |
 |---|---|---|
-| Rule, monthly target, evidence | Canary verdict `core.target` (built) | Pure evaluator `internal/core`; a frozen monthly state document with its input digest; `canary core` and `canary_core`, read-only; listed in `TestOnlyTheDaemonEvaluates` |
+| Rule, monthly target, evidence | Canary verdict `core.target` (built) | The strategy evaluator's arithmetic `internal/core`, the core its first instance (`strategy-evaluator.md`); a frozen monthly state document with its input digest; `canary core` and `canary_core`, read-only; listed in `TestOnlyTheDaemonEvaluates` |
 | The exact order | Canary proposal engine, bucket `core_rebalance` | Sizes D; applies the band, minimum, funding and headroom; nets and merges with other rows; readiness on the line's exchange calendar |
 | The decision to send | A: the owner on the device. B: the Desk controller under the Fully armed mandate | Desk never computes a size or a price |
 | Execution | Canary's existing order path | Every gate, the order journal, the wire guard |

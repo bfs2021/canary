@@ -55,17 +55,27 @@ func coreShares(n int) string {
 	return groupThousands(fmt.Sprint(n)) + " " + pluralWord(n, "share", "shares")
 }
 
+// renderCore renders a strategy target: the core's, headed "Core", or any
+// register entry's, headed by its id (strategy-evaluator.md §6).
 func renderCore(env *Env, res rpc.CoreTargetResult) {
+	isCore := res.Strategy == "" || res.Strategy == "core"
+	heading, name := "Core", "the core"
+	if !isCore {
+		heading, name = res.Strategy, "the "+res.Strategy+" strategy"
+	}
 	if !res.Active {
-		riskDisplayLine(env, env.bold("Core")+"  ", "INACTIVE", env.dim)
+		riskDisplayLine(env, env.bold(heading)+"  ", "INACTIVE", env.dim)
 		riskDisplayLine(env, "", nonEmpty(res.Message, "the risk constitution carries no [mandate.core] table"), nil)
 		riskReadLine(env, "Next", "write [mandate.core] into risk-policy.toml with a higher policy_version; canary policy default constitution shows the keys")
 		return
 	}
 	ccy := core.Currency
 	sym := core.Symbol
+	if !isCore {
+		ccy, sym = "", res.Strategy
+	}
 	if res.Instrument != nil {
-		ccy, sym = nonEmpty(res.Instrument.Currency, ccy), nonEmpty(res.Instrument.Symbol, sym)
+		ccy, sym = nonEmpty(res.Instrument.Currency, ccy), nonEmpty(res.Instrument.Symbol, nonEmpty(res.Instrument.ISIN, sym))
 	}
 	a := res.Action
 	headline, tone := "HOLD", "yellow"
@@ -92,7 +102,7 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 			headline, tone = "NO TRADE", "green"
 		}
 	}
-	riskDisplayLine(env, env.bold("Core")+"  ", headline, func(s string) string { return riskTone(env, tone, env.bold(s)) })
+	riskDisplayLine(env, env.bold(heading)+"  ", headline, func(s string) string { return riskTone(env, tone, env.bold(s)) })
 	spec := res.SpecHash
 	if len(spec) > 12 {
 		spec = spec[:12]
@@ -101,7 +111,11 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	if in := res.Instrument; in != nil {
 		fund = strings.TrimSpace(in.ISIN + " " + in.Currency)
 	}
-	riskReadLine(env, "Rule", res.Rule, "spec "+res.SpecID+" "+spec, fund)
+	if isCore {
+		riskReadLine(env, "Rule", res.Rule, "spec "+res.SpecID+" "+spec, fund)
+	} else {
+		riskReadLine(env, "Rule", res.Rule, "signal "+nonEmpty(res.Signal, "unwritten"), "spec cited "+nonEmpty(spec, "(none)"), fund, "sleeve "+res.Sleeve)
+	}
 	if st := res.Stage; st != nil {
 		reserve := "reserves nothing"
 		if st.ReservedPct > 0 {
@@ -156,7 +170,7 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 			sigma = " ÷ " + corePct(d.Sigma) + " volatility"
 		}
 		riskReadLine(env, "Target", coreShares(s.Target)+" ("+mandateAmount(s.TargetBase, ccy)+")",
-			fmt.Sprintf("%s%% of %s × room %s%s, at most %s%% (%s)", fmtPctNum(on.CoreVolPct), mandateAmount(on.BudgetBase, ccy), mandatePct(on.Room*100), sigma, fmtPctNum(on.MaxValuePct), mandateAmount(s.Current.Cap, ccy)),
+			fmt.Sprintf("%s%% of %s × room %s%s, at most %s%% (%s)", fmtPctNum(on.AllocationPct), mandateAmount(on.BudgetBase, ccy), mandatePct(on.Room*100), sigma, fmtPctNum(on.MaxValuePct), mandateAmount(s.Current.Cap, ccy)),
 			"scale "+fmtPctNum(on.ScalePct)+"%")
 		if s.Frozen.TargetShares != s.Current.TargetShares {
 			riskReadLine(env, "", fmt.Sprintf("frozen at %s, today's capital gives %s; the lower stands", coreShares(s.Frozen.TargetShares), coreShares(s.Current.TargetShares)))
@@ -186,6 +200,24 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 			line = append(line, fmt.Sprintf("headroom admits a holding of %s (95%% of the budget and of the gap cap)", coreShares(*res.Sizing.Holdable)))
 		}
 		riskReadLine(env, "Mandate", line...)
+	}
+	if k := res.Kill; k != nil && (k.MaxDrawdownK != nil || k.Measured) {
+		line := []string{}
+		if k.Measured {
+			line = append(line, fmt.Sprintf("drawdown %.2f K on the shadow record at %d %s", k.DrawdownK, k.Decisions, pluralWord(k.Decisions, "decision", "decisions")))
+		}
+		switch {
+		case k.MaxDrawdownK != nil && k.Breached:
+			line = append(line, env.red(fmt.Sprintf("past the bound %g K: buys stop; suspend it with stage = \"suspended\"", *k.MaxDrawdownK)))
+		case k.MaxDrawdownK != nil:
+			line = append(line, fmt.Sprintf("bound %g K", *k.MaxDrawdownK))
+		default:
+			line = append(line, "no bound written: cannot fire")
+		}
+		if k.Note != "" && k.MaxDrawdownK != nil {
+			line = append(line, k.Note)
+		}
+		riskReadLine(env, "Kill rule", line...)
 	}
 	if res.NextDecision != "" {
 		riskReadLine(env, "Next decision", res.NextDecision+" after the "+coreVenue(res.Instrument)+" close")
@@ -217,11 +249,39 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	if m := res.Mandate; m != nil && !m.EvaluatedAt.IsZero() {
 		riskReadLine(env, "  Mandate verdict", formatTimeShort(m.EvaluatedAt.Local()))
 	}
-	if res.ReadOnly {
-		riskReadLine(env, "", "Read-only: the core proposes nothing and places no order while it is not live. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
-	} else {
+	switch {
+	case isCore && !res.ReadOnly:
 		riskReadLine(env, "", "Live: the core serves its month's row among the proposals for your confirmation on your device; nothing is sent without it, and the core is never pre-authorised. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
+	case isCore:
+		riskReadLine(env, "", "Read-only: the core proposes nothing and places no order while it is not live. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
+	default:
+		riskReadLine(env, "", "Read-only: "+name+" proposes nothing and places no order in this build; its rule sends nothing, so it runs in shadow at most.")
 	}
+}
+
+// runStrategy reads the daemon's target for one registered strategy by its
+// id in the strategy register (internal-docs/design/strategy-evaluator.md),
+// in the core's shape. The daemon evaluates; this renders. Read-only: no
+// entry proposes or sends anything in this build.
+func runStrategy(ctx context.Context, env *Env, args []string) int {
+	fs := flagSet(env, "strategy")
+	jsonOut := fs.Bool("json", false, "emit the typed strategy target")
+	refresh := fs.Bool("refresh", false, "measure the mandate again before deciding")
+	if err := fs.Parse(args); err != nil {
+		return parseExit(err)
+	}
+	if fs.NArg() != 1 {
+		return printCommandUsage(env, "strategy")
+	}
+	res, err := rpc.FetchStrategyTarget(ctx, env.Conn, fs.Arg(0), *refresh)
+	if err != nil {
+		return fail(env, "strategy: %v", err)
+	}
+	if *jsonOut {
+		return printJSON(env, res)
+	}
+	renderCore(env, res)
+	return 0
 }
 
 // renderCoreRow is the core's pending row as the proposal engine serves

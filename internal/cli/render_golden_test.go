@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/osauer/canary/v2/internal/config"
+	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
@@ -271,6 +272,8 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "core_ambiguous", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreAmbiguous()}},
 		{name: "core_london", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreLondon()}},
 		{name: "core_shadow", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreShadow()}},
+		{name: "strategy_shadow", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategyShadow()}},
+		{name: "strategy_hold", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategyHold()}},
 		{name: "core_resolve", argv: []string{"core", "resolve"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolve()}},
 		{name: "core_resolve_pinned", argv: []string{"core", "resolve"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolvePinned()}},
 		{name: "core_resolve_none", argv: []string{"core", "resolve", "--isin", "IE00B5BMR087", "--currency", "EUR"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolveNone()}},
@@ -455,7 +458,7 @@ func goldenMandateRegister() rpc.MandateRiskResult {
 	res.Register = []rpc.MandateStrategyView{
 		{ID: "core", Sleeve: "core", Rule: "core-ibcf-v1", RuleCompiled: true, AllocationPct: 6, AllocationKey: "mandate.sleeves.core_vol_pct", State: "shadow", ScalePct: 25,
 			Notes:          []string{"stage unwritten: shadow, as before the register", "spec_hash unwritten: the compiled rule's own spec stands"},
-			DeclaredSeries: []string{"IBCF EUR daily closes, 253 sessions"}},
+			DeclaredSeries: []string{"IBCF EUR daily closes, 253 sessions"}, ISIN: core.ISIN, Currency: core.Currency, Signal: core.TrendSMA10.ID},
 		{ID: "s9", Sleeve: "s9", Rule: "synthetic-v1", SpecHash: "abababababababababababababababababababababababababababababababab", SpecCited: true, AllocationPct: 2,
 			AllocationKey: "mandate.strategies.s9.risk_allocation_pct", Stage: "live", State: "hold",
 			Reasons: []string{"mandate.strategies.s9.scale_pct unwritten", "rule synthetic-v1 is not compiled into this Canary"}},

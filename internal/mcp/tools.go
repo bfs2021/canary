@@ -484,6 +484,28 @@ var Tools = []Tool{
 		},
 	},
 	{
+		Name: "canary_strategy", Title: "Canary Registered Strategy Target",
+		Description: "Read the daemon's target for one machine strategy of the strategy register by its id (`id`: \"core\" for the core sleeve, else the `[mandate.strategies.<id>]` table's key; `canary_mandate` lists them). It is the same verdict shape as canary_core for any entry: `rule` (the compiled rule, `timed-holding-v1` for an entry the owner parameterises), `signal` (the trend filter from the library, `trend-sma10m`), `spec_hash` (the lab spec the entry cites), `sleeve`, `instrument` (the fund by ISIN and currency as IBKR lists it), `decision`, `sizing` against the sleeve's risk allocation, `holding` (what the allocation plan places in the sleeve; nothing until an order path sends its rows), `action`, `stage`, `shadow` (its paper position and newest records) and `kill` (the kill rule's drawdown on the shadow record in units of sleeve capital, against `kill_drawdown_k` when written; past it the strategy holds and the owner suspends it). `status` is ready, hold (with `reasons`: an unwritten key, a filter the library lacks, a currency other than the account's base, an unresolved contract, a missing or stale series, an unknown mandate verdict, the kill bound) or inactive. Not the option combos of canary_strategies. Read-only: `read_only` is true, no entry proposes or places anything in this build; refresh=true measures the mandate again first.",
+		JSONSchema: schemaObject(map[string]json.RawMessage{
+			"id":      json.RawMessage(`{"type":"string","description":"the strategy's id in the register: core, or the [mandate.strategies.<id>] table's key"}`),
+			"refresh": json.RawMessage(`{"type":"boolean","description":"when true, the daemon reads the account and positions and measures the mandate again before deciding; false (the default) uses a mandate verdict younger than thirty seconds"}`),
+		}, []string{"id"}), ReadOnlyHint: new(true), RPCMethods: []string{rpc.MethodStrategyTarget},
+		Handler: func(ctx context.Context, conn *dial.Conn, args json.RawMessage) (json.RawMessage, error) {
+			var in struct {
+				ID      string `json:"id"`
+				Refresh bool   `json:"refresh"`
+			}
+			if err := unmarshalArgs(args, &in); err != nil {
+				return nil, err
+			}
+			res, err := rpc.FetchStrategyTarget(ctx, conn, in.ID, in.Refresh)
+			if err != nil {
+				return nil, err
+			}
+			return json.Marshal(res)
+		},
+	},
+	{
 		Name:         "canary_brief",
 		Title:        "Canary Daily Brief",
 		Description:  "Start here for the daemon's current desk summary: regime stage and verdict, portfolio-stress summary, breadth coverage, modeled gamma response and expiry horizons, and observed 25-delta option skew. Preserve freshness, rankability, source warnings and unavailable values. Take severity order from Canary: `attention_order` lists what needs attention (drawdown tier, latch, rules at act, then other attention rows) and `ready.ranked` orders every Ready row; never re-sort them. Gamma models potential amplification or damping; open interest does not prove bullish/bearish intent or dealer inventory, and put-call skew is relative option pricing, not a forecast. Use canary_regime for all market indicators and confirmation details, canary_stress for full portfolio-risk evidence, canary_status to diagnose degraded sources and canary_edge for retrospective decision outcomes; drill into canary_positions or canary_account only when the brief points there. Read-only; never acknowledges the brief or writes to the journal.",

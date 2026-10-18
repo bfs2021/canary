@@ -1377,19 +1377,37 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # 50 or 100.
 # spec_hash = "2408d09e618904c84219cacf6bc0f599e1a00ee3c4b04b0effbcc4521f45a441"
 # stage = "shadow"
+# kill_drawdown_k is the kill rule's drawdown bound in units of sleeve
+# capital, the number the lab's design run writes into its registry, not a
+# proposal; unwritten, the kill rule cannot fire
+# (internal-docs/design/strategy-evaluator.md).
+# kill_drawdown_k = 1.0
 # Every later machine strategy is one table of its own, every key yours: a
 # rule compiled into Canary, the lab spec hash it implements, its sleeve,
 # its risk allocation in percent a year of the budget base (the overlay's is
 # overlay_vol_pct above), its stage and the scale it sizes at. A missing key
 # holds that strategy and is named in canary mandate; the core's allocation
-# and every risk_allocation_pct together stay within vol_target_pct.
+# and every risk_allocation_pct together stay within vol_target_pct. The
+# rule timed-holding-v1 reads its fund, its signal and its numbers from the
+# entry (design internal-docs/design/strategy-evaluator.md): the fund by
+# ISIN and currency (the account's base currency, in this build), a signal
+# from the library (trend-sma10m), the no-trade band, the minimum order and
+# the value cap, as [mandate.core] writes them; con_id and exchange are
+# optional pins. canary strategy ID shows what it would trade.
 # [mandate.strategies.example]
-# rule = ""
+# rule = "timed-holding-v1"
 # spec_hash = ""
 # sleeve = "example"
 # risk_allocation_pct = 2.0
 # stage = "shadow"
 # scale_pct = 25.0
+# isin = ""
+# currency = "EUR"
+# signal = "trend-sma10m"
+# band_pct = 10.0
+# min_order_base = 2500.0
+# max_value_pct = 40.0
+# kill_drawdown_k = 1.0
 `)
 	return []byte(b.String())
 }

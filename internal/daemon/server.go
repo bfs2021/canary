@@ -438,8 +438,8 @@ type Server struct {
 	// mandate_verdict.go).
 	mandateHistory  mandateHistoryStore
 	mandateVerdicts mandateVerdictCache
-	// coreTargets keeps the core sleeve's frozen monthly decisions
-	// (core_target.go).
+	// coreTargets keeps every registered strategy's frozen monthly decisions
+	// and contract pins (strategy_target.go, core_resolve.go).
 	coreTargets coreTargetStore
 	// coreListingsForTest replaces the broker's listing lookup behind
 	// core.resolve and the core's contract pin.
@@ -2877,6 +2877,8 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleMandateRisk(ctx, req) })
 	case rpc.MethodCoreTarget:
 		s.unary(req, enc, func() (any, error) { return s.handleCoreTarget(ctx, req) })
+	case rpc.MethodStrategyTarget:
+		s.unary(req, enc, func() (any, error) { return s.handleStrategyTarget(ctx, req) })
 	case rpc.MethodCoreResolve:
 		s.unary(req, enc, func() (any, error) { return s.handleCoreResolve(ctx, req) })
 	case rpc.MethodAlertCandidates:

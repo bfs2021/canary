@@ -14,22 +14,25 @@ import (
 	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
 	"github.com/osauer/canary/v2/internal/marketcal"
+	"github.com/osauer/canary/v2/internal/register"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
-// The core's contract (internal-docs/design/core-sleeve.md, "Instrument and
-// series"). The policy names the fund and its currency; IBKR's contract
-// record names the rest (owner decision 2026-10-18 08:06 CEST). The daemon
-// asks IBKR for every line it lists under the ISIN in that currency and
-// uses the one it answers: the series is read for that contract id with
-// IBKR's symbol on the listing's primary exchange, and sessions, freshness
-// and the decision day are judged on that exchange's calendar. It holds,
-// naming every candidate, when IBKR lists more than one line, and holds
-// when the line differs from the one the core last used; in both cases
-// the owner chooses by writing con_id. A written con_id must be one of the
-// ISIN's lines, and a written exchange a venue IBKR lists it on.
+// A strategy's contract (internal-docs/design/core-sleeve.md, "Instrument
+// and series"; every register entry since the evaluator). The policy names
+// the fund and its currency; IBKR's contract record names the rest (owner
+// decision 2026-10-18 08:06 CEST). The daemon asks IBKR for every line it
+// lists under the ISIN in that currency and uses the one it answers: the
+// series is read for that contract id with IBKR's symbol on the listing's
+// primary exchange, and sessions, freshness and the decision day are judged
+// on that exchange's calendar. It holds, naming every candidate, when IBKR
+// lists more than one line, and holds when the line differs from the one
+// the strategy last used; in both cases the owner chooses by writing
+// con_id. A written con_id must be one of the ISIN's lines, and a written
+// exchange a venue IBKR lists it on. One pin per instrument request, so
+// the core and every later entry are resolved alike.
 
 const (
 	// coreResolveFormTimeout bounds one contract-details form.
@@ -121,9 +124,21 @@ func coreRequest(p *risk.ConstitutionMandateCore) (isin, ccy string, pinned int)
 	return isin, ccy, pinned
 }
 
-func coreRequestKey(p *risk.ConstitutionMandateCore) string {
+// coreInstrument is the core's instrument as the policy requests it: its
+// fund and currency (the compiled ones while unwritten) and its pins.
+func coreInstrument(p *risk.ConstitutionMandateCore) register.Instrument {
 	isin, ccy, pinned := coreRequest(p)
-	return fmt.Sprintf("%s|%s|%d", isin, ccy, pinned)
+	inst := register.Instrument{ISIN: isin, Currency: ccy, Symbol: core.Symbol, ConID: pinned}
+	if p != nil {
+		inst.Exchange = strings.ToUpper(strings.TrimSpace(p.Exchange))
+	}
+	return inst
+}
+
+// instrumentRequestKey keys a resolution by what IBKR is asked: the ISIN,
+// the currency and any pinned contract id.
+func instrumentRequestKey(inst register.Instrument) string {
+	return fmt.Sprintf("%s|%s|%d", inst.ISIN, inst.Currency, inst.ConID)
 }
 
 // coreListings asks the broker for listings: the gateway's lookup, or the
@@ -182,7 +197,7 @@ func (s *Server) handleCoreResolve(ctx context.Context, req *rpc.Request) (*rpc.
 		}
 	}
 	used := 0
-	if k := s.coreContractInUse(); k != nil && k.ISIN == res.ISIN {
+	if k := s.instrumentInUse(res.ISIN); k != nil {
 		used = k.ConID
 	}
 	for _, l := range listings {
@@ -211,22 +226,28 @@ func (s *Server) handleCoreResolve(ctx context.Context, req *rpc.Request) (*rpc.
 	return res, nil
 }
 
-// coreResolve finds the core's contract on the background lane: IBKR is
-// asked by ISIN and currency (and by the pinned id when written) every
-// corePinResolveEvery; a lookup that gets no answer keeps what the last one
-// found and is retried after corePinRetryAfter. It returns the contract in
-// use, nil while the core holds on it.
+// coreResolve finds the core's contract on the background lane:
+// resolveInstrument on the policy's fund and currency.
 func (s *Server) coreResolve(ctx context.Context, c *risk.Constitution) *coreContract {
 	if c == nil || c.Mandate == nil || c.Mandate.Core == nil {
 		return nil
 	}
-	isin, ccy, pinned := coreRequest(c.Mandate.Core)
-	request := coreRequestKey(c.Mandate.Core)
+	return s.resolveInstrument(ctx, coreInstrument(c.Mandate.Core), "the core", "[mandate.core]")
+}
+
+// resolveInstrument finds a strategy instrument's contract on the
+// background lane: IBKR is asked by ISIN and currency (and by the pinned id
+// when written) every corePinResolveEvery; a lookup that gets no answer
+// keeps what the last one found and is retried after corePinRetryAfter. It
+// returns the contract in use, nil while the strategy holds on it. name is
+// how the strategy is named in holds ("the core"), table its policy table.
+func (s *Server) resolveInstrument(ctx context.Context, inst register.Instrument, name, table string) *coreContract {
+	if inst.ISIN == "" {
+		return nil
+	}
+	request := instrumentRequestKey(inst)
 	now := s.nowUTC()
-	st := &s.coreTargets
-	st.mu.Lock()
-	pin := st.pin
-	st.mu.Unlock()
+	pin := s.pinOf(request)
 	if pin.request == request {
 		switch {
 		case pin.err == "" && now.Sub(pin.at) < corePinResolveEvery:
@@ -235,7 +256,7 @@ func (s *Server) coreResolve(ctx context.Context, c *risk.Constitution) *coreCon
 			return pin.contract
 		}
 	}
-	listings, _, err := s.coreListings(ctx, ibkrlib.ListingRequest{ISIN: isin, ConID: pinned, Currency: ccy})
+	listings, _, err := s.coreListings(ctx, ibkrlib.ListingRequest{ISIN: inst.ISIN, ConID: inst.ConID, Currency: inst.Currency})
 	next := corePin{request: request, at: now}
 	if pin.request == request {
 		next.contract, next.lines, next.hold = pin.contract, pin.lines, pin.hold
@@ -243,26 +264,39 @@ func (s *Server) coreResolve(ctx context.Context, c *risk.Constitution) *coreCon
 	if err != nil && !errors.Is(err, ibkrlib.ErrNoListing) {
 		next.err = errText(err)
 		if s.logger != nil && ctx.Err() == nil {
-			s.logger.Warnf("core contract for %s in %s: IBKR gave no answer: %s; asked again in %s", isin, ccy, next.err, corePinRetryAfter)
+			s.logger.Warnf("%s's contract for %s in %s: IBKR gave no answer: %s; asked again in %s", name, inst.ISIN, inst.Currency, next.err, corePinRetryAfter)
 		}
 	} else {
-		next.contract, next.lines, next.hold = s.coreChoose(ctx, c.Mandate.Core, isin, ccy, pinned, listings, now)
+		next.contract, next.lines, next.hold = s.chooseLine(ctx, inst, name, table, listings, now)
 		if next.hold != "" && next.hold != pin.hold && s.logger != nil && ctx.Err() == nil {
-			s.logger.Warnf("core contract: %s; the core holds", next.hold)
+			s.logger.Warnf("%s's contract: %s; %s holds", name, next.hold, name)
 		}
 	}
+	st := &s.coreTargets
 	st.mu.Lock()
-	st.pin = next
+	if st.pins == nil {
+		st.pins = map[string]corePin{}
+	}
+	st.pins[request] = next
 	st.mu.Unlock()
 	return next.contract
 }
 
-// coreChoose picks the core's line among IBKR's answer: the pinned id when
+// pinOf is the last resolution of a request, or an empty pin.
+func (s *Server) pinOf(request string) corePin {
+	st := &s.coreTargets
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.pins[request]
+}
+
+// chooseLine picks a strategy's line among IBKR's answer: the pinned id when
 // written, else the one line IBKR lists under the ISIN in the currency. It
 // holds on none, on several, on a line Canary has no calendar for, on a
 // written exchange IBKR does not list it on, and, without a pin, on a line
-// other than the one the core last used. The line in use is remembered.
-func (s *Server) coreChoose(ctx context.Context, p *risk.ConstitutionMandateCore, isin, ccy string, pinned int, listings []ibkrlib.Listing, now time.Time) (*coreContract, []int, string) {
+// other than the one the strategy last used. The line in use is remembered.
+func (s *Server) chooseLine(ctx context.Context, inst register.Instrument, name, table string, listings []ibkrlib.Listing, now time.Time) (*coreContract, []int, string) {
+	isin, ccy, pinned := inst.ISIN, inst.Currency, inst.ConID
 	var lines []ibkrlib.Listing
 	var ids []int
 	for _, l := range listings {
@@ -295,7 +329,7 @@ func (s *Server) coreChoose(ctx context.Context, p *risk.ConstitutionMandateCore
 	case len(lines) == 0:
 		return nil, ids, fmt.Sprintf("IBKR lists no %s line under %s; check it with `canary core resolve`", ccy, isin)
 	case len(lines) > 1:
-		return nil, ids, fmt.Sprintf("IBKR lists %d %s lines under %s: %s. None is chosen for you: write the con_id of the core's line into [mandate.core] with a higher policy_version", len(lines), ccy, isin, listed())
+		return nil, ids, fmt.Sprintf("IBKR lists %d %s lines under %s: %s. None is chosen for you: write the con_id of %s's line into %s with a higher policy_version", len(lines), ccy, isin, listed(), name, table)
 	default:
 		chosen = &lines[0]
 	}
@@ -312,12 +346,12 @@ func (s *Server) coreChoose(ctx context.Context, p *risk.ConstitutionMandateCore
 		return nil, ids, fmt.Sprintf("IBKR lists %s, and Canary carries no exchange calendar for %s", k.label(), nonEmptyString(k.PrimaryExch, "a line without a primary exchange"))
 	}
 	k.Market = market
-	if want := strings.ToUpper(strings.TrimSpace(p.Exchange)); want != "" && want != k.PrimaryExch && !coreListedOn(*chosen, want) {
-		return nil, ids, fmt.Sprintf("the policy names exchange %s, and IBKR does not list %s there; remove exchange from [mandate.core] or write one IBKR lists, with a higher policy_version", want, k.label())
+	if want := strings.ToUpper(strings.TrimSpace(inst.Exchange)); want != "" && want != k.PrimaryExch && !coreListedOn(*chosen, want) {
+		return nil, ids, fmt.Sprintf("the policy names exchange %s, and IBKR does not list %s there; remove exchange from %s or write one IBKR lists, with a higher policy_version", want, k.label(), table)
 	}
 	used := s.coreUsed(ctx, isin, ccy)
 	if pinned == 0 && used != nil && !used.sameLine(k) {
-		return nil, ids, fmt.Sprintf("IBKR now lists %s under %s in %s; the core last used %s. Write con_id = %d into [mandate.core] with a higher policy_version to use the new line", k.label(), isin, ccy, used.label(), k.ConID)
+		return nil, ids, fmt.Sprintf("IBKR now lists %s under %s in %s; %s last used %s. Write con_id = %d into %s with a higher policy_version to use the new line", k.label(), isin, ccy, name, used.label(), k.ConID, table)
 	}
 	if !used.sameLine(k) || used.Symbol != k.Symbol || used.TradingClass != k.TradingClass || used.Market != k.Market {
 		if err := s.rememberCore(ctx, k); err != nil && s.logger != nil {
@@ -407,67 +441,93 @@ func (s *Server) rememberCore(ctx context.Context, k *coreContract) error {
 	return nil
 }
 
-// coreContractInUse is the line of the last resolution, nil while the core
-// holds on its contract or none was resolved.
+// coreContractInUse is the core's line of its last resolution, nil while
+// the core holds on its contract or none was resolved.
 func (s *Server) coreContractInUse() *coreContract {
-	st := &s.coreTargets
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.pin.contract == nil {
-		return nil
-	}
-	k := *st.pin.contract
-	return &k
-}
-
-// corePinState is the last resolution of the policy's request: the line in
-// use, why the core holds on its contract, the last lookup that got no
-// answer, and whether IBKR was asked for this request at all.
-func (s *Server) corePinState(p *risk.ConstitutionMandateCore) (contract *coreContract, hold, lookupErr string, asked bool) {
-	request := coreRequestKey(p)
-	st := &s.coreTargets
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.pin.request != request {
-		return nil, "", "", false
-	}
-	if st.pin.contract != nil {
-		k := *st.pin.contract
-		contract = &k
-	}
-	return contract, st.pin.hold, st.pin.err, true
-}
-
-// coreFundLines names, by mandate leg ID, every contract IBKR listed under
-// the core's ISIN (the line in use, the one the core last used and the
-// other lines of the ISIN in the currency): the same fund whatever its
-// broker symbol, so the mandate stresses it as a broad index fund and
-// moves it with its returns proxy (mandate.Input.LineISINs). Nil while the
-// constitution carries no [mandate.core].
-func (s *Server) coreFundLines(ctx context.Context) map[string]string {
-	if s == nil || s.riskPolicies == nil {
+	if s.riskPolicies == nil {
 		return nil
 	}
 	c := s.riskPolicies.snapshot().policy
 	if c == nil || c.Mandate == nil || c.Mandate.Core == nil {
 		return nil
 	}
-	isin, ccy, _ := coreRequest(c.Mandate.Core)
-	out := map[string]string{}
-	if used := s.coreUsed(ctx, isin, ccy); used != nil {
-		out[mandateConLegID(used.ConID)] = isin
-	}
+	k, _, _, _ := s.instrumentPinState(coreInstrument(c.Mandate.Core))
+	return k
+}
+
+// instrumentInUse is the line any strategy's last resolution uses for an
+// ISIN, nil while none does.
+func (s *Server) instrumentInUse(isin string) *coreContract {
 	st := &s.coreTargets
 	st.mu.Lock()
-	if strings.HasPrefix(st.pin.request, isin+"|"+ccy+"|") {
-		if st.pin.contract != nil {
-			out[mandateConLegID(st.pin.contract.ConID)] = isin
-		}
-		for _, id := range st.pin.lines {
-			out[mandateConLegID(id)] = isin
+	defer st.mu.Unlock()
+	for _, pin := range st.pins {
+		if pin.contract != nil && pin.contract.ISIN == isin {
+			k := *pin.contract
+			return &k
 		}
 	}
-	st.mu.Unlock()
+	return nil
+}
+
+// corePinState is the last resolution of the core's request
+// (instrumentPinState on the policy's fund).
+func (s *Server) corePinState(p *risk.ConstitutionMandateCore) (contract *coreContract, hold, lookupErr string, asked bool) {
+	return s.instrumentPinState(coreInstrument(p))
+}
+
+// instrumentPinState is the last resolution of an instrument's request: the
+// line in use, why the strategy holds on its contract, the last lookup that
+// got no answer, and whether IBKR was asked for this request at all.
+func (s *Server) instrumentPinState(inst register.Instrument) (contract *coreContract, hold, lookupErr string, asked bool) {
+	if inst.ISIN == "" {
+		return nil, "", "", false
+	}
+	pin := s.pinOf(instrumentRequestKey(inst))
+	if pin.request == "" {
+		return nil, "", "", false
+	}
+	if pin.contract != nil {
+		k := *pin.contract
+		contract = &k
+	}
+	return contract, pin.hold, pin.err, true
+}
+
+// registerFundLines names, by mandate leg ID, every contract IBKR listed
+// under a registered strategy's ISIN (the line in use, the one the strategy
+// last used and the other lines of the ISIN in the currency): the same fund
+// whatever its broker symbol, so the mandate stresses the core's as a broad
+// index fund and moves it with its returns proxy (mandate.Input.LineISINs).
+// Nil while the register names no instrument.
+func (s *Server) registerFundLines(ctx context.Context) map[string]string {
+	if s == nil || s.riskPolicies == nil {
+		return nil
+	}
+	c := s.riskPolicies.snapshot().policy
+	if c == nil || c.Mandate == nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, r := range s.resolvedRegister(c) {
+		inst := r.Instrument
+		if r.Entry.Form == risk.StrategyFormCore {
+			inst = coreInstrument(c.Mandate.Core)
+		}
+		if inst.ISIN == "" {
+			continue
+		}
+		if used := s.coreUsed(ctx, inst.ISIN, inst.Currency); used != nil {
+			out[mandateConLegID(used.ConID)] = inst.ISIN
+		}
+		pin := s.pinOf(instrumentRequestKey(inst))
+		if pin.contract != nil {
+			out[mandateConLegID(pin.contract.ConID)] = inst.ISIN
+		}
+		for _, id := range pin.lines {
+			out[mandateConLegID(id)] = inst.ISIN
+		}
+	}
 	if len(out) == 0 {
 		return nil
 	}

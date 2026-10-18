@@ -86,7 +86,10 @@ func TestRegisterRefusesContradictions(t *testing.T) {
 		"an unknown stage":                            {entry("s9", strings.Replace(full("s9"), `stage = "shadow"`, `stage = "paper"`, 1)), "shadow, live or suspended"},
 		"a short spec hash":                           {entry("s9", strings.Replace(full("s9"), hash, "abc", 1)), "64-character"},
 		"allocations over the target":                 {entry("s9", strings.Replace(full("s9"), "risk_allocation_pct = 2.0", "risk_allocation_pct = 6.0", 1)), "the machine's allocations sit inside the budget"},
-		"an unknown entry key":                        {entry("s9", full("s9")+"band_pct = 10.0\n"), "unknown risk policy key"},
+		"an unknown entry key":                        {entry("s9", full("s9")+"lookback_days = 10\n"), "unknown risk policy key"},
+		"a short entry isin":                          {entry("s9", full("s9")+"isin = \"ABC\"\n"), "twelve upper-case letters and digits"},
+		"a bad entry band":                            {entry("s9", full("s9")+"band_pct = 100.0\n"), "band_pct must be in (0, 100)"},
+		"a kill bound of zero":                        {entry("s9", full("s9")+"kill_drawdown_k = 0.0\n"), "kill_drawdown_k must be positive"},
 		"the core's scale off the ladder once staged": {"stage = \"shadow\"\n", ""},
 	} {
 		t.Run(name, func(t *testing.T) {

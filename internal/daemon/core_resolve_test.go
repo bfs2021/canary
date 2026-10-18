@@ -99,7 +99,7 @@ func TestCoreContractFromIBKRsRecordForTheISIN(t *testing.T) {
 	srv.coreListingsForTest = fake.lookup
 	k := srv.coreResolve(t.Context(), c)
 	if k == nil {
-		t.Fatalf("no contract: %+v", srv.coreTargets.pin)
+		t.Fatalf("no contract: %+v", srv.coreTargets.pins)
 	}
 	asked := fake.asked[0]
 	if asked.ISIN != core.ISIN || asked.Currency != core.Currency || asked.ConID != 0 || len(asked.Venues) != 0 || len(asked.Symbols) != 0 {
@@ -131,7 +131,7 @@ func TestCoreContractFromIBKRsRecordForTheISIN(t *testing.T) {
 		t.Fatalf("remembered %+v", used)
 	}
 	// The mandate knows the line as the fund; protection leaves it out.
-	if lines := srv.coreFundLines(t.Context()); lines["con:9031"] != core.ISIN {
+	if lines := srv.registerFundLines(t.Context()); lines["con:9031"] != core.ISIN {
 		t.Fatalf("fund lines %v", lines)
 	}
 	if ids := srv.coreContractIDs(t.Context()); !slices.Equal(ids, []int{9031}) {
@@ -158,7 +158,7 @@ func TestCoreContractHoldsOnWhatItCannotUse(t *testing.T) {
 		t.Helper()
 		srv.coreListingsForTest = (&coreFakeListings{listings: listings, err: err}).lookup
 		srv.coreTargets.mu.Lock()
-		srv.coreTargets.pin = corePin{}
+		srv.coreTargets.pins = nil
 		srv.coreTargets.mu.Unlock()
 		k := srv.coreResolve(t.Context(), c)
 		_, hold, _, _ := srv.corePinState(c.Mandate.Core)

@@ -118,7 +118,7 @@ func TestParityWithTheLab(t *testing.T) {
 			if err := json.Unmarshal([]byte(scale), &s); err != nil {
 				t.Fatal(err)
 			}
-			got := SizeTarget(sig, Sizing{CoreVolPct: f.Sizing.CoreVolPct, ScalePct: s, MaxValuePct: f.Sizing.MaxValuePct, BudgetBase: f.Sizing.BudgetBaseRoom, Room: 1})
+			got := SizeTarget(sig, Sizing{AllocationPct: f.Sizing.CoreVolPct, ScalePct: s, MaxValuePct: f.Sizing.MaxValuePct, BudgetBase: f.Sizing.BudgetBaseRoom, Room: 1})
 			if got.TargetShares != ws.TargetShares || !relClose(got.Notional, ws.Notional) || !relClose(got.SleeveBudget, ws.SleeveBudget) || !relClose(got.Cap, ws.Cap) {
 				t.Fatalf("%s at scale %s: %+v, lab %+v", want.Decision, scale, got, ws)
 			}
@@ -165,7 +165,7 @@ func TestMeasureRefusesWhatIsNotAMonthEndDecision(t *testing.T) {
 // notional past it.
 func TestSizeTargetRoomScaleAndCap(t *testing.T) {
 	sig := Signal{Status: StatusOK, TrendOn: true, Sigma: 0.2, Close: 100}
-	s := Sizing{CoreVolPct: 6, ScalePct: 100, MaxValuePct: 40, BudgetBase: 250000, Room: 1}
+	s := Sizing{AllocationPct: 6, ScalePct: 100, MaxValuePct: 40, BudgetBase: 250000, Room: 1}
 	full := SizeTarget(sig, s)
 	if full.SleeveBudget != 15000 || full.Notional != 75000 || full.TargetShares != 750 {
 		t.Fatalf("full: %+v", full)
@@ -197,7 +197,7 @@ func TestTargetNonIncreasingInDrawdownAndVolatility(t *testing.T) {
 	r := rand.New(rand.NewPCG(7, 8))
 	for range 5000 {
 		sig := Signal{Status: StatusOK, TrendOn: true, Sigma: VolFloor + r.Float64()*0.5, Close: 20 + r.Float64()*200}
-		s := Sizing{CoreVolPct: 1 + r.Float64()*10, ScalePct: []float64{25, 50, 100}[r.IntN(3)], MaxValuePct: 10 + r.Float64()*60, BudgetBase: 50000 + r.Float64()*1e6, Room: r.Float64()}
+		s := Sizing{AllocationPct: 1 + r.Float64()*10, ScalePct: []float64{25, 50, 100}[r.IntN(3)], MaxValuePct: 10 + r.Float64()*60, BudgetBase: 50000 + r.Float64()*1e6, Room: r.Float64()}
 		base := SizeTarget(sig, s)
 		deeper := s
 		deeper.Room = s.Room * r.Float64()
@@ -345,5 +345,58 @@ func TestParityFixturePinnedToTheSpec(t *testing.T) {
 	)
 	if RuleID != pinnedRule || SpecHash != pinnedSpec || hex.EncodeToString(sum[:]) != pinnedFixture {
 		t.Fatalf("rule %s, spec %s, fixture %x: a new fixture is a new spec version and a new rule", RuleID, SpecHash, sum)
+	}
+}
+
+// The signal library (strategy-evaluator.md §3): the core's filter is its
+// first entry and Measure is MeasureWith it, byte for byte; a filter is
+// found by id; every entry fits the evaluator's window, which holds about
+// twelve month-ends; the core's digest is DigestFor under its own label,
+// so no frozen month drifts.
+func TestTrendLibraryCarriesTheCoreFilter(t *testing.T) {
+	f := loadParity(t)
+	for _, want := range f.Decisions {
+		a, wa := Measure(f.Calendar, f.Dates, f.Closes, want.Decision)
+		b, wb := MeasureWith(TrendSMA10, CoreLabel, f.Calendar, f.Dates, f.Closes, want.Decision)
+		if a.Digest != b.Digest || a.Status != b.Status || a.TrendOn != b.TrendOn || a.Sigma != b.Sigma || !slices.Equal(wa.Dates, wb.Dates) {
+			t.Fatalf("%s: Measure %+v, MeasureWith(TrendSMA10) %+v", want.Decision, a, b)
+		}
+		if a.Status == StatusOK && a.Digest != DigestFor(CoreLabel, wa) {
+			t.Fatalf("%s: the core's digest is not DigestFor under its label", want.Decision)
+		}
+	}
+	if got, ok := FindTrend(TrendSMA10.ID); !ok || got != TrendSMA10 || got.Months != TrendMonths {
+		t.Fatalf("FindTrend(%s) = %+v %v", TrendSMA10.ID, got, ok)
+	}
+	if _, ok := FindTrend("trend-sma12m"); ok {
+		t.Fatal("a filter the library lacks was found")
+	}
+	for _, tr := range Trends() {
+		if tr.ID == "" || tr.Months <= 0 || tr.Months > 12 {
+			t.Fatalf("filter %+v needs more month-ends than the %d-session window holds", tr, WindowCloses)
+		}
+	}
+	// A twelve-month filter never decides a month before twelve month-ends:
+	// the library's cap is the window's.
+	if sig, _ := MeasureWith(Trend{ID: "x", Months: 12}, "x", f.Calendar, f.Dates, f.Closes, f.Decisions[0].Decision); sig.Status == StatusOK {
+		t.Fatalf("the first decision decided under a twelve-month filter: %+v", sig)
+	}
+}
+
+// An instrument without a returns proxy holds on every move beyond the
+// jump guard, for review; with a proxy the guard names it.
+func TestGuardWithoutAProxyHoldsAJump(t *testing.T) {
+	sig := Signal{Status: StatusOK, SigmaEWMA: 0.2, Sigma252: 0.18}
+	w := Window{Dates: []string{"2026-03-02", "2026-03-03", "2026-03-04"}, Closes: []float64{100, 100.5, 90}}
+	if got := GuardWith(sig, w, Series{}, ""); len(got) != 1 || !strings.Contains(got[0], "no index to corroborate it") {
+		t.Fatalf("no proxy: %v", got)
+	}
+	if got := GuardWith(sig, w, Series{}, "SYNX"); len(got) != 1 || !strings.Contains(got[0], "waits for SYNX's close") {
+		t.Fatalf("named proxy: %v", got)
+	}
+	// A named strategy's headroom reason names its instrument and itself.
+	d := Decide(DecideInput{Target: 100, TrendOn: true, Price: 10, Holdable: 0, Symbol: "SYNF", Name: "the trend-fund strategy"})
+	if d.Kind != ActionWait || !strings.Contains(d.Why, "more SYNF") || !strings.Contains(d.Why, "the trend-fund strategy past its allocation") {
+		t.Fatalf("named reason: %+v", d)
 	}
 }

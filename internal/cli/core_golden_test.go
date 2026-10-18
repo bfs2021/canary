@@ -15,7 +15,7 @@ func goldenCore() rpc.CoreTargetResult {
 	conID := 9030
 	scale, band, minimum, maxValue, coreVol := 100.0, 10.0, 2500.0, 40.0, 6.0
 	holdable := 908
-	on := core.Sizing{CoreVolPct: 6, ScalePct: 100, MaxValuePct: 40, BudgetBase: 230000, Room: 1}
+	on := core.Sizing{AllocationPct: 6, ScalePct: 100, MaxValuePct: 40, BudgetBase: 230000, Room: 1}
 	size := core.Size{SleeveBudget: 13800, Cap: 92000, Notional: 92000, TargetShares: 958}
 	return rpc.CoreTargetResult{AsOf: goldenAt, Active: true, Status: rpc.CoreStatusReady, ReadOnly: false,
 		Rule: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash, PolicyRule: core.RuleID,
@@ -158,5 +158,51 @@ func goldenCoreShadow() rpc.CoreTargetResult {
 	decision.Kind, decision.Session, decision.Decision = rpc.ShadowKindDecision, "2026-08-31", &rpc.ShadowDecision{TrendOn: true, Sigma: 0.15, Binding: core.BindingFloor, TargetShares: 958, ScalePct: 100}
 	missed.Kind, missed.Session, missed.Fill = rpc.ShadowKindFill, "2026-08-03", &rpc.ShadowFill{Convention: rpc.ShadowFillConvention, Unobserved: "no close of 2026-08-03 in the series; nothing is guessed"}
 	res.Shadow = &rpc.ShadowView{Strategy: "core", Stage: "shadow", Holding: 958, Records: 6, Recent: []rpc.ShadowRecord{fill, intent, decision, missed}}
+	return res
+}
+
+// goldenStrategyShadow is a register entry on the parameterised rule, a
+// synthetic trend fund on a London line in the overlay, in shadow: its
+// month's decision, the first paper buy and its fill, and the kill rule's
+// drawdown on the record with no bound written. Every figure is synthetic.
+func goldenStrategyShadow() rpc.StrategyTargetResult {
+	res := goldenCore()
+	// An entry's rows are not built: read-only, no row, no decision record.
+	res.Row, res.LastDecision, res.ReadOnly = nil, nil, true
+	hash := "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	scale, band, minimum, maxValue, allocation := 25.0, 10.0, 2500.0, 40.0, 4.0
+	res.Strategy, res.Sleeve, res.Rule, res.SpecID, res.SpecHash, res.PolicyRule, res.Signal = "trend-fund", "overlay", "timed-holding-v1", "", hash, "timed-holding-v1", "trend-sma10m"
+	res.Stage = &rpc.CoreStageView{Written: "shadow", State: "shadow", SpecHashCited: true}
+	res.Policy = &rpc.CorePolicyView{Rule: "timed-holding-v1", ISIN: "ZZ0000000001", Currency: "EUR", Signal: "trend-sma10m", ScalePct: &scale, BandPct: &band, MinOrderBase: &minimum, MaxValuePct: &maxValue, AllocationPct: &allocation}
+	res.Instrument = &rpc.CoreInstrument{Symbol: "SYNF", ISIN: "ZZ0000000001", ConID: 9040, Exchange: "LSEETF", Currency: "EUR", Resolved: true, TradingClass: "SYNF",
+		Calendar: "uk_lse", CalendarLabel: "London SETS", ResolvedAt: goldenAt.Add(-2 * time.Hour)}
+	on := core.Sizing{AllocationPct: 4, ScalePct: 25, MaxValuePct: 40, BudgetBase: 230000, Room: 1}
+	size := core.Size{SleeveBudget: 9200, Cap: 92000, Notional: 61333.33, TargetShares: 159}
+	res.Sizing = &rpc.CoreSizingView{Frozen: size, FrozenOn: on, Current: size, CurrentOn: on, Target: 159, TargetBase: 15280.5}
+	res.Action = &core.Decision{Kind: core.ActionWait, Why: "no buy: the trend-fund strategy runs in shadow and sends no orders, so it reserves no allocation", Diff: 159, BandShares: 15.9}
+	res.Kill = &rpc.KillView{DrawdownK: 0.0312, Measured: true, Decisions: 2, Note: "kill_drawdown_k unwritten: the kill rule cannot fire until the lab's design run writes its bound"}
+	res.Evidence = &rpc.CoreEvidence{SeriesKey: "strategy:trend-fund:con:9040", Closes: 320, LastClose: "2026-09-04", FetchedAt: goldenAt.Add(-9 * time.Hour), Source: "IBKR historical bars · TRADES", Calendar: "uk_lse"}
+	base := rpc.ShadowRecord{Version: 1, Strategy: "trend-fund", Rule: "timed-holding-v1", SpecHash: hash, SpecCited: true, Stage: "shadow", RecordedAt: goldenAt}
+	fill, intent, decision := base, base, base
+	fill.Kind, fill.Session, fill.Fill = rpc.ShadowKindFill, "2026-09-01", &rpc.ShadowFill{Quantity: 159, Price: 96.12, HoldingAfter: 159, Convention: rpc.ShadowFillConvention}
+	intent.Kind, intent.Session, intent.Intent = rpc.ShadowKindIntent, "2026-08-31", &rpc.ShadowIntent{ForSession: "2026-09-01", Kind: core.ActionBuy, Quantity: 159, Why: "first buy toward the target", Diff: 159, BandShares: 15.9}
+	decision.Kind, decision.Session, decision.Decision = rpc.ShadowKindDecision, "2026-08-31", &rpc.ShadowDecision{TrendOn: true, Sigma: 0.15, Binding: core.BindingFloor, TargetShares: 159, ScalePct: 25, Close: 95.95, SleeveBudget: 9200}
+	res.Shadow = &rpc.ShadowView{Strategy: "trend-fund", Stage: "shadow", Holding: 159, Records: 3, Recent: []rpc.ShadowRecord{fill, intent, decision}}
+	return res
+}
+
+// goldenStrategyHold is an entry that holds: a key unwritten, so nothing is
+// resolved or decided.
+func goldenStrategyHold() rpc.StrategyTargetResult {
+	res := goldenStrategyShadow()
+	res.Status = rpc.CoreStatusHold
+	res.Stage = &rpc.CoreStageView{Written: "shadow", State: "hold", SpecHashCited: true}
+	res.Reasons = []string{"mandate.strategies.trend-fund.band_pct unwritten"}
+	res.Policy.BandPct, res.Policy.Unapproved = nil, []string{"mandate.strategies.trend-fund.band_pct"}
+	res.Instrument = &rpc.CoreInstrument{Symbol: "ZZ0000000001", ISIN: "ZZ0000000001", Currency: "EUR"}
+	res.Decision, res.Sizing, res.Evidence, res.Kill, res.NextDecision = nil, nil, nil, nil, ""
+	res.Holding = &rpc.CoreHolding{}
+	res.Action = &core.Decision{Kind: core.ActionHold, Why: "the trend-fund strategy holds: buys stop, and a sale the rule wants goes to you for review"}
+	res.Shadow = &rpc.ShadowView{Strategy: "trend-fund", Stage: "hold", Holding: 159, Records: 3, Recent: res.Shadow.Recent}
 	return res
 }

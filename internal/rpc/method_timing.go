@@ -106,6 +106,7 @@ var methodTimings = []MethodTiming{
 	// The core target measures the mandate as mandate.risk does, then reads
 	// its own stores and runs a few dozen simulations for the headroom.
 	{Method: MethodCoreTarget, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
+	{Method: MethodStrategyTarget, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	// The resolver asks up to six contract-details forms, each bounded.
 	{Method: MethodCoreResolve, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	{Method: MethodOrderPlace, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},

@@ -52,13 +52,38 @@ type Data struct {
 	Chains []ChainNeed  `json:"chains,omitempty"`
 }
 
+// Instrument is the fund a strategy trades: by ISIN and currency, with the
+// owner's optional pins (a contract id among the ISIN's lines, a venue IBKR
+// lists it on). Symbol is the owner's name for it, when the rule compiles
+// one; IBKR's record names the line.
+type Instrument struct {
+	ISIN     string `json:"isin"`
+	Currency string `json:"currency"`
+	Symbol   string `json:"symbol,omitempty"`
+	ConID    int    `json:"con_id,omitempty"`
+	Exchange string `json:"exchange,omitempty"`
+}
+
+// Terms are the owner's numbers the evaluator sizes with: the no-trade band
+// in percent of the target, the minimum order in base currency and the
+// value cap in percent of the budget base × room.
+type Terms struct {
+	BandPct      float64 `json:"band_pct"`
+	MinOrderBase float64 `json:"min_order_base"`
+	MaxValuePct  float64 `json:"max_value_pct"`
+}
+
 // Rule is one compiled rule: the lab spec it implements, the policy form it
 // runs in, whether this build serves its orders, its proposal bucket and its
-// declared data.
+// declared data. A compiled instance (the core) carries its instrument and
+// its filter; a parameterised rule reads them from the entry's keys
+// (internal-docs/design/strategy-evaluator.md §1).
 type Rule struct {
-	ID       string `json:"id"`
-	SpecID   string `json:"spec_id"`
-	SpecHash string `json:"spec_hash"`
+	ID     string `json:"id"`
+	SpecID string `json:"spec_id,omitempty"`
+	// SpecHash is the spec a compiled instance implements; empty for a
+	// parameterised rule, whose entry cites its own.
+	SpecHash string `json:"spec_hash,omitempty"`
 	Form     Form   `json:"form"`
 	// Sends is whether this build serves the rule's orders. A strategy whose
 	// rule does not send runs as shadow whatever its stage says.
@@ -67,18 +92,38 @@ type Rule struct {
 	// pre-authorisable.
 	Bucket string `json:"bucket"`
 	Data   Data   `json:"data"`
+	// Parameterised says the entry's keys supply the instrument, the signal
+	// and the terms; Instrument and Trend are then empty here.
+	Parameterised bool       `json:"parameterised,omitempty"`
+	Instrument    Instrument `json:"instrument,omitzero"`
+	// Trend is the compiled filter's id in core.Trends().
+	Trend string `json:"trend,omitempty"`
 }
 
 // CoreRebalanceBucket is the core's proposal bucket (core-sleeve.md §2).
 const CoreRebalanceBucket = "core_rebalance"
 
+// TimedHoldingRuleID is the parameterised evaluator rule: one fund named by
+// the entry, held while the entry's filter is on, sized to the entry's
+// sleeve's allocation (strategy-evaluator.md). It sends nothing in this
+// build, so every entry on it runs as shadow at most.
+const TimedHoldingRuleID = "timed-holding-v1"
+
+// TimedHoldingBucket is the proposal bucket of its rows, once rows exist;
+// never pre-authorisable.
+const TimedHoldingBucket = "strategy_rebalance"
+
 // Catalogue is the rules this Canary carries. core-ibcf-v1 sends: its
-// monthly rows (core-sleeve.md phase 2, option A) are served as proposals
-// the owner confirms on a device, so a live stage runs live.
+// monthly rows (core-sleeve.md phase 2, option A) are served as proposals the
+// owner confirms on a device, so a live stage runs live. timed-holding-v1
+// sends nothing yet: an entry's rows come after the core's.
 func Catalogue() []Rule {
 	return []Rule{{
 		ID: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash, Form: FormCore, Sends: true, Bucket: CoreRebalanceBucket,
-		Data: Data{Series: []SeriesNeed{{ISIN: core.ISIN, Currency: core.Currency, Symbol: core.Symbol, Sessions: core.WindowCloses}}},
+		Data:       Data{Series: []SeriesNeed{{ISIN: core.ISIN, Currency: core.Currency, Symbol: core.Symbol, Sessions: core.WindowCloses}}},
+		Instrument: Instrument{ISIN: core.ISIN, Currency: core.Currency, Symbol: core.Symbol}, Trend: core.TrendSMA10.ID,
+	}, {
+		ID: TimedHoldingRuleID, Form: FormEntry, Sends: false, Bucket: TimedHoldingBucket, Parameterised: true,
 	}}
 }
 
@@ -121,6 +166,17 @@ type Resolved struct {
 	// another (live written, the build sends nothing; a stage unwritten).
 	Reasons []string `json:"reasons,omitempty"`
 	Notes   []string `json:"notes,omitempty"`
+	// What the evaluator runs (strategy-evaluator.md §1): the instrument,
+	// the filter's id, the terms, the spec the run is recorded under (the
+	// rule's own, or the entry's citation) and the declared data, from the
+	// compiled rule or the entry's keys. Empty on a hold.
+	Instrument Instrument `json:"instrument,omitzero"`
+	Trend      string     `json:"trend,omitempty"`
+	Terms      Terms      `json:"terms,omitzero"`
+	SpecHash   string     `json:"spec_hash,omitempty"`
+	Data       Data       `json:"data,omitzero"`
+	// KillDrawdownK is the kill rule's drawdown bound, nil while unwritten.
+	KillDrawdownK *float64 `json:"kill_drawdown_k,omitempty"`
 }
 
 // Reserves reports whether the entry reserves any of its allocation.
@@ -148,31 +204,60 @@ func resolveOne(e risk.StrategyEntry, rules []Rule) Resolved {
 		r.ScalePct = *e.ScalePct
 	}
 	hold := func(format string, args ...any) { r.Reasons = append(r.Reasons, fmt.Sprintf(format, args...)) }
-	if len(e.Unwritten) > 0 {
-		hold("%s unwritten", strings.Join(e.Unwritten, ", "))
-	}
+	unwritten := slices.Clone(e.Unwritten)
+	var rule Rule
 	if e.Rule != "" {
-		rule, ok := Find(rules, e.Rule)
-		switch {
-		case !ok:
-			hold("rule %s is not compiled into this Canary", e.Rule)
-		default:
+		var ok bool
+		rule, ok = Find(rules, e.Rule)
+		if ok {
 			r.Rule = &rule
-			if e.SpecHash != "" && e.SpecHash != rule.SpecHash {
-				hold("spec_hash %s is not the spec rule %s implements (%s)", e.SpecHash, rule.ID, rule.SpecHash)
+			if rule.Parameterised {
+				unwritten = append(unwritten, parameterisedUnwritten(e)...)
 			}
-			if want := formOf(e); rule.Form != want {
-				if rule.Form == FormCore {
-					hold("rule %s runs only as [mandate.core]", rule.ID)
-				} else {
-					hold("[mandate.core] runs only the core's rule; %s is a [mandate.strategies] rule", rule.ID)
-				}
+		}
+	}
+	if len(unwritten) > 0 {
+		hold("%s unwritten", strings.Join(unwritten, ", "))
+	}
+	switch {
+	case e.Rule == "":
+	case r.Rule == nil:
+		hold("rule %s is not compiled into this Canary", e.Rule)
+	default:
+		if rule.SpecHash != "" && e.SpecHash != "" && e.SpecHash != rule.SpecHash {
+			hold("spec_hash %s is not the spec rule %s implements (%s)", e.SpecHash, rule.ID, rule.SpecHash)
+		}
+		if want := formOf(e); rule.Form != want {
+			if rule.Form == FormCore {
+				hold("rule %s runs only as [mandate.core]", rule.ID)
+			} else {
+				hold("[mandate.core] runs only the core's rule; %s is a [mandate.strategies] rule", rule.ID)
+			}
+		}
+		if rule.Parameterised && e.Signal != "" {
+			if _, ok := core.FindTrend(e.Signal); !ok {
+				hold("signal %s is not in this Canary's library", e.Signal)
 			}
 		}
 	}
 	if len(r.Reasons) > 0 {
 		r.State, r.ScalePct = StateHold, 0
 		return r
+	}
+	r.KillDrawdownK = e.KillDrawdownK
+	if rule.Parameterised {
+		r.Instrument = Instrument{ISIN: e.ISIN, Currency: e.Currency, Exchange: e.Exchange}
+		r.Trend, r.SpecHash = e.Signal, e.SpecHash
+		r.Data = Data{Series: []SeriesNeed{{ISIN: e.ISIN, Currency: e.Currency, Sessions: core.WindowCloses}}}
+	} else {
+		r.Instrument, r.Trend, r.SpecHash, r.Data = rule.Instrument, rule.Trend, rule.SpecHash, rule.Data
+		r.Instrument.Exchange = e.Exchange
+	}
+	if e.ConID != nil && *e.ConID > 0 {
+		r.Instrument.ConID = *e.ConID
+	}
+	if e.BandPct != nil && e.MinOrderBase != nil && e.MaxValuePct != nil {
+		r.Terms = Terms{BandPct: *e.BandPct, MinOrderBase: *e.MinOrderBase, MaxValuePct: *e.MaxValuePct}
 	}
 	stage := e.Stage
 	if stage == "" {
@@ -203,4 +288,26 @@ func formOf(e risk.StrategyEntry) Form {
 		return FormCore
 	}
 	return FormEntry
+}
+
+// parameterisedUnwritten names the evaluator keys a parameterised rule
+// needs that the entry leaves unwritten (strategy-evaluator.md §2).
+func parameterisedUnwritten(e risk.StrategyEntry) []string {
+	var out []string
+	for _, k := range []struct {
+		name    string
+		missing bool
+	}{
+		{"isin", strings.TrimSpace(e.ISIN) == ""},
+		{"currency", strings.TrimSpace(e.Currency) == ""},
+		{"signal", strings.TrimSpace(e.Signal) == ""},
+		{"band_pct", e.BandPct == nil},
+		{"min_order_base", e.MinOrderBase == nil},
+		{"max_value_pct", e.MaxValuePct == nil},
+	} {
+		if k.missing {
+			out = append(out, e.KeyPrefix+"."+k.name)
+		}
+	}
+	return out
 }
