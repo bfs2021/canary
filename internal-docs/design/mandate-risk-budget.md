@@ -665,6 +665,16 @@ holds, and the standalone bound is what keeps "inside its allocation" a
 limit. The owner's room is the owner's allocation less the owner's use: the
 budget, less the machine's allocations, less what the owner's book uses.
 
+The owner approved the change with that guard on 2026-10-18 17:24 CEST, in
+this session's words: "Yes: finish the mandate gate change with the own-risk
+guard while over budget, record it in the Canary docs, run make check and make
+test, land, push and reinstall the daemon." The guard as built (6f182ab6,
+Canary v3.22.1) binds in every state, wider than the approval's "while over
+budget": inside the budget it changes nothing while the machine's
+allocations are zero, and once a machine sleeve trades it narrows the
+owner's room to what the owner's sleeve holds on its own risk. Whether to
+limit it to a book over budget is the owner's call.
+
 - The check judges the order's own sleeve. By the bound above, an order can
   raise another sleeve's use at most to that sleeve's standalone risk.
 - A sleeve over its allocation adds nothing, even an order that would lower its
