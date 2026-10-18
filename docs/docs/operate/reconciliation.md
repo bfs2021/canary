@@ -140,7 +140,15 @@ a same-day statement-versus-runtime equity comparison inside
 `max_equity_divergence_pct`. When that holds, the extension is journaled against
 the report id and `canary recon` says the clock was extended automatically. When
 it does not hold, the report says the automatic extension was not recorded and
-leaves the clock alone.
+leaves the clock alone, and `canary recon status` names the hold in words
+(`evaluation.detail`): a statement past `max_report_age_days`, as over a long
+weekend, is `attention_required` with `report_stale` and extends the clock when
+the next one lands; a clean report the daemon has not judged yet is `waiting`
+with `evaluation_pending`; a degraded report, a policy that is not active or an
+extension that could not be recorded is `failed` with its cause. The daemon
+judges a report again whenever its id changes: at a statement ingest, at the
+day's first account reading, when a revised policy is adopted and after a
+dismissal.
 
 So the human job is the exception and the deliberate case, not a weekly ritual.
 `canary policy capital-event reconcile` remains for a report carrying exceptions

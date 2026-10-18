@@ -13,7 +13,7 @@ const reportReasons = new Set([
 ]);
 const evaluationReasons = new Set([
   "", "none", "report_pending", "account_value_pending", "exceptions_need_review", "account_value_mismatch",
-  "evaluation_failed", "policy_unapproved",
+  "evaluation_failed", "policy_unapproved", "report_stale", "evaluation_pending",
 ]);
 const transportStates = new Set([
   "push_service_accepted", "partial_acceptance", "all_failed", "suppressed", "no_subscription", "missing_keys",
@@ -127,6 +127,7 @@ function reconciliationView(reconciliation) {
   if (["attention_required", "failed"].includes(evaluation.state)) return { key: "needs_you", label: "Needs you", title: "Report comparison needs attention", summary: evaluationCopy(evaluation.reason) };
   if (report.state === "current" && evaluation.state === "complete") return { key: "up_to_date", label: "Up to date", title: "Latest report checked", summary: "The daily broker report is current and Canary finished the automatic comparison." };
   if (report.state === "current" && evaluation.reason === "account_value_pending") return { key: "waiting", label: "Waiting", title: "Report received", summary: "The report is current. Canary is waiting for today's account value before it compares the totals; no action is needed." };
+  if (report.state === "current" && evaluation.reason === "evaluation_pending") return { key: "waiting", label: "Waiting", title: "Report received", summary: "The report is current and clean. Canary compares it at its next check; no action is needed." };
   if (report.state === "due") return { key: "waiting", label: "Waiting", title: "Latest report is due", summary: "Canary is ready to check the latest daily report and will do so automatically." };
   const summary = report.reason === "before_daily_window"
     ? "Canary will check after the daily IBKR report window opens and before your morning report. Nothing needs your attention."
@@ -163,6 +164,7 @@ function evaluationCopy(reason) {
   if (reason === "exceptions_need_review") return "Canary found a cash movement it could not match. Review that exception in the morning brief, then check again.";
   if (reason === "account_value_mismatch") return "The broker report and account value do not match. Review the figures in the morning brief, then check again.";
   if (reason === "policy_unapproved") return "The report arrived, but the local reconciliation settings are incomplete. Approve the missing setting on this Mac.";
+  if (reason === "report_stale") return "The latest report is older than your reconciliation settings allow, as after a long weekend. The next daily report completes the check; nothing else is needed.";
   return "Canary could not finish comparing the report. Check again.";
 }
 

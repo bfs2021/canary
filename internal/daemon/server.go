@@ -459,6 +459,12 @@ type Server struct {
 	// reconMu serializes report-content mutations with report-backed human
 	// and automatic reconcile appends so a report id cannot race a new
 	reconMu sync.Mutex
+	// reconEvaluations is the last report the automatic extension judged
+	// (recon_auto_extend.go).
+	reconEvaluations reconEvaluationRecord
+	// mandateStatus is when the mandate verdict's status last changed
+	// (mandate_status.go).
+	mandateStatus mandateStatusClock
 	// flexFetch tracks the daily Flex statement ingestion for post-trade
 	// the broker; sanitized status only, never the token.
 	flexFetch flexFetchState

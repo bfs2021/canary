@@ -1,5 +1,6 @@
 # canary mandate · COLUMNS=80 · colour off
 Mandate  WITHIN BUDGET
+Since · Sat 5 Sep 09:00 TZ · 5h 00m
 Risk · 23,970 EUR a year · 1-day 1,510 EUR · 99% expected shortfall 4,120 EUR
   · 75% of the budget 32,050 EUR
 Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
@@ -46,6 +47,7 @@ The mandate refuses risk-adding orders. Its reduction is a set of proposals
   is pre-authorised, after the veto window.
 # canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mMandate\x1b[0m  \x1b[32m\x1b[1mWITHIN BUDGET\x1b[0m\x1b[0m
+Since · Sat 5 Sep 09:00 TZ · 5h 00m
 Risk · 23,970 EUR a year · 1-day 1,510 EUR · 99% expected shortfall 4,120 EUR
   · 75% of the budget 32,050 EUR
 Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the

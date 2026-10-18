@@ -479,6 +479,12 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 	if scale > 1 {
 		indexLoss = 39480
 	}
+	// The within book has read so since the morning, the reduce book since
+	// an hour ago; the unknown variants reset it below.
+	since := goldenAt.Add(-5 * time.Hour)
+	if status == mandate.StatusReduce {
+		since = goldenAt.Add(-62 * time.Minute)
+	}
 	verdict := &mandate.Verdict{Status: status, AsOf: goldenAt, BaseCurrency: "EUR", Capital: capital,
 		Risk:      &mandate.Risk{SD1DBase: 1510 * scale, SDAnnualBase: 23970 * scale, ES99Base: 4120 * scale, RatioToBudget: 0.748 * scale, FXContributionPct: 11.2},
 		Stresses:  &mandate.Stresses{GapShockPct: 25, GapCapBase: 22940, IndexShockPct: 10, IndexLossBase: indexLoss},
@@ -501,7 +507,7 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 	if scale > 1 {
 		verdict.Stresses.GapBreaches = []string{"SYNA", "SYNB"}
 	}
-	res := rpc.MandateRiskResult{AsOf: goldenAt, Active: true, Verdict: verdict,
+	res := rpc.MandateRiskResult{AsOf: goldenAt, Active: true, Verdict: verdict, StatusSince: since,
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: "sha256:synthetic"},
 		Policy:            &rpc.MandatePolicyView{MaxLossPct: 30, VolTargetPct: 15, TaxReserveBase: 70000, StartedAt: "2026-09-01", GapShockPct: 25, GapRoomPct: 33.3},
 		Evidence: &rpc.MandateEvidence{EvaluatedAt: goldenAt, EquityAsOf: goldenAt.Add(-2 * time.Minute), PositionsAsOf: goldenAt.Add(-time.Minute),
@@ -609,6 +615,7 @@ func goldenMandateUnknown() rpc.MandateRiskResult {
 	res := goldenMandate(mandate.StatusWithin)
 	v := res.Verdict
 	v.Status = mandate.StatusUnknown
+	res.StatusSince = goldenAt.Add(-50*time.Hour - 10*time.Minute)
 	v.Reasons = []string{"daily history for SYNB is stale (last read 2026-09-02 06:10:00)", "SYNA 20261218 110 C: no implied volatility on the position row"}
 	v.Risk, v.Stresses, v.Underlyings = nil, nil, nil
 	v.Scenarios, v.ScenariosFrom, v.ScenariosTo = 0, "", ""

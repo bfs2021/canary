@@ -109,16 +109,35 @@ func mandateFlowThreshold(equityBase float64) float64 {
 	return math.Max(0.01*equityBase, mandateFlowFloorBase)
 }
 
+// mandatePnLResetBand is how near zero the broker's daily P&L must sit, and
+// how little the equity may have moved beyond it, for a reading to be the
+// first of a new broker day: a quarter of the flow threshold, so a reading
+// misjudged either way can never raise a suspicion by itself.
+func mandatePnLResetBand(equityBase float64) float64 {
+	return mandateFlowThreshold(equityBase) / 4
+}
+
 // mandatePnLStep is the broker's P&L between two consecutive readings: the
-// difference within one session, the new session's own P&L across a
-// session start (the old session's last reading taken as its close).
-// Without it on the readings it needs, the step counts zero: the whole move
-// is unexplained.
-func mandatePnLStep(last mandateFlowBase, pnl mandatePnLReading) float64 {
+// difference of the two daily figures within one broker day, the new day's
+// own figure across the broker's daily reset (the old day's last reading
+// taken as its close). The reset is read from the figures themselves, not
+// from the calendar alone: IBKR starts its day at its own hour, before the
+// New York midnight the session date turns at, so on 2026-10-16 a reading at
+// 23:59:59 New York still carried the trading day's session while the
+// broker's figure was already the new day's zero, and the difference charged
+// a whole down day to a cash flow. A reading whose figure sits within
+// band of zero while the equity moved by no more than that figure (move is
+// the equity move net of flows since the last reading) is the first of a
+// new broker day, and so is one in a new session date. Without the figure
+// on the readings it needs, the step counts zero: the whole move is
+// unexplained.
+func mandatePnLStep(last mandateFlowBase, pnl mandatePnLReading, move, band float64) float64 {
 	switch {
 	case pnl.DailyBase == nil:
 		return 0
 	case last.Session != pnl.Session:
+		return *pnl.DailyBase
+	case math.Abs(*pnl.DailyBase) <= band && math.Abs(move-*pnl.DailyBase) <= band:
 		return *pnl.DailyBase
 	case last.DailyPnL == nil:
 		return 0
@@ -139,16 +158,21 @@ func mandatePnLStep(last mandateFlowBase, pnl mandatePnLReading) float64 {
 // clears only when that cumulative part is back under the threshold (a flow
 // declared or incorporated from the statement accounts for it, or the
 // reading that raised it is undone) or a statement covering its day has
-// been reconciled, which accounts for every flow of that day.
+// been reconciled, which accounts for every flow of that day. Its day is
+// the New York date of the reading that raised it, the date IBKR's
+// statements run by: a reading after UTC midnight but before the New York
+// date turns belongs to the trading day still open, and that day's statement
+// covers it.
 func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *risk.Constitution, equityBase float64, pnl mandatePnLReading, asOf time.Time, flows float64, now time.Time) {
 	threshold := mandateFlowThreshold(equityBase)
+	band := mandatePnLResetBand(equityBase)
 	if s := m.FlowSuspect; s != nil {
 		if m.Last != nil {
-			s.PnLSince += mandatePnLStep(*m.Last, pnl)
+			s.PnLSince += mandatePnLStep(*m.Last, pnl, equityBase-m.Last.EquityBase-(flows-m.Last.FlowsBase), band)
 		}
 		s.Unexplained = equityBase - s.Base.EquityBase - (flows - s.Base.FlowsBase) - s.PnLSince
 		explained := math.Abs(s.Unexplained) <= threshold
-		statement := !st.state.StatementCoverageTo.IsZero() && !utcDateBefore(st.state.StatementCoverageTo, s.At)
+		statement := !st.state.StatementCoverageTo.IsZero() && mandateSessionDate(s.At) <= st.state.StatementCoverageTo.UTC().Format(time.DateOnly)
 		if explained || statement {
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_cleared",
@@ -158,8 +182,9 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 			m.FlowSuspect = nil
 		}
 	} else if m.Last != nil {
-		step := mandatePnLStep(*m.Last, pnl)
-		if unexplained := equityBase - m.Last.EquityBase - (flows - m.Last.FlowsBase) - step; math.Abs(unexplained) > threshold {
+		move := equityBase - m.Last.EquityBase - (flows - m.Last.FlowsBase)
+		step := mandatePnLStep(*m.Last, pnl, move, band)
+		if unexplained := move - step; math.Abs(unexplained) > threshold {
 			m.FlowSuspect = &mandateFlowSuspect{At: asOf, Base: *m.Last, PnLSince: step, Unexplained: unexplained, ThresholdAt: threshold}
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_suspected",

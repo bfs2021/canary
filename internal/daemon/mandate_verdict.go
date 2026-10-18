@@ -278,6 +278,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		Policy:            mandatePolicyView(c.Mandate)}
 	res.Gate = s.mandateGateView(res, now)
 	res.Register = mandateRegisterView(resolved)
+	res.StatusSince = s.mandateStatusSince(ctx, verdict.Status, now)
 	s.mandateVerdicts.set(res, &in, now, fp, !refreshAccount)
 	return res
 }

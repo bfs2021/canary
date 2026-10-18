@@ -652,6 +652,84 @@ func TestMandateUnexplainedEquityMoveHoldsTheRoom(t *testing.T) {
 	})
 }
 
+// The broker's daily P&L starts anew at the broker's own hour, before the
+// New York midnight the session date turns at. On the evening of 2026-10-16
+// a reading at 23:59:59 New York (03:59:59 UTC the next day) still carried
+// the trading day's session date while the broker's figure had already gone
+// back to zero: the within-session step charged a whole down day to
+// a cash flow, and the room was held from Friday night until a statement
+// covering the day was reconciled. The weekend below is that incident on a
+// synthetic book; the reading is explained by the figures themselves (the
+// figure near zero, the equity unmoved), a flow landing in the same reading
+// is still caught, and the Friday statement covers a suspicion raised after
+// UTC midnight but before the New York date turned.
+func TestMandateFlowCheckSurvivesTheBrokerDailyPnLReset(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	utc := func(day, hour, minute int) time.Time { return time.Date(2026, 10, day, hour, minute, 0, 0, time.UTC) }
+	fridayNight := time.Date(2026, 10, 16, 23, 59, 59, 0, ny)
+	if got := mandateSessionDate(fridayNight); got != "2026-10-16" {
+		t.Fatalf("session date of %s = %s", fridayNight, got)
+	}
+	weekend := func(t *testing.T) (*riskCapitalStore, *risk.Constitution, func(time.Time, float64, float64), func(string)) {
+		t.Helper()
+		clock := utc(15, 14, 0)
+		st := newTestRiskCapitalStore(t)
+		st.now = func() time.Time { return clock }
+		c := testMandateConstitution()
+		reconcileNow(t, st)
+		read := func(at time.Time, equity, pnl float64) {
+			clock = at.Add(time.Second)
+			observeWithPnL(st, c, equity, pnl, at)
+		}
+		known := func(note string) {
+			t.Helper()
+			if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); !got.Known {
+				t.Fatalf("%s: %v", note, got.Reasons)
+			}
+		}
+		read(utc(15, 14, 0), 300000, 0)      // Thursday, during the session
+		read(utc(15, 20, 30), 303000, 3000)  // Thursday after the close
+		read(utc(16, 4, 0), 303000, 0)       // Friday 00:00 New York: a new session date, the figure reset
+		read(utc(16, 14, 0), 290000, -13000) // Friday morning
+		read(utc(16, 20, 30), 264000, -39000)
+		known("a down day the broker's P&L explains")
+		return st, c, read, known
+	}
+	t.Run("the figure goes back to zero before the New York date turns", func(t *testing.T) {
+		_, _, read, known := weekend(t)
+		read(fridayNight, 264000, 0)
+		known("the reading at 23:59:59 New York")
+		read(utc(17, 10, 0), 264000, 0) // Saturday
+		read(utc(19, 14, 0), 270000, 6000)
+		known("Monday")
+	})
+	t.Run("a flow in the same reading is still caught", func(t *testing.T) {
+		st, c, read, _ := weekend(t)
+		read(fridayNight, 234000, 0)
+		got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, fridayNight.Add(time.Second))
+		if got.Known || len(got.Reasons) == 0 || !strings.Contains(got.Reasons[0], "a cash flow is suspected") {
+			t.Fatalf("a withdrawal in the reset reading passed: %+v", got)
+		}
+	})
+	t.Run("the statement for the New York date covers it", func(t *testing.T) {
+		st, c, read, known := weekend(t)
+		read(fridayNight, 234000, 0)
+		if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, fridayNight.Add(time.Second)); got.Known {
+			t.Fatalf("not suspected: %+v", got)
+		}
+		// Saturday morning's fetch reconciles Friday's statement: its
+		// coverage date is Friday, the UTC date before the reading's.
+		st.mu.Lock()
+		st.state.StatementCoverageTo = utc(16, 0, 0)
+		st.mu.Unlock()
+		read(utc(17, 6, 30), 234000, 0)
+		known("after the Friday statement")
+	})
+}
+
 // A suspected cash flow makes the verdict unknown: additions are refused and
 // the forced reduction sizes nothing until it is explained.
 func TestMandateSuspectedFlowMakesTheVerdictUnknown(t *testing.T) {

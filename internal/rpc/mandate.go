@@ -38,6 +38,9 @@ type MandateRiskResult struct {
 	Policy *MandatePolicyView `json:"policy,omitempty"`
 	// Verdict is the daemon's evaluation; nil while inactive.
 	Verdict *mandate.Verdict `json:"verdict,omitempty"`
+	// StatusSince is when the verdict's status last changed, as the daemon
+	// has seen it across evaluations and restarts; zero while inactive.
+	StatusSince time.Time `json:"status_since,omitzero"`
 	// Evidence carries the clocks the verdict rests on.
 	Evidence *MandateEvidence `json:"evidence,omitempty"`
 	// Gate says how the additions gate reads the verdict right now.

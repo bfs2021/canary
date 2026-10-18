@@ -1,6 +1,6 @@
 # Post-Trade Truth (Phase 3a): Flex Ingestion and Reconciliation
 
-Updated: 2026-07-21 08:30 CEST
+Updated: 2026-10-18 16:35 CEST
 Status: implemented (phase 3a, 2026-07-13) — live since risk-policy v2 with
 the Flex pull configured. R3/R4 flipped 2026-07-18 with risk-policy v3
 (statement-authoritative flows, clean-report auto-extend of the reconcile
@@ -201,7 +201,15 @@ actual broker coverage date, safe reason, and retry timing. It separates
 report retrieval from report comparison and offers an authenticated
 `Check again` action when that action is safe. Credentials, raw broker text,
 paths, identifiers, and balances never cross that boundary. New `[flex]`
-config regenerates the config reference (`make docs-regen`).
+config regenerates the config reference (`make docs-regen`). The evaluation
+half of `recon.status` is the evaluator's own judgement (`autoExtendHoldFor`,
+`recon_auto_extend.go`): a clean report that does not extend the clock says
+why in `evaluation.detail`, without a report id, an amount or a threshold,
+and a statement past `recon.max_report_age_days` reads `report_stale`
+(attention required), a clean report not yet judged `evaluation_pending`
+(waiting), both bare `evaluation_failed` before 2026-10-18. The daemon judges
+a report again when a revised policy is adopted and after a dismissal, since
+either gives it a new id.
 
 ## Rückbau
 
@@ -246,6 +254,9 @@ never in any marshaled output (grep-style test over RPC results and logs);
 daily-window tests across winter, summer, and DST; restart tests before and
 after raw retention; broker-generation regression and same-date correction
 tests; automatic-retry, action-required, and unavailable Canary fixtures;
+every hold the evaluator knows named by `recon.status` and valid under the
+contract (`TestReconAutomationStatusNamesTheHold`, a revised policy judged
+again: `TestRiskPolicyRevisionTriggersReconEvaluation`);
 `make check` + `make test` binding; live artifact: redacted `canary recon
 --json` (report id, category counts, coverage window — no amounts) plus a
 journaled report-backed reconcile performed by the operator.

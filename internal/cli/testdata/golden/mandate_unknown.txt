@@ -1,5 +1,6 @@
 # canary mandate · COLUMNS=80 · colour off
 Mandate  UNKNOWN
+Since · Thu 3 Sep 11:50 TZ · 2d 2h
 Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
   high-water mark 235,000 EUR
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
@@ -39,6 +40,7 @@ The mandate refuses risk-adding orders. Its reduction is a set of proposals
   is pre-authorised, after the veto window.
 # canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mMandate\x1b[0m  \x1b[33m\x1b[1mUNKNOWN\x1b[0m\x1b[0m
+Since · Thu 3 Sep 11:50 TZ · 2d 2h
 Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
   high-water mark 235,000 EUR
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows

@@ -44,6 +44,9 @@ type riskPolicyManager struct {
 	// placeholder template.
 	review       string
 	onTransition func(prev, next string, c *risk.Constitution)
+	// onRevision runs after a reload adopts a constitution with a new
+	// fingerprint in place of an active one (not the first load).
+	onRevision func(c *risk.Constitution)
 	// fileMu serialises a reread with policy.cash.apply's write of the
 	// constitution (cash_policy_handlers.go), so a reread that read the file
 	// before a save can never publish it after the save and misreport the
@@ -64,6 +67,11 @@ func (s *Server) installRiskPolicyManager() {
 			}
 		}
 	}
+	// A revised constitution gives the reconciliation report a new id (the
+	// id pins the policy), so a clean report is judged again at once rather
+	// than at the next statement ingest or the day's first account reading;
+	// until then recon status read a bare evaluation_failed (2026-10-18).
+	m.onRevision = func(*risk.Constitution) { s.evaluateRiskPolicyV3Reconciliation() }
 	// First reload is deferred until Start has bound SQLite authority. This
 	// prevents construction-time policy transitions from leaking into the
 	// sealed legacy JSONL journal before the daemon owns its state lock.
@@ -151,6 +159,7 @@ func (m *riskPolicyManager) reloadHeld() {
 
 	m.mu.Lock()
 	prevStatus := m.status
+	revised := false
 	m.lastCheckedAt = now
 	switch {
 	case err != nil && errors.Is(err, os.ErrNotExist):
@@ -179,6 +188,7 @@ func (m *riskPolicyManager) reloadHeld() {
 			policy.PolicyVersion == m.active.PolicyVersion && policy.EffectiveFingerprintKey() == m.active.EffectiveFingerprintKey():
 			if m.active == nil || fp != m.lastFingerprint {
 				m.loadedAt = now
+				revised = m.active != nil
 			}
 			m.active = policy
 			m.status = rpc.RiskPolicyStatusActive
@@ -195,6 +205,9 @@ func (m *riskPolicyManager) reloadHeld() {
 
 	if m.onTransition != nil && prevStatus != next {
 		m.onTransition(prevStatus, next, active)
+	}
+	if m.onRevision != nil && revised {
+		m.onRevision(active)
 	}
 }
 

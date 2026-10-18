@@ -367,6 +367,16 @@ func (s *Server) handleReconDismiss(_ context.Context, req *rpc.Request) (*rpc.R
 	if err := requireHumanRiskPolicyOrigin(p.Origin); err != nil {
 		return nil, err
 	}
+	res, err := s.dismissReconLine(p)
+	if err == nil {
+		// The dismissal gives the report a new id; one that is now clean
+		// extends the clock at once rather than at the next trigger.
+		s.evaluateRiskPolicyV3Reconciliation()
+	}
+	return res, err
+}
+
+func (s *Server) dismissReconLine(p rpc.ReconDismissParams) (*rpc.RiskPolicyWriteResult, error) {
 	s.reconMu.Lock()
 	defer s.reconMu.Unlock()
 	scope := s.currentBrokerStateScope()

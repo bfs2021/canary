@@ -1,6 +1,6 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-18 09:10 CEST
+Updated: 2026-10-18 16:35 CEST
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
 gate); increment 2 implemented 2026-10-14 (forced reduction, below);
 increment 3 implemented 2026-10-18 (allocations, below). The
@@ -146,7 +146,13 @@ owner's is recorded and not read: "Risk allocations" below). The
   refused until the owner writes them (data absence never renders ok).
 - Verdict: `within` (risk ≤ budget and no gap breach), `over` (risk >
   budget), `reduce` (risk > 1.25 × budget, or any gap-cap breach),
-  `unknown` (anything the measurement lacks).
+  `unknown` (anything the measurement lacks). The result carries
+  `status_since`, when the status last changed as the daemon has seen it
+  across evaluations and restarts (a `mandate_status` state document; each
+  change journaled as `mandate_status_changed` with how long the old status
+  held), because a machine sleeve cannot trade while the verdict is unknown
+  and the owner asked how often and how long it is (2026-10-18);
+  `canary mandate` prints it as "Since".
 - Enforcement class: pre-trade hard gate for additions (`mandate_budget`
   blocker), at the same four enforcement points as the drawdown brake (order
   preview, strategy preview, admission, the final wire guard), with the
@@ -385,9 +391,21 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   observation the capital state keeps the broker's daily P&L of the same
   read and judges the unexplained part of the move since the last
   observation: the move net of declared and statement flows, less the
-  P&L over the same span (the new session's own P&L across a session
-  start; zero where the broker reports none, so without P&L the whole move
-  counts). More than max(1% of equity, 1,000 in base currency) is a
+  P&L over the same span: the difference of the two daily figures within
+  one broker day, the new day's own figure across the broker's daily reset
+  (the old day's last reading taken as its close); zero where the broker
+  reports none, so without P&L the whole move counts. The reset is read
+  from the figures themselves and from the session date, never from the
+  calendar alone: IBKR starts its day at its own hour, before the New York
+  midnight the session date turns at, so a reading whose daily figure sits
+  within a quarter of the flow threshold of zero while the equity moved by
+  no more than that figure is the first of a new broker day, and so is a
+  reading in a new session date (2026-10-18 after the 2026-10-16 incident:
+  a reading at 23:59:59 New York still carried the trading day's session
+  while the broker's figure was already the new day's zero, and the
+  difference charged a whole down day to a flow; every machine sleeve was
+  refused from Friday night on, and Saturday's statement did not clear it,
+  below). More than max(1% of equity, 1,000 in base currency) is a
   suspected flow (`flow_suspect`, journaled `mandate_flow_suspected`); the
   floor stands for the accruals a broker posts to cash that its daily P&L
   may not carry (interest, a dividend, a fee), and a flow that small moves
@@ -401,7 +419,13 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   (`mandate_flow_cleared`) only when that cumulative part is back under
   the threshold, because a declared or statement flow accounts for it or
   the reading that raised it is undone (a glitch), or when a statement
-  covering its day has been reconciled. How the owner clears it: declare
+  covering its day has been reconciled: its day is the New York date of
+  the reading that raised it, the date IBKR's statements run by, so a
+  reading after UTC midnight but before the New York date turns belongs
+  to the trading day still open and that day's statement covers it (the
+  first build compared UTC dates, and Friday's statement, fetched Saturday
+  morning, never covered a suspicion raised at 23:59 New York Friday).
+  How the owner clears it: declare
   the flow (`canary policy capital-event deposit|withdrawal --amount …
   --effective-at …`), or let the next statement reconciliation cover the
   day. A suspicion nothing explains stays in the safe direction, the room
@@ -425,9 +449,15 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   reads the broker's daily P&L: a P&L feed that lags a fast market, or
   is missing, can suspect a flow (the safe direction: the room is held)
   until it catches up, the flow is declared or a statement covers the
-  day. One unit of an order may exceed a cap, judged by the order gate as
-  for the governor. After any fill the batch waits for the next verdict
-  (at most two minutes).
+  day. Two more holds are accepted the same way: a reading taken long
+  before the broker's day closed leaves that day's later P&L untracked, so
+  the next day's first reading charges it to a flow (the broker's
+  previous-day equity is not read; the statement clears it); and a flow
+  landing in the very reading that carries the broker's reset is caught
+  but measured against the within-day step, so a declaration alone does
+  not clear it before the statement does. One unit of an order may exceed
+  a cap, judged by the order gate as for the governor. After any fill the
+  batch waits for the next verdict (at most two minutes).
 - **Verification** (synthetic books;
   `internal/daemon/mandate_reduction_test.go`,
   `mandate_reduction_review_test.go`, `mandate_reduction_automatic_test.go`,
@@ -444,7 +474,11 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   of the plan, a partly filled sale in it; the maximum loss reduces to the
   hedges and encodes; a glitch never raises the mark; an unexplained equity
   move holds the room until declared or a statement covers it, a P&L-explained
-  one does not; the merge under the latch and with automatic channels; the
+  one does not; the broker's daily reset before the New York date turns is
+  no flow, a flow in that reading is, and the statement for the New York
+  date covers a suspicion raised after UTC midnight
+  (`TestMandateFlowCheckSurvivesTheBrokerDailyPnLReset`, `mandate_gate_test.go`);
+  the merge under the latch and with automatic channels; the
   veto clock kept within one lot, renewed on a larger growth and in a new
   session or episode, a veto holding the line; the next session's row a new
   revision; `unknown`, stale and changed-book verdicts hold a standing batch
@@ -863,6 +897,7 @@ internal/rpc/mandate.go                mandate.risk method, result types, FetchM
 internal/daemon/mandate_capital.go     high-water mark, room, daily samples (inside the risk_capital document)
 internal/daemon/mandate_history.go     decision-grade daily closes, background refresh
 internal/daemon/mandate_verdict.go     evaluation cache, RPC handler, mandate_budget gate
+internal/daemon/mandate_status.go      when the verdict's status last changed (status_since)
 internal/daemon/mandate_reduction.go   forced reduction: sizing, hold, release, rows
 internal/daemon/mandate_allocations.go       allocation plan and placement, the allocation check
 internal/cli/mandate.go                canary mandate [--json]

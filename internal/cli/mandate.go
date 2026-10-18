@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/rpc"
@@ -72,6 +73,23 @@ func mandateCap(v float64) string {
 	return groupThousands(fmt.Sprintf("%.0f", math.Abs(v)))
 }
 
+// mandateHeldWords says how long the verdict has read as it does: days and
+// hours past a day, else hours and minutes.
+func mandateHeldWords(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	days, hours, minutes := int(d/(24*time.Hour)), int(d%(24*time.Hour)/time.Hour), int(d%time.Hour/time.Minute)
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh", days, hours)
+	case hours > 0:
+		return fmt.Sprintf("%dh %02dm", hours, minutes)
+	default:
+		return fmt.Sprintf("%dm", minutes)
+	}
+}
+
 // mandateShare prints a contribution share with one decimal.
 func mandateShare(v float64) string {
 	return strings.Replace(fmt.Sprintf("%.1f%%", v), "-", "−", 1)
@@ -96,6 +114,9 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 		headline, tone = "REDUCE", "red"
 	}
 	riskDisplayLine(env, env.bold("Mandate")+"  ", headline, func(s string) string { return riskTone(env, tone, env.bold(s)) })
+	if !res.StatusSince.IsZero() {
+		riskReadLine(env, "Since", res.StatusSince.Local().Format("Mon 2 Jan 15:04 MST"), mandateHeldWords(res.AsOf.Sub(res.StatusSince)))
+	}
 	if v.Risk != nil {
 		share := "budget 0"
 		if v.Capital.BudgetAnnualSD > 0 {

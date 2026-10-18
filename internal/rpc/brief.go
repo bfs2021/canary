@@ -1177,6 +1177,14 @@ const (
 	ReconEvaluationReasonAccountValueMismatch = "account_value_mismatch"
 	ReconEvaluationReasonEvaluationFailed     = "evaluation_failed"
 	ReconEvaluationReasonPolicyUnapproved     = "policy_unapproved"
+	// ReconEvaluationReasonReportStale: the newest statement, or the day
+	// its equity pairs with, is older than recon.max_report_age_days, so a
+	// clean report extends nothing until a fresher one lands
+	// (attention_required). ReconEvaluationReasonEvaluationPending: the
+	// report is clean and not yet extended; Detail says what extends it
+	// (waiting). Both read evaluation_failed before 2026-10-18.
+	ReconEvaluationReasonReportStale       = "report_stale"
+	ReconEvaluationReasonEvaluationPending = "evaluation_pending"
 )
 
 // Recon report statuses.
@@ -1323,10 +1331,13 @@ type ReconFetchStatus struct {
 
 // ReconEvaluationStatus reports what happened after the broker report was
 // acquired. It intentionally does not expose report ids, amounts, or policy
-// thresholds.
+// thresholds. Detail names the cause in words under the same rule, so a
+// failed or waiting evaluation says what holds it (2026-10-18: before, every
+// hold the evaluator knew read as the bare evaluation_failed).
 type ReconEvaluationStatus struct {
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // ReconAutomationStatus keeps acquisition and evaluation separate so a
@@ -1443,6 +1454,8 @@ func ValidateReconAutomationStatus(status ReconAutomationStatus) error {
 		ReconEvaluationReasonAccountValueMismatch: true,
 		ReconEvaluationReasonEvaluationFailed:     true,
 		ReconEvaluationReasonPolicyUnapproved:     true,
+		ReconEvaluationReasonReportStale:          true,
+		ReconEvaluationReasonEvaluationPending:    true,
 	}
 	if !reportStates[status.Report.State] || !reportReasons[status.Report.Reason] {
 		return errors.New("invalid reconciliation report automation state")
@@ -1500,7 +1513,9 @@ func ValidateReconAutomationStatus(status ReconAutomationStatus) error {
 	}
 	switch status.Evaluation.State {
 	case ReconEvaluationStateWaiting:
-		if status.Evaluation.Reason != ReconEvaluationReasonReportPending && status.Evaluation.Reason != ReconEvaluationReasonAccountValuePending {
+		switch status.Evaluation.Reason {
+		case ReconEvaluationReasonReportPending, ReconEvaluationReasonAccountValuePending, ReconEvaluationReasonEvaluationPending:
+		default:
 			return errors.New("waiting reconciliation evaluation has an invalid reason")
 		}
 	case ReconEvaluationStateChecking:
@@ -1512,7 +1527,9 @@ func ValidateReconAutomationStatus(status ReconAutomationStatus) error {
 			return errors.New("complete reconciliation evaluation carries a reason")
 		}
 	case ReconEvaluationStateAttentionRequired:
-		if status.Evaluation.Reason != ReconEvaluationReasonExceptionsNeedReview && status.Evaluation.Reason != ReconEvaluationReasonAccountValueMismatch {
+		switch status.Evaluation.Reason {
+		case ReconEvaluationReasonExceptionsNeedReview, ReconEvaluationReasonAccountValueMismatch, ReconEvaluationReasonReportStale:
+		default:
 			return errors.New("attention-required reconciliation evaluation has an invalid reason")
 		}
 	case ReconEvaluationStateFailed:
