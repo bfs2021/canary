@@ -193,10 +193,12 @@ section, required detail level, and `Select All` repair, then asks before
 accepting that uncertainty. It refuses activation when a non-empty section
 proves that a named field is missing.
 
-For unattended recovery, `canary setup reporting --accept-unproved` accepts
-only absent-section uncertainty. It never accepts a field that a returned row
-proves missing. Use the flag only after comparing the Portal definition with
-the generated field reference.
+`canary setup reporting --accept-unproved` skips the additional confirmation
+for absent sections. The wizard still requires an interactive terminal and
+prompts for the Query ID and hidden token. It never accepts missing fields
+proved by returned rows. Use the flag only after comparing the Portal definition
+with the generated field reference. For provisioning without running the wizard,
+use the manual configuration below.
 
 On success, Canary updates the `[flex]` settings atomically, keeps one private
 local config backup for rollback, restarts the daemon, and prints the shared

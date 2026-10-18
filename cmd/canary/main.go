@@ -13,6 +13,7 @@ import (
 	"slices"
 	"syscall"
 	"time"
+	_ "time/tzdata" // Standalone binaries must work without system timezone packages.
 
 	"github.com/osauer/canary/v2/internal/cli"
 	"github.com/osauer/canary/v2/internal/dial"

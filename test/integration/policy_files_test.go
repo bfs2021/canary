@@ -15,13 +15,12 @@ import (
 // alone and never stops the daemon.
 func TestLifecycle_FreshInstallWritesPolicyFilesAndRestartsKeepThem(t *testing.T) {
 	t.Parallel()
-	env, socketPath, logPath := lifecycleEnv(t)
+	env, socketPath, _ := lifecycleEnv(t)
 	policies := filepath.Join(filepath.Dir(socketPath), "home", ".config", "ibkr", "policies")
 	names := []string{"rulebook-policy.toml", "protection-policy.toml", "opportunity-policy.toml", "risk-policy.toml"}
 
-	if out, code := runCLI(t, env, 30*time.Second, "status", "--json"); code != 0 {
-		t.Fatalf("first start: exit %d\n%s", code, out)
-	}
+	out, code := runCLI(t, env, 30*time.Second, "status", "--json")
+	requireOfflineDaemonStatus(t, out, code)
 	for _, name := range names {
 		data, err := os.ReadFile(filepath.Join(policies, name))
 		if err != nil || !strings.HasPrefix(string(data), "# Canary defaults, not yet reviewed.\n") {
@@ -37,17 +36,15 @@ func TestLifecycle_FreshInstallWritesPolicyFilesAndRestartsKeepThem(t *testing.T
 	if err := os.WriteFile(filepath.Join(policies, "protection-policy.toml"), []byte(broken), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := runCLI(t, env, 30*time.Second, "status", "--json"); code != 0 {
-		log, _ := os.ReadFile(logPath)
-		t.Fatalf("a broken policy file stopped the daemon: exit %d\n%s\n%s", code, out, log)
-	}
+	out, code = runCLI(t, env, 30*time.Second, "status", "--json")
+	requireOfflineDaemonStatus(t, out, code)
 	if data, err := os.ReadFile(filepath.Join(policies, "rulebook-policy.toml")); err != nil || !strings.HasPrefix(string(data), "# Canary defaults, not yet reviewed.\n") {
 		t.Fatalf("deleted rulebook file was not written again: %v", err)
 	}
 	if data, _ := os.ReadFile(filepath.Join(policies, "protection-policy.toml")); string(data) != broken {
 		t.Fatal("the daemon rewrote a broken protection file")
 	}
-	out, code := runCLI(t, env, 30*time.Second, "policy", "show", "--json")
+	out, code = runCLI(t, env, 30*time.Second, "policy", "show", "--json")
 	if code != 0 || !strings.Contains(out, `"policy": "protection"`) || !strings.Contains(out, `"review": "unreviewed"`) {
 		t.Fatalf("policy show: exit %d\n%s", code, out)
 	}

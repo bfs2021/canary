@@ -18,16 +18,16 @@ By class
 
 Fills
   2026-09-05 14:00:03 TZ  BUY 2 SYNX 261016C00100000 @ 1.3000 USD (canary)
-    quote 1.2000 / 1.3000 · mid 1.2500 · read 2.2 s after the fill · half-spread
-    +10.00 USD = +9.00 EUR
-  2026-09-05 14:05:03 TZ  SELL 100 AAA @ 10.4000 USD (canary)
-    quote 10.4000 / 10.6000 · mid 10.5000 · read 1.5 s after the fill ·
+    feed live · quote 1.2000 / 1.3000 · mid 1.2500 · read 2.2 s after the fill ·
     half-spread +10.00 USD = +9.00 EUR
+  2026-09-05 14:05:03 TZ  SELL 100 AAA @ 10.4000 USD (canary)
+    feed live · quote 10.4000 / 10.6000 · mid 10.5000 · read 1.5 s after the
+    fill · half-spread +10.00 USD = +9.00 EUR
   2026-09-05 15:00:03 TZ  BUY 10 BBB @ 5.0000 USD (broker)
-    unknown: timeout
+    feed unknown · unknown: timeout
   2026-09-05 16:00:03 TZ  SELL 1 SYNX 261120P00090000 @ 2.0000 USD (broker)
-    quote 1.9000 / 2.1000 · mid 2.0000 · read 40.0 s after the fill · unknown:
-    multiplier_unknown
+    feed live · quote 1.9000 / 2.1000 · mid 2.0000 · read 40.0 s after the fill
+    · unknown: multiplier_unknown
 
 Executions from the account
   poll every 60 s · last 14:00:05 TZ complete · 2 executions
@@ -56,16 +56,16 @@ By class
 
 Fills
   2026-09-05 14:00:03 TZ  BUY 2 SYNX 261016C00100000 @ 1.3000 USD (canary)
-    quote 1.2000 / 1.3000 · mid 1.2500 · read 2.2 s after the fill · half-spread
-    +10.00 USD = +9.00 EUR
-  2026-09-05 14:05:03 TZ  SELL 100 AAA @ 10.4000 USD (canary)
-    quote 10.4000 / 10.6000 · mid 10.5000 · read 1.5 s after the fill ·
+    feed live · quote 1.2000 / 1.3000 · mid 1.2500 · read 2.2 s after the fill ·
     half-spread +10.00 USD = +9.00 EUR
+  2026-09-05 14:05:03 TZ  SELL 100 AAA @ 10.4000 USD (canary)
+    feed live · quote 10.4000 / 10.6000 · mid 10.5000 · read 1.5 s after the
+    fill · half-spread +10.00 USD = +9.00 EUR
   2026-09-05 15:00:03 TZ  BUY 10 BBB @ 5.0000 USD (broker)
-    unknown: timeout
+    feed unknown · unknown: timeout
   2026-09-05 16:00:03 TZ  SELL 1 SYNX 261120P00090000 @ 2.0000 USD (broker)
-    quote 1.9000 / 2.1000 · mid 2.0000 · read 40.0 s after the fill · unknown:
-    multiplier_unknown
+    feed live · quote 1.9000 / 2.1000 · mid 2.0000 · read 40.0 s after the fill
+    · unknown: multiplier_unknown
 
 Executions from the account
   poll every 60 s · last 14:00:05 TZ complete · 2 executions

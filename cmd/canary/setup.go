@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -41,6 +42,23 @@ func runSetup(args []string) int {
 
 	switch target {
 	case "claude-desktop":
+		var rest []string
+		if len(args) > 0 {
+			rest = args[1:]
+		}
+		fs := flag.NewFlagSet("canary setup claude-desktop", flag.ContinueOnError)
+		fs.SetOutput(os.Stderr)
+		fs.Usage = func() { fmt.Fprintln(os.Stdout, "Usage: canary setup [claude-desktop]") }
+		if err := fs.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		if fs.NArg() != 0 {
+			fmt.Fprintln(os.Stderr, "canary setup claude-desktop: unexpected argument")
+			return 2
+		}
 		return setupClaudeDesktop()
 	case "app":
 		return setupAppLaunchAgent(args[1:])
@@ -105,6 +123,10 @@ func setupClaudeDesktop() int {
 			fmt.Fprintln(os.Stderr, "  fix or delete the file and re-run, or restore from backup")
 			return 1
 		}
+		if _, err := mergeCanaryMCPEntry(cfg, binPath); err != nil {
+			fmt.Fprintf(os.Stderr, "canary setup: %v\n", err)
+			return 1
+		}
 		// Backup so the user has a one-step rollback.
 		stamp := time.Now().Format("20060102-150405")
 		backup := configPath + ".bak-" + stamp
@@ -152,18 +174,35 @@ func setupClaudeDesktop() int {
 // path and returns the marshalled JSON bytes (with trailing newline) that
 // claude_desktop_config.json should contain. Unrelated top-level keys are
 // preserved; the mcpServers map is created if absent, the exact retired `ibkr`
-// entry is removed, and the canonical `canary` entry is replaced. Pure — no
+// entry is migrated, preserving environment and unrelated integration options. Pure — no
 // I/O — so it carries the merge invariants for unit tests.
 func mergeCanaryMCPEntry(cfg map[string]any, binPath string) ([]byte, error) {
-	servers, _ := cfg["mcpServers"].(map[string]any)
+	if cfg == nil {
+		return nil, errors.New("existing config must be a JSON object, not null")
+	}
+	servers, ok := cfg["mcpServers"].(map[string]any)
+	if _, exists := cfg["mcpServers"]; exists && (!ok || servers == nil) {
+		return nil, errors.New("mcpServers must be a JSON object")
+	}
 	if servers == nil {
 		servers = map[string]any{}
 	}
-	delete(servers, "ibkr")
-	servers["canary"] = map[string]any{
-		"command": binPath,
-		"args":    []string{"mcp"},
+	entry := map[string]any{}
+	// Migrate the retired entry's environment too, when no canonical entry exists.
+	existing, exists := servers["canary"]
+	if !exists {
+		existing, exists = servers["ibkr"]
 	}
+	if exists {
+		old, ok := existing.(map[string]any)
+		if !ok || old == nil {
+			return nil, errors.New("canary MCP entry must be a JSON object")
+		}
+		maps.Copy(entry, old)
+	}
+	entry["command"], entry["args"] = binPath, []string{"mcp"}
+	delete(servers, "ibkr")
+	servers["canary"] = entry
 	cfg["mcpServers"] = servers
 
 	// Two-space indent matches what Claude Desktop writes by default.

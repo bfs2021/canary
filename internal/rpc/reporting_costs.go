@@ -11,7 +11,7 @@ import (
 // and the half-spread each fill paid against the mid of that quote.
 const (
 	MethodReportingCosts        = "reporting.costs"
-	ReportingCostsSchemaVersion = "canary-reporting-costs-v1"
+	ReportingCostsSchemaVersion = "canary-reporting-costs-v2"
 
 	// FillQuoteSourceCanary marks a fill of an order Canary placed.
 	FillQuoteSourceCanary = "canary"
@@ -127,16 +127,23 @@ type CostCoverage struct {
 	Ratio   *float64 `json:"ratio,omitempty"`
 }
 
-// CostTotal is one line of a breakdown. HalfSpreadBase sums the measured
-// fills that could be converted; Unconverted counts measured fills without an
-// FX rate, which the base sum therefore omits.
+// CostCurrencyAmount keeps historically converted money in its own unit.
+type CostCurrencyAmount struct {
+	Currency       string  `json:"currency"`
+	HalfSpreadBase float64 `json:"half_spread_base"`
+}
+
+// CostTotal is one breakdown with measured amounts grouped by conversion currency.
+// The legacy scalar is present only when the entire report has one base currency.
+// Unconverted counts measured fills without a known FX rate or base currency.
 type CostTotal struct {
-	Key            string   `json:"key"`
-	Fills          int      `json:"fills"`
-	Measured       int      `json:"measured"`
-	Unknown        int      `json:"unknown"`
-	Unconverted    int      `json:"unconverted,omitempty"`
-	HalfSpreadBase *float64 `json:"half_spread_base,omitempty"`
+	ByCurrency     []CostCurrencyAmount `json:"by_currency,omitempty"`
+	Key            string               `json:"key"`
+	Fills          int                  `json:"fills"`
+	Measured       int                  `json:"measured"`
+	Unknown        int                  `json:"unknown"`
+	Unconverted    int                  `json:"unconverted,omitempty"`
+	HalfSpreadBase *float64             `json:"half_spread_base,omitempty"`
 }
 
 // CostFill is one fill with its quote and the half-spread it paid:
@@ -144,6 +151,7 @@ type CostTotal struct {
 // and in the base currency at the fill's FX rate. Positive is cost paid,
 // negative is price improvement. Status unknown carries the reason.
 type CostFill struct {
+	BaseCurrency   string    `json:"base_currency,omitempty"`
 	ExecID         string    `json:"exec_id"`
 	Source         string    `json:"source"`
 	At             time.Time `json:"at,omitzero"`
@@ -219,6 +227,12 @@ func ValidateReportingCostsResult(result ReportingCostsResult) error {
 		}
 		switch fill.Status {
 		case CostFillMeasured:
+			if fill.Quote.DataType != MarketDataLive {
+				return errors.New("measured costs require an explicitly live quote")
+			}
+			if fill.HalfSpreadBase != nil && fill.BaseCurrency == "" {
+				return errors.New("converted cost lacks its base currency")
+			}
 			if fill.Quote.Mid == nil || fill.HalfSpread == nil || fill.Quote.Status != FillQuoteQuoted {
 				return errors.New("measured reporting costs fill lacks its mid or half-spread")
 			}
@@ -255,6 +269,19 @@ func ValidateReportingCostsResult(result ReportingCostsResult) error {
 	}
 	for _, totals := range [][]CostTotal{result.ByMonth, result.BySource, result.ByClass} {
 		for _, total := range totals {
+			if total.HalfSpreadBase != nil && result.BaseCurrency == "" {
+				return errors.New("scalar cost total lacks an unambiguous base currency")
+			}
+			seen := map[string]bool{}
+			for _, amount := range total.ByCurrency {
+				if amount.Currency == "" || seen[amount.Currency] || math.IsNaN(amount.HalfSpreadBase) || math.IsInf(amount.HalfSpreadBase, 0) {
+					return errors.New("invalid currency cost total")
+				}
+				seen[amount.Currency] = true
+			}
+			if total.HalfSpreadBase != nil && len(total.ByCurrency) > 0 && (len(total.ByCurrency) != 1 || total.ByCurrency[0].Currency != result.BaseCurrency || total.ByCurrency[0].HalfSpreadBase != *total.HalfSpreadBase) {
+				return errors.New("scalar cost total disagrees with currency totals")
+			}
 			if total.Key == "" || total.Fills != total.Measured+total.Unknown || total.Unconverted > total.Measured {
 				return errors.New("invalid reporting costs total")
 			}

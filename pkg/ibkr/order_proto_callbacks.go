@@ -16,6 +16,9 @@ const (
 )
 
 type inboundOrderProtoSummary struct {
+	modifyTermsKnown     bool
+	modifyUnsupported    string
+	openClose            string
 	deactivated          *bool
 	algoStrategy         string
 	adaptivePriority     string
@@ -208,6 +211,9 @@ func appendOrderSummaryFields(fields []string, summary inboundOrderProtoSummary)
 		fields = append(fields, "deactivated="+strconv.FormatBool(*summary.deactivated))
 	}
 	return append(fields,
+		"modifyTermsKnown="+strconv.FormatBool(summary.modifyTermsKnown),
+		"modifyUnsupported="+summary.modifyUnsupported,
+		"openClose="+summary.openClose,
 		"algoStrategy="+summary.algoStrategy,
 		"adaptivePriority="+summary.adaptivePriority,
 		"action="+summary.action,
@@ -249,6 +255,9 @@ func parseOpenOrderProtoCallback(body []byte) (inboundOrderProtoSummary, error) 
 		}
 		return nil
 	})
+	if !summary.transmit && summary.modifyUnsupported == "" {
+		summary.modifyUnsupported = "order is not explicitly transmitted"
+	}
 	return summary, err
 }
 
@@ -373,7 +382,13 @@ func parseInboundContractProto(body []byte, summary *inboundOrderProtoSummary) e
 }
 
 func parseInboundOrderProto(body []byte, summary *inboundOrderProtoSummary) error {
+	summary.modifyTermsKnown = true
 	return forEachProtoField(body, func(fieldNumber, wireType int, value []byte) error {
+		// Refuse non-default attributes that our replacement encoder cannot
+		// round-trip. Never infer their absence from the lossy public summary.
+		if !twsModifySupportedField(fieldNumber) && protoOrderFieldHasValue(fieldNumber, wireType, value) && summary.modifyUnsupported == "" {
+			summary.modifyUnsupported = fmt.Sprintf("unsupported broker order field %d", fieldNumber)
+		}
 		switch fieldNumber {
 		case 61:
 			if wireType != protoWireBytes {
@@ -399,8 +414,10 @@ func parseInboundOrderProto(body []byte, summary *inboundOrderProtoSummary) erro
 			}); err != nil {
 				return err
 			}
-			if key == "adaptivePriority" {
+			if key == "adaptivePriority" && summary.adaptivePriority == "" {
 				summary.adaptivePriority = param
+			} else {
+				summary.modifyUnsupported = "unsupported or duplicate algorithm parameter"
 			}
 
 		case 1:
@@ -497,6 +514,8 @@ func parseInboundOrderProto(body []byte, summary *inboundOrderProtoSummary) erro
 				return err
 			}
 			summary.transmit = v != 0
+		case 68:
+			summary.openClose = string(value)
 		case 138: // IBKR Order.deactivate; absence is not false on older callbacks.
 			v, err := protoVarintValue(fieldNumber, wireType, value)
 			if err != nil || v > 1 {
@@ -514,6 +533,33 @@ func parseInboundOrderProto(body []byte, summary *inboundOrderProtoSummary) erro
 		}
 		return nil
 	})
+}
+
+// These fields are identity/receipt fields or are preserved by the DAY LMT
+// replacement. All other meaningful terms require a dedicated round trip.
+func twsModifySupportedField(field int) bool {
+	switch field {
+	case 1, 2, 3, 5, 6, 8, 9, 11, 12, 19, 27, 28, 30, 31, 61, 62, 66, 68, 138:
+		return true
+	}
+	return false
+}
+
+func protoOrderFieldHasValue(field, wire int, value []byte) bool {
+	switch wire {
+	case protoWireBytes:
+		return len(value) > 0
+	case protoWireVarint:
+		v, err := protoVarintValue(field, wire, value)
+		// IBKR's exempt-code default is -1; other integer unset fields use MAX_INT.
+		return err != nil || (v != 0 && v != math.MaxInt32 && !(field == 72 && int32(v) == -1))
+	case protoWireFixed64:
+		v, err := protoFixed64Value(field, wire, value)
+		f := math.Float64frombits(v)
+		return err != nil || (f != 0 && f != math.MaxFloat64)
+	default:
+		return true
+	}
 }
 
 func parseInboundOrderStateProto(body []byte, summary *inboundOrderProtoSummary) error {

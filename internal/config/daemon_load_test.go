@@ -167,3 +167,27 @@ func TestLoadForDaemonReadsACleanFileAsLoadDoes(t *testing.T) {
 		t.Fatalf("missing file: %v %+v %v", cfg, issues, err)
 	}
 }
+
+func TestDaemonPreservesExplicitZeroIdleTimeout(t *testing.T) {
+	for _, extra := range []string{"", "[extras]\nignored=true\n", "[spx]\nmembers_auto_refresh=tru\n"} {
+		cfg, _, err := LoadForDaemon(writeDaemonConfig(t, "[daemon]\nidle_timeout=\"0s\"\n"+extra))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := cfg.Resolve()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Daemon.IdleTimeout.Std() != 0 {
+			t.Fatalf("daemon replaced zero in %q with %s", extra, got.Daemon.IdleTimeout.Std())
+		}
+	}
+	cfg, issues, err := LoadForDaemon(writeDaemonConfig(t, "[daemon]\nidle_timeout=\"invalid\"\n"))
+	if err != nil || len(issues) == 0 {
+		t.Fatalf("invalid duration %v %v", issues, err)
+	}
+	got, err := cfg.Resolve()
+	if err != nil || got.Daemon.IdleTimeout.Std().String() != "15m0s" {
+		t.Fatalf("invalid duration did not default: %+v %v", got, err)
+	}
+}

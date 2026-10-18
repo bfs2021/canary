@@ -97,7 +97,9 @@ TARBALL="${archive_product}-${VERSION}-${PLATFORM}.tar.gz"
 TARBALL_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
 SUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
 
-tmp=$(mktemp -d -t canary-install.XXXXXX)
+# gpg-agent creates Unix sockets here; macOS TMPDIR paths can exceed
+# the socket path limit. mktemp creates a private directory on both platforms.
+tmp=$(mktemp -d /tmp/canary.XXXXXX)
 canonical_stage=""
 canonical_retired=""
 pre_upgrade_retired=""
@@ -193,7 +195,7 @@ if [ -s "$tmp/SHA256SUMS.asc" ]; then
 		step "Verifying PGP signature on SHA256SUMS..."
 		# Fetch the release-signing public key from the tagged source tree, then
 		mkdir -p "$tmp/gnupg" && chmod 700 "$tmp/gnupg"
-		if curl -fsSL "$KEY_URL" | GNUPGHOME="$tmp/gnupg" gpg --batch --quiet --import 2>/dev/null; then
+		if curl -fsSL "$KEY_URL" | GNUPGHOME="$tmp/gnupg" gpg --batch --quiet --import 2>"$tmp/gpg-import.err"; then
 			got_fp=$(GNUPGHOME="$tmp/gnupg" gpg --batch --with-colons --fingerprint 2>/dev/null \
 				| awk -F: '/^fpr:/{print $10; exit}')
 			if [ "$got_fp" != "$EXPECTED_FP" ]; then
@@ -206,6 +208,7 @@ if [ -s "$tmp/SHA256SUMS.asc" ]; then
 			fi
 		else
 			if [ "$require_sig" = "1" ]; then
+				cat "$tmp/gpg-import.err" >&2
 				fail "could not fetch/import release-signing key for $VERSION — aborting"
 			fi
 			warn "Couldn't fetch maintainer key; skipping PGP verification for pre-v1 release"
@@ -357,7 +360,7 @@ if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
 		# Pick the rc file and the export syntax from $SHELL.
 		case "${SHELL:-}" in
 			*/fish)
-				rc="$HOME/.config/fish/config.fish"
+				rc="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
 				line="set -gx PATH \$HOME/.local/bin \$PATH"
 				;;
 			*/zsh)
@@ -378,6 +381,7 @@ if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
 		if [ -f "$rc" ] && grep -Fq '$HOME/.local/bin' "$rc" 2>/dev/null; then
 			info "$INSTALL_DIR already referenced in $rc — leaving it alone"
 		else
+			mkdir -p "$(dirname "$rc")"
 			printf '\n# Added by Canary installer\n%s\n' "$line" >> "$rc"
 			info "Added $INSTALL_DIR to PATH in $rc"
 			warn "Open a new terminal (or run: source $rc) for canary to be on PATH in this shell"

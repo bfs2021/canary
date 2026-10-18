@@ -39,7 +39,12 @@ const (
 // This is solely a quiescence/dual-authority safety predicate. Callers should
 // pass filepath.Base(path) when matching process argv.
 func IsManagedProcessExecutableBase(base string) bool {
-	return base == Executable || base == PreUpgradeExecutable
+	switch base {
+	case Executable, PreUpgradeExecutable,
+		"canary-darwin-arm64", "canary-darwin-amd64", "canary-linux-arm64", "canary-linux-amd64":
+		return true // exact signed MCP bundle names, including already-running upgrades
+	}
+	return false
 }
 
 // CanonicalPath returns the canonical executable path under dir.

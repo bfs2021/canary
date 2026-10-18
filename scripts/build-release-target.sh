@@ -64,7 +64,9 @@ WARN
 			fi
 		done
 	fi
-	( cd "$dist_dir" && tar -czf "$base.tar.gz" "$base" )
+	# macOS copyfile metadata becomes AppleDouble members under GNU tar.
+	# The release archive contains only portable product files.
+	( cd "$dist_dir" && COPYFILE_DISABLE=1 tar --no-xattrs -czf "$base.tar.gz" "$base" )
 	archive="$dist_dir/$base.tar.gz"
 	# Buffer the complete inventory before testing membership. Piping tar into
 	# grep -q is racy under pipefail: grep may close early after a match, making
@@ -76,6 +78,12 @@ WARN
 			exit 1
 		fi
 	done
+	local expected
+	expected="$(printf '%s\n' "$base/" "$base/$binary_name" "$base/LICENSE" "$base/README.md"; if [ "$warning" = "trading" ]; then printf '%s\n' "$base/TRADING-WARNING.md"; fi)"
+	if [ "$(printf '%s\n' "$archive_inventory" | LC_ALL=C sort)" != "$(printf '%s\n' "$expected" | LC_ALL=C sort)" ]; then
+		echo "release archive has unexpected or duplicate members: $archive" >&2
+		exit 1
+	fi
 	assert_archive_capability "$archive" "$base" "$binary_name" "$warning"
 	if grep -Fqx "$base/ibkr" <<< "$archive_inventory" >/dev/null; then
 		echo "release archive contains retired executable entry: $base/ibkr" >&2
