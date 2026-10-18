@@ -225,7 +225,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	capital, _ := s.riskCapital.MandateCapitalForScope(c, scope, s.nowUTC())
 	now := s.nowUTC()
 	in := mandate.Input{Now: now, BaseCurrency: base, Policy: mandatePolicyNumbers(c), Capital: capital,
-		Series: map[string]mandate.Series{}, FX: map[string]mandate.Series{}, FXNow: map[string]float64{}, Seats: mandateSeatPlan(c, s.coreRuns(), s.mandateCoreContracts(ctx, c))}
+		Series: map[string]mandate.Series{}, FX: map[string]mandate.Series{}, FXNow: map[string]float64{}, Allocations: mandateAllocationPlan(c, s.coreRuns(), s.mandateCoreContracts(ctx, c))}
 	if unapproved := c.Mandate.UnapprovedKeys(); len(unapproved) > 0 {
 		in.Reasons = append(in.Reasons, "mandate keys are unwritten: "+strings.Join(unapproved, ", "))
 	}
@@ -382,9 +382,9 @@ func (s *Server) mandateGateView(res *rpc.MandateRiskResult, now time.Time) *rpc
 	if res.Verdict.Status != mandate.StatusWithin {
 		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, res.Verdict.BaseCurrency)}
 	}
-	// Within the budget, your additions still stop at your seat.
-	if seat, ok := res.Verdict.Seat(mandate.SleeveOwner); ok && seat.Over {
-		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateSeatOverSentence(mandate.SleeveOwner, seat, mandateMachineSeats(*res.Verdict), "", seat.UseBase, res.Verdict.BaseCurrency)}
+	// Within the budget, your additions still stop at your allocation.
+	if allocation, ok := res.Verdict.Allocation(mandate.SleeveOwner); ok && allocation.Over {
+		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateAllocationOverSentence(mandate.SleeveOwner, allocation, mandateMachineAllocations(*res.Verdict), "", allocation.UseBase, res.Verdict.BaseCurrency)}
 	}
 	return &rpc.MandateGateView{}
 }
@@ -456,7 +456,7 @@ func mandateBillBuy(draft rpc.OrderDraft) bool {
 // refuses nothing. Otherwise a risk-adding order other than a bill purchase
 // is refused unless a kept verdict no older than mandateVerdictMaxAge reads
 // within, and the order itself, re-evaluated on the same book, keeps the
-// risk inside the budget and its own sleeve inside its seat (mandate_seats.go).
+// risk inside the budget and its own sleeve inside its allocation (mandate_allocations.go).
 // Cheap by construction: the kept verdict and a simulation of milliseconds,
 // never a broker read.
 func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPositionImpact) *rpc.TradingBlocker {
@@ -511,9 +511,9 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		// unmeasured (core sleeve review, 2026-10-14).
 		return mandateUnpricedOrderGate(draft, result.Verdict, book, sleeve, ccy, open, action)
 	}
-	// The order's units open in its sleeve: the seats are judged with it
+	// The order's units open in its sleeve: the allocations are judged with it
 	// placed there.
-	book.Seats = book.Seats.WithPlaced(leg.ID, sleeve)
+	book.Allocations = book.Allocations.WithPlaced(leg.ID, sleeve)
 	with := mandate.Evaluate(mandate.WithLeg(book, leg))
 	if with.Status == mandate.StatusUnknown || with.Risk == nil {
 		why := "no reason given"
@@ -537,9 +537,9 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 			Message: fmt.Sprintf("Mandate budget: with this order a %s gap in %s would lose %s, over the gap cap %s.", mandateGapPct(u.GapShockPct), u.Underlying, mandateMoney(u.GapLossBase, ccy), mandateMoney(u.GapCapBase, ccy)) + open,
 			Action:  "Size it smaller; `canary mandate` has each name's gap against its cap."}
 	}
-	// Seats sit inside the whole-book limits: an addition also stays inside
-	// its own sleeve's seat (2026-10-18 08:06 CEST).
-	return mandateSeatRefusal(sleeve, result.Verdict, with, ccy, open)
+	// Allocations sit inside the whole-book limits: an addition also stays inside
+	// its own sleeve's allocation (2026-10-18 08:06 CEST).
+	return mandateAllocationRefusal(sleeve, result.Verdict, with, ccy, open)
 }
 
 // mandateUnpricedOrderGate judges a risk-adding order the evaluator cannot
@@ -548,7 +548,7 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 // limit did not give. An option buy is judged by a volatility-free bound
 // (mandateLongOptionBound) and refused without a limit, which gives no
 // premium to bound it; its sleeve's own risk plus that bound must fit its
-// seat (a sleeve's use is at most its own risk, which the leg can raise by
+// allocation (a sleeve's use is at most its own risk, which the leg can raise by
 // at most the bound). Any other security type is left as it was: this check
 // judges only what the evaluator models.
 func mandateUnpricedOrderGate(draft rpc.OrderDraft, standing *mandate.Verdict, book mandate.Input, sleeve, ccy, open, action string) *rpc.TradingBlocker {
@@ -583,11 +583,11 @@ func mandateUnpricedOrderGate(draft rpc.OrderDraft, standing *mandate.Verdict, b
 		return refuse(fmt.Sprintf("with this order a gap in %s could lose %s (its premium at most on top of the book's %s), over the gap cap %s.", sym, mandateMoney(b.gapLoss, ccy), mandateMoney(b.gapLoss-b.premium, ccy), mandateMoney(b.gapCap, ccy)),
 			"Size it smaller; `canary mandate` has each name's gap against its cap.")
 	}
-	if seat, ok := standing.Seat(sleeve); ok {
-		if worst := seat.StandaloneBase + (b.riskAnnual - standing.Risk.SDAnnualBase); worst > seat.SeatBase+mandateReductionEpsilon {
-			return refuse("with this order "+mandateSeatOverSentence(sleeve, seat, mandateMachineSeats(*standing), "could", worst, ccy)+
-				": the option's limit gives no volatility, so the seat is bounded by its own risk plus "+sym+"'s full daily moves.",
-				"Size it smaller, or buy at a limit the volatility can be solved from; `canary mandate` has each seat.")
+	if allocation, ok := standing.Allocation(sleeve); ok {
+		if worst := allocation.StandaloneBase + (b.riskAnnual - standing.Risk.SDAnnualBase); worst > allocation.AllocationBase+mandateReductionEpsilon {
+			return refuse("with this order "+mandateAllocationOverSentence(sleeve, allocation, mandateMachineAllocations(*standing), "could", worst, ccy)+
+				": the option's limit gives no volatility, so the allocation is bounded by its own risk plus "+sym+"'s full daily moves.",
+				"Size it smaller, or buy at a limit the volatility can be solved from; `canary mandate` has each allocation.")
 		}
 	}
 	return nil

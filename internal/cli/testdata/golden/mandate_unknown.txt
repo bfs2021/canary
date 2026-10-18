@@ -7,9 +7,9 @@ Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flow
 Additions · refused · the mandate risk cannot be measured: daily history for
             SYNB is stale (last read 2026-09-02 06:10:00)
 
-Seats  each seat's use against its seat, a year · alone: its own risk
-  Yours · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
-  machine's seats
+Risk allocations  each sleeve's use against its allocation, a year · alone: its own risk
+  Owner · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
+  machine's allocations
   Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
   monthly rows are phase 2), so it runs nothing
   Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
@@ -45,9 +45,9 @@ Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flow
 Additions · \x1b[31mrefused · the mandate risk cannot be measured: daily history for\x1b[0m
             \x1b[31mSYNB is stale (last read 2026-09-02 06:10:00)\x1b[0m
 
-\x1b[1mSeats\x1b[0m  each seat's use against its seat, a year · alone: its own risk
-  Yours · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
-  machine's seats
+\x1b[1mRisk allocations\x1b[0m  each sleeve's use against its allocation, a year · alone: its own risk
+  Owner · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
+  machine's allocations
   Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
   monthly rows are phase 2), so it runs nothing
   Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1

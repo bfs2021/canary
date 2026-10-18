@@ -144,7 +144,7 @@ func coreTestServer(t *testing.T, c *risk.Constitution, pos *rpc.PositionsResult
 		t.Fatal(err)
 	}
 	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
-	srv.coreSendsOrdersForTest = true // the core's buys are sized inside its seat
+	srv.coreSendsOrdersForTest = true // the core's buys are sized inside its allocation
 	coreAnswer(t, srv, coreTestListing())
 	return srv
 }

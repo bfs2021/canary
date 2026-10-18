@@ -107,8 +107,8 @@ type Input struct {
 	// NotModelled names held lines the daemon left out (bills, bonds,
 	// conversions) so the verdict says so.
 	NotModelled []string
-	// Seats is the seat plan; nil measures no seats.
-	Seats *SeatPlan
+	// Allocations is the allocation plan; nil measures no allocations.
+	Allocations *AllocationPlan
 	// Reasons are the daemon's own grounds for an unknown verdict (a stale
 	// positions read, an unproven base currency); any makes it unknown.
 	Reasons []string
@@ -238,9 +238,9 @@ type Verdict struct {
 	Legs          []LegReport        `json:"legs,omitempty"`
 	Underlyings   []UnderlyingReport `json:"underlyings,omitempty"`
 	NotModelled   []string           `json:"not_modelled,omitempty"`
-	// Seats is each sleeve's seat and use, owner first; nil while the risk
-	// is not measured or the input carries no seat plan.
-	Seats []SeatReport `json:"seats,omitempty"`
+	// Allocations is each sleeve's allocation and use, owner first; nil while the risk
+	// is not measured or the input carries no allocation plan.
+	Allocations []AllocationReport `json:"allocations,omitempty"`
 }
 
 // Evaluate runs the historical simulation and judges the book against the
@@ -319,7 +319,7 @@ func Evaluate(in Input) Verdict {
 	}
 	v.Scenarios, v.ScenariosFrom, v.ScenariosTo = Scenarios, from, to
 	sim := simulate(in, legs, returns)
-	v.Risk, v.Legs, v.Underlyings, v.Stresses, v.Seats = sim.risk, sim.legs, sim.underlyings, sim.stresses, sim.seats
+	v.Risk, v.Legs, v.Underlyings, v.Stresses, v.Allocations = sim.risk, sim.legs, sim.underlyings, sim.stresses, sim.allocations
 	budget := in.Capital.BudgetAnnualSD
 	if sim.risk.SDAnnualBase > 0 && budget <= 0 {
 		v.Risk.RatioToBudget = math.Inf(1)
@@ -444,7 +444,7 @@ type simulation struct {
 	legs        []LegReport
 	underlyings []UnderlyingReport
 	stresses    *Stresses
-	seats       []SeatReport
+	allocations []AllocationReport
 }
 
 // legValue prices one leg in its own currency at spot and the given time to
@@ -589,11 +589,11 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 		}
 		return strings.Compare(a.Symbol, b.Symbol)
 	})
-	var seats []SeatReport
-	if in.Seats != nil {
-		seats = seatReports(in.Seats, in.Policy, in.Capital, legs, legPnL, contributions, risk)
+	var allocations []AllocationReport
+	if in.Allocations != nil {
+		allocations = allocationReports(in.Allocations, in.Policy, in.Capital, legs, legPnL, contributions, risk)
 	}
-	return simulation{risk: risk, legs: legReports, underlyings: underlyings, stresses: stresses, seats: seats}
+	return simulation{risk: risk, legs: legReports, underlyings: underlyings, stresses: stresses, allocations: allocations}
 }
 
 // shockLoss revalues every leg at its underlying's spot times factor(leg)

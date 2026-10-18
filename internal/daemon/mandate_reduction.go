@@ -196,13 +196,13 @@ type mandateCut struct {
 	full int // the whole units held, the most the cut may reach
 	step int // the lot the cut moves in: 1 contract, or 1, 10 or 100 shares
 	// units is the cut; rank its place in the batch (1 = first); phase why;
-	// sleeve the seat the leg is placed in, and seatExcess that seat's use
-	// less its seat when a risk cut chose it.
-	units      int
-	rank       int
-	phase      string
-	sleeve     string
-	seatExcess *float64
+	// sleeve the allocation the leg is placed in, and allocationExcess that allocation's use
+	// less its allocation when a risk cut chose it.
+	units            int
+	rank             int
+	phase            string
+	sleeve           string
+	allocationExcess *float64
 	// contribution is the leg's Euler share on the verdict; gapLoss and
 	// gapCap a gap row's figures; sessions an expiry row's sessions to
 	// expiry; riskCut the risk the cut removes in its place in the batch.
@@ -688,21 +688,21 @@ func (z *mandateSizer) move(c *mandateCut, f func(over map[string]int) float64, 
 }
 
 // mandateSizeBatch sizes the batch afresh on the verdict's book, the sleeve
-// furthest over its seat first. The seats' order never stops short where
+// furthest over its allocation first. The allocations' order never stops short where
 // the whole book's order (largest contributor first) reaches the target:
 // the reduction protects the whole book first, so it then takes that one.
 func mandateSizeBatch(verdictBook mandate.Input, candidates map[string]*mandateCut, standing []rpc.TradeProposal, now time.Time) mandateBatch {
 	for id, c := range candidates {
-		c.sleeve = verdictBook.Seats.SleeveOf(id)
+		c.sleeve = verdictBook.Allocations.SleeveOf(id)
 	}
 	batch := mandateSizeBatchBy(verdictBook, candidates, standing, now)
-	if batch.reached || verdictBook.Seats == nil {
+	if batch.reached || verdictBook.Allocations == nil {
 		return batch
 	}
 	whole := verdictBook
-	whole.Seats = nil
+	whole.Allocations = nil
 	if alt := mandateSizeBatchBy(whole, candidates, standing, now); alt.reached {
-		alt.leftOut = append(alt.leftOut, "the seats' order stops short of the target, so this batch cuts the largest contributor first")
+		alt.leftOut = append(alt.leftOut, "ranking by allocation stops short of the target, so this batch cuts the largest contributor first")
 		return alt
 	}
 	return mandateSizeBatchBy(verdictBook, candidates, standing, now)
@@ -710,8 +710,8 @@ func mandateSizeBatch(verdictBook mandate.Input, candidates map[string]*mandateC
 
 // mandateSizeBatchBy sizes one batch on the verdict's book: cut by cut,
 // re-evaluating the book after each, the gap breaches and then the sleeve
-// furthest over its seat and its largest Euler contributor (every leg in
-// one seat without a seat plan); then the expiry gate, sizing again around
+// furthest over its allocation and its largest Euler contributor (every leg in
+// one allocation without an allocation plan); then the expiry gate, sizing again around
 // any option it cuts; then the damping against the standing batch.
 func mandateSizeBatchBy(verdictBook mandate.Input, candidates map[string]*mandateCut, standing []rpc.TradeProposal, now time.Time) mandateBatch {
 	in := verdictBook
@@ -795,7 +795,7 @@ func mandateKeepStanding(z *mandateSizer, standing []rpc.TradeProposal) {
 func (z *mandateSizer) reset() {
 	z.cuts, z.leftOut = nil, nil
 	for _, c := range z.candidates {
-		c.units, c.phase, c.gapLoss, c.gapCap, c.sessions, c.seatExcess = 0, "", nil, nil, nil, nil
+		c.units, c.phase, c.gapLoss, c.gapCap, c.sessions, c.allocationExcess = 0, "", nil, nil, nil, nil
 	}
 	ids := make([]string, 0, len(z.expiry))
 	for id := range z.expiry {
@@ -810,10 +810,10 @@ func (z *mandateSizer) reset() {
 	}
 }
 
-// sizeMain cuts gap breaches first, then the sleeve furthest over its seat
+// sizeMain cuts gap breaches first, then the sleeve furthest over its allocation
 // and, within it, the largest contributor, until the book reaches the target
-// or nothing reduces further (seats, 2026-10-18 08:06 CEST: "the sleeve
-// furthest over its seat is cut first").
+// or nothing reduces further (allocations, 2026-10-18 08:06 CEST: "the sleeve
+// furthest over its allocation is cut first").
 func (z *mandateSizer) sizeMain() {
 	skipped := map[string]bool{}
 	exhausted := map[string]bool{}
@@ -837,11 +837,11 @@ func (z *mandateSizer) sizeMain() {
 			share[rep.ID] = rep.ContributionPct
 		}
 		var top *mandateCut
-		var seat mandate.SeatReport
-		for _, sleeve := range mandateSeatOrder(v) {
+		var allocation mandate.AllocationReport
+		for _, sleeve := range mandateAllocationOrder(v) {
 			for _, id := range z.ids {
 				c := z.candidates[id]
-				if z.in.Seats.SleeveOf(c.id) != sleeve || c.units >= c.full || exhausted[c.id] || share[c.id] <= mandateReductionEpsilon {
+				if z.in.Allocations.SleeveOf(c.id) != sleeve || c.units >= c.full || exhausted[c.id] || share[c.id] <= mandateReductionEpsilon {
 					continue
 				}
 				if top == nil || share[c.id] > share[top.id] {
@@ -849,8 +849,8 @@ func (z *mandateSizer) sizeMain() {
 				}
 			}
 			if top != nil {
-				seat, _ = v.Seat(sleeve)
-				seat.Sleeve = sleeve
+				allocation, _ = v.Allocation(sleeve)
+				allocation.Sleeve = sleeve
 				break
 			}
 		}
@@ -862,40 +862,40 @@ func (z *mandateSizer) sizeMain() {
 			exhausted[top.id] = true
 			continue
 		}
-		// A sleeve over its seat is cut to its seat, not past it for another
-		// sleeve's excess: while another sleeve is over its own seat, the
+		// A sleeve over its allocation is cut to its allocation, not past it for another
+		// sleeve's excess: while another sleeve is over its own allocation, the
 		// smallest step that takes this one inside, when that comes before
 		// the step that reaches the target. Never more than the whole-book
 		// step, so the cut still lowers the book's risk.
-		if seat.Over && slices.ContainsFunc(v.Seats, func(s mandate.SeatReport) bool { return s.Sleeve != seat.Sleeve && s.Over }) {
+		if allocation.Over && slices.ContainsFunc(v.Allocations, func(s mandate.AllocationReport) bool { return s.Sleeve != allocation.Sleeve && s.Over }) {
 			for _, u := range mandateCutSteps(top, top.units) {
 				if u >= units {
 					break
 				}
-				if after, ok := z.eval(map[string]int{top.id: u}).Seat(seat.Sleeve); ok && !after.Over {
+				if after, ok := z.eval(map[string]int{top.id: u}).Allocation(allocation.Sleeve); ok && !after.Over {
 					units = u
 					break
 				}
 			}
 		}
 		z.commit(top, units, rpc.MandatePhaseRisk)
-		if len(v.Seats) > 0 {
-			top.seatExcess = &seat.ExcessBase
+		if len(v.Allocations) > 0 {
+			top.allocationExcess = &allocation.ExcessBase
 		}
 	}
 }
 
-// mandateSeatOrder lists the sleeves furthest over their seats first (use
-// less seat; ties in mandate.Sleeves order). A verdict without seats puts
+// mandateAllocationOrder lists the sleeves furthest over their allocations first (use
+// less allocation; ties in mandate.Sleeves order). A verdict without allocations puts
 // every leg in the owner's, the order of the old rule.
-func mandateSeatOrder(v mandate.Verdict) []string {
-	if len(v.Seats) == 0 {
+func mandateAllocationOrder(v mandate.Verdict) []string {
+	if len(v.Allocations) == 0 {
 		return []string{mandate.SleeveOwner}
 	}
-	seats := slices.Clone(v.Seats)
-	slices.SortStableFunc(seats, func(a, b mandate.SeatReport) int { return cmp.Compare(b.ExcessBase, a.ExcessBase) })
-	out := make([]string, len(seats))
-	for i, s := range seats {
+	allocations := slices.Clone(v.Allocations)
+	slices.SortStableFunc(allocations, func(a, b mandate.AllocationReport) int { return cmp.Compare(b.ExcessBase, a.ExcessBase) })
+	out := make([]string, len(allocations))
+	for i, s := range allocations {
 		out[i] = s.Sleeve
 	}
 	return out
@@ -1319,10 +1319,10 @@ func (e *proposalEngine) mandateReductionRow(policy protectionPolicy, status rpc
 	default:
 		why = fmt.Sprintf("the largest risk contributor left in %s", mandateSleeveName(c.sleeve))
 		switch {
-		case c.seatExcess != nil && *c.seatExcess > 0:
-			why += fmt.Sprintf(", the seat furthest over (%s over it)", mandateMoney(*c.seatExcess, ccy))
-		case c.seatExcess != nil:
-			why += ", the seat with the least room left"
+		case c.allocationExcess != nil && *c.allocationExcess > 0:
+			why += fmt.Sprintf(", the sleeve furthest over its allocation (%s over it)", mandateMoney(*c.allocationExcess, ccy))
+		case c.allocationExcess != nil:
+			why += ", the sleeve with the least room left in its allocation"
 		}
 		why += fmt.Sprintf(" (%.0f%% of the risk)", c.contribution)
 	}

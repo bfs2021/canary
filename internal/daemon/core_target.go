@@ -508,9 +508,9 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	if verdict.Status != mandate.StatusWithin {
 		in.BuyBlocked = "the mandate verdict reads " + verdict.Status
 	} else if !s.coreRuns() {
-		// Seats (2026-10-18): the core's seat is its stage times its share
+		// Allocations (2026-10-18): the core's allocation is its stage times its share
 		// while it sends orders, and nothing until then.
-		in.BuyBlocked = "the core sends no orders yet, so it has no seat"
+		in.BuyBlocked = "the core sends no orders yet, so it has no allocation"
 	} else if want := res.Sizing.Target - held; want > 0 && price > 0 {
 		add := core.Headroom(want, func(q int) bool { return coreHeadroomFits(input, contract, q, price) })
 		in.Holdable = held + add
@@ -525,9 +525,9 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 // coreHeadroomFits reports whether the book with q more shares of the core
 // stays at most at core.HeadroomFactor of the budget, carries no gap-cap
 // breach, keeps the core's own gap at most at that share of its cap, and
-// keeps the core inside its seat: the forced reduction's target with
+// keeps the core inside its allocation: the forced reduction's target with
 // margin, so a core buy cannot set up a forced sale by itself (design §3;
-// review B1), and the gate's seat check (seats, 2026-10-18).
+// review B1), and the gate's allocation check (allocations, 2026-10-18).
 func coreHeadroomFits(book *mandate.Input, k *coreContract, q int, price float64) bool {
 	if book == nil || k == nil {
 		return false
@@ -556,7 +556,7 @@ func coreHeadroomFits(book *mandate.Input, k *coreContract, q int, price float64
 			return false
 		}
 	}
-	if seat, ok := with.Seat(mandate.SleeveCore); ok && seat.Over {
+	if allocation, ok := with.Allocation(mandate.SleeveCore); ok && allocation.Over {
 		return false
 	}
 	return true

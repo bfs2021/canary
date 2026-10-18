@@ -16,9 +16,9 @@ Reduction · reducing · 2 rows, pre-authorised: the daemon places 2 after the
   2. sell 1200 SYNB · largest risk · 33.1% of the risk · places itself at
   14:30:00 TZ unless vetoed
 
-Seats  each seat's use against its seat, a year · alone: its own risk
-  Yours · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the
-  budget less the machine's seats
+Risk allocations  each sleeve's use against its allocation, a year · alone: its own risk
+  Owner · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the
+  budget less the machine's allocations
   Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
   monthly rows are phase 2), so it runs nothing
   Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
@@ -70,9 +70,9 @@ Reduction · \x1b[33mreducing · 2 rows, pre-authorised: the daemon places 2 aft
   2. sell 1200 SYNB · largest risk · 33.1% of the risk · places itself at
   14:30:00 TZ unless vetoed
 
-\x1b[1mSeats\x1b[0m  each seat's use against its seat, a year · alone: its own risk
-  \x1b[31mYours · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the\x1b[0m
-  \x1b[31mbudget less the machine's seats\x1b[0m
+\x1b[1mRisk allocations\x1b[0m  each sleeve's use against its allocation, a year · alone: its own risk
+  \x1b[31mOwner · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the\x1b[0m
+  \x1b[31mbudget less the machine's allocations\x1b[0m
   Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
   monthly rows are phase 2), so it runs nothing
   Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1

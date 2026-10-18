@@ -773,7 +773,7 @@ type TradeProposalMandatePlanOrder struct {
 	Phase             string  `json:"phase"`
 	ContributionPct   float64 `json:"contribution_pct"`
 	RiskCutAnnualBase float64 `json:"risk_cut_annual_base"`
-	// Sleeve is the seat the line is placed in (mandate.Sleeve*).
+	// Sleeve is the allocation the line is placed in (mandate.Sleeve*).
 	Sleeve string `json:"sleeve,omitempty"`
 }
 
@@ -821,8 +821,8 @@ type TradeProposalMandate struct {
 	// order that expired unfilled is proposed afresh the next session.
 	Episode string `json:"episode,omitempty"`
 	Session string `json:"session,omitempty"`
-	// Sleeve is the seat the line is placed in (mandate.Sleeve*): the risk
-	// phase cuts the sleeve furthest over its seat first.
+	// Sleeve is the allocation the line is placed in (mandate.Sleeve*): the risk
+	// phase cuts the sleeve furthest over its allocation first.
 	Sleeve string `json:"sleeve,omitempty"`
 	// Held says the row waits: the verdict cannot be measured right now, so
 	// the sizing cannot be confirmed; HoldReason says why. A held row is not

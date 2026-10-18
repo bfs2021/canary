@@ -6,13 +6,13 @@ Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
   high-water mark 235,000 EUR
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
-Additions · refused · your seat carries 23,970 EUR a year, over its 19,230 EUR
-            (the budget less the machine's seats of 12,820 EUR)
+Additions · refused · your sleeve carries 23,970 EUR a year, over its allocation
+            19,230 EUR (the budget less the machine's allocations of 12,820 EUR)
 
-Seats  each seat's use against its seat, a year · alone: its own risk
-  Yours · 23,970 EUR of 19,230 EUR · alone 23,970 EUR · OVER by 4,740 EUR · the
-  budget less the machine's seats
-  Core · 0 EUR of 12,820 EUR · alone 0 EUR · stage 100% of the 6% share
+Risk allocations  each sleeve's use against its allocation, a year · alone: its own risk
+  Owner · 23,970 EUR of 19,230 EUR · alone 23,970 EUR · OVER by 4,740 EUR · the
+  budget less the machine's allocations
+  Core · 0 EUR of 12,820 EUR · alone 0 EUR · stage 100% of its 6% allocation
   Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
   was dropped on 2026-10-18)
 
@@ -52,13 +52,13 @@ Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
   high-water mark 235,000 EUR
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
-Additions · \x1b[31mrefused · your seat carries 23,970 EUR a year, over its 19,230 EUR\x1b[0m
-            \x1b[31m(the budget less the machine's seats of 12,820 EUR)\x1b[0m
+Additions · \x1b[31mrefused · your sleeve carries 23,970 EUR a year, over its allocation\x1b[0m
+            \x1b[31m19,230 EUR (the budget less the machine's allocations of 12,820 EUR)\x1b[0m
 
-\x1b[1mSeats\x1b[0m  each seat's use against its seat, a year · alone: its own risk
-  \x1b[31mYours · 23,970 EUR of 19,230 EUR · alone 23,970 EUR · OVER by 4,740 EUR · the\x1b[0m
-  \x1b[31mbudget less the machine's seats\x1b[0m
-  Core · 0 EUR of 12,820 EUR · alone 0 EUR · stage 100% of the 6% share
+\x1b[1mRisk allocations\x1b[0m  each sleeve's use against its allocation, a year · alone: its own risk
+  \x1b[31mOwner · 23,970 EUR of 19,230 EUR · alone 23,970 EUR · OVER by 4,740 EUR · the\x1b[0m
+  \x1b[31mbudget less the machine's allocations\x1b[0m
+  Core · 0 EUR of 12,820 EUR · alone 0 EUR · stage 100% of its 6% allocation
   Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
   was dropped on 2026-10-18)
 

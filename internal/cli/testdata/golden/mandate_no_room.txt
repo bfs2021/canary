@@ -10,9 +10,9 @@ Additions · refused · the mandate risk 23,970 EUR a year is over the budget 0
             EUR (the loss has reached the mandate's maximum, so no risk is in
             budget); a gap in SYNA, SYNB would lose more than the gap cap 0 EUR
 
-Seats  each seat's use against its seat, a year · alone: its own risk
-  Yours · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
-  machine's seats
+Risk allocations  each sleeve's use against its allocation, a year · alone: its own risk
+  Owner · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
+  machine's allocations
   Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
   monthly rows are phase 2), so it runs nothing
   Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
@@ -58,9 +58,9 @@ Additions · \x1b[31mrefused · the mandate risk 23,970 EUR a year is over the b
             \x1b[31mEUR (the loss has reached the mandate's maximum, so no risk is in\x1b[0m
             \x1b[31mbudget); a gap in SYNA, SYNB would lose more than the gap cap 0 EUR\x1b[0m
 
-\x1b[1mSeats\x1b[0m  each seat's use against its seat, a year · alone: its own risk
-  Yours · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
-  machine's seats
+\x1b[1mRisk allocations\x1b[0m  each sleeve's use against its allocation, a year · alone: its own risk
+  Owner · 23,970 EUR of 32,050 EUR · alone 23,970 EUR · the budget less the
+  machine's allocations
   Core · 0 EUR of 0 EUR · alone 0 EUR · the core sends no orders yet (its
   monthly rows are phase 2), so it runs nothing
   Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy runs in the overlay (s1
