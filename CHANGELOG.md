@@ -44,6 +44,7 @@ inside the existing episode and veto window. Absent the key nothing changes.
 
 ### Fixed
 
+- The executions poll's request carries the two filter fields TWS API 10.30 and later read after `side` (lastNDays unset, no specific dates); the gateway had read the next request's bytes as them and refused that request with "Reading request error … 'MART'" about once a minute since the poll shipped, losing one market-data, contract or history read each time (#113).
 - A strategy held on an unknown mandate capital named the capital's reason once, not twice.
 - Forced reduction rows kept from the last cycle say so with their own size; the clause read "(the batch asks for 150; )" once the order cap stopped binding, and "hold one order to 111" beside an order of 110.
 
