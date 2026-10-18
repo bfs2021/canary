@@ -96,9 +96,11 @@ type mandateFlowSuspect struct {
 	Unexplained float64         `json:"unexplained_base"`
 	ThresholdAt float64         `json:"threshold_base"`
 	// MoveBase is the equity move, net of declared flows, of the reading that
-	// raised the suspicion: always beyond the threshold since 2026-10-18, as
-	// a flow moves equity. Zero marks a record raised before that rule.
-	MoveBase float64 `json:"move_base,omitempty"`
+	// raised the suspicion: always beyond the threshold, as a flow moves
+	// equity (2026-10-18). The one record from before that rule cleared on
+	// the v3.23.1 install; v3.23.2 dropped the clearing rule for such records,
+	// which could also have cleared a real flow the market later offset.
+	MoveBase float64 `json:"move_base"`
 }
 
 // mandateFlowFloorBase is the least unexplained move, in base currency,
@@ -178,17 +180,11 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 		s.Unexplained = moveSince - s.PnLSince
 		explained := math.Abs(s.Unexplained) <= threshold
 		statement := !st.state.StatementCoverageTo.IsZero() && mandateSessionDate(s.At) <= st.state.StatementCoverageTo.UTC().Format(time.DateOnly)
-		// A record raised before 2026-10-18 21:30 CEST could come from the
-		// broker's P&L figure alone, with the equity standing still (a daemon
-		// restart or the weekend reset moved the figure by a day's P&L while
-		// equity moved by nothing): where the equity has not moved beyond the
-		// threshold since the base, no flow happened and the record clears.
-		legacy := s.MoveBase == 0 && math.Abs(moveSince) <= threshold
-		if explained || statement || legacy {
+		if explained || statement {
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_cleared",
 				"suspected_at": s.At.UTC(), "unexplained_base": s.Unexplained, "equity_base": equityBase, "flows_base": flows, "by_statement": statement && !explained,
-				"equity_move_base": moveSince, "legacy_flat_equity": legacy && !explained && !statement,
+				"equity_move_base":   moveSince,
 				"policy_fingerprint": constitutionFingerprint(c),
 			})
 			m.FlowSuspect = nil

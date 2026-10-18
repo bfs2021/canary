@@ -1169,40 +1169,27 @@ func TestMandateFlowCheckIgnoresAPnLJumpWhileEquityStandsStill(t *testing.T) {
 	}
 }
 
-// A suspicion raised before the equity-move rule, with the equity never moved
-// beyond the threshold since its base, was the broker's figure alone and
-// clears on the next reading; a suspicion raised by a real equity move stays
-// even when the market later moves the equity back.
-func TestMandateLegacyFlatEquitySuspicionClears(t *testing.T) {
+// A suspicion raised by a real equity move stays even when the market later
+// moves the equity back to its base: only an explanation or a statement
+// covering its day clears it.
+func TestMandateRealFlowSuspicionSurvivesTheMarketMovingBack(t *testing.T) {
 	utc := func(day, hour, minute int) time.Time { return time.Date(2026, 10, day, hour, minute, 0, 0, time.UTC) }
-	for _, tc := range []struct {
-		name     string
-		moveBase float64
-		cleared  bool
-	}{{"legacy record, equity flat", 0, true}, {"real move, equity back at the base", 20000, false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			clock := utc(18, 14, 0)
-			st := newTestRiskCapitalStore(t)
-			st.now = func() time.Time { return clock }
-			c := testMandateConstitution()
-			reconcileNow(t, st)
-			read := func(at time.Time, equity, pnl float64) {
-				clock = at.Add(time.Second)
-				observeWithPnL(st, c, equity, pnl, at)
-			}
-			read(utc(18, 14, 0), 300000, 15000)
-			st.mu.Lock()
-			m := st.state.Mandate
-			m.FlowSuspect = &mandateFlowSuspect{At: utc(18, 17, 54), Base: *m.Last, PnLSince: -10000, Unexplained: 10000, ThresholdAt: 3000, MoveBase: tc.moveBase}
-			st.mu.Unlock()
-			if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known {
-				t.Fatalf("the injected suspicion is not held: %+v", got)
-			}
-			read(utc(18, 18, 0), 300000, 5000)
-			got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock)
-			if got.Known != tc.cleared {
-				t.Fatalf("known %v, want %v: %v", got.Known, tc.cleared, got.Reasons)
-			}
-		})
+	clock := utc(18, 14, 0)
+	st := newTestRiskCapitalStore(t)
+	st.now = func() time.Time { return clock }
+	c := testMandateConstitution()
+	reconcileNow(t, st)
+	read := func(at time.Time, equity, pnl float64) {
+		clock = at.Add(time.Second)
+		observeWithPnL(st, c, equity, pnl, at)
+	}
+	read(utc(18, 14, 0), 300000, 15000)
+	read(utc(18, 17, 54), 320000, 15000) // a deposit: equity moves, no P&L
+	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known {
+		t.Fatalf("the deposit was not suspected: %+v", got)
+	}
+	read(utc(18, 18, 0), 300000, -5000) // the market gives the same amount back
+	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known {
+		t.Fatalf("a real flow cleared because the market moved the equity back: %+v", got)
 	}
 }

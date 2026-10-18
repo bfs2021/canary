@@ -419,7 +419,8 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   same size, netting under the threshold, is not suspected until the next
   statement incorporates it; readings run every two minutes in the session, so
   the exposure is a gap, overnight or a weekend, and one statement long. The
-  legacy clearing rule can go once no record from before it remains; the
+  clearing rule for records from before it was dropped in v3.23.2, once the
+  one such record had cleared on the v3.23.1 install; the
   floor stands for the accruals a broker posts to cash that its daily P&L
   may not carry (interest, a dividend, a fee), and a flow that small moves
   the budget by under 150 a year at the 15% target. While suspected the
