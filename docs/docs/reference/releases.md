@@ -8,8 +8,10 @@ Every release publishes two binaries per platform, under two different names. On
 
 ## Moving to 3.23
 
-Nothing changes on upgrade until you write it. `[mandate.core]` keeps running
-in shadow. Writing `stage = "live"` in it turns each monthly decision into one
+An absent `[mandate.core]` stays inactive, and an absent stage or
+`stage = "shadow"` keeps the core in shadow. An existing `stage = "live"`
+declaration now takes effect: earlier builds accepted it but limited the core
+to shadow. On upgrade it reserves its configured allocation and turns each monthly decision into one
 `core_rebalance` proposal row for your device confirmation, bound to the
 core's contract and sized by the rule, the band, the minimum and the
 mandate's headroom; the daemon never sends it by itself and the bucket cannot

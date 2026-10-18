@@ -68,17 +68,23 @@ func TestRetainedIntradayHistoryUpgrade(t *testing.T) {
 					day, _ := time.Parse(time.DateOnly, tc.day)
 					return &rpc.MarketHistoryResult{Contract: p.Contract, Interval: "1 day", AsOf: at, Source: "synthetic", Points: []rpc.MarketHistoryPoint{{At: day, Value: 120}}}, nil
 				}
-				srv.refreshMandateSeries(t.Context(), &fakeSetupSource{}, mandateHistoryNeed{Key: old.Key, Contract: old.Contract, Market: tc.market})
-				fresh := srv.mandateHistorySeries(t.Context(), old.Key)
+				need := mandateHistoryNeed{Key: old.Key, Contract: old.Contract, Market: tc.market}
+				srv.refreshMandateSeries(t.Context(), &fakeSetupSource{}, need)
+				fresh := srv.mandateHistoryForNeed(t.Context(), need)
 				if reads != 1 || fresh == nil || len(fresh.Closes) != 1 || fresh.Closes[0] != 120 {
 					t.Fatalf("post-close upgrade refresh failed reads=%d series=%+v", reads, fresh)
 				}
 				again := &Server{coreStore: store, now: func() time.Time { return now }}
-				retained := again.mandateHistorySeries(t.Context(), old.Key)
-				if retained == nil || retained.Closes[0] != 120 || again.mandateHistory.revisions[old.Key] <= doc.Revision {
+				retained := again.mandateHistoryForNeed(t.Context(), need)
+				boundKey := bindMandateHistoryNeed(need).Key
+				if retained == nil || retained.Closes[0] != 120 || again.mandateHistory.revisions[boundKey] == 0 {
 					t.Fatalf("fresh result not durable: %+v", retained)
 				}
-				t.Logf("old partial bar discarded at original fetch time; after-close read replaced revision %d", doc.Revision)
+				unchanged, ok, e = store.GetStateDocument(t.Context(), mandateHistoryScope(old.Key), stateKindMandateHistory)
+				if e != nil || !ok || unchanged.Revision != doc.Revision || string(unchanged.JSON) != string(raw) {
+					t.Fatal("identity-bound refresh overwrote the legacy observation")
+				}
+				t.Log("old partial bar discarded; completed refresh survives restart under its bound identity")
 			})
 		}
 	}

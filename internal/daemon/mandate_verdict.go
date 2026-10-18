@@ -251,7 +251,10 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		in.LineISINs = s.registerFundLines(ctx)
 		in.Reasons = append(in.Reasons, reasons...)
 		for _, need := range mandateHistoryNeeds(pos, base, in.LineISINs) {
-			series := s.mandateHistorySeries(ctx, need.Key)
+			if need.Ambiguous {
+				in.Reasons = append(in.Reasons, "daily history for "+need.Contract.Symbol+" is ambiguous across distinct contracts")
+			}
+			series := s.mandateHistoryForNeed(ctx, need)
 			row := rpc.MandateSeriesEvidence{Key: need.Key, Missing: series == nil}
 			if series != nil {
 				row.Closes, row.LastClose, row.FetchedAt, row.Source = len(series.Closes), series.Dates[len(series.Dates)-1], series.FetchedAt, series.Source
@@ -806,8 +809,8 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 	if ccy == "" {
 		return book, []mandateMissing{{reason: "the order names no currency for " + sym}}
 	}
-	fresh := func(key string) (*mandateHistorySeries, bool) {
-		series := s.mandateHistorySeries(context.Background(), key)
+	fresh := func(need mandateHistoryNeed) (*mandateHistorySeries, bool) {
+		series := s.mandateHistoryForNeed(context.Background(), need)
 		return series, series != nil && !mandateSeriesStale(series, now) && len(series.Closes) >= mandate.Closes
 	}
 	var missing []mandateMissing
@@ -815,7 +818,10 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 		// A line moved by its proxy's returns (mandate.ReturnsProxies): the
 		// proxy is the index, which every verdict reads; its price is the
 		// held line's or the order's limit, never the proxy's close.
-		if _, ok := book.Series[returns]; !ok {
+		proxy := mandateIndexHistoryNeed()
+		if series, ok := fresh(proxy); ok && returns == proxy.Contract.Symbol {
+			book.Series[returns] = mandateSeriesInput(series, now)
+		} else {
 			missing = append(missing, mandateMissing{reason: "no daily history for " + returns + ", whose returns " + sym + " is measured by"})
 		}
 		held := false
@@ -825,25 +831,44 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 		if !held && !(draft.LimitPrice > 0) {
 			missing = append(missing, mandateMissing{reason: "no price for " + sym + ": the book does not hold it and the order carries no limit"})
 		}
-	} else if _, ok := book.Series[sym]; !ok {
+	} else {
 		contract := rpc.ContractParams{Symbol: sym, SecType: "STK", Currency: ccy, Exchange: "SMART"}
 		if strings.EqualFold(draft.Contract.SecType, "STK") || strings.EqualFold(draft.Contract.SecType, "ETF") {
 			contract.ConID, contract.PrimaryExch = draft.Contract.ConID, strings.ToUpper(strings.TrimSpace(draft.Contract.PrimaryExch))
 		}
-		if series, ok := fresh("u:" + sym); ok {
+		// Options use the held stock's underlying identity when available,
+		// never the option contract ID. Multiple same-symbol stocks conflict.
+		if contract.ConID == 0 {
+			for _, leg := range in.Legs {
+				if leg.Underlying == sym && leg.Kind == mandate.KindStock {
+					id, err := strconv.Atoi(strings.TrimPrefix(leg.ID, "con:"))
+					if err != nil || id <= 0 || (contract.ConID > 0 && contract.ConID != id) {
+						return book, []mandateMissing{{reason: "daily history for " + sym + " is ambiguous across distinct contracts"}}
+					}
+					contract.ConID = id
+				}
+			}
+		}
+		for _, leg := range in.Legs {
+			if leg.Underlying != sym {
+				continue
+			}
+			if normCcy(leg.Currency) != ccy || leg.Kind == mandate.KindStock && contract.ConID > 0 && leg.ID != mandateConLegID(contract.ConID) {
+				return book, []mandateMissing{{reason: "daily history for " + sym + " is ambiguous across distinct contracts"}}
+			}
+		}
+		if series, ok := fresh(mandateHistoryNeed{Key: "u:" + sym, Contract: contract}); ok {
 			book.Series[sym] = mandateSeriesInput(series, now)
 		} else {
 			missing = append(missing, mandateMissing{need: mandateHistoryNeed{Key: "u:" + sym, Contract: contract}, reason: "no daily history for " + sym + " yet; the desk is fetching it"})
 		}
 	}
 	if base := normCcy(in.BaseCurrency); ccy != base {
-		if _, ok := book.FX[ccy]; !ok {
-			if series, ok := fresh("fx:" + ccy); ok {
-				book.FX[ccy] = mandateSeriesInput(series, now)
-			} else {
-				missing = append(missing, mandateMissing{need: mandateHistoryNeed{Key: "fx:" + ccy, Contract: rpc.ContractParams{Symbol: base, SecType: "CASH", Currency: ccy, Exchange: "IDEALPRO"}},
-					reason: "no daily history for the " + base + "/" + ccy + " exchange rate yet; the desk is fetching it"})
-			}
+		if series, ok := fresh(mandateHistoryNeed{Key: "fx:" + ccy, Contract: rpc.ContractParams{Symbol: base, SecType: "CASH", Currency: ccy, Exchange: "IDEALPRO"}}); ok {
+			book.FX[ccy] = mandateSeriesInput(series, now)
+		} else {
+			missing = append(missing, mandateMissing{need: mandateHistoryNeed{Key: "fx:" + ccy, Contract: rpc.ContractParams{Symbol: base, SecType: "CASH", Currency: ccy, Exchange: "IDEALPRO"}},
+				reason: "no daily history for the " + base + "/" + ccy + " exchange rate yet; the desk is fetching it"})
 		}
 		if _, ok := book.FXNow[ccy]; !ok {
 			if fx, ok := book.FX[ccy]; ok && len(fx.Closes) > 0 {

@@ -193,3 +193,23 @@ func TestSetupSecuresOrphanedBackupsBeforeReadingConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestSetupAppBackupsCannotCollide(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "com.osauer.ibkr-app.plist")
+	original := []byte("synthetic original custom LaunchAgent")
+	names := map[string]bool{}
+	for range 20 {
+		backup, err := writePrivateSetupBackup(path, original)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if names[backup] {
+			t.Fatal("backup collision")
+		}
+		names[backup] = true
+		got, err := os.ReadFile(backup)
+		if err != nil || string(got) != string(original) {
+			t.Fatal("backup lost original contents")
+		}
+	}
+}

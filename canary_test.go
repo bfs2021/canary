@@ -318,7 +318,7 @@ func TestToolsMirrorTheCatalogue(t *testing.T) {
 		}
 	}
 	status, ok := canary.Lookup("canary_status")
-	if !ok || len(status.Methods) != 1 || status.Methods[0] != "status.health" {
+	if !ok || len(status.Methods) != 2 || status.Methods[0] != "status.health" || status.Methods[1] != "settings.get" {
 		t.Fatalf("status=%+v ok=%v", status, ok)
 	}
 	status.InputSchema[0] = ' '

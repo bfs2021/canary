@@ -2,21 +2,33 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## v3.23.2 — 2026-10-18 22:05 CEST
+## v3.23.2 — 2026-10-18 22:00 CEST
 
 ### What's new
 
-`canary status` now says whether the fills you enter in TWS reach Canary,
-and names the TWS setting that lets them, so the execution cost report and
-the scorecard are not silently missing your hand fills.
-
-### Added
-
-- `canary status` carries an `Executions` row: `this client's own orders only · set TWS Master API client ID to N to see hand and other-client fills` until the daemon has seen a fill from another API client or TWS, then `all clients (proven HH:MM)`; `--json` and `canary_status` carry the same facts under `executions` (`visibility`, `proven_at`, `client_id`, `setting`, `action`), read from the execution poll the cost report already reports. `canary reporting costs` names the proving poll's time beside its visibility verdict (`observation.proven_at`). The reporting, install and first-session pages explain the setting.
+This patch binds risk history to the instrument being measured, preserves captured fills through storage recovery, and repairs installation, upgrade activation and command-line errors on macOS and Linux.
 
 ### Fixed
 
 - The mandate's flow check no longer carries the clearing rule for records from before the equity-move rule: the one such record cleared on the v3.23.1 install, and the rule could also have cleared a real flow the market later offset. A suspicion raised by a real equity move now clears only when it is explained or a statement covers its day.
+- The flow check keeps the rules the owner approved on 2026-10-18: a suspicion needs an equity move beyond the threshold, the broker's P&L reset is read from the figures as well as the session date, and a record from before those rules no longer clears on a flat equity (the one such record cleared on the v3.23.1 install). A flat-equity jump of the broker's P&L figure is journaled as `mandate_pnl_basis_jump`, never held. The alternative raised as #109, #110 and #111, holding every ambiguous reset until a statement reconciles it, was declined because it holds every machine addition for a trading day after each daemon restart; its price (a flow exactly offset by a market move within one two-minute reading gap waits for the next statement) is stated in the design record. Thresholds and order authorization are unchanged.
+- Mandate risk checks reject history from a different contract or exchange-rate pair, including retained history after restart; ambiguous same-symbol holdings stay unmeasured (#92).
+- Execution-cost reports recover the original captured fill quote after a transient storage failure, without recording a later quote or duplicating the fill (#93).
+- An interrupted self-update leaves a complete executable available; unsupported update operands are rejected before a trailing `--check` can be ignored (#94, #95).
+- MCP status compares host and daemon versions and offers an explicit, scoped activation command for a verified upgrade with matching build capabilities; MCPB users can activate without a shell-installed binary (#96).
+- Installation verifies that the candidate runs from its destination before replacing an existing installation, and fresh shells work with commented PATH examples and unexported Zsh configuration directories (#98, #100).
+- Repeated app setup preserves each original LaunchAgent in a unique backup (#99).
+- Malformed help requests return a usage error without starting a daemon or panicking; strategy requests with missing or extra IDs return a failure status (#102, #105).
+- Core decision outcomes use only the matching account and mode; Hong Kong history remains available through its final covered trading session (#104, #103).
+- Reporting instructions honor custom config paths; upgrade notes explain that existing live-core declarations take effect in 3.23, and the strategy MCP description identifies the live core's confirmation-required proposal rows (#101, #106, #107).
+
+### Security
+
+- The installer accepts only the pinned primary signing key and rejects additional keys before trusting a release manifest. Verification no longer starts GPG's agent, so long writable Linux temporary paths work too (#108, #97).
+
+### Added
+
+- `canary status` carries an `Executions` row: `this client's own orders only · set TWS Master API client ID to N to see hand and other-client fills` until the daemon has seen a fill from another API client or TWS, then `all clients (proven HH:MM)`; `--json` and `canary_status` carry the same facts under `executions` (`visibility`, `proven_at`, `client_id`, `setting`, `action`), read from the execution poll the cost report already reports. `canary reporting costs` names the proving poll's time beside its visibility verdict (`observation.proven_at`). The reporting, install and first-session pages explain the setting.
 
 ## v3.23.1 — 2026-10-18 21:30 CEST
 

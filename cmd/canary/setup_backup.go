@@ -46,9 +46,14 @@ func secureClaudeDesktopBackups(path string) error {
 	return nil
 }
 
-// writeClaudeDesktopBackup creates a unique private backup, removing a partial
-// result on failure and never following an existing destination symlink.
+// writeClaudeDesktopBackup uses the shared private setup-backup writer.
 func writeClaudeDesktopBackup(path string, data []byte) (string, error) {
+	return writePrivateSetupBackup(path, data)
+}
+
+// writePrivateSetupBackup creates a unique private backup, removing a partial
+// result on failure and never following an existing destination symlink.
+func writePrivateSetupBackup(path string, data []byte) (string, error) {
 	dir, prefix := filepath.Dir(path), filepath.Base(path)+".bak-"
 	f, err := os.CreateTemp(dir, prefix+time.Now().Format("20060102-150405")+"-*")
 	if err != nil {

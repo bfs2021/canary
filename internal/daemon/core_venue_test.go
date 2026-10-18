@@ -67,7 +67,7 @@ func TestCoreTargetOnTheLondonLine(t *testing.T) {
 	}
 	// The same closes on Xetra's calendar: a bar on a day Xetra was shut
 	// and a missing close on a day it traded.
-	series := srv.mandateHistorySeries(t.Context(), coreSeriesKey(9031))
+	series := srv.mandateHistoryForNeed(t.Context(), coreSeriesNeed(srv.coreContractInUse()))
 	sessions, off := coreCalendar(series.Dates, "2026-09-30", mandateTestNow, marketcal.MarketDEXetra)
 	if !slices.Contains(off, "2026-05-01") {
 		t.Fatalf("Xetra's calendar takes London's 1 May bar: %v", off)
@@ -128,7 +128,7 @@ func TestCoreHoldNamesTheRefusedRead(t *testing.T) {
 		return nil, ibkrlib.ErrIBKRUnavailable
 	}
 	srv.readMandateSeries(t.Context(), coreSeriesNeed(k), mandateTestNow.Add(time.Minute))
-	if err, at := srv.mandateSeriesFailure(coreSeriesKey(9031)); err != refusal.Error() || !at.Equal(mandateTestNow) {
+	if err, at := srv.mandateSeriesFailure(bindMandateHistoryNeed(coreSeriesNeed(k)).Key); err != refusal.Error() || !at.Equal(mandateTestNow) {
 		t.Fatalf("after a down gateway: %q at %s", err, at)
 	}
 	dates := coreTestDatesOn(t, marketcal.MarketUKLSE)
@@ -143,10 +143,10 @@ func TestCoreHoldNamesTheRefusedRead(t *testing.T) {
 	if !srv.readMandateSeries(t.Context(), coreSeriesNeed(k), mandateTestNow.Add(2*time.Minute)) {
 		t.Fatal("the read did not succeed")
 	}
-	if err, _ := srv.mandateSeriesFailure(coreSeriesKey(9031)); err != "" {
+	if err, _ := srv.mandateSeriesFailure(bindMandateHistoryNeed(coreSeriesNeed(k)).Key); err != "" {
 		t.Fatalf("a successful read left the refusal: %q", err)
 	}
-	if got := srv.mandateHistorySeries(t.Context(), coreSeriesKey(9031)); got == nil || got.Market != marketcal.MarketUKLSE {
+	if got := srv.mandateHistoryForNeed(t.Context(), coreSeriesNeed(k)); got == nil || got.Market != marketcal.MarketUKLSE {
 		t.Fatalf("the read is not stamped with London's calendar: %+v", got)
 	}
 }

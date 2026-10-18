@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,6 +85,8 @@ type fillQuoteRuntime struct {
 	mu      sync.Mutex
 	records map[string]fillQuoteStored
 	claimed map[string]bool
+	// pending retains the originally captured payload until its durable commit is confirmed.
+	pending map[string]fillQuoteStored
 	queue   []fillQuoteFill
 	poll    fillQuotePoll
 
@@ -138,7 +141,7 @@ func (rt *fillQuoteRuntime) enqueue(f fillQuoteFill) bool {
 	if rt.claimed[f.record.ExecID] {
 		return false
 	}
-	if len(rt.queue) >= fillQuoteQueueSize {
+	if len(rt.queue)+len(rt.pending) >= fillQuoteQueueSize {
 		return false
 	}
 	rt.claimed[f.record.ExecID] = true
@@ -190,27 +193,84 @@ func (rt *fillQuoteRuntime) append(account string, rec rpc.FillQuoteRecord) erro
 		return fmt.Errorf("fill quote store is unavailable")
 	}
 	stored := fillQuoteStored{Account: strings.ToUpper(strings.TrimSpace(account)), Record: rec}
+	rt.mu.Lock()
+	if rt.pending == nil {
+		rt.pending = map[string]fillQuoteStored{}
+	}
+	if original, ok := rt.pending[rec.ExecID]; ok {
+		stored = original
+	} else {
+		rt.pending[rec.ExecID] = stored
+	}
+	rt.mu.Unlock()
+	return rt.persistCaptured(stored)
+}
+
+// persistCaptured reconciles an ambiguous commit before retrying the original
+// observation. A watermark failure can follow a successful SQLite commit.
+// Never recapture a later quote or publish an unconfirmed observation.
+func (rt *fillQuoteRuntime) persistCaptured(stored fillQuoteStored) error {
+	if !rt.core.Health().Ready {
+		return fmt.Errorf("fill quote store is not ready")
+	}
 	payload, err := json.Marshal(stored)
 	if err != nil {
 		return fmt.Errorf("encode fill quote: %w", err)
 	}
+	rec := stored.Record
 	observedAt := rec.ExecTime
 	if observedAt.IsZero() {
 		observedAt = rec.ObservedAt
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := rt.core.AppendObservation(ctx, corestore.ObservationInput{
-		ScopeKey: fillQuoteScopeKey, Source: rec.Source, Kind: fillQuoteKind, ObservedAt: observedAt.UTC(),
-		ContentType: "application/json", Payload: payload,
-	}); err != nil {
-		return fmt.Errorf("append fill quote: %w", err)
+	query := corestore.ObservationQuery{ScopeKey: fillQuoteScopeKey, Source: rec.Source, Kind: fillQuoteKind,
+		FromObservedAtMS: observedAt.UnixMilli(), ToObservedAtMS: observedAt.UnixMilli(), Limit: fillQuoteStorePage}
+	committed := false
+	for {
+		rows, err := rt.core.ListObservations(ctx, query)
+		if err != nil {
+			return fmt.Errorf("reconcile fill quote: %w", err)
+		}
+		for _, row := range rows {
+			if bytes.Equal(row.Payload, payload) {
+				committed = true
+				break
+			}
+		}
+		if committed || len(rows) < fillQuoteStorePage {
+			break
+		}
+		query.AfterObservationID = rows[len(rows)-1].ID
+	}
+	if !committed {
+		if _, err := rt.core.AppendObservation(ctx, corestore.ObservationInput{
+			ScopeKey: fillQuoteScopeKey, Source: rec.Source, Kind: fillQuoteKind, ObservedAt: observedAt.UTC(),
+			ContentType: "application/json", Payload: payload,
+		}); err != nil {
+			return fmt.Errorf("append fill quote: %w", err)
+		}
 	}
 	rt.mu.Lock()
 	rt.records[rec.ExecID] = stored
 	rt.claimed[rec.ExecID] = true
+	delete(rt.pending, rec.ExecID)
 	rt.mu.Unlock()
 	return nil
+}
+
+func (rt *fillQuoteRuntime) retryCaptured() {
+	rt.mu.Lock()
+	pending := make([]fillQuoteStored, 0, len(rt.pending))
+	for _, stored := range rt.pending {
+		pending = append(pending, stored)
+	}
+	rt.mu.Unlock()
+	for _, stored := range pending {
+		if err := rt.persistCaptured(stored); err != nil {
+			return
+		}
+	}
 }
 
 // list returns the retained records of one account and mode, ascending by
@@ -466,6 +526,7 @@ func (s *Server) runFillQuoteLoop(ctx context.Context) {
 }
 
 func (s *Server) captureQueuedFillQuotes(ctx context.Context) {
+	s.fillQuotes.retryCaptured()
 	for ctx.Err() == nil {
 		f, ok := s.fillQuotes.pop()
 		if !ok {

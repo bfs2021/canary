@@ -25,7 +25,7 @@ func TestMandateRefreshesIntradayBarAfterClose(t *testing.T) {
 	srv.refreshMandateSeries(t.Context(), source, need)
 	now = time.Date(2026, 10, 19, 21, 0, 0, 0, time.UTC)
 	srv.refreshMandateSeries(t.Context(), source, need)
-	series := srv.mandateHistorySeries(t.Context(), need.Key)
+	series := srv.mandateHistoryForNeed(t.Context(), need)
 	if reads != 2 || series.Closes[len(series.Closes)-1] != 120 {
 		t.Fatalf("after completed close: reads=%d last=%s close=%v due=%v stale=%v; expected new completed close 120, not retained intraday 100", reads, series.Dates[len(series.Dates)-1], series.Closes[len(series.Closes)-1], mandateSeriesDue(series, now), mandateSeriesStale(series, now))
 	}

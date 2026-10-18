@@ -197,7 +197,20 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 		// broker's P&L clock (a reset, a reconnect), never money (2026-10-18:
 		// two readings with the equity unchanged to the euro and the figure a
 		// day's P&L apart read as flows and held the room for days).
-		if unexplained := move - step; math.Abs(move) > threshold && math.Abs(unexplained) > threshold {
+		unexplained := move - step
+		if math.Abs(move) <= threshold && math.Abs(unexplained) > threshold {
+			// The figure jumped while the equity stood still: the broker's P&L
+			// clock, journaled for the record and for the statement to confirm,
+			// never a hold (the alternative, holding every such reading until
+			// reconciliation, was declined on 2026-10-18 22:15 CEST under the
+			// owner's decision of the evening; mandate-risk-budget.md).
+			st.appendRiskPolicyJournal(map[string]any{
+				"version": 1, "at": now.UTC(), "kind": "mandate_pnl_basis_jump",
+				"pnl_move_base": step, "equity_move_base": move, "threshold_base": threshold, "equity_base": equityBase, "equity_as_of": asOf.UTC(),
+				"policy_fingerprint": constitutionFingerprint(c),
+			})
+		}
+		if math.Abs(move) > threshold && math.Abs(unexplained) > threshold {
 			m.FlowSuspect = &mandateFlowSuspect{At: asOf, Base: *m.Last, PnLSince: step, Unexplained: unexplained, ThresholdAt: threshold, MoveBase: move}
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_suspected",

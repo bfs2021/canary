@@ -78,6 +78,9 @@ func parseUpdateFlags(args []string, opts *updateOptions, stdout, stderr io.Writ
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err), false
 	}
+	if fs.NArg() != 0 {
+		return failUnexpectedArgs(env, fs), false
+	}
 	if opts.restart && opts.noRestart {
 		fmt.Fprintf(stderr, "%s update: --restart and --no-restart are mutually exclusive\n", productidentity.Executable)
 		return 2, false

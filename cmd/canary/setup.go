@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/osauer/canary/v2/internal/productidentity"
 )
@@ -280,9 +279,8 @@ func setupAppLaunchAgent(args []string) int {
 		return 1
 	}
 	if data, err := os.ReadFile(plistPath); err == nil {
-		stamp := time.Now().Format("20060102-150405")
-		backup := plistPath + ".bak-" + stamp
-		if err := os.WriteFile(backup, data, 0o644); err != nil {
+		backup, err := writePrivateSetupBackup(plistPath, data)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s setup app: backup %s: %v\n", productidentity.Executable, backup, err)
 			return 1
 		}

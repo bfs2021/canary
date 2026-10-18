@@ -420,7 +420,15 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   statement incorporates it; readings run every two minutes in the session, so
   the exposure is a gap, overnight or a weekend, and one statement long. The
   clearing rule for records from before it was dropped in v3.23.2, once the
-  one such record had cleared on the v3.23.1 install; the
+  one such record had cleared on the v3.23.1 install. The alternative, to
+  hold the room at every reading a reset cannot be told from an offsetting
+  flow until a statement reconciles it (proposed as Canary issues #109 to
+  #111 on 2026-10-18 evening), was declined by the integrating session at
+  22:15 CEST under the owner's decision of that evening ("yes, patch" to the
+  fix for the false weekend and restart suspicions; the owner's standing
+  priority that the machine runs by itself): it would hold every machine
+  addition for a trading day after every daemon restart. A flat-equity jump
+  of the figure is journaled as `mandate_pnl_basis_jump` for the record; the
   floor stands for the accruals a broker posts to cash that its daily P&L
   may not carry (interest, a dividend, a fee), and a flow that small moves
   the budget by under 150 a year at the 15% target. While suspected the

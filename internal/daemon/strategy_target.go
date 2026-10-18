@@ -546,26 +546,33 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	var series *mandateHistorySeries
 	if contract != nil {
 		need := instrumentSeriesNeed(seriesKeyFor(r, contract.ConID), contract)
-		series = s.mandateHistorySeries(ctx, need.Key)
+		series = s.mandateHistoryForNeed(ctx, need)
+		candidate := series
+		if candidate == nil {
+			candidate = s.mandateHistorySeries(ctx, need.Key)
+		}
 		ev := &rpc.CoreEvidence{SeriesKey: need.Key, Missing: series == nil, Calendar: string(contract.Market)}
-		if series != nil {
-			ev.Closes, ev.LastClose, ev.FetchedAt, ev.Source, ev.Stale = len(series.Closes), series.Dates[len(series.Dates)-1], series.FetchedAt, series.Source, mandateSeriesStale(series, now)
+		if candidate != nil {
+			ev.Closes, ev.LastClose, ev.FetchedAt, ev.Source, ev.Stale = len(candidate.Closes), candidate.Dates[len(candidate.Dates)-1], candidate.FetchedAt, candidate.Source, mandateSeriesStale(candidate, now)
 		}
 		refused := ""
-		if ev.ReadError, ev.ReadErrorAt = s.mandateSeriesFailure(need.Key); ev.ReadError != "" {
+		if ev.ReadError, ev.ReadErrorAt = s.mandateSeriesFailure(bindMandateHistoryNeed(need).Key); ev.ReadError != "" {
 			refused = fmt.Sprintf("the last read of %s failed at %s UTC: %s", contract.label(), ev.ReadErrorAt.UTC().Format(time.DateTime), ev.ReadError)
 		}
 		res.Evidence = ev
 		switch {
-		case series == nil && refused != "":
+		case candidate == nil && refused != "":
 			hold(fmt.Sprintf("no %s daily history: %s", sym, refused))
-		case series == nil:
+		case candidate == nil:
 			hold(fmt.Sprintf("no %s daily history yet; the desk reads it on %s on the background lane", sym, contract.PrimaryExch))
-		case series.Market != contract.Market:
-			hold(fmt.Sprintf("the kept %s history was read for the %s calendar, not %s; the desk reads it again on %s", sym, nonEmptyString(string(series.Market), "Xetra"), venue, contract.PrimaryExch))
+		case candidate.Market != contract.Market:
+			hold(fmt.Sprintf("the kept %s history was read for the %s calendar, not %s; the desk reads it again on %s", sym, nonEmptyString(string(candidate.Market), "Xetra"), venue, contract.PrimaryExch))
 			series = nil
-		case series.Contract.ConID > 0 && series.Contract.ConID != contract.ConID:
-			hold(fmt.Sprintf("the series' contract %d is not %s's contract %d", series.Contract.ConID, name, contract.ConID))
+		case candidate.Contract.ConID > 0 && candidate.Contract.ConID != contract.ConID:
+			hold(fmt.Sprintf("the series' contract %d is not %s's contract %d", candidate.Contract.ConID, name, contract.ConID))
+		case !mandateHistoryContractMatches(candidate.Contract, need.Contract):
+			hold(fmt.Sprintf("the kept %s history does not match its resolved contract identity; the desk reads it again", sym))
+			series = nil
 		case ev.Stale && refused != "":
 			hold(fmt.Sprintf("the %s daily history is stale: last close %s on the %s calendar; %s", sym, ev.LastClose, venue, refused))
 		case ev.Stale:
@@ -604,7 +611,7 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 				}
 				index := core.Series{}
 				if proxy != "" {
-					if spy := s.mandateHistorySeries(ctx, "u:"+proxy); spy != nil {
+					if spy := s.mandateHistoryForNeed(ctx, mandateIndexHistoryNeed()); spy != nil && proxy == mandate.IndexSymbol {
 						index = core.Series{Dates: spy.Dates, Closes: spy.Closes}
 					}
 				}

@@ -30,8 +30,10 @@ type DaemonConn interface {
 
 // Env is the per-invocation context shared by every subcommand.
 type Env struct {
-	Stdout io.Writer
-	Stderr io.Writer
+	// HelpOnly parses offline; it must never execute a normal command.
+	HelpOnly bool
+	Stdout   io.Writer
+	Stderr   io.Writer
 	// Stdin is the interactive input used for live-write confirmation
 	Stdin io.Reader
 	Conn  DaemonConn
@@ -319,18 +321,35 @@ func PrintUsage(w io.Writer) {
 }
 
 // flagSet builds a *flag.FlagSet wired to the env's writers and equipped
-func flagSet(env *Env, name string) *flag.FlagSet {
+func flagSet(env *Env, name string) *commandFlagSet {
 	summary, usage := helpDescription(name)
 	return describedFlagSet(env, name, summary, usage)
 }
 
 // describedFlagSet also gives nested commands the standard help presentation.
-func describedFlagSet(env *Env, name, summary, usage string) *flag.FlagSet {
+func describedFlagSet(env *Env, name, summary, usage string) *commandFlagSet {
 	fs := flag.NewFlagSet(productidentity.Executable+" "+name, flag.ContinueOnError)
 	fs.SetOutput(env.Stderr)
 	fs.Usage = func() { renderCommandHelp(env, fs, name, summary, usage) }
 
-	return fs
+	return &commandFlagSet{FlagSet: fs, helpOnly: env.HelpOnly}
+}
+
+type commandFlagSet struct {
+	*flag.FlagSet
+	helpOnly bool
+}
+
+func (fs *commandFlagSet) Parse(args []string) error {
+	if err := fs.FlagSet.Parse(args); err != nil {
+		return err
+	}
+	if fs.helpOnly {
+		err := errors.New("help flag was consumed as an argument; use --help by itself")
+		fmt.Fprintln(fs.Output(), err)
+		return err
+	}
+	return nil
 }
 
 // printJSON writes obj as indented JSON, returning a non-zero exit code if
@@ -370,7 +389,7 @@ func isGatewayUnavailable(msg string) bool {
 }
 
 // failUnexpectedArgs rejects a stray positional argument with the command's
-func failUnexpectedArgs(env *Env, fs *flag.FlagSet) int {
+func failUnexpectedArgs(env *Env, fs *commandFlagSet) int {
 	arg := fs.Arg(0)
 	fmt.Fprintf(env.Stderr, "%s: unexpected argument %q", fs.Name(), arg)
 	if name := strings.TrimLeft(arg, "-"); name != "" && fs.Lookup(name) != nil {
