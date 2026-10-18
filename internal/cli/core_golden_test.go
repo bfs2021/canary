@@ -17,7 +17,7 @@ func goldenCore() rpc.CoreTargetResult {
 	holdable := 908
 	on := core.Sizing{CoreVolPct: 6, ScalePct: 100, MaxValuePct: 40, BudgetBase: 230000, Room: 1}
 	size := core.Size{SleeveBudget: 13800, Cap: 92000, Notional: 92000, TargetShares: 958}
-	return rpc.CoreTargetResult{AsOf: goldenAt, Active: true, Status: rpc.CoreStatusReady, ReadOnly: true,
+	return rpc.CoreTargetResult{AsOf: goldenAt, Active: true, Status: rpc.CoreStatusReady, ReadOnly: false,
 		Rule: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash, PolicyRule: core.RuleID,
 		Stage:             &rpc.CoreStageView{Written: "live", State: "live", ReservedPct: 100, SpecHashCited: true},
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: "sha256:synthetic"},
@@ -37,24 +37,40 @@ func goldenCore() rpc.CoreTargetResult {
 		Mandate:      &rpc.CoreMandateView{BaseCurrency: "EUR", Status: "within", EvaluatedAt: goldenAt.Add(-time.Minute), BudgetAnnualSD: 34500, RiskAnnualSD: 3267},
 		NextDecision: "2026-09-30",
 		Evidence:     &rpc.CoreEvidence{SeriesKey: "core:con:9030", Closes: 320, LastClose: "2026-09-04", FetchedAt: goldenAt.Add(-9 * time.Hour), Source: "IBKR historical bars · TRADES", Calendar: "de_xetra"},
+		Row:          &rpc.CoreRowView{Key: "core_rebalance:synthetic01", Revision: "r1", Action: "BUY", Quantity: 908, ReferencePrice: 96.1, Session: "2026-09-04", State: rpc.TradeProposalStateGenerated, Readiness: "ready", Terms: goldenCoreTerms()},
+		LastDecision: &rpc.CoreDecisionRecord{Decision: "2026-08-31", DecidedAt: goldenAt.Add(-5 * 24 * time.Hour), Stage: "live", Kind: core.ActionBuy, Quantity: 908, Why: "first buy, cut by the mandate's headroom from 958 shares",
+			Target: 958, Held: 0, Price: 95.95, Window: goldenCoreTerms().Window, RowKey: "core_rebalance:synthetic01", Outcome: rpc.CoreDecisionOutcome{Served: true}},
 	}
 }
 
+// goldenCoreTerms are the synthetic row's order terms: the five sessions
+// after the 31 August decision the US also trades.
+func goldenCoreTerms() rpc.CoreRowTerms {
+	return rpc.CoreRowTerms{OrderType: "LMT", TIF: "DAY", Limit: "the live mid, snapped to the tick grid, never crossing the mid", Exchange: "SMART", PrimaryExchange: "IBIS",
+		Window: []string{"2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-08"}, Episode: "core:synthetic:paper:2026-08"}
+}
+
 // goldenCoreHold is a core that holds: the decision day's close has not
-// arrived and a key is unwritten.
+// arrived and a key is unwritten, so no row stands and nothing is recorded.
 func goldenCoreHold() rpc.CoreTargetResult {
 	res := goldenCore()
 	res.Status = rpc.CoreStatusHold
 	res.Reasons = []string{"core keys are unwritten: mandate.core.band_pct", "the decision waits for IBCF's close of 2026-08-31"}
-	res.Decision, res.Sizing = nil, nil
+	res.Decision, res.Sizing, res.Row, res.LastDecision = nil, nil, nil, nil
 	res.Action = &core.Decision{Kind: core.ActionHold, Why: "the core holds: buys stop, and a sale the rule wants goes to you for review"}
 	res.Evidence.Stale = true
 	return res
 }
 
-// goldenCoreTrendOff sells the holding: the trend is off.
+// goldenCoreTrendOff sells the holding: the trend is off, its sale row is
+// blocked while an order of the line works, and the last decision's row was
+// sent after the owner's confirmation.
 func goldenCoreTrendOff() rpc.CoreTargetResult {
 	res := goldenCore()
+	res.Row = &rpc.CoreRowView{Key: "core_rebalance:synthetic02", Revision: "r2", Action: "SELL", Quantity: 640, ReferencePrice: 84.3, Session: "2026-09-04", State: rpc.TradeProposalStateBlocked, Readiness: "not_executable", Terms: goldenCoreTerms(),
+		Blockers: []rpc.TradingBlocker{{Code: "existing_reduction_order", Message: "an order to sell 200 of this contract is already working (LMT); this row waits until it fills or is cancelled, then recomputes from the new position"}}}
+	res.LastDecision = &rpc.CoreDecisionRecord{Decision: "2026-08-31", DecidedAt: goldenAt.Add(-5 * 24 * time.Hour), Stage: "live", Kind: core.ActionSellAll, Quantity: 840, Why: "the trend is off: sell every share; the band and the minimum do not apply",
+		Target: 0, Held: 840, Price: 84.1, Window: goldenCoreTerms().Window, RowKey: "core_rebalance:synthetic02", Outcome: rpc.CoreDecisionOutcome{Served: true, Submitted: true, SubmittedAt: goldenAt.Add(-4 * 24 * time.Hour), OrderRef: "canary-synthetic-7"}}
 	res.Decision.TrendOn, res.Decision.Close = false, 84.1
 	res.Decision.Binding, res.Decision.Sigma, res.Decision.SigmaEWMA = core.BindingEWMA, 0.231, 0.231
 	zero := core.Size{SleeveBudget: 13800, Cap: 92000}
@@ -126,13 +142,14 @@ func goldenCoreLondon() rpc.CoreTargetResult {
 	return res
 }
 
-// goldenCoreShadow is the core in shadow: written live while this build sends
-// no orders, its own verdict waits, and its shadow record holds a month's
-// decision, intent and fill on the paper position, newest first, and an
-// earlier month's fill whose close was missing.
+// goldenCoreShadow is the core in shadow, as the owner wrote it: its own
+// verdict waits, and its shadow record holds a month's decision, intent and
+// fill on the paper position, newest first, and an earlier month's fill
+// whose close was missing.
 func goldenCoreShadow() rpc.CoreTargetResult {
 	res := goldenCore()
-	res.Stage = &rpc.CoreStageView{Written: "live", State: "shadow", Notes: []string{"live written; this build sends no orders for core-ibcf-v1, so it runs as shadow"}}
+	res.Stage = &rpc.CoreStageView{Written: "shadow", State: "shadow", SpecHashCited: true}
+	res.Row, res.LastDecision, res.ReadOnly = nil, nil, true
 	res.Action = &core.Decision{Kind: core.ActionWait, Why: "no buy: the core runs in shadow and sends no orders, so it reserves no allocation", Diff: 958, BandShares: 95.8}
 	base := rpc.ShadowRecord{Version: 1, Strategy: "core", Rule: core.RuleID, SpecHash: core.SpecHash, SpecCited: true, Stage: "shadow", RecordedAt: goldenAt}
 	fill, intent, decision, missed := base, base, base, base

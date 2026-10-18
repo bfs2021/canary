@@ -293,7 +293,7 @@ func TestBudgetReductionBlockersAndBookIntegration(t *testing.T) {
 	// output, the status reaches the caller, and a snapshot copy owns them.
 	pos = budgetTestBook()
 	engine.budgetInput = func(*rpc.AccountResult, time.Time) budgetGovernorInput { return budgetLatchedInput() }
-	proposals, _, hedges, status, _ := engine.generateBook(context.Background(), policy, rpc.ProtectionPolicyStatus{}, nil, pos, rpc.TradeProposalSourceFingerprints{}, nil, brokerStateScope{}, now)
+	proposals, _, hedges, status, _, _ := engine.generateBook(context.Background(), policy, rpc.ProtectionPolicyStatus{}, nil, pos, rpc.TradeProposalSourceFingerprints{}, nil, brokerStateScope{}, now)
 	if len(proposals) != 2 || status == nil || status.Rows != 2 || len(hedges) != 0 {
 		t.Fatalf("book: %d proposals, %d hedges, status %+v", len(proposals), len(hedges), status)
 	}

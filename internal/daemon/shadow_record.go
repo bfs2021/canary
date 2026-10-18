@@ -181,12 +181,19 @@ func (s *Server) recordCoreShadowDecision(ctx context.Context, res *rpc.CoreTarg
 	intent := base
 	intent.Kind, intent.Session = rpc.ShadowKindIntent, d.Decision
 	action := s.coreShadowDecide(res, contract, held, scalePct)
-	intent.Intent = &rpc.ShadowIntent{ForSession: coreNextSession(d.Decision, contract.Market, now), Kind: action.Kind, Why: action.Why, Diff: action.Diff, BandShares: action.BandShares, HoldingBefore: held}
+	// The session and the order terms come from the live row's builder, so
+	// the shadow intent carries what its row would (core_rebalance.go).
+	terms := coreRowTerms(contract, d.Decision, s.currentBrokerStateScope(), now)
+	forSession := coreNextSession(d.Decision, contract.Market, now)
+	if len(terms.Window) > 0 {
+		forSession = terms.Window[0]
+	}
+	intent.Intent = &rpc.ShadowIntent{ForSession: forSession, Kind: action.Kind, Why: action.Why, Diff: action.Diff, BandShares: action.BandShares, HoldingBefore: held}
 	switch action.Kind {
 	case core.ActionBuy:
-		intent.Intent.Quantity = action.Quantity
+		intent.Intent.Quantity, intent.Intent.Terms = action.Quantity, &terms
 	case core.ActionSell, core.ActionSellAll:
-		intent.Intent.Quantity = -action.Quantity
+		intent.Intent.Quantity, intent.Intent.Terms = -action.Quantity, &terms
 	}
 	for _, r := range []rpc.ShadowRecord{decision, intent} {
 		if err := s.appendShadowRecord(ctx, r); err != nil {

@@ -1,8 +1,7 @@
 # canary core · COLUMNS=80 · colour off
 Core  WAITS
 Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
-Stage · shadow · reserves nothing · spec compiled, not cited · live written;
-  this build sends no orders for core-ibcf-v1, so it runs as shadow
+Stage · shadow · reserves nothing · spec cited
 Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
   the ISIN
 Action · no buy: the core runs in shadow and sends no orders, so it reserves
@@ -37,13 +36,13 @@ Evidence
   core:con:9030 · 320 closes to 2026-09-04 · read 05:00:00 TZ · Xetra
     calendar
   Mandate verdict · 13:59:00 TZ
-Read-only: the core proposes nothing and places no order in this phase. It is
-  a beta allocation with a drawdown filter that you chose, not an edge claim.
+Read-only: the core proposes nothing and places no order while it is not live.
+  It is a beta allocation with a drawdown filter that you chose, not an edge
+  claim.
 # canary core · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mCore\x1b[0m  \x1b[33m\x1b[1mWAITS\x1b[0m\x1b[0m
 Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
-Stage · shadow · reserves nothing · spec compiled, not cited · live written;
-  this build sends no orders for core-ibcf-v1, so it runs as shadow
+Stage · shadow · reserves nothing · spec cited
 Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
   the ISIN
 Action · no buy: the core runs in shadow and sends no orders, so it reserves
@@ -78,5 +77,6 @@ Next decision · 2026-09-30 after the Xetra close
   core:con:9030 · 320 closes to 2026-09-04 · read 05:00:00 TZ · Xetra
     calendar
   Mandate verdict · 13:59:00 TZ
-Read-only: the core proposes nothing and places no order in this phase. It is
-  a beta allocation with a drawdown filter that you chose, not an edge claim.
+Read-only: the core proposes nothing and places no order while it is not live.
+  It is a beta allocation with a drawdown filter that you chose, not an edge
+  claim.

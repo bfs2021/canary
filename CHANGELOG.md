@@ -2,6 +2,54 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.23.0 — Unreleased
+
+### What's new
+
+The core sleeve can go live at a small stage. On each decision day (the
+last session of the month on the fund's London listing), a core written
+`stage = "live"` in `[mandate.core]` turns its month's decision into one
+`core_rebalance` proposal row: the rule's buy, sell or sale to zero toward
+the frozen target, sized by the band, the minimum and the mandate's headroom,
+a DAY limit at the live mid, for the first five sessions after the decision
+that the US also trades. You confirm the row on your device through the
+prepared-proposal path; Canary's gates re-check it at preview, prepare and
+submit, and the daemon never sends it by itself. In shadow nothing changes:
+the same decision reaches only the shadow record. The live policy runs the
+core in shadow until you write the stage.
+
+### Added
+
+- The core's monthly rows (`core_rebalance`, core-sleeve.md phase 2): one row
+  a month while the core is live, with the decision's figures, the session it
+  is for and the window on it; a buy passes `close_reduce_only` under its own
+  typed exception, bound to the core's contract, the sized quantity (never
+  more than the frozen target leaves to buy) and a limit within 10% of the
+  decision close; a core sale is an ordinary reduction. A buy is served
+  blocked while the mandate's breach episode is open or a reduction of the
+  line stands, and any row while an order for the contract works, the owner's
+  included; a data hold stops buys and still serves the sale to zero the
+  frozen month wants, for review. The bucket is never pre-authorisable.
+- `canary core` and `canary_core` show the pending row (key, order, session,
+  window, state, blockers, readiness) and the last decision made live with
+  what became of its row (served, sent after your confirmation with the order
+  reference, or the latest refusal); `canary proposals` carries the row's
+  `core` figures and the snapshot its `core_rebalance` status.
+- The shadow intent carries the order terms its live row would, from the one
+  row builder, and is for the first window session.
+- The scorecard keeps a `core_rebalance` fill in the `core` sleeve under its
+  rule, never in the owner's and never in the generic rule sleeve.
+- A London line (`LSE`, `LSEETF`) reads the London calendar for readiness
+  and the preview's closed-session refusal; it read the US one.
+
+### Changed
+
+- The core's rule sends in the catalogue, so a core written `live` runs live
+  and reserves its scale; `canary core` reads `read_only` false while live
+  and its closing line says the row needs your confirmation. The window (five
+  sessions) and the limit's distance from the decision close (10%) are
+  compiled with the rule, as its input window is, not policy keys.
+
 ## v3.22.2 — 2026-10-18 18:05 CEST
 
 ### What's new

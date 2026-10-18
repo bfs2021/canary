@@ -21,16 +21,18 @@ import (
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
-// The core sleeve's target (internal-docs/design/core-sleeve.md), phase 1:
-// read-only. The daemon keeps the core contract's own closes (the line IBKR
-// lists under the policy's ISIN and currency, core_resolve.go, read by contract
-// id on its primary exchange, judged fresh on that exchange's calendar, and
-// never read by the book's verdict), decides each month at the exchange's last
-// session's close with internal/core, freezes the month's target with the digest
-// of its inputs, sizes it on the mandate's capital, cuts a buy to the mandate's
+// The core sleeve's target (internal-docs/design/core-sleeve.md). The daemon
+// keeps the core contract's own closes (the line IBKR lists under the policy's
+// ISIN and currency, core_resolve.go, read by contract id on its primary
+// exchange, judged fresh on that exchange's calendar, and never read by the
+// book's verdict), decides each month at the exchange's last session's close
+// with internal/core, freezes the month's target with the digest of its
+// inputs, sizes it on the mandate's capital, cuts a buy to the mandate's
 // headroom (the book at most at 0.95 of the budget, the core's gap at most at
-// 0.95 of its cap, whole book: owner decision D1) and serves what the rule would
-// do. It creates no proposal row and sends no order.
+// 0.95 of its cap, the core inside its allocation) and serves what the rule
+// would do. In shadow that is all (phase 1, read-only); live, the month's
+// action is served as one proposal row the owner confirms on a device
+// (core_rebalance.go, phase 2). The daemon itself sends no order.
 
 const (
 	coreSeriesKeyPrefix = "core:con:"
@@ -65,6 +67,9 @@ type coreFrozenTarget struct {
 	Signal   core.Signal `json:"signal"`
 	On       core.Sizing `json:"on"`
 	Size     core.Size   `json:"size"`
+	// Row is the month's decision as recorded while the core was live
+	// (core_rebalance.go); nil while the core decided the month in shadow.
+	Row *coreDecisionRow `json:"row,omitempty"`
 }
 
 type coreTargetStore struct {
@@ -286,11 +291,19 @@ func (s *Server) refreshCoreTarget(ctx context.Context) {
 		return
 	}
 	f := s.coreFrozen(ctx, coreScope(s.currentBrokerStateScope(), contract.ConID))
-	if f != nil && f.Decision == latest && !s.coreShadowDue(ctx, latest) {
+	reg, _ := resolvedCore(s.resolvedRegister(c))
+	decided := f != nil && f.Decision == latest
+	switch {
+	case decided && reg.State == register.StateLive && f.Row != nil:
+		return // the month's decision is recorded; its row is sized by the proposal engine
+	case decided && reg.State != register.StateLive && !s.coreShadowDue(ctx, latest):
 		return
 	}
-	// The shadow record's only writer (strategy-register.md, section 3).
-	s.recordCoreShadow(ctx, s.evaluateCoreTarget(ctx, now), now)
+	res := s.evaluateCoreTarget(ctx, now)
+	// The shadow record's only writer (strategy-register.md, section 3),
+	// and the live decision record's.
+	s.recordCoreShadow(ctx, res, now)
+	s.recordCoreDecision(ctx, res, now)
 }
 
 // coreScope keys a frozen month by account, mode and the core's contract.
@@ -509,11 +522,11 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 
 	if len(res.Reasons) > 0 {
 		res.Action = &core.Decision{Kind: core.ActionHold, Why: "the core holds: buys stop, and a sale the rule wants goes to you for review"}
-		return res
+		return s.coreFinish(ctx, res, contract, reg)
 	}
 	if res.Sizing == nil {
 		res.Action = &core.Decision{Kind: core.ActionHold, Why: "no target is sized"}
-		return res
+		return s.coreFinish(ctx, res, contract, reg)
 	}
 
 	// The action, with a buy cut to the mandate's headroom.
@@ -532,7 +545,7 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	d := core.Decide(in)
 	res.Action = &d
 	res.Status = rpc.CoreStatusReady
-	return res
+	return s.coreFinish(ctx, res, contract, reg)
 }
 
 // coreHeadroomFits reports whether the book with q more shares of the core

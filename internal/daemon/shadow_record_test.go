@@ -15,12 +15,13 @@ import (
 // The shadow record (internal-docs/design/strategy-register.md, section 3),
 // witnessed on synthetic books.
 
-// coreShadowServer is the core test server with the core in shadow: written
-// live, while this build's rule sends no orders.
+// coreShadowServer is the core test server with the core in shadow, as the
+// owner writes it before the core goes live.
 func coreShadowServer(t *testing.T, pos *rpc.PositionsResult) *Server {
 	t.Helper()
-	srv := coreTestServer(t, testCoreConstitution(), pos, 0.25)
-	srv.coreSendsOrdersForTest = false
+	c := testCoreConstitution()
+	c.Mandate.Core.Stage = risk.StageShadow
+	srv := coreTestServer(t, c, pos, 0.25)
 	if res := srv.evaluateMandate(t.Context(), false); res.Verdict == nil {
 		t.Fatal("no mandate verdict")
 	}

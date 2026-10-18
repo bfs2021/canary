@@ -69,6 +69,10 @@ type ShadowIntent struct {
 	Diff          int     `json:"diff"`
 	BandShares    float64 `json:"band_shares"`
 	HoldingBefore int     `json:"holding_before"`
+	// Terms are the order terms the live row would carry, from the one
+	// row builder (core-sleeve.md phase 2); nil on an intent that trades
+	// nothing.
+	Terms *CoreRowTerms `json:"terms,omitempty"`
 }
 
 // ShadowFill is an intent's simulated fill: the signed quantity at the

@@ -181,7 +181,7 @@ func TestOptionExitExpiryCloseNeverSellsProtection(t *testing.T) {
 				f.readErr = context.DeadlineExceeded
 			}
 			engine := &proposalEngine{server: withTestOrderLimits(&Server{}), optionExitSource: f, now: func() time.Time { return now }}
-			proposals, _, hedges, _, _ := engine.generateBook(context.Background(), standingOptionExitPolicy(), rpc.ProtectionPolicyStatus{}, nil, pos, rpc.TradeProposalSourceFingerprints{}, nil, brokerStateScope{}, now)
+			proposals, _, hedges, _, _, _ := engine.generateBook(context.Background(), standingOptionExitPolicy(), rpc.ProtectionPolicyStatus{}, nil, pos, rpc.TradeProposalSourceFingerprints{}, nil, brokerStateScope{}, now)
 			if tc.close {
 				if len(proposals) != 1 || proposals[0].Bucket != rpc.TradeProposalBucketOptionExpiryClose || len(hedges) != 0 {
 					t.Fatalf("a measured directional put in the money did not qualify: proposals %+v hedges %+v", proposals, hedges)

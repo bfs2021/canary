@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/register"
 	"github.com/osauer/canary/v2/internal/risk"
@@ -24,18 +23,9 @@ import (
 // furthest over its allocation first.
 
 // registerRules is the compiled rule catalogue as this daemon runs it
-// (internal-docs/design/strategy-register.md). A test may let the core's rule
-// send, as the build will once its monthly rows exist (core-sleeve.md phase 2).
+// (internal-docs/design/strategy-register.md).
 func (s *Server) registerRules() []register.Rule {
-	rules := register.Catalogue()
-	if s != nil && s.coreSendsOrdersForTest {
-		for i := range rules {
-			if rules[i].ID == core.RuleID {
-				rules[i].Sends = true
-			}
-		}
-	}
-	return rules
+	return register.Catalogue()
 }
 
 // resolvedRegister is the policy's strategy register against this build's

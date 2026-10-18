@@ -44,6 +44,10 @@ const (
 	// ScorecardSleeveRule is the sleeve of fills Canary's own rules or the
 	// broker's lifecycle produced; they never count for an owner stream.
 	ScorecardSleeveRule = "rule"
+	// ScorecardSleeveCore is the sleeve of the core's own rows
+	// (core_rebalance): reported as the core's, never as the owner's
+	// decisions (core-sleeve.md, review S1).
+	ScorecardSleeveCore = "core"
 
 	// MaxScorecardDecisions bounds the decisions one read returns.
 	MaxScorecardDecisions = 2000

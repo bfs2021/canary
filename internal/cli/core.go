@@ -13,8 +13,8 @@ import (
 // runCore reads the daemon's core sleeve target
 // (internal-docs/design/core-sleeve.md): the month's decision under the
 // compiled rule, the target, the holding, the band and the action the rule
-// would take. The daemon evaluates; this renders. Read-only: the core
-// proposes nothing and places no order in this phase.
+// would take, and while the core is live its pending row and the last
+// decision. The daemon evaluates; this renders and changes nothing.
 func runCore(ctx context.Context, env *Env, args []string) int {
 	if idx := firstPositionalIndex(args); idx >= 0 && args[idx] == "resolve" {
 		return runCoreResolve(ctx, env, append(append([]string{}, args[:idx]...), args[idx+1:]...))
@@ -69,7 +69,16 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	}
 	a := res.Action
 	headline, tone := "HOLD", "yellow"
-	if res.Status == rpc.CoreStatusReady && a != nil {
+	switch {
+	case res.Row != nil:
+		state := "PENDING"
+		if res.Row.State == rpc.TradeProposalStateBlocked {
+			state, tone = "BLOCKED", "red"
+		} else {
+			tone = "green"
+		}
+		headline = fmt.Sprintf("ROW %s: %s %s %s", state, strings.ToUpper(res.Row.Action), groupThousands(fmt.Sprint(res.Row.Quantity)), sym)
+	case res.Status == rpc.CoreStatusReady && a != nil:
 		switch a.Kind {
 		case core.ActionBuy:
 			headline, tone = fmt.Sprintf("WOULD BUY %s %s", groupThousands(fmt.Sprint(a.Quantity)), sym), "green"
@@ -114,6 +123,8 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 		}
 		riskReadLine(env, "Action", action)
 	}
+	renderCoreRow(env, res.Row, sym)
+	renderCoreLastDecision(env, res.LastDecision)
 	if len(res.Reasons) > 0 {
 		fmt.Fprintln(env.Stdout, "\n"+env.bold("Why it holds"))
 		for _, r := range res.Reasons {
@@ -206,7 +217,63 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	if m := res.Mandate; m != nil && !m.EvaluatedAt.IsZero() {
 		riskReadLine(env, "  Mandate verdict", formatTimeShort(m.EvaluatedAt.Local()))
 	}
-	riskReadLine(env, "", "Read-only: the core proposes nothing and places no order in this phase. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
+	if res.ReadOnly {
+		riskReadLine(env, "", "Read-only: the core proposes nothing and places no order while it is not live. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
+	} else {
+		riskReadLine(env, "", "Live: the core serves its month's row among the proposals for your confirmation on your device; nothing is sent without it, and the core is never pre-authorised. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
+	}
+}
+
+// renderCoreRow is the core's pending row as the proposal engine serves
+// it: the order, the session it is for, its state and what blocks it.
+func renderCoreRow(env *Env, r *rpc.CoreRowView, sym string) {
+	if r == nil {
+		return
+	}
+	order := fmt.Sprintf("%s %s %s", strings.ToLower(r.Action), coreShares(r.Quantity), sym)
+	terms := fmt.Sprintf("%s %s at %s", r.Terms.OrderType, r.Terms.TIF, r.Terms.Limit)
+	session := "for the " + r.Session + " session"
+	if n := len(r.Terms.Window); n > 0 {
+		session += fmt.Sprintf(" (window %s to %s)", r.Terms.Window[0], r.Terms.Window[n-1])
+	}
+	state := r.State
+	if r.Readiness != "" {
+		state += ", " + strings.ReplaceAll(r.Readiness, "_", " ")
+	}
+	if r.State == rpc.TradeProposalStateBlocked {
+		why := make([]string, 0, len(r.Blockers))
+		for _, b := range r.Blockers {
+			why = append(why, b.Message)
+		}
+		riskWarnReadLine(env, "Row", state, order, terms, session, strings.Join(why, "; "))
+		return
+	}
+	riskReadLine(env, "Row", order, terms, session, state, "key "+r.Key)
+}
+
+// renderCoreLastDecision is the last month the core decided while live and
+// what became of its row.
+func renderCoreLastDecision(env *Env, d *rpc.CoreDecisionRecord) {
+	if d == nil {
+		return
+	}
+	what := d.Why
+	if d.Quantity > 0 {
+		what = briefJoin(strings.ReplaceAll(d.Kind, "_", " ")+" "+coreShares(d.Quantity), d.Why)
+	}
+	parts := []string{d.Decision, what, "decided " + formatTimeShort(d.DecidedAt.Local())}
+	o := d.Outcome
+	switch {
+	case o.Submitted:
+		parts = append(parts, "sent "+formatTimeShort(o.SubmittedAt.Local())+" after your confirmation (order "+o.OrderRef+")")
+	case o.Refused != "":
+		parts = append(parts, "last refused "+formatTimeShort(o.RefusedAt.Local())+": "+o.Refused)
+	case o.Served:
+		parts = append(parts, "row served, not sent")
+	default:
+		parts = append(parts, "no row")
+	}
+	riskReadLine(env, "Last decision", parts...)
 }
 
 // coreContractLine is the contract the core reads and would trade, as

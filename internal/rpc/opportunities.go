@@ -343,6 +343,13 @@ const (
 	// places them only when the owner lists mandate_reduction under
 	// [authority].pre_authorised.
 	TradeProposalBucketMandateReduction = "mandate_reduction"
+	// TradeProposalBucketCoreRebalance is the core sleeve's monthly row
+	// (internal-docs/design/core-sleeve.md, phase 2): one buy, sell or
+	// sale to zero of the core's contract toward the month's frozen target,
+	// served while the core is live for the owner's device confirmation.
+	// Never pre-authorisable; a buy passes under its own typed exception
+	// to close_reduce_only, bound to the row's contract and sized quantity.
+	TradeProposalBucketCoreRebalance = "core_rebalance"
 
 	// BudgetReductionModeShadow and BudgetReductionModeActive are the two
 	// governor modes. Shadow is the policy default.
@@ -538,8 +545,11 @@ type TradeProposalSnapshot struct {
 	// generation: the verdict it read, whether it proposed, held or withdrew
 	// rows, and the batch. Absent while the constitution carries no [mandate].
 	MandateReduction *TradeProposalMandateStatus `json:"mandate_reduction,omitempty"`
-	Blockers         []TradingBlocker            `json:"blockers,omitempty"`
-	LoadedFromState  bool                        `json:"loaded_from_state,omitempty"`
+	// CoreRebalance is the core sleeve's row status for this generation.
+	// Absent while the constitution carries no [mandate.core].
+	CoreRebalance   *TradeProposalCoreStatus `json:"core_rebalance,omitempty"`
+	Blockers        []TradingBlocker         `json:"blockers,omitempty"`
+	LoadedFromState bool                     `json:"loaded_from_state,omitempty"`
 	// CashSweep is the cash sweep's typed status for this generation: per
 	// currency, the band figures and why it invests, redeems, holds or
 	// generates nothing. Absent while the bucket is not enabled.
@@ -984,6 +994,7 @@ type TradeProposalCounts struct {
 	BudgetReductionShadow int `json:"budget_reduction_shadow,omitempty"`
 	// MandateReduction counts the mandate's forced-reduction rows.
 	MandateReduction            int     `json:"mandate_reduction,omitempty"`
+	CoreRebalance               int     `json:"core_rebalance,omitempty"`
 	MarketFlags                 int     `json:"market_flags,omitempty"`
 	ThetaPerDay                 float64 `json:"theta_per_day"`
 	RiskReductionExcessNotional float64 `json:"risk_reduction_excess_notional,omitempty"`
@@ -1109,6 +1120,66 @@ type TradeProposal struct {
 	// CurrencyLeveling is a conversion row's arithmetic for a
 	// currency_leveling row; nil on every other bucket.
 	CurrencyLeveling *TradeProposalCurrencyLeveling `json:"currency_leveling,omitempty"`
+	// Core is the core sleeve's arithmetic for a core_rebalance row; nil on
+	// every other bucket.
+	Core *TradeProposalCore `json:"core,omitempty"`
+}
+
+// TradeProposalCore is the core's month on a core_rebalance row: the
+// decision it rests on, the target and the holding it was sized between,
+// the band test, the session it is for and the order terms.
+type TradeProposalCore struct {
+	Decision string `json:"decision"`
+	TrendOn  bool   `json:"trend_on"`
+	// Kind is buy, sell or sell_all; Target and Held the frozen target
+	// (lowered to today's capital) and the confirmed holding; Diff their
+	// difference and BandShares the no-trade band; HeadroomCut says a buy
+	// was cut to the mandate's headroom.
+	Kind        string  `json:"kind"`
+	Target      int     `json:"target_shares"`
+	Held        int     `json:"held_shares"`
+	Diff        int     `json:"diff"`
+	BandShares  float64 `json:"band_shares"`
+	HeadroomCut bool    `json:"headroom_cut,omitempty"`
+	ScalePct    float64 `json:"scale_pct"`
+	// ConID and Currency bind the row to the core's contract; DecisionClose
+	// is the decision day's close, which a limit may not leave by more than
+	// the rule's distance.
+	ConID         int     `json:"con_id"`
+	Currency      string  `json:"currency"`
+	DecisionClose float64 `json:"decision_close"`
+	// VerdictStatus and VerdictAt name the mandate verdict the row was
+	// sized on; every generation sizes it afresh.
+	VerdictStatus string    `json:"verdict_status,omitempty"`
+	VerdictAt     time.Time `json:"verdict_at,omitzero"`
+	// Session is the exchange session the row is for, part of its revision,
+	// so a DAY order that expired unfilled is proposed afresh the next
+	// session; Sleeve and Stage are the register's.
+	Session string       `json:"session"`
+	Sleeve  string       `json:"sleeve"`
+	Stage   string       `json:"stage"`
+	Terms   CoreRowTerms `json:"terms"`
+}
+
+// TradeProposalCoreStatus is the core sleeve's row status for a
+// generation: the stage it runs in, the month's decision and whether a row
+// is served, held or none is due, and why.
+type TradeProposalCoreStatus struct {
+	// State is the register's effective stage (live, shadow, suspended,
+	// hold) or inactive.
+	State string `json:"state"`
+	// Decision is the month decided; Kind, Quantity and Why the rule's
+	// action on the holding this generation.
+	Decision string `json:"decision,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	Quantity int    `json:"quantity,omitempty"`
+	Why      string `json:"why,omitempty"`
+	// Served says a row is in this generation (RowKey); Window the sessions
+	// it is served for; Reasons why none is, or what blocks it.
+	Served  bool     `json:"served"`
+	RowKey  string   `json:"row_key,omitempty"`
+	Window  []string `json:"window,omitempty"`
+	Reasons []string `json:"reasons,omitempty"`
 }
 
 // TradeProposalCoverage is another bucket's requirement on the same exact

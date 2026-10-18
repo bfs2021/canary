@@ -1,11 +1,16 @@
 # canary core · COLUMNS=80 · colour off
-Core  WOULD BUY 908 IBCF
+Core  ROW PENDING: BUY 908 IBCF
 Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
 Stage · live · reserves 100% of its allocation · spec cited
 Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
   the ISIN
 Action · buy 908 shares · first buy, cut by the mandate's headroom from 958
   shares
+Row · buy 908 shares IBCF · LMT DAY at the live mid, snapped to the tick grid,
+  never crossing the mid · for the 2026-09-04 session (window 2026-09-01 to
+  2026-09-08) · generated, ready · key core_rebalance:synthetic01
+Last decision · 2026-08-31 · buy 908 shares · first buy, cut by the mandate's
+  headroom from 958 shares · decided 14:00:00 TZ · row served, not sent
 Decision · 2026-08-31 · close 95.95 above its 10-month average 89.50: trend on
   · frozen 14:00:00 TZ
 Volatility · 15.0% from the 15% floor · EWMA 13.0% · 252-day 11.6%
@@ -27,16 +32,23 @@ Evidence
   core:con:9030 · 320 closes to 2026-09-04 · read 05:00:00 TZ · Xetra
     calendar
   Mandate verdict · 13:59:00 TZ
-Read-only: the core proposes nothing and places no order in this phase. It is
-  a beta allocation with a drawdown filter that you chose, not an edge claim.
+Live: the core serves its month's row among the proposals for your
+  confirmation on your device; nothing is sent without it, and the core is never
+  pre-authorised. It is a beta allocation with a drawdown filter that you chose,
+  not an edge claim.
 # canary core · COLUMNS=80 · colour on, ESC written as \x1b
-\x1b[1mCore\x1b[0m  \x1b[32m\x1b[1mWOULD BUY 908 IBCF\x1b[0m\x1b[0m
+\x1b[1mCore\x1b[0m  \x1b[32m\x1b[1mROW PENDING: BUY 908 IBCF\x1b[0m\x1b[0m
 Rule · core-ibcf-v1 · spec s0_core_sleeve 2408d09e6189 · IE00B3ZW0K18 EUR
 Stage · live · reserves 100% of its allocation · spec cited
 Contract · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for
   the ISIN
 Action · buy 908 shares · first buy, cut by the mandate's headroom from 958
   shares
+Row · buy 908 shares IBCF · LMT DAY at the live mid, snapped to the tick grid,
+  never crossing the mid · for the 2026-09-04 session (window 2026-09-01 to
+  2026-09-08) · generated, ready · key core_rebalance:synthetic01
+Last decision · 2026-08-31 · buy 908 shares · first buy, cut by the mandate's
+  headroom from 958 shares · decided 14:00:00 TZ · row served, not sent
 Decision · 2026-08-31 · close 95.95 above its 10-month average 89.50: trend on
   · frozen 14:00:00 TZ
 Volatility · 15.0% from the 15% floor · EWMA 13.0% · 252-day 11.6%
@@ -58,5 +70,7 @@ Next decision · 2026-09-30 after the Xetra close
   core:con:9030 · 320 closes to 2026-09-04 · read 05:00:00 TZ · Xetra
     calendar
   Mandate verdict · 13:59:00 TZ
-Read-only: the core proposes nothing and places no order in this phase. It is
-  a beta allocation with a drawdown filter that you chose, not an edge claim.
+Live: the core serves its month's row among the proposals for your
+  confirmation on your device; nothing is sent without it, and the core is never
+  pre-authorised. It is a beta allocation with a drawdown filter that you chose,
+  not an edge claim.

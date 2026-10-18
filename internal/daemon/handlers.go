@@ -2251,6 +2251,10 @@ func quoteMarketForStockContract(c rpc.ContractParams) marketcal.Market {
 		return marketcal.MarketDEXetra
 	case exchange == "IBIS" || primary == "IBIS":
 		return marketcal.MarketDEXetra
+	case market == "uk" || market == "london" || market == "lse":
+		return marketcal.MarketUKLSE
+	case exchange == "LSE" || exchange == "LSEETF" || primary == "LSE" || primary == "LSEETF":
+		return marketcal.MarketUKLSE
 	default:
 		return marketcal.MarketUSEquity
 	}

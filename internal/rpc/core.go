@@ -10,8 +10,9 @@ import (
 // MethodCoreTarget serves the daemon-owned core sleeve target: the month's
 // decision under the compiled rule, the target shares, the holding, the
 // band test and the action the rule would take
-// (internal-docs/design/core-sleeve.md). Read-only: in this increment the
-// core serves no proposal row and sends no order.
+// (internal-docs/design/core-sleeve.md). Reading it changes nothing: while
+// the core is live its month's row is served among the trade proposals for
+// the owner's device confirmation (Row), and in shadow nothing is proposed.
 const MethodCoreTarget = "core.target"
 
 // CoreTargetParams is the input for MethodCoreTarget. Refresh asks the
@@ -41,8 +42,10 @@ type CoreTargetResult struct {
 	Message string `json:"message,omitempty"`
 	// Reasons name every hold.
 	Reasons []string `json:"reasons,omitempty"`
-	// ReadOnly is true while the core places nothing: the action is what
-	// the rule would do, never a proposal or an order.
+	// ReadOnly is true while the core proposes nothing (shadow, suspended
+	// or on hold): the action is then what the rule would do. Live, the
+	// action is served as Row, a proposal the owner confirms on a device;
+	// the core itself never sends.
 	ReadOnly bool `json:"read_only"`
 	// Rule and SpecHash name the compiled rule and the lab spec it
 	// implements (s0_core_sleeve); PolicyRule is the rule the policy names.
@@ -69,6 +72,86 @@ type CoreTargetResult struct {
 	// calendar, when the calendar covers it.
 	NextDecision string        `json:"next_decision,omitempty"`
 	Evidence     *CoreEvidence `json:"evidence,omitempty"`
+	// Row is the core's pending proposal row as the proposal engine serves
+	// it, while one stands (live only); LastDecision the last month the
+	// core decided while live and what became of it.
+	Row          *CoreRowView        `json:"row,omitempty"`
+	LastDecision *CoreDecisionRecord `json:"last_decision,omitempty"`
+}
+
+// CoreRowTerms are the order terms of the core's row (core-sleeve.md,
+// "Window and order terms", owner decision D2): one function builds them
+// for the live row and the shadow intent, so the two never disagree.
+type CoreRowTerms struct {
+	// OrderType and TIF: a plain DAY limit. Limit says how it is priced:
+	// the live mid, snapped to the tick grid, never crossing the mid.
+	OrderType string `json:"order_type"`
+	TIF       string `json:"tif"`
+	Limit     string `json:"limit"`
+	// Exchange is the route (SMART) and PrimaryExchange the line's venue
+	// as IBKR's record names it.
+	Exchange        string `json:"exchange"`
+	PrimaryExchange string `json:"primary_exchange,omitempty"`
+	// Window lists the sessions the row is served for: the first sessions
+	// on the line's calendar after the decision day that the US also
+	// trades. A sale to zero continues past it until sold.
+	Window []string `json:"window,omitempty"`
+	// Episode keys the month's rows: core:<account>:<mode>:<YYYY-MM>.
+	Episode string `json:"episode,omitempty"`
+}
+
+// CoreRowView is the core's pending proposal row: its key and revision
+// for `canary proposals`, the order, the session it is for, and whether
+// it stands open or blocked, with the blockers and readiness as served.
+type CoreRowView struct {
+	Key      string `json:"key"`
+	Revision string `json:"revision"`
+	Action   string `json:"action"`
+	Quantity int    `json:"quantity"`
+	// ReferencePrice is the price the row was sized at (the held line's
+	// mark, else the last close); the order's limit is the live mid at
+	// preview.
+	ReferencePrice float64          `json:"reference_price"`
+	Session        string           `json:"session"`
+	State          string           `json:"state"`
+	Blockers       []TradingBlocker `json:"blockers,omitempty"`
+	// Readiness is the served readiness code (ready, market_closed, ...).
+	Readiness string       `json:"readiness,omitempty"`
+	Terms     CoreRowTerms `json:"terms"`
+}
+
+// CoreDecisionRecord is the last decision the core made while live, kept
+// with the frozen month: the action it decided on the holding then, the
+// window, and what became of its row.
+type CoreDecisionRecord struct {
+	Decision  string    `json:"decision"`
+	DecidedAt time.Time `json:"decided_at"`
+	Stage     string    `json:"stage"`
+	// Kind is buy, sell, sell_all, wait, none or hold; Quantity the shares;
+	// Why the rule's reason, the gate's refusal included.
+	Kind     string  `json:"kind"`
+	Quantity int     `json:"quantity,omitempty"`
+	Why      string  `json:"why"`
+	Target   int     `json:"target_shares"`
+	Held     int     `json:"held_shares"`
+	Price    float64 `json:"price,omitempty"`
+	// Window is the sessions the row was served for; RowKey the row.
+	Window []string `json:"window,omitempty"`
+	RowKey string   `json:"row_key,omitempty"`
+	// Outcome is what became of the row, from the proposal journal.
+	Outcome CoreDecisionOutcome `json:"outcome"`
+}
+
+// CoreDecisionOutcome is the row's fate so far: served (a row was made),
+// submitted (the owner confirmed it and it went to the broker, with the
+// order reference), or the latest refusal recorded on it.
+type CoreDecisionOutcome struct {
+	Served      bool      `json:"served"`
+	Submitted   bool      `json:"submitted,omitempty"`
+	SubmittedAt time.Time `json:"submitted_at,omitzero"`
+	OrderRef    string    `json:"order_ref,omitempty"`
+	Refused     string    `json:"refused,omitempty"`
+	RefusedAt   time.Time `json:"refused_at,omitzero"`
 }
 
 // CoreStageView is the core's ladder stage: as written (empty while

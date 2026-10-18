@@ -16,7 +16,8 @@ Account, positions, orders and risk
                   action
   stress          Check portfolio risks and the evidence behind them
   mandate         Check the book's risk against the mandate's volatility budget
-  core            See the core sleeve's monthly target and what it would trade
+  core            See the core sleeve's monthly target, its pending row and what
+                  it would trade
   brief           Portfolio summary, urgent items first; more with --details
   edge            Review past trading decisions using broker records
   scorecard       Score past decisions per strategy, with the evidence and its
@@ -87,7 +88,8 @@ Start: canary status — check the broker connection
                   action
   \x1b[36mstress          \x1b[0mCheck portfolio risks and the evidence behind them
   \x1b[36mmandate         \x1b[0mCheck the book's risk against the mandate's volatility budget
-  \x1b[36mcore            \x1b[0mSee the core sleeve's monthly target and what it would trade
+  \x1b[36mcore            \x1b[0mSee the core sleeve's monthly target, its pending row and what
+                  it would trade
   \x1b[36mbrief           \x1b[0mPortfolio summary, urgent items first; more with --details
   \x1b[36medge            \x1b[0mReview past trading decisions using broker records
   \x1b[36mscorecard       \x1b[0mScore past decisions per strategy, with the evidence and its

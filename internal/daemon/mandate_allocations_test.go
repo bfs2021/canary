@@ -20,18 +20,19 @@ import (
 // Allocations (internal-docs/design/mandate-risk-budget.md, "Risk allocations"; owner
 // decision 2026-10-18 08:06 CEST), witnessed on synthetic books.
 
-// The machine's allocation is only as big as what it runs: in this build the
-// core's rule sends no orders, so a core written live runs as shadow and
-// reserves nothing, and the owner has the whole budget. The core's contract
-// is placed with the core either way; a book without [mandate.core] places
-// nothing (strategy-register.md, section 2).
+// The machine's allocation is only as big as what it runs: a core in shadow
+// reserves nothing, and the owner has the whole budget; a live core, whose
+// rows this build serves, reserves its scale. The core's contract is placed
+// with the core either way; a book without [mandate.core] places nothing
+// (strategy-register.md, section 2).
 func TestMandateAllocationPlanGivesTheMachineWhatItRuns(t *testing.T) {
 	c := testCoreConstitution()
-	building := &Server{}
-	plan := mandateAllocationPlan(c, building.resolvedRegister(c), []int{coreTestConID}, nil)
+	c.Mandate.Core.Stage = risk.StageShadow
+	srv := &Server{}
+	plan := mandateAllocationPlan(c, srv.resolvedRegister(c), []int{coreTestConID}, nil)
 	if len(plan.Machine) != 2 || plan.Machine[0].Sleeve != mandate.SleeveCore || plan.Machine[0].TargetPct != 6 || plan.Machine[0].StagePct != 0 ||
 		!strings.Contains(plan.Machine[0].Note, "sends no orders") {
-		t.Fatalf("core allocation while it sends no orders: %+v", plan.Machine)
+		t.Fatalf("core allocation in shadow: %+v", plan.Machine)
 	}
 	if o := plan.Machine[1]; o.Sleeve != mandate.SleeveOverlay || o.TargetPct != 4 || o.StagePct != 0 || !strings.Contains(o.Note, "no strategy registered") {
 		t.Fatalf("overlay allocation: %+v", o)
@@ -39,16 +40,16 @@ func TestMandateAllocationPlanGivesTheMachineWhatItRuns(t *testing.T) {
 	if plan.SleeveOf("con:9030") != mandate.SleeveCore || plan.SleeveOf("con:9001") != mandate.SleeveOwner {
 		t.Fatalf("placement %+v", plan.Placed)
 	}
-	sends := &Server{coreSendsOrdersForTest: true}
-	if running := mandateAllocationPlan(c, sends.resolvedRegister(c), []int{coreTestConID}, nil); running.Machine[0].StagePct != 100 {
-		t.Fatalf("a live core whose rule sends reserves its scale: %+v", running.Machine[0])
+	c.Mandate.Core.Stage = risk.StageLive
+	if running := mandateAllocationPlan(c, srv.resolvedRegister(c), []int{coreTestConID}, nil); running.Machine[0].StagePct != 100 {
+		t.Fatalf("a live core reserves its scale: %+v", running.Machine[0])
 	}
 	bare := testMandateConstitution()
-	if plan := mandateAllocationPlan(bare, sends.resolvedRegister(bare), []int{coreTestConID}, nil); len(plan.Placed) != 0 || plan.Machine[0].StagePct != 0 || !strings.Contains(plan.Machine[0].Note, "inactive") {
+	if plan := mandateAllocationPlan(bare, srv.resolvedRegister(bare), []int{coreTestConID}, nil); len(plan.Placed) != 0 || plan.Machine[0].StagePct != 0 || !strings.Contains(plan.Machine[0].Note, "inactive") {
 		t.Fatalf("no core table: %+v", plan)
 	}
-	if rule, _ := register.Find(building.registerRules(), core.RuleID); rule.Sends {
-		t.Fatal("this build serves no core orders, so the core runs nothing")
+	if rule, _ := register.Find(srv.registerRules(), core.RuleID); !rule.Sends {
+		t.Fatal("this build serves the core's rows, so a live core runs")
 	}
 }
 
@@ -58,7 +59,7 @@ func TestMandateAllocationPlanGivesTheMachineWhatItRuns(t *testing.T) {
 // live core on hold keeps its reservation only while it holds positions; a
 // later entry reserves its own allocation at its scale.
 func TestMandateAllocationPlanFollowsTheRegister(t *testing.T) {
-	sends := &Server{coreSendsOrdersForTest: true}
+	sends := &Server{}
 	held := []mandate.Leg{{ID: mandateConLegID(coreTestConID), Quantity: 10}}
 	plan := func(c *risk.Constitution, legs []mandate.Leg) mandate.MachineAllocation {
 		return mandateAllocationPlan(c, sends.resolvedRegister(c), []int{coreTestConID}, legs).Machine[0]
@@ -103,10 +104,10 @@ func TestMandateAllocationPlanFollowsTheRegister(t *testing.T) {
 // whole book has room; inside the allocation they pass. With the core running
 // nothing, the same order passes: the owner has the whole budget, as today.
 func TestMandateGateHoldsTheOwnerToTheOwnersAllocation(t *testing.T) {
-	srv, _ := mandateTestServer(t, testCoreConstitution())
+	c := testCoreConstitution()
+	srv, _ := mandateTestServer(t, c)
 	seedMandateHistory(t, srv, 0)
 	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
-	srv.coreSendsOrdersForTest = true
 	res := srv.evaluateMandate(t.Context(), false)
 	if res.Verdict.Status != mandate.StatusWithin {
 		t.Fatalf("book: %s %v", res.Verdict.Status, res.Verdict.Reasons)
@@ -142,8 +143,8 @@ func TestMandateGateHoldsTheOwnerToTheOwnersAllocation(t *testing.T) {
 	if blocker := srv.mandateBudgetGate(mandateBuy(over-10), mandateOpen); blocker != nil {
 		t.Fatalf("inside the owner's allocation: %+v", blocker)
 	}
-	// The core running nothing gives the owner the whole budget back.
-	srv.coreSendsOrdersForTest = false
+	// The core running nothing (in shadow) gives the owner the whole budget back.
+	c.Mandate.Core.Stage = risk.StageShadow
 	srv.evaluateMandate(t.Context(), false)
 	if blocker := srv.mandateBudgetGate(mandateBuy(over), mandateOpen); blocker != nil {
 		t.Fatalf("with no machine allocation the owner has the whole budget: %+v", blocker)
@@ -156,8 +157,8 @@ func TestMandateGateHoldsTheOwnerToTheOwnersAllocation(t *testing.T) {
 // the core running, a buy inside its allocation passes and one past it is refused.
 func TestMandateGatePlacesTheCoreFundWithTheCore(t *testing.T) {
 	c := testCoreConstitution()
+	c.Mandate.Core.Stage = risk.StageShadow
 	srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
-	srv.coreSendsOrdersForTest = false
 	if res := srv.evaluateMandate(t.Context(), false); res.Verdict.Status != mandate.StatusWithin {
 		t.Fatalf("book: %s %v", res.Verdict.Status, res.Verdict.Reasons)
 	}
@@ -176,7 +177,7 @@ func TestMandateGatePlacesTheCoreFundWithTheCore(t *testing.T) {
 		t.Fatal("another listing under another contract id is the owner's")
 	}
 
-	srv.coreSendsOrdersForTest = true
+	c.Mandate.Core.Stage = risk.StageLive
 	res := srv.evaluateMandate(t.Context(), false)
 	allocation, _ := res.Verdict.Allocation(mandate.SleeveCore)
 	if allocation.AllocationBase <= 0 {
@@ -198,7 +199,9 @@ func TestMandateGatePlacesTheCoreFundWithTheCore(t *testing.T) {
 // the sleeve's own risk plus the volatility-free bound: a squeeze the whole
 // budget would admit is refused once the owner's allocation is smaller.
 func TestMandateGateBoundsAnUnpricedOptionBuyByItsAllocation(t *testing.T) {
-	srv, _ := mandateTestServer(t, testCoreConstitution())
+	c := testCoreConstitution()
+	c.Mandate.Core.Stage = risk.StageShadow
+	srv, _ := mandateTestServer(t, c)
 	seedMandateHistory(t, srv, 0)
 	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
 	option := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 1, LimitPrice: 40, Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "OPT", Currency: "USD", Right: "C", Strike: 50, Expiry: "20270115", Multiplier: 100}}
@@ -216,7 +219,7 @@ func TestMandateGateBoundsAnUnpricedOptionBuyByItsAllocation(t *testing.T) {
 		t.Fatal("fixture: no unpriced option buy fits the whole book")
 	}
 	option.Quantity = most
-	srv.coreSendsOrdersForTest = true
+	c.Mandate.Core.Stage = risk.StageLive
 	res := srv.evaluateMandate(t.Context(), false)
 	owner, _ := res.Verdict.Allocation(mandate.SleeveOwner)
 	_, kept, _, _ := srv.mandateVerdicts.current()

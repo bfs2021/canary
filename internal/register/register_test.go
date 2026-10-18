@@ -99,11 +99,11 @@ func TestResolveHolds(t *testing.T) {
 	}
 }
 
-// The catalogue carries the core's rule as the core compiles it, never
-// sending in this build and never in the other form.
+// The catalogue carries the core's rule as the core compiles it: sending
+// (its monthly rows are served since phase 2) and never in the other form.
 func TestCatalogueCarriesTheCoreRule(t *testing.T) {
 	rule, ok := Find(Catalogue(), core.RuleID)
-	if !ok || rule.SpecHash != core.SpecHash || rule.SpecID != core.SpecID || rule.Form != FormCore || rule.Sends || rule.Bucket != CoreRebalanceBucket {
+	if !ok || rule.SpecHash != core.SpecHash || rule.SpecID != core.SpecID || rule.Form != FormCore || !rule.Sends || rule.Bucket != CoreRebalanceBucket {
 		t.Fatalf("catalogue core rule %+v", rule)
 	}
 	if len(rule.Data.Series) != 1 || rule.Data.Series[0].ISIN != core.ISIN || rule.Data.Series[0].Sessions != core.WindowCloses || len(rule.Data.Chains) != 0 {

@@ -691,7 +691,7 @@ func TestMandateReductionAbsentMandateChangesNothing(t *testing.T) {
 		t.Fatalf("server without [mandate]: %+v", got)
 	}
 	engine.mandateInput = func(time.Time) mandateReductionInput { return mandateReductionInput{} }
-	rows, _, _, _, st := engine.generateBook(t.Context(), defaultProtectionPolicy(), rpc.ProtectionPolicyStatus{}, nil, pos, rpc.TradeProposalSourceFingerprints{}, nil, brokerStateScope{}, mandateTestNow)
+	rows, _, _, _, st, _ := engine.generateBook(t.Context(), defaultProtectionPolicy(), rpc.ProtectionPolicyStatus{}, nil, pos, rpc.TradeProposalSourceFingerprints{}, nil, brokerStateScope{}, mandateTestNow)
 	if st != nil || slices.ContainsFunc(rows, func(p rpc.TradeProposal) bool { return p.Bucket == rpc.TradeProposalBucketMandateReduction }) {
 		t.Fatalf("generateBook without [mandate]: status %+v", st)
 	}

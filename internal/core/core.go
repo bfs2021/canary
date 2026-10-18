@@ -69,7 +69,17 @@ const (
 	// cap, a core buy may fill: the forced reduction's own target, so a
 	// core buy can never set up a forced sale by itself.
 	HeadroomFactor = 0.95
+	// LimitDistancePct is how far a row's limit may sit from the decision
+	// close before the row holds as a probable data or contract error.
+	LimitDistancePct = 10.0
 )
+
+// WindowSessions is the order window (core-sleeve.md, "Window and order
+// terms"): a row is served for this many sessions on the line's exchange
+// calendar after the decision day that the US also trades, since European
+// S&P 500 fund lines quote wide on a US holiday. Compiled with the rule, as
+// the input window is; a sale to zero continues past it until sold.
+const WindowSessions = 5
 
 // Signal statuses.
 const (
@@ -386,8 +396,9 @@ func Headroom(want int, fits func(q int) bool) int {
 	return lo
 }
 
-// Action kinds: what the rule would do at the next window. Phase 1 serves
-// it read-only; nothing is proposed or sent.
+// Action kinds: what the rule would do at the next window. In shadow the
+// daemon serves it read-only; live, a buy, sell or sell_all is served as one
+// proposal row the owner confirms on a device.
 const (
 	ActionNone    = "none"
 	ActionBuy     = "buy"

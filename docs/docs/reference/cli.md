@@ -33,7 +33,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary regime`](#canary-regime) | Markets | Detailed broad-market regime across volatility, credit, funding, FX, gamma, and breadth | `read-only` | yes |
 | [`canary stress`](#canary-stress) | Desk | Portfolio stress with margin, exposure, concentration, options, protection, and source evidence | `read-only` | yes |
 | [`canary mandate`](#canary-mandate) | Desk | Mandate risk budget: the book's ex-ante volatility against the owner's budget, what drives it, gap and index stresses, and whether additions are open | `read-only` | yes |
-| [`canary core`](#canary-core) | Desk | Core sleeve target: the month's trend and volatility decision, the target shares, the holding, the band and what the rule would trade; read-only, no orders | `read-only` | yes |
+| [`canary core`](#canary-core) | Desk | Core sleeve target: the month's trend and volatility decision, the target shares, the holding, the band and what the rule would trade; live, the month's row waiting for your confirmation and the last decision. Reads only | `read-only` | yes |
 | [`canary brief`](#canary-brief) | Desk | Combined post- and pre-trade operator brief with disclosed source degradation | `read-only` | yes |
 | [`canary edge`](#canary-edge) | Desk | Review past trading decisions using broker records | `read-only` | yes |
 | [`canary scorecard`](#canary-scorecard) | Desk | Score past decisions per strategy against the underlying's own history, with sequential evidence and gates | `read-only` | yes |
@@ -437,7 +437,7 @@ canary mandate [--refresh] [--json]
 
 ## `canary core`
 
-Core sleeve target: the month's trend and volatility decision, the target shares, the holding, the band and what the rule would trade; read-only, no orders.
+Core sleeve target: the month's trend and volatility decision, the target shares, the holding, the band and what the rule would trade; live, the month's row waiting for your confirmation and the last decision. Reads only.
 
 Guard `read-only`. Also available as an MCP tool.
 

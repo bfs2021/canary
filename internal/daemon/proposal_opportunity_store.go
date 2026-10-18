@@ -502,6 +502,22 @@ func (s *opportunityStore) appendEvent(ctx context.Context, ev opportunityEvent)
 	return nil
 }
 
+// eventsSince returns the events at or after since, oldest first.
+func (s *proposalStore) eventsSince(since time.Time) []proposalEvent {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []proposalEvent
+	for _, ev := range s.events {
+		if !ev.At.Before(since) {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
 func (s *proposalStore) FindSubmittedEvent(orderRef, tokenID string) (proposalEvent, bool, error) {
 	if s == nil {
 		return proposalEvent{}, false, nil

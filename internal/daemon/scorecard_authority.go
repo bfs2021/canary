@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
 	edgecore "github.com/osauer/canary/v2/internal/edge"
 	"github.com/osauer/canary/v2/internal/rpc"
@@ -656,13 +657,27 @@ func scorecardSleeveResolver(events []orderJournalEvent, proposals []proposalEve
 	return func(change edgecore.PositionChange) scorecard.Sleeve {
 		for _, execID := range change.ExecutionIDs {
 			for _, ev := range byExecution[execID] {
-				if origin := scorecardRuleOrigin(ev, bucketByRef); origin != "" {
-					return scorecard.Sleeve{Name: rpc.ScorecardSleeveRule, Origin: origin}
+				if sleeve, ok := scorecardMachineSleeve(ev, bucketByRef); ok {
+					return sleeve
 				}
 			}
 		}
 		return scorecard.Sleeve{Name: scorecard.SleeveOwner}
 	}
+}
+
+// scorecardMachineSleeve is the sleeve of a fill a machine produced: the
+// core's own row (core_rebalance) is the core sleeve's, reported as the
+// rule's fill under its rule id and never as the owner's decision
+// (core-sleeve.md, review S1); every other rule origin is the rule sleeve.
+func scorecardMachineSleeve(ev orderJournalEvent, bucketByRef map[string]string) (scorecard.Sleeve, bool) {
+	if ev.OrderRef != "" && bucketByRef[ev.OrderRef] == rpc.TradeProposalBucketCoreRebalance {
+		return scorecard.Sleeve{Name: rpc.ScorecardSleeveCore, Origin: "proposal:" + rpc.TradeProposalBucketCoreRebalance, StrategyRef: core.RuleID}, true
+	}
+	if origin := scorecardRuleOrigin(ev, bucketByRef); origin != "" {
+		return scorecard.Sleeve{Name: rpc.ScorecardSleeveRule, Origin: origin}, true
+	}
+	return scorecard.Sleeve{}, false
 }
 
 func scorecardRuleOrigin(ev orderJournalEvent, bucketByRef map[string]string) string {

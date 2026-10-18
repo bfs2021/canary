@@ -43,6 +43,10 @@ type proposalEngine struct {
 	// the forced reduction (mandate_reduction.go). Test seam; nil reads the
 	// daemon's own verdict cache.
 	mandateInput func(now time.Time) mandateReductionInput
+	// coreInput resolves the core sleeve's verdict and contract for its
+	// monthly row (core_rebalance.go). Test seam; nil evaluates the daemon's
+	// own core target.
+	coreInput func(now time.Time) coreRowInput
 	// resolve returns the proposal a preview or submit names. Test seam; nil
 	// re-validates against a fresh refresh (revalidatedProposal).
 	resolve  func(ctx context.Context, key, revision string) (rpc.TradeProposal, []rpc.TradingBlocker, error)
@@ -334,7 +338,7 @@ func (e *proposalEngine) snapshotForRead(show, refresh bool) rpc.TradeProposalSn
 	// stays scoped, including budget/cash status with no generated proposals.
 	// Only genuinely unscoped shells without financial evidence pass through.
 	bound := strings.TrimSpace(snap.AccountID) != "" || strings.TrimSpace(snap.AccountMode) != ""
-	if bound || len(snap.Proposals) > 0 || snap.CashSweep != nil || snap.CurrencyLeveling != nil || snap.BudgetReduction != nil || snap.MandateReduction != nil || len(snap.OptionHedges) > 0 {
+	if bound || len(snap.Proposals) > 0 || snap.CashSweep != nil || snap.CurrencyLeveling != nil || snap.BudgetReduction != nil || snap.MandateReduction != nil || snap.CoreRebalance != nil || len(snap.OptionHedges) > 0 {
 		scope := e.currentScope()
 		if blockers := proposalScopeBlockers(snap.AccountID, snap.AccountMode, scope); len(blockers) > 0 {
 			shell := emptyProposalSnapshot(e.clock())
@@ -561,7 +565,7 @@ func (e *proposalEngine) refresh(ctx context.Context, show bool) (rpc.TradePropo
 		}
 		sources.MarketEvents = &fp
 	}
-	proposals, thetaSuppressions, hedges, budget, mandateStatus := e.generateBook(ctx, policy, policyStatus, acct, pos, sources, marketEvents, scope, now)
+	proposals, thetaSuppressions, hedges, budget, mandateStatus, coreStatus := e.generateBook(ctx, policy, policyStatus, acct, pos, sources, marketEvents, scope, now)
 	sweepRows, sweep := e.cashSweepProposals(ctx, policy, policyStatus, acct, pos, sources, scope, now)
 	proposals = append(proposals, sweepRows...)
 	levelingRows, leveling := e.currencyLevelingProposals(ctx, policy, policyStatus, acct, sources, scope, now)
@@ -631,6 +635,7 @@ func (e *proposalEngine) refresh(ctx context.Context, show bool) (rpc.TradePropo
 		OptionHedges:               hedges,
 		BudgetReduction:            budget,
 		MandateReduction:           mandateStatus,
+		CoreRebalance:              coreStatus,
 		Counts:                     proposalCounts(proposals, protectionCoverageBaseCurrency(pos)),
 	}
 	snap.Counts.OptionHedges = len(hedges)
@@ -693,7 +698,7 @@ func (e *proposalEngine) thetaSuppressionEvents(snap rpc.TradeProposalSnapshot, 
 }
 
 func (e *proposalEngine) generate(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, scope brokerStateScope, now time.Time) ([]rpc.TradeProposal, []thetaSuppression) {
-	proposals, suppressions, _, _, _ := e.generateBook(ctx, policy, status, acct, pos, sources, marketEvents, scope, now)
+	proposals, suppressions, _, _, _, _ := e.generateBook(ctx, policy, status, acct, pos, sources, marketEvents, scope, now)
 	e.mergeSameContract(proposals)
 	return proposals, suppressions
 }
@@ -703,13 +708,15 @@ func (e *proposalEngine) generate(ctx context.Context, policy protectionPolicy, 
 // proposals, so a consumer can show a hedge as what it is instead of nothing.
 // The fourth value is the premium budget governor's status, nil while its
 // bucket is not enabled; the fifth the mandate's forced-reduction status,
-// nil while the constitution carries no [mandate].
-func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, scope brokerStateScope, now time.Time) ([]rpc.TradeProposal, []thetaSuppression, []rpc.OptionHedge, *rpc.TradeProposalBudgetStatus, *rpc.TradeProposalMandateStatus) {
+// nil while the constitution carries no [mandate]; the sixth the core
+// sleeve's row status, nil while it carries no [mandate.core].
+func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, scope brokerStateScope, now time.Time) ([]rpc.TradeProposal, []thetaSuppression, []rpc.OptionHedge, *rpc.TradeProposalBudgetStatus, *rpc.TradeProposalMandateStatus, *rpc.TradeProposalCoreStatus) {
 	var hedges []rpc.OptionHedge
 	var out []rpc.TradeProposal
 	var suppressions []thetaSuppression
 	var budget *rpc.TradeProposalBudgetStatus
 	var mandateStatus *rpc.TradeProposalMandateStatus
+	var coreStatus *rpc.TradeProposalCoreStatus
 	baseCcy := protectionCoverageBaseCurrency(pos)
 	if policy.Buckets.ThetaHygiene.Enabled {
 		for _, row := range pos.Options {
@@ -747,6 +754,13 @@ func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPoli
 	if rows, st := e.mandateReductionProposals(policy, status, e.resolveMandateInput(ctx, policy, pos, scope, now), acct, pos, sources, marketEvents, now); st != nil {
 		out = append(out, rows...)
 		mandateStatus = st
+	}
+	// The core sleeve's monthly row needs no bucket table either: it runs
+	// whenever the constitution carries [mandate.core] and the core is live
+	// (core_rebalance.go).
+	if rows, st := e.coreRebalanceProposals(ctx, policy, status, e.resolveCoreInput(ctx, scope, mandateStatus, out, now), sources, now); st != nil {
+		out = append(out, rows...)
+		coreStatus = st
 	}
 	if policy.Buckets.TrailingStop.Enabled {
 		stockEnabled := true
@@ -907,7 +921,7 @@ func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPoli
 			}
 		}
 	}
-	return out, suppressions, hedges, budget, mandateStatus
+	return out, suppressions, hedges, budget, mandateStatus, coreStatus
 }
 
 // optionHedgeRecord describes one held long option the engine holds as
@@ -2978,10 +2992,16 @@ func proposalPreviewSafetyBlockers(prop rpc.TradeProposal, preview *rpc.OrderPre
 	// Protection is close-or-reduce only. A cash row the [cash] authority
 	// admits, the sweep's bill buy (decision O1) or a leveling conversion
 	// (owner decision 2026-10-05 22:02 CEST), is judged by its own typed
-	// bounds instead (cash_sweep_orders.go, currency_leveling_orders.go);
-	// everything else, a sweep redemption included, by close/reduce.
+	// bounds instead (cash_sweep_orders.go, currency_leveling_orders.go),
+	// and so is the core sleeve's buy of its own contract within its sized
+	// quantity (core_rebalance.go, core-sleeve.md review S4); everything
+	// else, a sweep redemption and a core sale included, by close/reduce.
 	if admitted, ok := cashAuthorityAdmission(prop); ok {
 		for _, b := range admitted.previewBlockers(preview) {
+			add(b.Code, b.Message, b.Action)
+		}
+	} else if x, ok := coreOpenExceptionFor(prop); ok {
+		for _, b := range x.previewBlockers(preview) {
 			add(b.Code, b.Message, b.Action)
 		}
 	} else {
@@ -3638,6 +3658,8 @@ func proposalCounts(proposals []rpc.TradeProposal, baseCurrency string) rpc.Trad
 			}
 		case rpc.TradeProposalBucketMandateReduction:
 			out.MandateReduction++
+		case rpc.TradeProposalBucketCoreRebalance:
+			out.CoreRebalance++
 		}
 	}
 	// A raw sum across different local currencies is meaningless. Rather
@@ -3757,6 +3779,11 @@ func proposalRevisionTerms(p rpc.TradeProposal) []string {
 		// new revision, so a DAY order that expired unfilled (its record
 		// terminal) never strands the batch.
 		terms = append(terms, "mandate-session:"+p.Mandate.Session)
+	}
+	if p.Bucket == rpc.TradeProposalBucketCoreRebalance && p.Core != nil && p.Core.Session != "" {
+		// A core row is one session's order too: a DAY order that expired
+		// unfilled is proposed afresh, as a new revision, the next session.
+		terms = append(terms, "core-session:"+p.Core.Session)
 	}
 	if p.OptionExit != nil {
 		// Receipt times/values refresh at preview; scope and resulting role

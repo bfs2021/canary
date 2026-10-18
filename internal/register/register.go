@@ -72,11 +72,12 @@ type Rule struct {
 // CoreRebalanceBucket is the core's proposal bucket (core-sleeve.md §2).
 const CoreRebalanceBucket = "core_rebalance"
 
-// Catalogue is the rules this Canary carries. core-ibcf-v1 sends no orders
-// in this build: its monthly rows are core-sleeve.md phase 2.
+// Catalogue is the rules this Canary carries. core-ibcf-v1 sends: its
+// monthly rows (core-sleeve.md phase 2, option A) are served as proposals
+// the owner confirms on a device, so a live stage runs live.
 func Catalogue() []Rule {
 	return []Rule{{
-		ID: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash, Form: FormCore, Sends: false, Bucket: CoreRebalanceBucket,
+		ID: core.RuleID, SpecID: core.SpecID, SpecHash: core.SpecHash, Form: FormCore, Sends: true, Bucket: CoreRebalanceBucket,
 		Data: Data{Series: []SeriesNeed{{ISIN: core.ISIN, Currency: core.Currency, Symbol: core.Symbol, Sessions: core.WindowCloses}}},
 	}}
 }

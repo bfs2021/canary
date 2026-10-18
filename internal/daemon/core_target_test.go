@@ -34,8 +34,8 @@ func testCoreConstitution() *risk.Constitution {
 	c := testMandateConstitution()
 	c.Mandate.Core = &risk.ConstitutionMandateCore{Rule: core.RuleID, ISIN: core.ISIN, Currency: core.Currency,
 		ScalePct: new(100.0), BandPct: new(10.0), MinOrderBase: new(2500.0), MaxValuePct: new(40.0),
-		// Live in the register, so the core reserves its allocation exactly
-		// when its rule sends (coreSendsOrdersForTest), as the build will.
+		// Live in the register, so the core reserves its allocation and
+		// sizes its buys inside it.
 		SpecHash: core.SpecHash, Stage: risk.StageLive}
 	c.Mandate.IndexGapShockPct = new(12.0) // the owner's D4
 	c.Capital.BaseCurrency = "EUR"
@@ -147,7 +147,9 @@ func coreTestServer(t *testing.T, c *risk.Constitution, pos *rpc.PositionsResult
 		t.Fatal(err)
 	}
 	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
-	srv.coreSendsOrdersForTest = true // the core's buys are sized inside its allocation
+	srv.openOrderInventoryForTest = func(context.Context, bool) (ibkrlib.OpenOrderSnapshot, brokerStateScope, error) {
+		return ibkrlib.OpenOrderSnapshot{Complete: true, AsOf: mandateTestNow}, srv.currentBrokerStateScope(), nil
+	}
 	coreAnswer(t, srv, coreTestListing())
 	return srv
 }
@@ -177,7 +179,7 @@ func TestCoreTargetFirstBuyAtTheRuleTarget(t *testing.T) {
 	if res.Status != rpc.CoreStatusReady || len(res.Reasons) != 0 {
 		t.Fatalf("status %s reasons %v", res.Status, res.Reasons)
 	}
-	if !res.ReadOnly || res.Rule != core.RuleID || res.SpecHash != core.SpecHash || res.PolicyRule != core.RuleID || res.NextDecision != "2026-10-30" {
+	if res.ReadOnly || res.Rule != core.RuleID || res.SpecHash != core.SpecHash || res.PolicyRule != core.RuleID || res.NextDecision != "2026-10-30" {
 		t.Fatalf("header %+v", res)
 	}
 	d := res.Decision

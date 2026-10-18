@@ -5,11 +5,13 @@ answers to D1 to D4, the independent design review folded in (section
 "Design review"), and phase 1 built. Revised 2026-10-18: allocations replace D1
 (§3, §7). Revised 2026-10-18 CEST: the owner's decision of 08:06 CEST on
 the core's venue and on D5 (sections 1, 3 and 7), built on Canary branch
-`core-venue`.
-Status: phase 1 built (read-only: the target is served, nothing is
-proposed or sent) with the two mandate-gate fixes the review requires;
-phases 2 and 3 are design. Buying stays off until the owner arms Fully
-armed on a device.
+`core-venue`. Revised 2026-10-18 18:55 CEST: phase 2 built on Canary
+branch `core-rows` (section "Phase 2 as built").
+Status: phases 1 and 2 built. Phase 1 serves the target read-only; phase 2
+serves each month's decision as one proposal row the owner confirms on a
+device while `[mandate.core]` is live (option A). The live policy runs the
+core in shadow until the owner writes `stage = "live"` with `spec_hash`.
+Phase 3 (option B, automatic submission) is design.
 
 Sources read, read-only: Canary main `761a1c31` (mandate increment 1, Desk
 authority and execution groundwork), Canary `integration-2` `e4df5eeb`
@@ -113,11 +115,11 @@ answered here; "built" means phase 1 carries it, with a test.
 | S1 | Honesty | This is a beta allocation the owner chose with a drawdown filter, no alpha claim. The lab supplies parity and the kill rule only; s0's Sharpe hypothesis is dropped as a success test; the kill rule's reference is concrete (the new spec); Desk shows no IC, e-value or "established" for the core | Lab spec `2408d09e6189`; Desk in phase 2 |
 | S2 | Lab accounting | The design's 1995-2015 turnover run (five configurations) is logged with `lab prior`; the 10% band was picked on that turnover; "S&P 500 only" is recorded as hindsight-prone; a new s0 version matching the rule is registered | Built in the lab: registry seq 29-31 |
 | S3 | Costs beyond commission and spread | Whipsaw, tax on realised gains, Vorabpauschale and hedge carry, each with a number or "unknown" | "Turnover and cost" below |
-| S4 | The typed buy exception | Bound like `cashSweepOpenException`: to the `core_rebalance` row, its sized quantity and a cost at most the funded EUR; netted against every working IBCF order, the owner's included; 0.95 and the gap headroom re-checked at submit; held on `book_changed` | Phase 2 item 8 (design only) |
+| S4 | The typed buy exception | Bound like `cashSweepOpenException`: to the `core_rebalance` row, its sized quantity and a cost at most the funded EUR; netted against every working IBCF order, the owner's included; 0.95 and the gap headroom re-checked at submit; held on `book_changed` | Built in phase 2: `coreOpenException` (contract, currency, the sized quantity, never more than Q − H, a limit within 10% of P_m); the netting at generation and again at preview through the fresh refresh; the headroom re-checked by the refresh that re-sizes the row and by the mandate gate at preview and submit; funding by the stock Add admission the preview runs on a stock buy while the policy carries `[position_add]` with `admission_contract = "stock-entry-v1"` |
 | S5 | IBCF closes at 17:30 CET, the US at 22:00: on its own closes the mandate understates its correlation with US names | The mandate moves IBCF with SPY's local-currency returns, no FX leg (EUR-hedged class); the ±8% price cross-check uses SPY's move over the two US sessions spanning IBCF's day. Since 2026-10-18 every EUR line IBKR lists under the ISIN matches by contract, whatever its symbol (the London line closes at the same instant) | Built: `mandate.ReturnsProxies`, `Input.LineISINs`, `core.Guard` |
-| S6 | Sales | A trend-off remainder does not wait a month: it continues in the next sessions until sold. A data hold stops buys and sends any sale the rule wants to the owner | Phase 2 item 7; phase 1 serves the hold |
+| S6 | Sales | A trend-off remainder does not wait a month: it continues in the next sessions until sold. A data hold stops buys and sends any sale the rule wants to the owner | Built in phase 2: a sale to zero is served past the window until the holding is zero; under a hold, the sale to zero the frozen month wants is served with the hold's reasons on it |
 | S7 | Series | Requested on the listing's primary exchange, not SMART, keyed by contract id; an unheld core series never makes the book's verdict stale; freshness on that exchange's calendar; a fixed input window. Until 2026-10-18 the venue was the policy's IBIS, on which IBKR does not list the contract it pinned | Built: key `core:con:<id>`, `coreSeriesNeed`, `mandateSeriesMarket`, `core.WindowCloses` |
-| S8 | Calendar | The order window skips sessions the US is closed (wide spreads on European S&P 500 fund lines); the send time is clamped before an early close, and on London's early closes, which end before the US open, the session is skipped instead | Phase 2 item 7 |
+| S8 | Calendar | The order window skips sessions the US is closed (wide spreads on European S&P 500 fund lines); the send time is clamped before an early close, and on London's early closes, which end before the US open, the session is skipped instead | Built in phase 2 (`coreWindow`): the window skips US-closed sessions and London's early closes; no send time under option A, the owner sends |
 
 Notes the review raised, with their rules:
 
@@ -560,19 +562,86 @@ stand.
 
 Then witness W0 (section 6).
 
-Phase 2, option A:
+Phase 2, option A (built 2026-10-18, branch `core-rows`; the section
+"Phase 2 as built" below says exactly what each item is):
 
-| # | Item | Size |
+| # | Item | State |
 |---|---|---|
-| 7 | `core_rebalance` rows: window (skipping US-closed sessions, S8), send time clamped before an early close (S8), band, minimum, funding, headroom, netting against every working IBCF order and merge, readiness; a trend-off remainder continues past the window (S6); a data hold stops buys and sends a sale to the owner (S6) | M |
-| 8 | The typed buy exception at preview, prepare and submit, bound to the row, its quantity and its funded cost, re-checking both headrooms and holding on `book_changed` (S4) | M |
-| 9 | Core buys require a known incremental mandate evaluation (section 3) | S |
-| 10 | The sweep's planned need from the core's pending buy | S |
-| 11 | Desk: the row's notice and its review through the existing prepared-proposal confirmation; the matcher accepts the row | S |
-| 12a | Items 5 and 6 above; the contract-details check of the core's line at preview (the line IBKR lists under the ISIN, EUR, its primary exchange, STK) | S |
+| 7 | `core_rebalance` rows: window (skipping US-closed sessions, S8), band, minimum, headroom, netting against every working IBCF order, readiness; a trend-off remainder continues past the window (S6); a data hold stops buys and serves the sale to the owner (S6) | Built, `core_rebalance.go`. No send time: under A the owner sends |
+| 8 | The typed buy exception at preview, prepare and submit, bound to the row, its quantity and its funded cost, re-checking both headrooms (S4) | Built: `coreOpenException`; the headroom through the refresh that re-sizes the row at preview and submit and the mandate gate; funding through the stock Add admission where `[position_add]` is written; `book_changed` is the prepared path's `prepared_proposal_changed` |
+| 9 | Core buys require a known incremental mandate evaluation (section 3) | Built before: the mandate gate refuses an addition it cannot evaluate, at preview and submit |
+| 10 | The sweep's planned need from the core's pending buy | Not built: the sweep's seam `cashSweepPlannedNeeds` still reads 0; a buy whose cash sits in bills waits for settled EUR and its row says why at preview |
+| 11 | Desk: the row's notice and its review through the existing prepared-proposal confirmation; the matcher accepts the row | Desk batches any BUY row as an add and prepares it as an exact proposal (`execution_batch.go`); no Desk change needed. A dedicated notice is not built |
+| 12a | Items 5 and 6 above; the contract-details check of the core's line at preview (the line IBKR lists under the ISIN, EUR, its primary exchange, STK) | Item 5 built (the scorecard's `core` sleeve). Item 6 (Desk's core line) and the contract-details check are not built; the row's contract is the one the six-hourly lookup pinned and the exception binds the preview to its id, type and currency |
 | 12b | D5, decided 2026-10-18: the core's contract is outside protection's automatic sales | Built, `core-venue` |
 
 Then witnesses W1 (paper) and W2 (live ramp).
+
+### Phase 2 as built (2026-10-18)
+
+What happens while `[mandate.core]` reads `stage = "live"` with `spec_hash`
+(the register resolves the core live: the catalogue's rule now sends):
+
+- At each decision (the London line's last session of the month, from half
+  an hour after its close) the daemon freezes the month as before, and the
+  first background refresh after it records the month's decision beside the
+  frozen target (`coreDecisionRow`): the rule's action on the holding then
+  (buy, sell, sell all, none or wait with its reason, a refused buy naming
+  the gate's reading), the window and the row's key. Recorded once; the row
+  itself is sized afresh by every proposal generation from the current
+  holding and verdict, so a partial fill becomes a smaller remainder and a
+  verdict that stops reading `within` withdraws a buy.
+- The proposal engine serves at most one `core_rebalance` row per generation
+  (`coreRebalanceProposals`): only while the core is live, the month is
+  decided, the rule wants a buy, a sell or a sale to zero with a positive
+  quantity, and the window stands. The window is the first five sessions on
+  the line's calendar after the decision day that the US also trades
+  (`core.WindowSessions`, compiled with the rule as its input window is, not
+  a policy key; London's early closes are skipped). A buy or a sale down is
+  served for the window's sessions and then waits for the next decision; a
+  sale to zero continues in the next sessions until sold. A row is served
+  blocked, never open, while the mandate's breach episode is open or a
+  `mandate_reduction` row of the line stands (buys), and while any order for
+  the contract works on either side, the owner's included, or one Canary
+  sent is unacknowledged. The owner's ignore applies.
+- The row: BUY or SELL of the pinned contract by id, routed SMART with the
+  line's primary exchange, STK in EUR, LMT DAY, quantity and maximum both
+  the sized quantity, the position effect open, increase, reduce or close,
+  the reference price (the held line's mark, else the last close), the
+  decision's figures (`TradeProposalCore`: decision, trend, target, held,
+  band, headroom cut, scale, the decision close, the verdict, the session,
+  the sleeve and stage) and the terms (`CoreRowTerms`: LMT, DAY, the limit
+  rule, the venue, the window, the episode `core:<account>:<mode>:<YYYY-MM>`).
+  The limit itself is the preview's patient limit: the live mid snapped to
+  the tick, a buy rounding down and never above the bid, a sale rounding up
+  and never below the ask (D2, the plain limit; Adaptive is not used).
+- The path: `trade.proposals` lists the row with its readiness on the London
+  calendar; Desk batches it as an add (a buy) or a reduce (a sale) and
+  prepares it as an exact proposal; the owner confirms on the device; the
+  prepared submit re-resolves the row against a fresh refresh (the band, the
+  minimum, the headroom and the netting again), refuses a changed row
+  (`prepared_proposal_changed`), and the order preview inside it runs the
+  risk limits, the drawdown brake, the mandate gate (the whole book within,
+  no gap-cap breach, the core inside its allocation), the stock Add
+  admission (funding from settled cash) on a stock buy while the policy
+  carries `[position_add]` with `admission_contract = "stock-entry-v1"`,
+  and the close-reduce check with the core's typed exception. The daemon sends
+  nothing by itself: `core_rebalance` is not in the pre-authorisable
+  vocabulary and `automaticBucketFor` returns nothing for it.
+- The record: the proposal journal's events for the row key (previewed,
+  blocked, submitted with the order reference) are read back as the last
+  decision's outcome on `canary core`; a submitted row's fill resolves to
+  the scorecard's `core` sleeve under `core-ibcf-v1`.
+- In shadow nothing changes: no row, the shadow record as before, its intent
+  now with the terms the live row would carry and for the window's first
+  session (the one builder, `coreRowTerms`).
+
+Not built in phase 2, by decision or scope: the sweep's planned need (item
+10); Desk's core line and notice (items 6 and 11); the contract-details
+check at preview (12a); the `send_after` due time and the window as policy
+keys (compiled instead, so the live file keeps loading); option B's
+automatic submission (phase 3). Writing `stage = "live"` arms none of phase
+3: every row still needs a device confirmation.
 
 Phase 3, option B: what the implementation sequence in Desk's
 `automatic-trading.md` still lacks against Canary main, numbered by its
@@ -1049,8 +1118,19 @@ lab: lab/core_rule.py, lab/core_fixture.py, tests/test_core_rule.py,
      specs/s0_core_sleeve.yaml (2408d09e6189)
 ```
 
-Phase 2:
+Phase 2 (built 2026-10-18):
 
 ```
-internal/daemon/core_rebalance.go  rows, sizing, the typed buy exception
+internal/daemon/core_rebalance.go  the row builder, the window, the typed buy
+                                   exception, the decision record, the views
+internal/daemon/core_target.go     the live decision record on the refresh;
+                                   read_only false while live
+internal/daemon/proposal_engine.go the row in each generation; the core's
+                                   admission in the preview safety checks
+internal/daemon/shadow_record.go   the intent's terms from the one builder
+internal/daemon/scorecard_authority.go  core_rebalance fills in sleeve core
+internal/register/register.go      core-ibcf-v1 sends
+internal/rpc/core.go, opportunities.go  CoreRowView, CoreDecisionRecord,
+                                   CoreRowTerms, TradeProposalCore, the status
+internal/cli/core.go               the Row and Last decision lines
 ```
