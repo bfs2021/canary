@@ -2,6 +2,51 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.24.0 — 2026-10-18 22:45 CEST
+
+### What's new
+
+The desk's arming reaches the strategies. Canary now serves
+`desk.execution.submit` for the standing automatic mandate the owner confirms
+once on their device: Desk's controller can send a served proposal row, the
+core sleeve's monthly buy included, through the one order path with every
+gate re-checked at the preview and the mandate re-read at the wire, one
+request per row and session, refusals journaled and never retried blindly.
+Nothing is sent until Desk presents that mandate; until then a live
+strategy's row still waits for the owner's tap.
+
+The decision scorecard can now conclude. One unit of evidence per name and
+entry week, the overlap of horizons charged to an effective sample, the
+market taken out on SPY and the name's sector fund, a sign-shuffle placebo
+and a futility test: a true directional score of 0.10 across six names a
+week reads established in a median of about five years instead of never,
+and a true edge is killed on at most 3% of paths. Each scored decision
+carries the half-spread it paid from the quote retained at its fill.
+
+The owner's sleeve has a drawdown stop of its own: at 25% below its own
+high-water mark the forced reduction cuts it, reduce-only, to half its risk,
+inside the existing episode and veto window. Absent the key nothing changes.
+
+### Added
+
+- `desk.execution.submit` under the standing automatic mandate (design `desk-execution.md`, `desk-automatic-authority.md`, core-sleeve.md "Phase 3 as built"): the daemon verifies the mandate's terms, capability hash, generation, preferences and armed scope before journaling, classifies the row itself (`class_mismatch` otherwise), refuses an addition under Protection-only arming, binds a strategy row to one request per row and session, and decides the outcome from the order journal; origin `desk-automatic`; Go client `SubmitDeskExecution`. `core_rebalance` stays outside the pre-authorised vocabulary.
+- The owner sleeve's drawdown stop: `[mandate.sleeves] owner_stop_pct` (optional). The sleeve's equity-like measure is the book's cash-flow-adjusted equity less the machine sleeves' marked P&L, against its own high-water mark; at the stop the forced reduction cuts the owner's sleeve alone to half its risk (reduce-only, inside the episode and veto window, pre-authorisation as for the reduction) and refuses its additions until the drawdown is back under the stop; `canary mandate` shows the sleeve's drawdown, high-water mark and stop state (`verdict.owner_stop`).
+- Scorecard schema `canary-scorecard-v2`: `units`, `effective_units`, `weeks`, `directional_score`, `p_score_above_0`/`_0_05`/`_0_10`, `futility_e_value`, `units_to_establish`, `weeks_to_establish`, `placebo`, `slippage` per stream and per decision, `entry.market_adjustment` with the sector fund; the daemon collects one series per S&P 500 sector on the history lane, after SPY, once a session.
+- `policy.snapshot` carries `mandate_realised` (the capital state, drawdown, room and the risk base's 20- and 60-day realised volatility), so `canary policy check` runs the mandate's realised drawdown and volatility checks against a daemon; a daemon from before the field is named as the reason for the skip.
+
+### Changed
+
+- The scorecard's gate: established at an anytime-valid 5% (E ≥ 20) with at least 60 effective name-weeks over 26 entry weeks, P(score > 0) ≥ 0.975, the same sign in both halves and in rising and falling markets, and a sign-shuffle placebo that passes at most 5% of 200 replicates; futile when a no-information likelihood against a score of 0.05 reaches 20. The measure is the "directional score" in CLI, JSON and `canary_scorecard`; `mean_z`, `clusters`, `p_ic_above_*`, `clusters_to_establish` and the per-horizon slippage keys are deprecated and stay one release. The design record holds the power table and the proposed thresholds for the owner.
+- The owner queue refuses the core's `core_rebalance` row (`queue_bucket_not_queueable`): the row is sent in session at the live mid, never queued at the last close, so Desk's closed-market routing shows that refusal for a core row.
+- `canary core` Last decision follows the row served later in the decision window and is final once the row is submitted; before, a "no buy" recorded on the decision day stood while a buy row was served and sent.
+- `canary strategy ID` with an unknown id names the register's ids, and a rule's id names the strategy running it.
+- Scored decisions after 2026-10-18 without a retained quote read `execution_not_observed` or the record's own reason; `no_fill_quote` stays for fills before that date.
+
+### Fixed
+
+- A strategy held on an unknown mandate capital named the capital's reason once, not twice.
+- Forced reduction rows kept from the last cycle say so with their own size; the clause read "(the batch asks for 150; )" once the order cap stopped binding, and "hold one order to 111" beside an order of 110.
+
 ## v3.23.2 — 2026-10-18 22:00 CEST
 
 ### What's new

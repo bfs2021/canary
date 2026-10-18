@@ -6,6 +6,23 @@ Every release publishes two binaries per platform, under two different names. On
 
 [Updating](../start/updating.md) covers how to install a new version. This page covers what you are installing, how to check it is genuine, and how long it keeps getting fixes.
 
+## Moving to 3.24
+
+Nothing changes on upgrade until you write it. `[mandate.sleeves]
+owner_stop_pct` is optional; absent, the owner sleeve has no stop of its own.
+`desk.execution.submit` is served only to a controller presenting the owner's
+device-confirmed automatic mandate; a live strategy's row otherwise still
+waits for the owner's tap. The owner queue now refuses the core's row, which
+is sent in session at the live mid.
+
+Clients that read the scorecard: the schema is `canary-scorecard-v2`. The
+measure is the directional score (`directional_score`, `p_score_above_0`,
+`units`, `effective_units`, `weeks`, `futility_e_value`, `placebo`,
+`slippage`); `mean_z`, `clusters`, `p_ic_above_*` and `clusters_to_establish`
+stay for one release and go in 3.25. `canary policy check` reads the
+mandate's realised figures from a 3.24 daemon; against an older daemon it
+names the missing field as the reason for the skip.
+
 ## Moving to 3.23
 
 An absent `[mandate.core]` stays inactive, and an absent stage or

@@ -1,6 +1,17 @@
 # Canary full context
 
-Updated: 2026-10-18 21:10 CEST
+Updated: 2026-10-18 22:45 CEST
+
+Version 3.24 lets the desk's arming reach the strategies: Canary serves a
+submit path for the standing automatic mandate the owner confirms once on
+their device, so a controller can send a served strategy row, the core
+sleeve's monthly buy included, through the one order path with every gate
+re-checked; nothing is sent until the controller presents that mandate. The
+decision scorecard can now conclude: one unit of evidence per name and week,
+overlap charged, the market taken out on SPY and the sector fund, a placebo
+and a futility test, and each decision's fill cost. The owner's sleeve gets a
+drawdown stop of its own. Existing policies load unchanged; standard binaries
+and MCP remain read-only.
 
 Version 3.23 adds one strategy evaluator that runs every machine strategy in
 the risk policy's register: the core sleeve's rule is its first entry,
