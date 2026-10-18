@@ -99,7 +99,10 @@ SUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/SHA256SUMS"
 
 # gpg-agent creates Unix sockets here; macOS TMPDIR paths can exceed
 # the socket path limit. mktemp creates a private directory on both platforms.
-tmp=$(mktemp -d /tmp/canary.XXXXXX)
+case "$os" in
+ darwin) tmp=$(mktemp -d /tmp/canary.XXXXXX) ;;
+ *) tmp=$(mktemp -d "${TMPDIR:-/tmp}/canary.XXXXXX") ;;
+esac
 canonical_stage=""
 canonical_retired=""
 pre_upgrade_retired=""
@@ -364,7 +367,7 @@ if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
 				line="set -gx PATH \$HOME/.local/bin \$PATH"
 				;;
 			*/zsh)
-				rc="$HOME/.zshrc"
+				rc="${ZDOTDIR:-$HOME}/.zshrc"
 				line='export PATH="$HOME/.local/bin:$PATH"'
 				;;
 			*/bash)
@@ -377,15 +380,28 @@ if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
 				;;
 		esac
 
-		# Idempotent: only append if our line (or a moral equivalent) isn't already there.
-		if [ -f "$rc" ] && grep -Fq '$HOME/.local/bin' "$rc" 2>/dev/null; then
-			info "$INSTALL_DIR already referenced in $rc — leaving it alone"
-		else
-			mkdir -p "$(dirname "$rc")"
-			printf '\n# Added by Canary installer\n%s\n' "$line" >> "$rc"
-			info "Added $INSTALL_DIR to PATH in $rc"
-			warn "Open a new terminal (or run: source $rc) for canary to be on PATH in this shell"
-		fi
+		add_path_to_rc() {
+			rc="$1"
+			if [ -f "$rc" ] && grep -Fq '$HOME/.local/bin' "$rc" 2>/dev/null; then
+				info "$INSTALL_DIR already referenced in $rc — leaving it alone"
+			else
+				mkdir -p "$(dirname "$rc")"
+				printf '\n# Added by Canary installer\n%s\n' "$line" >> "$rc"
+				info "Added $INSTALL_DIR to PATH in $rc"
+			fi
+		}
+		add_path_to_rc "$rc"
+		case "${SHELL:-}" in
+			*/bash)
+				# Login Bash reads the first existing login file, not .bashrc.
+				login_rc="$HOME/.bash_profile"
+				for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+					if [ -f "$candidate" ]; then login_rc="$candidate"; break; fi
+				done
+				add_path_to_rc "$login_rc"
+				;;
+		esac
+		warn "Open a new terminal for canary to be on PATH, or add $INSTALL_DIR to this shell's PATH"
 	fi
 else
 	# Custom install dir: don't touch rc files; just tell the user.

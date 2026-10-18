@@ -1,0 +1,4 @@
+# canary update · COLUMNS=80 · colour off
+canary update: this trading build cannot use the standard read-only update channel; install the verified trading release archive or rebuild with make install. To deliberately switch to read-only, use the standard installer.
+# canary update · COLUMNS=80 · colour on, ESC written as \x1b
+canary update: this trading build cannot use the standard read-only update channel; install the verified trading release archive or rebuild with make install. To deliberately switch to read-only, use the standard installer.

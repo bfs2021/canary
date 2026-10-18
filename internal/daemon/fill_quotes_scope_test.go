@@ -1,7 +1,10 @@
 package daemon
 
 import (
+	"github.com/osauer/canary/v2/internal/config"
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
+	"path/filepath"
 	"testing"
 )
 
@@ -55,5 +58,63 @@ func TestCostMeasurementRequiresExplicitLiveFeed(t *testing.T) {
 	got := costFillFromRecord(rec)
 	if got.HalfSpreadBase != nil || got.FXRate != nil {
 		t.Fatal("currency-free conversion", got)
+	}
+}
+
+func TestCostsSurviveTradingAuthorityChangesAndReload(t *testing.T) {
+	prior, core := newFillQuoteTestServer(t, filepath.Join(t.TempDir(), "daemon.db"))
+	for i, mode := range []string{"live", "disabled", ""} {
+		rec := fillQuoteTestRecords()[i]
+		rec.Mode = mode
+		if err := prior.fillQuotes.append("DU1234567", rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rt, err := bindFillQuoteRuntime(t.Context(), core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := newOrderPreviewTestServer(t, config.Trading{Mode: config.TradingModeDisabled})
+	s.fillQuotes = rt
+	s.cfg.Gateway.Account = ""
+	s.endpoint.Account = ""
+	s.gatewayAccountForTrading = func() string { return "DU1234567" }
+	for _, mode := range []string{config.TradingModeDisabled, config.TradingModePaper} {
+		s.cfg.Trading.Mode = mode
+		got, err := s.handleReportingCosts(t.Context(), &rpc.Request{Params: []byte(`{}`)})
+		if err != nil || len(got.Fills) != 3 || got.Mode != "paper" {
+			t.Fatalf("mode=%s result=%+v err=%v", mode, got, err)
+		}
+	}
+	if len(rt.list("DU1234567", "live")) != 0 || len(rt.list("DU7654321", "paper")) != 0 {
+		t.Fatal("crossed account or mode")
+	}
+	captured := fillQuoteFillFromExecution(ibkrlib.OrderLifecycleEvent{ExecID: "synthetic", Account: "DU1234567"}, rpc.TradingStatus{Mode: "disabled", Account: "DU1234567"}, fillQuoteTestAt)
+	if captured.record.Mode != "paper" {
+		t.Fatalf("captured mode=%s", captured.record.Mode)
+	}
+	s.gatewayAccountForTrading = func() string { return "All" }
+	if _, err := s.handleReportingCosts(t.Context(), &rpc.Request{Params: []byte(`{}`)}); err == nil {
+		t.Fatal("accepted aggregate account")
+	}
+}
+
+func TestCostsPollEvidenceCannotCrossAccountOrClient(t *testing.T) {
+	rt := &fillQuoteRuntime{}
+	a := brokerStateScope{Account: "DU1234567", Mode: "paper"}
+	b := brokerStateScope{Account: "DU7654321", Mode: "paper"}
+	rt.recordPoll(fillQuotePoll{scope: a, clientID: 15, otherClientsSeen: true})
+	rt.recordPoll(fillQuotePoll{scope: a, clientID: 15, complete: true})
+	if !rt.pollStatus().otherClientsSeen {
+		t.Fatal("forgot same-account evidence")
+	}
+	rt.recordPoll(fillQuotePoll{scope: b, clientID: 15, complete: true})
+	if rt.pollStatus().otherClientsSeen {
+		t.Fatal("inherited another account's visibility")
+	}
+	rt.recordPoll(fillQuotePoll{scope: b, clientID: 15, otherClientsSeen: true})
+	rt.recordPoll(fillQuotePoll{scope: b, clientID: 16, complete: true})
+	if rt.pollStatus().otherClientsSeen {
+		t.Fatal("inherited another API client's visibility")
 	}
 }

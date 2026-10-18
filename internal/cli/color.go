@@ -28,7 +28,7 @@ const (
 //  1. CANARY_COLOR=always  → on (overrides TTY check)
 //  2. CANARY_COLOR=never   → off
 //  3. NO_COLOR set (any) → off (https://no-color.org)
-//  4. w is a character device (interactive terminal) → on
+//  4. w is an interactive terminal → on
 //  5. otherwise → off (pipes, file redirects, bytes.Buffer in tests)
 //
 // Computed once per process and cached on Env.Color so colored renderers
@@ -49,11 +49,7 @@ func ShouldColor(w io.Writer) bool {
 	if !ok {
 		return false
 	}
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
+	return isTerminalFD(int(f.Fd()))
 }
 
 // red returns s wrapped in red ANSI codes when env.Color is on, else s

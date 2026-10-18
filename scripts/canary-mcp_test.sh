@@ -63,6 +63,7 @@ fi
 for required in \
 	"Canary Claude Code plugin could not find an executable canary binary." \
 	"raw.githubusercontent.com/osauer/canary/main/install.sh" \
+	'make install GO_TAGS=""' \
 	"CANARY_BIN=/absolute/path/to/canary"; do
 	if [[ "$output" != *"$required"* ]]; then
 		echo "canary-mcp test: canonical error copy missing $required" >&2

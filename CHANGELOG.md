@@ -59,6 +59,27 @@ core in shadow until you write the stage.
   sessions) and the limit's distance from the decision close (10%) are
   compiled with the rule, as its input window is, not policy keys.
 
+## v3.22.3 — 2026-10-18 19:28 CEST
+
+### What's new
+
+This patch fixes unattended command detection, protects credentials in MCP setup backups, and repairs account-cost history, completed-session prices, and installation across macOS and Linux.
+
+### Fixed
+
+- Redirecting input from `/dev/null` no longer counts as a human terminal; reaching EOF at the update restart prompt cancels the restart (#80).
+- Execution costs accept a confirmed auto-discovered account and retain that account's fills when trading controls change; visibility evidence is scoped to the account and client (#81, #85).
+- Manual order review retains the broker's contract ID, so a changed contract cannot bypass the reviewed identity check (#83). Existing order authorization and execution gates remain in place.
+- Daily price history excludes unfinished session bars, including cached bars retained across upgrades, and fetches the completed close after the session ends (#84).
+- Linux installation honors a writable `TMPDIR`; fresh Bash login shells and Zsh configurations using `ZDOTDIR` find Canary on PATH (#82, #88).
+- Updates from custom installations require an explicit `CANARY_INSTALL_DIR` when the default destination differs; trading builds refuse the standard read-only update channel and explain how to preserve trading capability (#86, #87).
+- `canary mcp --help` and `-h` exit without starting the server (#89).
+- The manual reporting-token recipe works in Bash and Zsh and preserves an existing token when input is cancelled or empty; plugin recovery instructions explicitly build read-only binaries (#90, #91).
+
+### Security
+
+- MCP setup creates credential-bearing Claude Desktop configuration backups with owner-only permissions and unique names. After upgrading to v3.22.3, running `canary setup claude-desktop` also restricts existing regular backup files created by earlier versions. Earlier backups may have been readable by other local users: rerun setup, and rotate credentials if another user could have accessed those files.
+
 ## v3.22.2 — 2026-10-18 18:05 CEST
 
 ### What's new

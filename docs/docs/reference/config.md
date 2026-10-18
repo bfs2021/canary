@@ -272,7 +272,7 @@ Read at process startup. Override TOML config where applicable; see the per-var 
 | `CANARY_APP_STATE_DIR` | Directory for `canary app` paired devices, alert settings, VAPID keys, and private alert-delivery evidence. Defaults to `$XDG_STATE_HOME/ibkr/app` or `$HOME/.local/state/ibkr/app`. |
 | `CANARY_COLOR` | Force terminal colour on (`always`), off (`never`); any other value defers to NO_COLOR + TTY detection. |
 | `CANARY_CONFIG` | Override the config.toml path. Defaults to `$XDG_CONFIG_HOME/ibkr/config.toml` or `$HOME/.config/ibkr/config.toml`. |
-| `CANARY_INSTALL_DIR` | Override the install directory for `canary update`. Defaults to `$HOME/.local/bin`. The release pipeline uses this to sandbox dog-food installs to a temporary directory. |
+| `CANARY_INSTALL_DIR` | Override the install directory for `canary update`. Defaults to `$HOME/.local/bin` only when the running binary is installed there; custom installations require an explicit override. The release pipeline uses this to sandbox dog-food installs to a temporary directory. |
 | `CANARY_LOG` | Override the daemon log file path. Defaults to `$XDG_STATE_HOME/ibkr/ibkr-daemon.log` or `$HOME/.local/state/ibkr/ibkr-daemon.log`. |
 | `CANARY_SOCKET` | Override the daemon IPC socket path. Defaults to `$XDG_RUNTIME_DIR/ibkr/ibkr.sock` or `$HOME/.cache/ibkr/ibkr.sock`. |
 | `CANARY_SPX_MEMBERS_AUTO_REFRESH` | Symmetric override of `[spx] members_auto_refresh`. `1` force-enables, `0` force-disables, unset / other defers to TOML. |

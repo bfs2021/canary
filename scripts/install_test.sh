@@ -15,7 +15,7 @@ mkdir -p "$fixture" "$fake_bin"
 
 make_fixture_release() {
 	local version="$1" product="$2" reported_name="$3"
-	local base="${product}-${version}-darwin-arm64"
+	local base="${product}-${version}-${4:-darwin}-arm64"
 	local release_dir="$fixture/$version"
 	mkdir -p "$release_dir/$base"
 	cat > "$release_dir/$base/$product" <<EOF
@@ -32,12 +32,13 @@ EOF
 	(
 		cd "$release_dir"
 		tar -czf "$base.tar.gz" "$base"
-		shasum -a 256 "$base.tar.gz" > SHA256SUMS
+		shasum -a 256 "$base.tar.gz" >> SHA256SUMS
 	)
 	printf '%s\n' 'fixture signature' > "$release_dir/SHA256SUMS.asc"
 }
 
 make_fixture_release v9.9.9 canary "Canary CLI "
+make_fixture_release v9.9.9 canary "Canary CLI " linux
 make_fixture_release v2.3.1 ibkr "ibkr"
 # Deliberately only a retired-name archive. The installer must not fall back
 # to it for any version except the exact v2.3.1 publication bootstrap.
@@ -47,7 +48,7 @@ printf '%s\n' 'fixture release key' > "$fixture/release-signing-key.asc"
 cat > "$fake_bin/uname" <<'EOF'
 #!/bin/sh
 case "${1:-}" in
-	-s) printf '%s\n' Darwin ;;
+	-s) printf '%s\n' "${CANARY_INSTALL_FIXTURE_OS:-Darwin}" ;;
 	-m) printf '%s\n' arm64 ;;
 	*) exit 2 ;;
 esac
@@ -56,7 +57,7 @@ EOF
 cat > "$fake_bin/gpg" <<'EOF'
 #!/bin/sh
 set -eu
-[ "${#GNUPGHOME}" -lt 60 ] || { echo "gpg socket path too long" >&2; exit 1; }
+[ "${CANARY_INSTALL_FIXTURE_OS:-Darwin}" != Darwin ] || [ "${#GNUPGHOME}" -lt 60 ] || { echo "gpg socket path too long" >&2; exit 1; }
 case "$*" in
 	*--with-colons*--fingerprint*)
 		printf '%s\n' 'fpr:::::::::D98426D48FED85EFA33904694D922A4F922B7D7D:'
@@ -384,3 +385,47 @@ run_installer v9.9.9 env SHELL=/usr/bin/fish XDG_CONFIG_HOME="$fish_config"
 [ -f "$fish_config/fish/config.fish" ]
 run_installer v9.9.9 env SHELL=/usr/bin/fish XDG_CONFIG_HOME="$fish_config"
 [ "$(grep -c 'set -gx PATH' "$fish_config/fish/config.fish")" = 1 ]
+
+# Linux honors an operator-selected writable temporary filesystem. A mktemp
+# shim refuses every other destination, including a hard-coded /tmp.
+mkdir -p "$test_root/linux-tmp" "$test_root/tmp-spy"
+real_mktemp=$(command -v mktemp)
+cat > "$test_root/tmp-spy/mktemp" <<'EOF'
+#!/bin/sh
+case "$*" in *"$TMPDIR/canary."*) exec "$REAL_MKTEMP" "$@" ;; *) exit 93 ;; esac
+EOF
+chmod 0755 "$test_root/tmp-spy/mktemp"
+CANARY_INSTALL_TEST_PATH_PREFIX="$test_root/tmp-spy:" run_installer v9.9.9 env \
+ CANARY_INSTALL_FIXTURE_OS=Linux TMPDIR="$test_root/linux-tmp" REAL_MKTEMP="$real_mktemp" \
+ CANARY_INSTALL_DIR="$test_root/linux-install/bin"
+[ -x "$test_root/linux-install/bin/canary" ]
+
+# Bash login shells read only the first existing login file. Preserve that
+# selection and make the non-login shell work as well, without duplicate lines.
+for login_file in .bash_profile .bash_login .profile; do
+ shell_home="$test_root/bash-$login_file"
+ mkdir -p "$shell_home"
+ printf '# existing user configuration\n' > "$shell_home/$login_file"
+ for attempt in 1 2; do
+  run_installer v9.9.9 env HOME="$shell_home" SHELL=/bin/bash
+ done
+ [ "$(grep -c 'export PATH=' "$shell_home/$login_file")" = 1 ]
+ [ "$(grep -c 'export PATH=' "$shell_home/.bashrc")" = 1 ]
+ HOME="$shell_home" PATH=/usr/bin:/bin bash --noprofile --rcfile "$shell_home/$login_file" -ic 'command -v canary' 2>/dev/null | grep -Fx "$shell_home/.local/bin/canary"
+done
+shell_home="$test_root/bash-no-profile"
+run_installer v9.9.9 env HOME="$shell_home" SHELL=/bin/bash
+[ -f "$shell_home/.bash_profile" ]
+
+# Zsh supports a configuration directory distinct from HOME, including spaces.
+zsh_home="$test_root/zsh-home"
+zsh_config="$test_root/zsh config"
+for attempt in 1 2; do
+ run_installer v9.9.9 env HOME="$zsh_home" SHELL=/bin/zsh ZDOTDIR="$zsh_config"
+done
+[ "$(grep -c 'export PATH=' "$zsh_config/.zshrc")" = 1 ]
+[ ! -e "$zsh_home/.zshrc" ]
+if command -v zsh >/dev/null; then
+ HOME="$zsh_home" ZDOTDIR="$zsh_config" PATH=/usr/bin:/bin zsh -d -ic 'command -v canary' | grep -Fx "$zsh_home/.local/bin/canary"
+fi
+echo "install shell and temporary-directory regressions: OK"

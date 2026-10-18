@@ -217,6 +217,7 @@ func renderGoldenCases() []renderGoldenCase {
 	diagnosticHealth.GatewayAPI = &rpc.GatewayAPIHealth{TradingProtocolMax: 203, ConfigReadProtocol: 219, ConfigState: "observed", DiagnosticProtocol: 219,
 		Settings: &rpc.GatewayAPISettings{ReadOnly: new(false), VolumeInLots: new(false), RetainOrdersOnReconnect: new(true), DownloadOpenOrders: new(true)}}
 	return []renderGoldenCase{
+		{name: "update-trading-refusal", argv: []string{"update"}, render: func(env *Env) { renderTradingUpdateRefusal(env.Stdout) }},
 		{name: "help", argv: []string{"help"}, render: renderUsage},
 		{name: "help_order", argv: []string{"order", "--help"}},
 		{name: "help_order_preview", argv: []string{"order", "preview", "--help"}},
