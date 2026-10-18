@@ -425,8 +425,21 @@ run_installer v9.9.9 env HOME="$shell_home" SHELL=/bin/bash
 # Zsh supports a configuration directory distinct from HOME, including spaces.
 zsh_home="$test_root/zsh-home"
 zsh_config="$test_root/zsh config"
+zsh_shell=$(command -v zsh || true)
+if [ -z "$zsh_shell" ]; then
+ # This case checks an exported directory. Keep it hermetic on hosts
+ # without Zsh; the unexported .zshenv case below uses a real Zsh only.
+ mkdir -p "$test_root/zsh-probe"
+ zsh_shell="$test_root/zsh-probe/zsh"
+ cat > "$zsh_shell" <<'SHIM'
+#!/bin/sh
+[ "${1:-}" = -c ] || exit 2
+exec /bin/sh "$@"
+SHIM
+ chmod 0755 "$zsh_shell"
+fi
 for attempt in 1 2; do
- run_installer v9.9.9 env HOME="$zsh_home" SHELL=/bin/zsh ZDOTDIR="$zsh_config"
+ run_installer v9.9.9 env HOME="$zsh_home" SHELL="$zsh_shell" ZDOTDIR="$zsh_config"
 done
 [ "$(grep -c 'export PATH=' "$zsh_config/.zshrc")" = 1 ]
 [ ! -e "$zsh_home/.zshrc" ]
