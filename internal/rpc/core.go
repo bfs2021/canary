@@ -191,6 +191,7 @@ type CoreHolding struct {
 
 // CoreMandateView is the mandate verdict the core read.
 type CoreMandateView struct {
+	BaseCurrency   string    `json:"base_currency,omitempty"`
 	Status         string    `json:"status"`
 	EvaluatedAt    time.Time `json:"evaluated_at,omitzero"`
 	BudgetAnnualSD float64   `json:"budget_annual_sd_base,omitempty"`

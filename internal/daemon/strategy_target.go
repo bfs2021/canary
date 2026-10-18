@@ -610,7 +610,7 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 		hold("no mandate verdict has been measured for the policy in force")
 	default:
 		verdict = result.Verdict
-		res.Mandate = &rpc.CoreMandateView{Status: verdict.Status, EvaluatedAt: at, BudgetAnnualSD: verdict.Capital.BudgetAnnualSD}
+		res.Mandate = &rpc.CoreMandateView{BaseCurrency: verdict.BaseCurrency, Status: verdict.Status, EvaluatedAt: at, BudgetAnnualSD: verdict.Capital.BudgetAnnualSD}
 		if verdict.Risk != nil {
 			res.Mandate.RiskAnnualSD = verdict.Risk.SDAnnualBase
 		}

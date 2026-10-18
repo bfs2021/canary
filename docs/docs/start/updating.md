@@ -12,7 +12,7 @@ matches how the binary arrived:
 | Installation path | Automatic restart | Activation |
 | --- | --- | --- |
 | `canary update` | Interactive use asks whether to restart. `--restart` refreshes only the app and daemon processes that were already running; `--no-restart` refreshes neither. | Use `canary update --restart` for running processes. Run `canary restart` afterward when you also want to start an absent daemon. |
-| `make install` | No. It builds and atomically installs the current checkout only. | Prefer `make restart-daemon` when working from source: it builds, installs, and activates the checkout in one target. After a separate `make install`, run the installed `canary restart`. |
+| `make install GO_TAGS=""` | No. It builds and atomically installs the standard read-only checkout. | Prefer `make restart-daemon GO_TAGS=""` to build, install, and activate it in one target. Plain `make install` and `make restart-daemon` use the experimental trading build default. After a separate install, run the installed `canary restart`. |
 | Manual download or binary replacement | No. Existing app, daemon, and MCP host processes keep executing their old image. | Run the newly installed `canary restart`. Fully relaunch the MCP host as well when it owns a `canary mcp` process. |
 
 After activation, `canary version` reports the CLI build and `canary status`

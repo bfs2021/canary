@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"errors"
 
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/osauer/canary/v2/internal/dial"
+	"github.com/osauer/canary/v2/internal/rpc"
 )
 
 func lifecycleEnv(t *testing.T) (env []string, socketPath, logPath string) {
@@ -171,22 +173,15 @@ func TestLifecycle_CleanCycle(t *testing.T) {
 	env, socketPath, _ := lifecycleEnv(t)
 
 	out, code := runCLI(t, env, 30*time.Second, "status", "--json")
-	if code != 0 {
-		t.Fatalf("status --json exit=%d, want 0 (CLI couldn't reach autospawned daemon)\n%s", code, out)
-	}
-	if !strings.Contains(out, "daemon_version") {
-		t.Fatalf("status --json output missing daemon_version field:\n%s", out)
-	}
+	requireOfflineDaemonStatus(t, out, code)
 
 	pid1 := daemonPID(socketPath)
 	if pid1 == 0 || !dial.IsProcessAlive(pid1) {
 		t.Fatalf("daemon not alive after autospawn (pid=%d)", pid1)
 	}
 
-	_, code = runCLI(t, env, 5*time.Second, "status", "--json")
-	if code != 0 {
-		t.Fatalf("second status exit=%d", code)
-	}
+	out, code = runCLI(t, env, 5*time.Second, "status", "--json")
+	requireOfflineDaemonStatus(t, out, code)
 	if pid2 := daemonPID(socketPath); pid2 != pid1 {
 		t.Fatalf("second invocation spawned new daemon: pid1=%d pid2=%d", pid1, pid2)
 	}
@@ -268,5 +263,15 @@ func TestLifecycle_CLIDoesNotHangOnDeafDaemon(t *testing.T) {
 	}
 	if elapsed < integrationCLIUnaryTimeout/2 {
 		t.Logf("note: CLI exited in %s (expected around %s) — deadline may have been shorter than intended", elapsed, integrationCLIUnaryTimeout)
+	}
+}
+
+// requireOfflineDaemonStatus distinguishes a running daemon with an unreachable
+// synthetic Gateway (status exit 1) from a failure to start or read the daemon.
+func requireOfflineDaemonStatus(t *testing.T, out string, code int) {
+	t.Helper()
+	var health rpc.HealthResult
+	if err := json.Unmarshal([]byte(out), &health); err != nil || health.DaemonVersion == "" || health.Connected || code != 1 {
+		t.Fatalf("want readable offline daemon and exit 1, got exit %d, JSON error %v: %s", code, err, out)
 	}
 }

@@ -183,7 +183,7 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	if m := res.Mandate; m != nil {
 		line := []string{m.Status}
 		if m.BudgetAnnualSD > 0 {
-			line = append(line, fmt.Sprintf("risk %s a year of the budget %s", mandateAmount(m.RiskAnnualSD, ccy), mandateAmount(m.BudgetAnnualSD, ccy)))
+			line = append(line, fmt.Sprintf("risk %s a year of the budget %s", mandateAmount(m.RiskAnnualSD, nonEmpty(m.BaseCurrency, "currency unavailable")), mandateAmount(m.BudgetAnnualSD, nonEmpty(m.BaseCurrency, "currency unavailable"))))
 		}
 		if res.Sizing != nil && res.Sizing.Holdable != nil {
 			line = append(line, fmt.Sprintf("headroom admits a holding of %s (95%% of the budget and of the gap cap)", coreShares(*res.Sizing.Holdable)))

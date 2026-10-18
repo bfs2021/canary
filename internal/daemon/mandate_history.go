@@ -74,10 +74,12 @@ type mandateHistoryNeed struct {
 }
 
 type mandateHistoryAttempt struct {
-	at        time.Time
-	session   ibkrlib.ConnectorSessionBinding
-	attempts  int
-	succeeded bool
+	completedSession string
+	market           marketcal.Market
+	at               time.Time
+	session          ibkrlib.ConnectorSessionBinding
+	attempts         int
+	succeeded        bool
 }
 
 // mandateHistoryFailure is a series' last failed read, kept until a read
@@ -404,9 +406,14 @@ func (s *Server) refreshMandateHistoryOnce(ctx context.Context) {
 }
 
 // refreshMandateSeries reads one series when it is due and the session
-// budget allows: one successful read per broker session, failed attempts
+// budget allows: one complete read per completed market session, failed attempts
 // retried after mandateHistoryRetryAfter up to mandateHistoryAttemptsPerSession.
-func (s *Server) refreshMandateSeries(ctx context.Context, c *ibkrlib.Connector, need mandateHistoryNeed) {
+type mandateHistorySession interface {
+	CaptureHistoricalSession() (ibkrlib.HistoricalSessionBinding, bool)
+	HistoricalSessionCurrent(ibkrlib.HistoricalSessionBinding) bool
+}
+
+func (s *Server) refreshMandateSeries(ctx context.Context, c mandateHistorySession, need mandateHistoryNeed) {
 	now := s.nowUTC()
 	series := s.mandateHistorySeries(ctx, need.Key)
 	if !mandateSeriesDue(series, now) && (need.Market == "" || series.Market == need.Market) {
@@ -416,16 +423,24 @@ func (s *Server) refreshMandateSeries(ctx context.Context, c *ibkrlib.Connector,
 	if !ok {
 		return
 	}
+	market := need.Market
+	if market == "" {
+		market = marketcal.MarketUSEquity
+	}
+	completed, _, covered := mandateLastSessionsIn(now, market)
+	if !covered {
+		return
+	}
 	st := &s.mandateHistory
 	st.mu.Lock()
 	attempt, seen := st.attempts[need.Key]
-	sameSession := seen && c.HistoricalSessionCurrent(attempt.session) && attempt.session == session
+	sameSession := seen && c.HistoricalSessionCurrent(attempt.session) && attempt.session == session && attempt.market == market && completed <= attempt.completedSession
 	if sameSession && (attempt.succeeded || attempt.attempts >= mandateHistoryAttemptsPerSession || now.Before(attempt.at.Add(mandateHistoryRetryAfter))) {
 		st.mu.Unlock()
 		return
 	}
 	if !sameSession {
-		attempt = mandateHistoryAttempt{session: session}
+		attempt = mandateHistoryAttempt{session: session, market: market, completedSession: completed}
 	}
 	attempt.at, attempt.attempts = now, attempt.attempts+1
 	st.attempts[need.Key] = attempt
@@ -434,9 +449,11 @@ func (s *Server) refreshMandateSeries(ctx context.Context, c *ibkrlib.Connector,
 	if !s.readMandateSeries(ctx, need, now) {
 		return
 	}
+	refreshed := s.mandateHistorySeries(ctx, need.Key)
+	complete := refreshed != nil && len(refreshed.Dates) > 0 && refreshed.Dates[len(refreshed.Dates)-1] >= completed
 	st.mu.Lock()
 	attempt = st.attempts[need.Key]
-	attempt.succeeded = true
+	attempt.succeeded = complete
 	st.attempts[need.Key] = attempt
 	st.mu.Unlock()
 }

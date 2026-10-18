@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -528,5 +529,71 @@ func TestTWSOrderControlRefusesACancelledContext(t *testing.T) {
 	receipt, err := RunTWSOrderControl(ctx, g.config(), TWSOrderControlCancel, twsControlTestTarget(), TWSOrderControlReplacement{})
 	if !errors.Is(err, ErrTWSOrderControlGate) || receipt.Outcome != TWSOrderControlRefused {
 		t.Fatalf("err=%v outcome=%s, want a gate refusal", err, receipt.Outcome)
+	}
+}
+
+func TestTWSControlFinalGuardsPreventForbiddenFrames(t *testing.T) {
+	for _, action := range []string{TWSOrderControlCancel, TWSOrderControlModify} {
+		for _, blockAt := range []int{1, 2} {
+			t.Run(fmt.Sprintf("%s/frame%d", action, blockAt), func(t *testing.T) {
+				g := startTWSControlGateway(t, twsControlTestOrder())
+				cfg := g.config()
+				calls, releases := 0, 0
+				cfg.NewWireGuard = func() (func() error, func()) {
+					return func() error {
+						calls++
+						if calls == blockAt {
+							return errors.New("synthetic authority revoked")
+						}
+						return nil
+					}, func() { releases++ }
+				}
+				_, err := RunTWSOrderControl(t.Context(), cfg, action, twsControlTestTarget(), TWSOrderControlReplacement{Quantity: 60, LimitPrice: 149})
+				if err == nil {
+					t.Fatal("revoked frame accepted")
+				}
+				_, binds, cancels, places := g.snapshot()
+				if len(cancels) != 0 || len(places) != 0 || (blockAt == 1 && binds != 0) {
+					t.Fatalf("forbidden frames: binds=%d cancels=%d places=%d", binds, len(cancels), len(places))
+				}
+				if releases != calls {
+					t.Fatalf("leases %d guards %d", releases, calls)
+				}
+			})
+		}
+	}
+}
+
+func TestTWSControlRejectsPrimaryRevocationBeforeStatusChanges(t *testing.T) {
+	for _, action := range []string{TWSOrderControlCancel, TWSOrderControlModify} {
+		t.Run(action, func(t *testing.T) {
+			primary, authority, _, _, _ := newQueuedInstructionReconnectFixture(t)
+			binding, ok := authority.CaptureSession()
+			if !ok {
+				t.Fatal("primary session unavailable")
+			}
+			g := startTWSControlGateway(t, twsControlTestOrder())
+			cfg := g.config()
+			cfg.Authority = authority
+			cfg.AuthoritySession = binding
+			calls := 0
+			cfg.NewWireGuard = func() (func() error, func()) {
+				return func() error {
+					calls++
+					if calls == 2 {
+						primary.publishRevokedOutboundSession()
+						if !authority.SessionCurrent(binding) {
+							t.Fatal("fixture must retain connected status")
+						}
+					}
+					return nil
+				}, func() {}
+			}
+			_, err := RunTWSOrderControl(t.Context(), cfg, action, twsControlTestTarget(), TWSOrderControlReplacement{Quantity: 60, LimitPrice: 149})
+			_, binds, cancels, places := g.snapshot()
+			if err == nil || binds != 1 || len(cancels) != 0 || len(places) != 0 {
+				t.Fatalf("revoked primary sent: err=%v binds=%d cancels=%d places=%d", err, binds, len(cancels), len(places))
+			}
+		})
 	}
 }

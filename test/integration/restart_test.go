@@ -26,9 +26,8 @@ func TestLifecycle_RestartReservationOwnsReplacement(t *testing.T) {
 			t.Setenv(name, value)
 		}
 	}
-	if out, code := runCLI(t, env, 15*time.Second, "status", "--json"); code != 0 {
-		t.Fatalf("initial start exit=%d: %s", code, out)
-	}
+	initial, code := runCLI(t, env, 15*time.Second, "status", "--json")
+	requireOfflineDaemonStatus(t, initial, code)
 	oldPID := daemonPID(socket)
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
@@ -71,7 +70,18 @@ func TestLifecycle_RestartReservationOwnsReplacement(t *testing.T) {
 	}
 	release()
 	for _, c := range contenders {
-		if err := c.cmd.Wait(); err != nil {
+		err := c.cmd.Wait()
+		if c.cmd.Args[1] == "status" {
+			code := 0
+			if err != nil {
+				if exit, ok := err.(*exec.ExitError); ok {
+					code = exit.ExitCode()
+				} else {
+					t.Fatal(err)
+				}
+			}
+			requireOfflineDaemonStatus(t, c.out.String(), code)
+		} else if err != nil {
 			t.Fatalf("contender %v: %v\n%s", c.cmd.Args, err, c.out.String())
 		}
 	}

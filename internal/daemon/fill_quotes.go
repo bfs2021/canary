@@ -199,7 +199,7 @@ func (rt *fillQuoteRuntime) append(account string, rec rpc.FillQuoteRecord) erro
 // list returns the retained records of one account and mode, ascending by
 // execution time.
 func (rt *fillQuoteRuntime) list(account, mode string) []rpc.FillQuoteRecord {
-	if rt == nil {
+	if rt == nil || !brokerScopeAccountConcrete(account) {
 		return nil
 	}
 	account = strings.ToUpper(strings.TrimSpace(account))
@@ -644,6 +644,9 @@ func (s *Server) handleReportingCosts(_ context.Context, req *rpc.Request) (*rpc
 	ep := s.endpoint
 	s.mu.Unlock()
 	status := s.tradingStatus(ep)
+	if !brokerScopeAccountConcrete(status.Account) {
+		return nil, errBadRequest("execution costs unavailable: select one concrete broker account")
+	}
 	var records []rpc.FillQuoteRecord
 	var poll fillQuotePoll
 	polling := false
@@ -667,6 +670,7 @@ func buildReportingCosts(records []rpc.FillQuoteRecord, month, mode string, clie
 		SchemaVersion: rpc.ReportingCostsSchemaVersion, AsOf: now.UTC(), Month: month, Mode: strings.ToLower(strings.TrimSpace(mode)),
 		ByMonth: []rpc.CostTotal{}, BySource: []rpc.CostTotal{}, ByClass: []rpc.CostTotal{}, Fills: []rpc.CostFill{},
 	}
+	mixedBase := false
 	byMonth, bySource, byClass := map[string]*rpc.CostTotal{}, map[string]*rpc.CostTotal{}, map[string]*rpc.CostTotal{}
 	for _, rec := range records {
 		key := rec.ExecTime.UTC().Format("2006-01")
@@ -676,8 +680,11 @@ func buildReportingCosts(records []rpc.FillQuoteRecord, month, mode string, clie
 		if month != "" && key != month {
 			continue
 		}
-		if rec.BaseCurrency != "" {
-			result.BaseCurrency = rec.BaseCurrency
+		if base := strings.ToUpper(strings.TrimSpace(rec.BaseCurrency)); base != "" {
+			if result.BaseCurrency != "" && result.BaseCurrency != base {
+				mixedBase = true
+			}
+			result.BaseCurrency = base
 		}
 		fill := costFillFromRecord(rec)
 		result.Fills = append(result.Fills, fill)
@@ -706,10 +713,29 @@ func buildReportingCosts(records []rpc.FillQuoteRecord, month, mode string, clie
 				total.Unconverted++
 				continue
 			}
-			if total.HalfSpreadBase == nil {
-				total.HalfSpreadBase = new(0.0)
+			found := false
+			for i := range total.ByCurrency {
+				if total.ByCurrency[i].Currency == fill.BaseCurrency {
+					total.ByCurrency[i].HalfSpreadBase += *fill.HalfSpreadBase
+					found = true
+					break
+				}
 			}
-			*total.HalfSpreadBase += *fill.HalfSpreadBase
+			if !found {
+				total.ByCurrency = append(total.ByCurrency, rpc.CostCurrencyAmount{Currency: fill.BaseCurrency, HalfSpreadBase: *fill.HalfSpreadBase})
+			}
+		}
+	}
+	if mixedBase {
+		result.BaseCurrency = ""
+	}
+	for _, groups := range []map[string]*rpc.CostTotal{byMonth, bySource, byClass} {
+		for _, total := range groups {
+			sort.Slice(total.ByCurrency, func(i, j int) bool { return total.ByCurrency[i].Currency < total.ByCurrency[j].Currency })
+			// Old scalar fields are populated only for an unambiguous report unit.
+			if result.BaseCurrency != "" && len(total.ByCurrency) == 1 {
+				total.HalfSpreadBase = new(total.ByCurrency[0].HalfSpreadBase)
+			}
 		}
 	}
 	sort.SliceStable(result.Fills, func(i, j int) bool {
@@ -752,7 +778,7 @@ func costFillFromRecord(rec rpc.FillQuoteRecord) rpc.CostFill {
 	fill := rpc.CostFill{
 		ExecID: rec.ExecID, Source: rec.Source, At: rec.ExecTime.UTC(), Symbol: rec.Contract.Symbol, LocalSymbol: rec.Contract.LocalSymbol,
 		SecType: rec.Contract.SecType, Class: costClass(rec.Contract.SecType), Side: rec.Side, Quantity: rec.Quantity, Price: rec.Price,
-		Currency: rec.Contract.Currency, Quote: rec.Quote, FXRate: rec.FXRate, Status: rpc.CostFillUnknown,
+		Currency: rec.Contract.Currency, BaseCurrency: strings.ToUpper(strings.TrimSpace(rec.BaseCurrency)), Quote: rec.Quote, FXRate: rec.FXRate, Status: rpc.CostFillUnknown,
 	}
 	if rec.ExecTime.IsZero() {
 		fill.At = rec.ObservedAt.UTC()
@@ -775,6 +801,8 @@ func costFillFromRecord(rec rpc.FillQuoteRecord) rpc.CostFill {
 			fill.Reason = "quote_unavailable"
 		}
 		return fill
+	case rec.Quote.DataType != rpc.MarketDataLive:
+		fill.Reason = "quote_not_live: " + nonEmptyString(rec.Quote.DataType, "unknown")
 	case !(rec.Price > 0) || math.IsInf(rec.Price, 0):
 		fill.Reason = "fill_price_unknown"
 	case !(rec.Quantity > 0) || math.IsInf(rec.Quantity, 0):
@@ -789,7 +817,7 @@ func costFillFromRecord(rec rpc.FillQuoteRecord) rpc.CostFill {
 	}
 	half := (rec.Price - *rec.Quote.Mid) * sign * rec.Quantity * multiplier
 	fill.HalfSpread = &half
-	if rec.FXRate != nil && *rec.FXRate > 0 {
+	if rec.FXRate != nil && *rec.FXRate > 0 && fill.BaseCurrency != "" {
 		fill.HalfSpreadBase = new(half * *rec.FXRate)
 	} else {
 		fill.FXRate = nil

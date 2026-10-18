@@ -12,6 +12,29 @@ All notable changes to this project are documented here. The project adheres to 
 ### Changed
 
 - `canary core --json` and `strategy.target` name the sizing's allocation `allocation_pct` where `sizing.frozen_on` and `sizing.current_on` said `core_vol_pct`: the same number, the sleeve's risk allocation, for every strategy. The human render is unchanged.
+## v3.22.2 — 2026-10-18 18:05 CEST
+
+### What's new
+
+This patch fixes installation failures on fresh macOS and Linux systems, preserves custom MCP setups across configuration updates, and makes execution-cost reports explicit about currency and quote quality. Manual TWS order changes recheck authority at transmission and preserve supported order terms.
+
+### Fixed
+
+- Manual TWS modifications now stop when trading authority changes before transmission; cancellation retains its freeze exemption and respects the manual-control switch (#59).
+- Manual TWS modifications preserve OCA groups and Adaptive settings, and refuse broker terms that cannot be preserved faithfully (#60).
+- Release archives omit macOS metadata that broke Linux installation; signature verification uses a short private GnuPG path on macOS (#61, #62).
+- Execution costs require one concrete account and keep historical base currencies separate; delayed, frozen and unknown feeds remain visible but do not count as measured costs (#63, #67, #68).
+- MCP bundle daemons can be stopped and restarted, including bundles already running before an upgrade; Linux binaries include timezone data for minimal installations (#64, #65).
+- Mandate and core history refresh on each completed market session without requiring a broker reconnect, including recovery after exhausted retries (#66).
+- MCP setup preserves custom environment and integration options; help and invalid arguments leave configuration untouched, and invalid JSON objects fail without a panic (#69, #70, #77).
+- Offline status returns failure consistently in JSON and text, and an explicit zero idle timeout disables idle shutdown (#71, #72).
+- Core mandate risk and budget amounts use the account base currency, independently of the fund's currency (#73).
+- Installation and update documentation identify source-build capability; mandate documentation describes enforced sleeve allocations; reporting setup states its terminal requirement; path documentation distinguishes XDG config from policy locations (#74, #75, #78, #79).
+- Fresh fish installations create their configuration directory and honor XDG_CONFIG_HOME (#76).
+
+### Changed
+
+- Execution-cost text shows each quote's feed and each converted amount's currency; the v2 cost-report schema prevents older clients from interpreting mixed currencies as one total (#67, #68).
 
 ## v3.22.1 — 2026-10-18 17:35 CEST
 

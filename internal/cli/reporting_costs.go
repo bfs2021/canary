@@ -101,9 +101,20 @@ func renderReportingCosts(env *Env, result *rpc.ReportingCostsResult) {
 }
 
 func costTotalText(total rpc.CostTotal, base string) string {
+	if len(total.ByCurrency) > 0 {
+		parts := make([]string, 0, len(total.ByCurrency))
+		for _, amount := range total.ByCurrency {
+			parts = append(parts, costMoney(amount.HalfSpreadBase, amount.Currency))
+		}
+		text := strings.Join(parts, " · ")
+		if total.Unconverted > 0 {
+			text += fmt.Sprintf(" (+%d without FX or base currency)", total.Unconverted)
+		}
+		return text
+	}
 	if total.HalfSpreadBase == nil {
 		if total.Measured > 0 {
-			return fmt.Sprintf("— (%d measured, no FX)", total.Unconverted)
+			return fmt.Sprintf("— (%d measured, FX or base currency unavailable)", total.Unconverted)
 		}
 		return "—"
 	}
@@ -140,7 +151,7 @@ func formatCostQuantity(q float64) string {
 // or why neither could be measured.
 func costFillDetail(fill rpc.CostFill, base string) string {
 	q := fill.Quote
-	var parts []string
+	parts := []string{"feed " + nonEmpty(q.DataType, "unknown")}
 	if q.Bid != nil || q.Ask != nil {
 		parts = append(parts, fmt.Sprintf("quote %s / %s", displayNumber(q.Bid, 1, "%.4f"), displayNumber(q.Ask, 1, "%.4f")))
 	}
@@ -158,9 +169,9 @@ func costFillDetail(fill rpc.CostFill, base string) string {
 	if fill.Status == rpc.CostFillMeasured {
 		cost := "half-spread " + costMoney(*fill.HalfSpread, fill.Currency)
 		if fill.HalfSpreadBase != nil {
-			cost += " = " + costMoney(*fill.HalfSpreadBase, base)
+			cost += " = " + costMoney(*fill.HalfSpreadBase, fill.BaseCurrency)
 		} else {
-			cost += " (no FX for base)"
+			cost += " (FX or base currency unavailable)"
 		}
 		parts = append(parts, cost)
 	} else {

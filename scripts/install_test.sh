@@ -56,6 +56,7 @@ EOF
 cat > "$fake_bin/gpg" <<'EOF'
 #!/bin/sh
 set -eu
+[ "${#GNUPGHOME}" -lt 60 ] || { echo "gpg socket path too long" >&2; exit 1; }
 case "$*" in
 	*--with-colons*--fingerprint*)
 		printf '%s\n' 'fpr:::::::::D98426D48FED85EFA33904694D922A4F922B7D7D:'
@@ -376,3 +377,10 @@ for mode in fail_canonical signal_after_canonical; do
 done
 
 echo "install test: OK"
+
+# A first fish install creates its XDG directory, including paths with spaces.
+fish_config="$test_root/fish config"
+run_installer v9.9.9 env SHELL=/usr/bin/fish XDG_CONFIG_HOME="$fish_config"
+[ -f "$fish_config/fish/config.fish" ]
+run_installer v9.9.9 env SHELL=/usr/bin/fish XDG_CONFIG_HOME="$fish_config"
+[ "$(grep -c 'set -gx PATH' "$fish_config/fish/config.fish")" = 1 ]

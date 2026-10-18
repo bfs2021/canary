@@ -185,7 +185,7 @@ func (s *Server) twsOrderControl(ctx context.Context, action string, p rpc.Order
 		return result, nil
 	}
 
-	auth, _, bindingErr := s.authorizeBrokerWriteTransaction(p.Origin, action == ibkrlib.TWSOrderControlCancel)
+	auth, binding, bindingErr := s.authorizeBrokerWriteTransaction(p.Origin, action == ibkrlib.TWSOrderControlCancel)
 	status := auth.Status
 	result.Mode, result.Account, result.Endpoint = status.Mode, status.Account, status.Endpoint
 	if !auth.Allowed {
@@ -245,6 +245,10 @@ func (s *Server) twsOrderControl(ctx context.Context, action string, p rpc.Order
 	cfg := ibkrlib.TWSOrderControlConfig{
 		Host: status.GatewayHost, Port: status.GatewayPort, Mode: status.Mode, Account: status.Account,
 		UseTLS: ep.TLS, EnableTLSFallback: ep.EnableTLSFallback,
+		Authority: binding.connector, AuthoritySession: binding.session,
+		NewWireGuard: func() (func() error, func()) {
+			return s.twsOrderControlWireGuard(binding, status, action == ibkrlib.TWSOrderControlCancel)
+		},
 	}
 	if cfg.Host == "" {
 		cfg.Host = ep.Host
@@ -259,6 +263,14 @@ func (s *Server) twsOrderControl(ctx context.Context, action string, p rpc.Order
 	run := s.twsOrderControlRun
 	if run == nil {
 		run = ibkrlib.RunTWSOrderControl
+	}
+	// Reject drift during inventory/journaling before opening client 0. Each
+	// later physical send gets a fresh guard and a short settings lease.
+	guard, release := cfg.NewWireGuard()
+	gateErr := guard()
+	release()
+	if gateErr != nil {
+		return s.finishTWSOrderControl(ctx, scope, p, refuseTWS(result, rpc.TradingBlocker{Code: rpc.TWSOrderControlBlockerGate, Message: gateErr.Error()}))
 	}
 	receipt, runErr := run(ctx, cfg, action, target, replacement)
 	result.BoundOrderID = receipt.BoundOrderID
@@ -283,6 +295,38 @@ func (s *Server) twsOrderControl(ctx context.Context, action string, p rpc.Order
 		result.Message = runErr.Error()
 	}
 	return s.finishTWSOrderControl(ctx, scope, p, result)
+}
+
+// twsOrderControlWireGuard retains the ordinary first-byte authority and
+// additionally holds the manual-control switch stable through the send.
+func (s *Server) twsOrderControlWireGuard(binding brokerWriteTransactionBinding, status rpc.TradingStatus, cancel bool) (func() error, func()) {
+	guard, release := s.brokerWireGuard(binding, status, cancel)
+	var unlockControl func()
+	return func() error {
+			if err := guard(); err != nil {
+				return err
+			}
+			if s.platformSettings == nil {
+				return fmt.Errorf("%w: manual order control unavailable", ErrTradingDisabled)
+			}
+			// The ordinary modify guard already holds this lease. Cancel bypasses
+			// freeze, so acquire its switch lease separately without a generation check.
+			if cancel {
+				s.platformSettings.mu.RLock()
+				unlockControl = s.platformSettings.mu.RUnlock
+			}
+			ctl := s.platformSettings.data.Trading.TWSOrderControl
+			if ctl.Enabled == nil || !*ctl.Enabled || (status.Mode == rpc.AccountModeLive && (ctl.PaperProvenAt == nil || ctl.PaperProvenAt.IsZero())) {
+				return fmt.Errorf("%w: manual order control disabled or unproved", ErrTradingDisabled)
+			}
+			return nil
+		}, func() {
+			if unlockControl != nil {
+				unlockControl()
+				unlockControl = nil
+			}
+			release()
+		}
 }
 
 func refuseTWS(result *rpc.OrderTWSControlResult, blocker rpc.TradingBlocker) *rpc.OrderTWSControlResult {

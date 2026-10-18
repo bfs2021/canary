@@ -22,7 +22,9 @@ There is no Windows build. The daemon uses `setsid`, `flock`, and AF_UNIX socket
 | Shell installer | `curl -fsSL https://raw.githubusercontent.com/osauer/canary/main/install.sh \| sh` | You want one shared binary for the terminal and for every MCP host. |
 | Public Go module / v2 CLI | `go install github.com/osauer/canary/v2/cmd/canary@latest` | You intentionally want the maintained v2 Go line. This does not install product v3. |
 | Release tarball | Download `canary-vX.Y.Z-<os>-<arch>.tar.gz`, verify it against `SHA256SUMS` | You verify downloads by hand, or you install to a managed location. |
-| Clone and build | `make install` | You are working on the code. |
+| Clone and build | `make install GO_TAGS=""` | You are working on the code. |
+
+Plain `make install` and `make restart-daemon` use this repository's experimental trading build default. Pass `GO_TAGS=""` to retain the standard read-only capability.
 
 The [Claude Desktop install page](../../claude-desktop-interactive-brokers/index.html) walks through the bundle step by step. [Packaging and distribution](../internals/packaging.md) describes what each artifact contains.
 
@@ -119,7 +121,9 @@ No config file is needed for this. The daemon probes `4001` (Gateway live), `400
 | `~/.cache/ibkr/ibkr.sock` | The daemon socket, under `$XDG_RUNTIME_DIR/ibkr/` when that is set |
 | `~/.cache/ibkr/` | Caches and update scratch space |
 
-`$XDG_CONFIG_HOME`, `$XDG_STATE_HOME`, `$XDG_CACHE_HOME`, and `$XDG_RUNTIME_DIR` take precedence where they are set. `CANARY_CONFIG`, `CANARY_SOCKET`, and `CANARY_LOG` override the config, socket, and log paths individually.
+`XDG_CONFIG_HOME` relocates `config.toml`; `XDG_STATE_HOME` relocates daemon state and logs, and `XDG_CACHE_HOME` relocates caches and update scratch space. The socket uses `XDG_RUNTIME_DIR` when set, otherwise `HOME/.cache/ibkr`, independently of `XDG_CACHE_HOME`. `CANARY_CONFIG`, `CANARY_SOCKET`, and `CANARY_LOG` override the corresponding file individually.
+
+Policy defaults remain under `HOME/.config/ibkr/policies`, even with `XDG_CONFIG_HOME` or `CANARY_CONFIG`. Rulebook, protection and opportunity policies have explicit `policy_file` overrides in `[rulebook]`, `[auto_trade]` and `[opportunities]`; the risk constitution uses its fixed default path. Changing the config path does not relocate policies.
 
 ## Next
 

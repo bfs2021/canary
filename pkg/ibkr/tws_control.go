@@ -70,8 +70,17 @@ var (
 // TWSOrderControlConfig is the control connection: the same TWS endpoint
 // and account the daemon is connected to, in the mode it trades in.
 type TWSOrderControlConfig struct {
-	Host string
-	Port int
+	// Authority fences client-0 writes against the primary connector's
+	// unpublication. It never supplies the client-0 connection or order id.
+	Authority *Connector
+	// AuthoritySession is the primary session captured by daemon admission.
+	AuthoritySession       ConnectorSessionBinding
+	authorityOutboundState uint64
+	// NewWireGuard creates one final-send guard and its release. The release
+	// runs after the frame write, before waiting for any broker callback.
+	NewWireGuard func() (func() error, func())
+	Host         string
+	Port         int
 	// Mode is "paper" or "live". Paper requires a DU account and is
 	// available in every build; live requires the trading build.
 	Mode    string
@@ -346,7 +355,14 @@ func RunTWSOrderControl(ctx context.Context, cfg TWSOrderControlConfig, action s
 		return receipt, fmt.Errorf("%w: %w", ErrTWSOrderControlGate, err)
 	}
 
+	if cfg.AuthoritySession.connection != nil {
+		cfg.authorityOutboundState = cfg.AuthoritySession.connection.outboundSessionState.Load()
+	}
 	conn := newTWSOrderControlConnection(cfg)
+	if cfg.Authority != nil {
+		conn.publicationBarrier = &cfg.Authority.publicationBarrier
+		conn.evidenceBarrier = &cfg.Authority.evidenceBarrier
+	}
 	session := newTWSOrderControlSession()
 	session.attach(conn)
 	defer func() {
@@ -366,7 +382,7 @@ func RunTWSOrderControl(ctx context.Context, cfg TWSOrderControlConfig, action s
 	receipt.ConnectedAt = time.Now().UTC()
 	receipt.ServerVersion = conn.ServerVersion()
 
-	bound, err := bindTWSOrders(ctx, conn, session, cfg.BindTimeout)
+	bound, err := bindTWSOrders(ctx, conn, session, cfg)
 	if err != nil {
 		return receipt, err
 	}
@@ -382,9 +398,11 @@ func RunTWSOrderControl(ctx context.Context, cfg TWSOrderControlConfig, action s
 		return receipt, fmt.Errorf("%w: %w", ErrTWSOrderControlConnect, err)
 	}
 	session.drain()
+	guard, release := cfg.newWireGuard()
+	defer release()
 	switch action {
 	case TWSOrderControlCancel:
-		err = conn.cancelOrderForEpochGuarded(ctx, order.OrderID, epoch, nil)
+		err = conn.cancelOrderForEpochGuarded(ctx, order.OrderID, epoch, guard)
 	default:
 		var modified *IBKROrder
 		modified, err = twsReplacementOrder(order, replacement, cfg.Account)
@@ -395,8 +413,9 @@ func RunTWSOrderControl(ctx context.Context, cfg TWSOrderControlConfig, action s
 		conn.ordersMu.Lock()
 		conn.openOrders[order.OrderID] = modified
 		conn.ordersMu.Unlock()
-		err = conn.placeOrder(ctx, modified, &epoch, nil)
+		err = conn.placeOrder(ctx, modified, &epoch, guard)
 	}
+	release()
 	if err != nil {
 		if brokerSendMayHaveBeenWritten(err) {
 			receipt.Outcome = TWSOrderControlUncertain
@@ -407,17 +426,46 @@ func RunTWSOrderControl(ctx context.Context, cfg TWSOrderControlConfig, action s
 	return awaitTWSOrderControlAnswer(ctx, session, receipt, action, replacement, cfg.AckTimeout)
 }
 
+func (cfg TWSOrderControlConfig) newWireGuard() (func() error, func()) {
+	var guard func() error
+	release := func() {}
+	if cfg.NewWireGuard != nil {
+		guard, release = cfg.NewWireGuard()
+	}
+	return func() error {
+		if guard != nil {
+			if err := guard(); err != nil {
+				return err
+			}
+		}
+		// Primary Disconnect revokes outbound authority before updating its
+		// connected status. Fence that interval at the same final-write
+		// boundary as the client-0 connection's own outbound generation.
+		if cfg.Authority != nil {
+			primary := cfg.AuthoritySession.connection
+			if primary == nil || !cfg.Authority.SessionCurrent(cfg.AuthoritySession) || cfg.authorityOutboundState&1 != 0 || primary.outboundSessionState.Load() != cfg.authorityOutboundState {
+				return fmt.Errorf("%w: primary broker session revoked before transmit", ErrTWSOrderControlGate)
+			}
+		}
+		return nil
+	}, sync.OnceFunc(release)
+}
+
 // bindTWSOrders asks TWS for client 0's orders, which binds its manual
 // orders, and waits for the openOrderEnd terminator.
-func bindTWSOrders(ctx context.Context, conn *Connection, session *twsOrderControlSession, timeout time.Duration) ([]OrderLifecycleEvent, error) {
+func bindTWSOrders(ctx context.Context, conn *Connection, session *twsOrderControlSession, cfg TWSOrderControlConfig) ([]OrderLifecycleEvent, error) {
 	epoch, err := conn.captureBrokerInstructionEpoch()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrTWSOrderControlBind, err)
 	}
 	msg := conn.encodeMsg(reqOpenOrders, 1)
-	if err := conn.sendMessageWithTypeContextForEpoch(ctx, msg, RequestTypeOrder, epoch, true); err != nil {
+	guard, release := cfg.newWireGuard()
+	err = conn.sendMessageWithTypeContextForEpochGuarded(ctx, msg, RequestTypeOrder, epoch, true, guard)
+	release()
+	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrTWSOrderControlBind, err)
 	}
+	timeout := cfg.BindTimeout
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
@@ -510,6 +558,17 @@ func twsReplacementOrder(bound OrderLifecycleEvent, replacement TWSOrderControlR
 	if !strings.EqualFold(bound.OrderType, "LMT") || (bound.TIF != "" && !strings.EqualFold(bound.TIF, "DAY")) {
 		return nil, fmt.Errorf("%w: only DAY limit orders are modified", ErrTWSOrderControlGate)
 	}
+	if !bound.ModifyTermsKnown {
+		return nil, fmt.Errorf("%w: broker order terms are incomplete; modify in TWS", ErrTWSOrderControlGate)
+	}
+	if bound.ModifyUnsupported != "" {
+		return nil, fmt.Errorf("%w: %s; modify in TWS", ErrTWSOrderControlGate, bound.ModifyUnsupported)
+	}
+	if !bound.AlgoKnown || (bound.AlgoStrategy != "" && bound.AlgoStrategy != "Adaptive") ||
+		(bound.AlgoStrategy == "" && bound.AdaptivePriority != "") ||
+		(bound.AlgoStrategy == "Adaptive" && bound.AdaptivePriority != "Urgent" && bound.AdaptivePriority != "Normal" && bound.AdaptivePriority != "Patient") {
+		return nil, fmt.Errorf("%w: unsupported or unknown algorithm terms; modify in TWS", ErrTWSOrderControlGate)
+	}
 	if replacement.Quantity <= bound.Filled {
 		return nil, fmt.Errorf("%w: filled %s since review", ErrTWSOrderControlChanged, formatTWSQuantity(bound.Filled))
 	}
@@ -521,7 +580,8 @@ func twsReplacementOrder(bound OrderLifecycleEvent, replacement TWSOrderControlR
 		Expiry: bound.Expiry, Strike: bound.Strike, Right: bound.Right, LocalSymbol: bound.LocalSymbol, TradingClass: bound.TradingClass,
 		Action: bound.Action, TotalQty: int(replacement.Quantity), OrderType: "LMT", LmtPrice: replacement.LimitPrice,
 		TIF: nonEmptyTWS(bound.TIF, "DAY"), OutsideRth: bound.OutsideRth, TriggerMethod: bound.TriggerMethod, OrderRef: bound.OrderRef,
-		Transmit: true,
+		Transmit: true, OcaGroup: bound.OcaGroup, OcaType: bound.OcaType,
+		AdaptivePriority: bound.AdaptivePriority, PrimaryExch: bound.PrimaryExch, OpenClose: bound.OpenClose,
 	}
 	if bound.Multiplier != 0 {
 		order.Multiplier = strconv.Itoa(bound.Multiplier)

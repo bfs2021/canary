@@ -108,6 +108,7 @@ func (g Gateway) TLSOrFalse() bool {
 
 // Daemon holds runtime knobs for the daemon process.
 type Daemon struct {
+	idleTimeoutSet bool
 	// IdleTimeout is how long the auto-spawned daemon stays alive between CLI calls (default 15m, accepts any Go duration string like "1h" or "0s"); set "0s" to disable idle-shutdown when running long cold-start jobs such as the first breadth fan-out under `canary daemon --foreground`.
 	IdleTimeout duration `toml:"idle_timeout"`
 	// LogLevel is the daemon's log verbosity — one of "debug", "info", "warn" (default), or "error". The warn default keeps the log to actionable lines; set "info" to trace routine broker traffic.
@@ -455,6 +456,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	cfg.Daemon.idleTimeoutSet = md.IsDefined("daemon", "idle_timeout")
 	// Reject unknown keys instead of silently dropping them. The previous
 	if undecoded := md.Undecoded(); len(undecoded) > 0 {
 		keys := make([]string, len(undecoded))
@@ -489,7 +491,7 @@ func (c *Config) Resolve() (*Resolved, error) {
 	if err := dae.validateLogging(); err != nil {
 		return nil, err
 	}
-	if dae.IdleTimeout == 0 {
+	if dae.IdleTimeout == 0 && !dae.idleTimeoutSet {
 		// 15 min default (was 5 min). Combined with the persistent option
 		dae.IdleTimeout = duration(15 * time.Minute)
 	}

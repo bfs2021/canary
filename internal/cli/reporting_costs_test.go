@@ -30,13 +30,13 @@ func goldenReportingCosts() rpc.ReportingCostsResult {
 		BySource: []rpc.CostTotal{{Key: rpc.FillQuoteSourceBroker, Fills: 2, Unknown: 2}, {Key: rpc.FillQuoteSourceCanary, Fills: 2, Measured: 2, HalfSpreadBase: new(18.0)}},
 		ByClass:  []rpc.CostTotal{{Key: rpc.CostClassOption, Fills: 2, Measured: 1, Unknown: 1, HalfSpreadBase: new(9.0)}, {Key: rpc.CostClassStock, Fills: 2, Measured: 1, Unknown: 1, HalfSpreadBase: new(9.0)}},
 		Fills: []rpc.CostFill{
-			{ExecID: "0000e0d5.01", Source: rpc.FillQuoteSourceCanary, At: at, Symbol: "SYNX", LocalSymbol: "SYNX  261016C00100000", SecType: "OPT", Class: rpc.CostClassOption, Side: rpc.OrderActionBuy, Quantity: 2, Multiplier: 100, Price: 1.30, Currency: "USD",
+			{ExecID: "0000e0d5.01", Source: rpc.FillQuoteSourceCanary, At: at, Symbol: "SYNX", LocalSymbol: "SYNX  261016C00100000", SecType: "OPT", Class: rpc.CostClassOption, Side: rpc.OrderActionBuy, Quantity: 2, Multiplier: 100, Price: 1.30, Currency: "USD", BaseCurrency: "EUR",
 				Quote: quoted(1.20, 1.30, 2200), HalfSpread: new(10.0), HalfSpreadBase: new(9.0), FXRate: new(0.9), Status: rpc.CostFillMeasured},
-			{ExecID: "0000e0d5.02", Source: rpc.FillQuoteSourceCanary, At: at.Add(5 * time.Minute), Symbol: "AAA", SecType: "STK", Class: rpc.CostClassStock, Side: rpc.OrderActionSell, Quantity: 100, Multiplier: 1, Price: 10.40, Currency: "USD",
+			{ExecID: "0000e0d5.02", Source: rpc.FillQuoteSourceCanary, At: at.Add(5 * time.Minute), Symbol: "AAA", SecType: "STK", Class: rpc.CostClassStock, Side: rpc.OrderActionSell, Quantity: 100, Multiplier: 1, Price: 10.40, Currency: "USD", BaseCurrency: "EUR",
 				Quote: quoted(10.40, 10.60, 1500), HalfSpread: new(10.0), HalfSpreadBase: new(9.0), FXRate: new(0.9), Status: rpc.CostFillMeasured},
-			{ExecID: "0000e0d5.03", Source: rpc.FillQuoteSourceBroker, At: at.Add(time.Hour), Symbol: "BBB", SecType: "STK", Class: rpc.CostClassStock, Side: rpc.OrderActionBuy, Quantity: 10, Multiplier: 1, Price: 5, Currency: "USD",
+			{ExecID: "0000e0d5.03", Source: rpc.FillQuoteSourceBroker, At: at.Add(time.Hour), Symbol: "BBB", SecType: "STK", Class: rpc.CostClassStock, Side: rpc.OrderActionBuy, Quantity: 10, Multiplier: 1, Price: 5, Currency: "USD", BaseCurrency: "EUR",
 				Quote: rpc.FillQuote{Status: rpc.FillQuoteUnavailable, Reason: "timeout", ReadStartedAt: at.Add(time.Hour + time.Minute), ReadAt: at.Add(time.Hour + time.Minute + 4*time.Second)}, Status: rpc.CostFillUnknown, Reason: "timeout"},
-			{ExecID: "0000e0d5.04", Source: rpc.FillQuoteSourceBroker, At: at.Add(2 * time.Hour), Symbol: "SYNX", LocalSymbol: "SYNX  261120P00090000", SecType: "OPT", Class: rpc.CostClassOption, Side: rpc.OrderActionSell, Quantity: 1, Price: 2, Currency: "USD",
+			{ExecID: "0000e0d5.04", Source: rpc.FillQuoteSourceBroker, At: at.Add(2 * time.Hour), Symbol: "SYNX", LocalSymbol: "SYNX  261120P00090000", SecType: "OPT", Class: rpc.CostClassOption, Side: rpc.OrderActionSell, Quantity: 1, Price: 2, Currency: "USD", BaseCurrency: "EUR",
 				Quote: quoted(1.90, 2.10, 40000), FXRate: new(0.9), Status: rpc.CostFillUnknown, Reason: "multiplier_unknown"},
 		},
 	}

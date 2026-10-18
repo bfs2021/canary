@@ -44,7 +44,13 @@ func runStatus(ctx context.Context, env *Env, args []string) int {
 	}
 
 	if *jsonOut {
-		return printJSON(env, res)
+		if code := printJSON(env, res); code != 0 {
+			return code
+		}
+		if !res.Connected {
+			return 1
+		}
+		return 0
 	}
 	// Best-effort: an older daemon without the method just loses the row.
 	var alerts *rpc.AlertCandidateSnapshot

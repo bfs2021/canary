@@ -30,21 +30,11 @@ printf '%s\n' '#!/bin/sh' 'set -eu' \
 	'chmod 0755 "$out"' > "$test_root/fake-bin/go"
 chmod 0755 "$test_root/fake-bin/go"
 
-# Make archive listings large enough that a tar-to-grep -q pipeline reliably
-# encounters SIGPIPE after grep finds an early entry. The release script must
-# consume the complete listing before checking membership.
-printf '%s\n' '#!/bin/sh' 'set -eu' \
-	'if [ "${1:-}" = "-tzf" ]; then' \
-	'  /usr/bin/tar "$@"' \
-	'  i=0' \
-	'  while [ "$i" -lt 20000 ]; do' \
-	'    printf "canary-pipe-padding-%05d\\n" "$i"' \
-	'    i=$((i + 1))' \
-	'  done' \
-	'  exit 0' \
-	'fi' \
-	'exec /usr/bin/tar "$@"' > "$test_root/fake-bin/tar"
-chmod 0755 "$test_root/fake-bin/tar"
+# Exercise files with macOS metadata; Python reads raw tar members instead
+# of BSD tar's filtered view, so AppleDouble cannot hide from this check.
+if command -v xattr >/dev/null 2>&1; then
+ xattr -w com.canary.packaging-test synthetic "$test_root/repo/README.md"
+fi
 
 (cd "$test_root/repo" && PATH="$test_root/fake-bin:$PATH" ./build-release-target.sh darwin-arm64 v1.2.3 '-s -w' "$test_root/dist")
 
@@ -58,6 +48,13 @@ grep -q "refuses ambient GOFLAGS" "$test_root/goflags-err.log" || {
 	cat "$test_root/goflags-err.log" >&2
 	exit 1
 }
+
+python3 - "$test_root/dist" <<'PYTAR'
+import pathlib,sys,tarfile
+for archive in pathlib.Path(sys.argv[1]).glob('*.tar.gz'):
+ with tarfile.open(archive) as tar:
+  assert all('/._' not in m.name and not m.name.startswith('._') for m in tar), archive
+PYTAR
 
 readonly_list="$(tar -tzf "$test_root/dist/canary-v1.2.3-darwin-arm64.tar.gz" | sort)"
 trading_list="$(tar -tzf "$test_root/dist/canary-trading-v1.2.3-darwin-arm64.tar.gz" | sort)"

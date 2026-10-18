@@ -88,6 +88,7 @@ func LoadForDaemon(path string) (*Config, []Issue, error) {
 	// A file the strict loader accepts is read exactly as before.
 	strict := &Config{}
 	if md, err := toml.Decode(string(data), strict); err == nil && len(md.Undecoded()) == 0 {
+		strict.Daemon.idleTimeoutSet = md.IsDefined("daemon", "idle_timeout")
 		return strict, strict.Daemon.sanitizeLogging(), nil
 	}
 	var root map[string]toml.Primitive
@@ -161,6 +162,8 @@ func decodeForDaemon(path string, md toml.MetaData, root map[string]toml.Primiti
 					return fail("%s cannot be read (%s)", full, tomlErrorText(err))
 				}
 				issues = append(issues, Issue{Key: full, Problem: "cannot be read (" + tomlErrorText(err) + "); Canary's default is in force"})
+			} else if full == "daemon.idle_timeout" {
+				cfg.Daemon.idleTimeoutSet = true
 			}
 		}
 	}

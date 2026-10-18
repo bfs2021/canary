@@ -250,3 +250,26 @@ func TestLoad_ShippedTemplatesLoad(t *testing.T) {
 		})
 	}
 }
+
+func TestExplicitZeroIdleTimeoutSurvivesLoadAndResolve(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want time.Duration
+	}{{"", 15 * time.Minute}, {"[daemon]\nidle_timeout = \"0s\"\n", 0}, {"[daemon]\nidle_timeout = \"2h\"\n", 2 * time.Hour}} {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(path, []byte(tc.body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := cfg.Resolve()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := res.Daemon.IdleTimeout.Std(); got != tc.want {
+			t.Fatalf("%q: %v want %v", tc.body, got, tc.want)
+		}
+	}
+}
