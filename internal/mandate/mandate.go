@@ -107,6 +107,8 @@ type Input struct {
 	// NotModelled names held lines the daemon left out (bills, bonds,
 	// conversions) so the verdict says so.
 	NotModelled []string
+	// Seats is the seat plan; nil measures no seats.
+	Seats *SeatPlan
 	// Reasons are the daemon's own grounds for an unknown verdict (a stale
 	// positions read, an unproven base currency); any makes it unknown.
 	Reasons []string
@@ -236,6 +238,9 @@ type Verdict struct {
 	Legs          []LegReport        `json:"legs,omitempty"`
 	Underlyings   []UnderlyingReport `json:"underlyings,omitempty"`
 	NotModelled   []string           `json:"not_modelled,omitempty"`
+	// Seats is each sleeve's seat and use, owner first; nil while the risk
+	// is not measured or the input carries no seat plan.
+	Seats []SeatReport `json:"seats,omitempty"`
 }
 
 // Evaluate runs the historical simulation and judges the book against the
@@ -314,7 +319,7 @@ func Evaluate(in Input) Verdict {
 	}
 	v.Scenarios, v.ScenariosFrom, v.ScenariosTo = Scenarios, from, to
 	sim := simulate(in, legs, returns)
-	v.Risk, v.Legs, v.Underlyings, v.Stresses = sim.risk, sim.legs, sim.underlyings, sim.stresses
+	v.Risk, v.Legs, v.Underlyings, v.Stresses, v.Seats = sim.risk, sim.legs, sim.underlyings, sim.stresses, sim.seats
 	budget := in.Capital.BudgetAnnualSD
 	if sim.risk.SDAnnualBase > 0 && budget <= 0 {
 		v.Risk.RatioToBudget = math.Inf(1)
@@ -439,6 +444,7 @@ type simulation struct {
 	legs        []LegReport
 	underlyings []UnderlyingReport
 	stresses    *Stresses
+	seats       []SeatReport
 }
 
 // legValue prices one leg in its own currency at spot and the given time to
@@ -496,6 +502,7 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 	}
 	// Euler contributions: cov(leg, total) / var(total), summing to 100%.
 	legReports := make([]LegReport, len(legs))
+	contributions := make([]float64, len(legs))
 	byUnderlying := map[string]*UnderlyingReport{}
 	returnsOf := map[string]string{}
 	var order []string
@@ -504,7 +511,7 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 		if variance > 0 {
 			rep.ContributionPct = covariance(legPnL[i], total, mean) / variance * 100
 		}
-		legReports[i] = rep
+		legReports[i], contributions[i] = rep, rep.ContributionPct
 		u, ok := byUnderlying[l.Underlying]
 		if !ok {
 			u = &UnderlyingReport{Underlying: l.Underlying}
@@ -582,7 +589,11 @@ func simulate(in Input, legs []Leg, returns map[string][]float64) simulation {
 		}
 		return strings.Compare(a.Symbol, b.Symbol)
 	})
-	return simulation{risk: risk, legs: legReports, underlyings: underlyings, stresses: stresses}
+	var seats []SeatReport
+	if in.Seats != nil {
+		seats = seatReports(in.Seats, in.Policy, in.Capital, legs, legPnL, contributions, risk)
+	}
+	return simulation{risk: risk, legs: legReports, underlyings: underlyings, stresses: stresses, seats: seats}
 }
 
 // shockLoss revalues every leg at its underlying's spot times factor(leg)

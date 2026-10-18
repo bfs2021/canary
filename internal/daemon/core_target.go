@@ -507,6 +507,10 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 	in := core.DecideInput{Target: res.Sizing.Target, TrendOn: sig.TrendOn, Held: held, Price: price, BandPct: *p.BandPct, MinOrderBase: *p.MinOrderBase, Holdable: held}
 	if verdict.Status != mandate.StatusWithin {
 		in.BuyBlocked = "the mandate verdict reads " + verdict.Status
+	} else if !s.coreRuns() {
+		// Seats (2026-10-18): the core's seat is its stage times its share
+		// while it sends orders, and nothing until then.
+		in.BuyBlocked = "the core sends no orders yet, so it has no seat"
 	} else if want := res.Sizing.Target - held; want > 0 && price > 0 {
 		add := core.Headroom(want, func(q int) bool { return coreHeadroomFits(input, contract, q, price) })
 		in.Holdable = held + add
@@ -520,9 +524,10 @@ func (s *Server) evaluateCoreTarget(ctx context.Context, now time.Time) *rpc.Cor
 
 // coreHeadroomFits reports whether the book with q more shares of the core
 // stays at most at core.HeadroomFactor of the budget, carries no gap-cap
-// breach, and keeps the core's own gap at most at that share of its cap:
-// the forced reduction's target with margin, so a core buy cannot set up a
-// forced sale by itself (design §3; review B1).
+// breach, keeps the core's own gap at most at that share of its cap, and
+// keeps the core inside its seat: the forced reduction's target with
+// margin, so a core buy cannot set up a forced sale by itself (design §3;
+// review B1), and the gate's seat check (seats, 2026-10-18).
 func coreHeadroomFits(book *mandate.Input, k *coreContract, q int, price float64) bool {
 	if book == nil || k == nil {
 		return false
@@ -550,6 +555,9 @@ func coreHeadroomFits(book *mandate.Input, k *coreContract, q int, price float64
 		if u.Underlying == leg.Underlying && u.GapLossBase > core.HeadroomFactor*u.GapCapBase {
 			return false
 		}
+	}
+	if seat, ok := with.Seat(mandate.SleeveCore); ok && seat.Over {
+		return false
 	}
 	return true
 }

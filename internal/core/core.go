@@ -477,7 +477,7 @@ func Decide(in DecideInput) Decision {
 	q := min(d.Diff, in.Holdable-held)
 	if q <= 0 {
 		d.Kind, d.HeadroomCut = ActionWait, true
-		d.Why = fmt.Sprintf("no headroom: more %s would take the book past %.0f%% of the budget or a gap cap", Symbol, HeadroomFactor*100)
+		d.Why = fmt.Sprintf("no headroom: more %s would take the book past %.0f%% of the budget or a gap cap, or the core past its seat", Symbol, HeadroomFactor*100)
 		return d
 	}
 	d.Quantity, d.OrderValue, d.HeadroomCut = q, value(q), q < d.Diff

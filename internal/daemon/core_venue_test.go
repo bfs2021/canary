@@ -41,6 +41,7 @@ func coreLondonServer(t *testing.T, pos *rpc.PositionsResult, series bool) *Serv
 		}
 	}
 	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
+	srv.coreSendsOrdersForTest = true // the core's buys are sized inside its seat
 	coreAnswer(t, srv, coreTestLondonListing())
 	return srv
 }

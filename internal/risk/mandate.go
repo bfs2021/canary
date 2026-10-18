@@ -43,8 +43,8 @@ type ConstitutionMandate struct {
 	// in that gap, in percent; the gap cap per underlying is
 	// room × D × budget base × this.
 	GapRoomPct *float64 `toml:"gap_room_pct" json:"gap_room_pct"`
-	// Sleeves records the owner's volatility shares per sleeve; recorded,
-	// not enforced in this increment.
+	// Sleeves holds the volatility shares per sleeve; the machine's size its
+	// seats (seats, 2026-10-18).
 	Sleeves *ConstitutionMandateSleeves `toml:"sleeves" json:"sleeves,omitempty"`
 	// Core is the core sleeve's rule and numbers
 	// (internal-docs/design/core-sleeve.md). Optional: absent, the core is
@@ -172,9 +172,14 @@ func isinShape(s string) bool {
 
 // ConstitutionMandateSleeves is [mandate.sleeves]: annualised volatility in
 // percent of the budget base per sleeve (owner 7, core 6, overlay 4 as
-// decided 2026-10-14). They are shares of one book, not addends: their sum
-// exceeds the target by design, because the sleeves are not perfectly
-// correlated.
+// decided 2026-10-14, then shares of one book whose sum exceeded the target
+// because the sleeves are not perfectly correlated). Since the seats of
+// 2026-10-18 08:06 CEST (internal-docs/design/mandate-risk-budget.md,
+// "Seats") a machine sleeve's seat is its stage times its share, measured by
+// Euler contributions, which add up: the machine's shares together may not
+// exceed vol_target_pct, and the owner's seat is the rest of the budget
+// (at full stages 15 − 6 − 4 = 5 points), so owner_vol_pct is recorded and
+// not read.
 type ConstitutionMandateSleeves struct {
 	OwnerVolPct   *float64 `toml:"owner_vol_pct" json:"owner_vol_pct"`
 	CoreVolPct    *float64 `toml:"core_vol_pct" json:"core_vol_pct"`
@@ -226,6 +231,20 @@ func (m *ConstitutionMandate) validate(semantics ConstitutionSemantics) error {
 		}{{"sleeves.owner_vol_pct", sl.OwnerVolPct}, {"sleeves.core_vol_pct", sl.CoreVolPct}, {"sleeves.overlay_vol_pct", sl.OverlayVolPct}} {
 			if err := pct(k.key, k.v); err != nil {
 				return err
+			}
+		}
+		// The machine's seats sit inside the budget: shares above the target
+		// would leave the owner no seat and turn a forced reduction on the
+		// owner's whole book first.
+		if t := m.VolTargetPct; t != nil {
+			machine := 0.0
+			for _, v := range []*float64{sl.CoreVolPct, sl.OverlayVolPct} {
+				if v != nil {
+					machine += *v
+				}
+			}
+			if machine > *t {
+				return fmt.Errorf("mandate.sleeves.core_vol_pct + overlay_vol_pct (%g) must not exceed mandate.vol_target_pct (%g): the machine's seats sit inside the budget", machine, *t)
 			}
 		}
 	}

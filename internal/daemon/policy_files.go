@@ -1336,8 +1336,10 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # this gap instead; absent, they take gap_shock_pct. 12 is your decision of
 # 2026-10-14 (D4).
 # index_gap_shock_pct = 12.0
-# Volatility shares per sleeve, recorded only; enforcement per sleeve comes
-# later.
+# Volatility shares per sleeve. The machine's (core, overlay) size its
+# seats: a seat is its stage times its share while the sleeve sends orders,
+# and their sum may not exceed vol_target_pct; your seat is the rest of the
+# budget, so owner_vol_pct is recorded and not read.
 # [mandate.sleeves]
 # owner_vol_pct = 0.0
 # core_vol_pct = 0.0

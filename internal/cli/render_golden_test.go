@@ -257,6 +257,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "stress_details", argv: []string{"stress", "--details"}, render: func(env *Env) { renderStress(env, goldenStress(), true) }},
 		{name: "mandate", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandate(mandate.StatusWithin)}},
 		{name: "mandate_reduce", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateReducing()}},
+		{name: "mandate_seats", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateSeats()}},
 		{name: "mandate_unknown", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateUnknown()}},
 		{name: "mandate_unknown_held", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateHeld()}},
 		{name: "mandate_no_room", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateNoRoom()}},
@@ -426,6 +427,21 @@ func goldenRegime(authority rpc.RegimeAuthorityHealth) rpc.RegimeSnapshotResult 
 	}
 }
 
+// goldenMandateSeats is the within book with the core running at its full
+// stage: its seat of 6 points leaves yours 9, which the book is over.
+func goldenMandateSeats() rpc.MandateRiskResult {
+	res := goldenMandate(mandate.StatusWithin)
+	v := *res.Verdict
+	v.Seats = []mandate.SeatReport{
+		{Sleeve: mandate.SleeveOwner, SeatPct: 9, SeatBase: 19230, UseBase: 23970, ContributionPct: 100, StandaloneBase: 23970, ExcessBase: 4740, Over: true, Legs: 3},
+		{Sleeve: mandate.SleeveCore, SharePct: 6, StagePct: 100, SeatPct: 6, SeatBase: 12820, ExcessBase: -12820, Note: "scale_pct 100 of core_vol_pct 6"},
+		{Sleeve: mandate.SleeveOverlay, SharePct: 4, Note: "no strategy runs in the overlay (s1 was dropped on 2026-10-18)"},
+	}
+	res.Verdict = &v
+	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "your seat carries 23,970 EUR a year, over its 19,230 EUR (the budget less the machine's seats of 12,820 EUR)"}
+	return res
+}
+
 // goldenMandate is a synthetic mandate verdict: a two-name book with a
 // short call, within budget or, with the quantities scaled up, a reduce with
 // one gap breach.
@@ -457,7 +473,12 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 			{Underlying: "SYNA", ValueBase: 89460 * scale, ContributionPct: 66.9, Beta: 1.12, GapDownLossBase: 22100 * scale, GapUpLossBase: &up, GapLossBase: 22100 * scale, GapCapBase: 22940, GapBreach: scale > 1},
 			{Underlying: "SYNB", ValueBase: 40000 * scale, ContributionPct: 33.1, Beta: 0.64, GapDownLossBase: 10000 * scale, GapLossBase: 10000 * scale, GapCapBase: 22940, GapBreach: scale > 1},
 		},
-		NotModelled: []string{"SYNT (bill, no equity risk modelled)"}}
+		NotModelled: []string{"SYNT (bill, no equity risk modelled)"},
+		Seats: []mandate.SeatReport{
+			{Sleeve: mandate.SleeveOwner, SeatPct: 15, SeatBase: 32050, UseBase: 23970 * scale, ContributionPct: 100, StandaloneBase: 23970 * scale, ExcessBase: 23970*scale - 32050, Over: scale > 1, Legs: 3},
+			{Sleeve: mandate.SleeveCore, SharePct: 6, Note: "the core sends no orders yet (its monthly rows are phase 2), so it runs nothing"},
+			{Sleeve: mandate.SleeveOverlay, SharePct: 4, Note: "no strategy runs in the overlay (s1 was dropped on 2026-10-18)"},
+		}}
 	if scale > 1 {
 		verdict.Stresses.GapBreaches = []string{"SYNA", "SYNB"}
 	}

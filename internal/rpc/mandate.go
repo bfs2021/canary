@@ -144,8 +144,9 @@ type MandateSeriesEvidence struct {
 
 // MandateGateView is the additions gate as it reads the verdict now.
 type MandateGateView struct {
-	// RefusesAdditions is true whenever the verdict is not within, or is
-	// older than the gate accepts.
+	// RefusesAdditions is true whenever the verdict is not within, is older
+	// than the gate accepts, or the owner's seat is over (seats, 2026-10-18):
+	// it reads the gate for the owner's additions.
 	RefusesAdditions bool   `json:"refuses_additions"`
 	Reason           string `json:"reason,omitempty"`
 }

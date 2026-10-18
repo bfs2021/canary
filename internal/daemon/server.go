@@ -445,6 +445,9 @@ type Server struct {
 	// mandatePositionsForTest the positions read behind the mandate.
 	mandateHistoryFetchForTest func(context.Context, rpc.MarketHistoryParams, int, time.Time) (*rpc.MarketHistoryResult, error)
 	mandatePositionsForTest    func(context.Context) (*rpc.PositionsResult, error)
+	// coreSendsOrdersForTest gives the core its seat in tests, as the build
+	// that serves its orders will (mandate_seats.go).
+	coreSendsOrdersForTest bool
 	// orderLimitsNLV is the latest current account reading the order cap
 	// in force scales with ([order_limits], order_limits.go).
 	orderLimitsNLV orderLimitsNLVState
