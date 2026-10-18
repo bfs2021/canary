@@ -82,6 +82,10 @@ func policyCheckLiveInputs(ctx context.Context, env *Env, in *daemon.PolicyCheck
 		if l := snap.OrderLimits; l != nil && l.OverrideID != "" {
 			in.OrderCapOverride = &risk.OrderLimitsOverride{ID: l.OverrideID, ExpiresAt: l.OverrideExpiresAt}
 		}
+		// The mandate's drawdown, room and realised volatility: only the
+		// daemon measures them, so the realised mandate checks read its
+		// figures (a daemon from before the field leaves them skipped).
+		in.Mandate = daemon.PolicyCheckMandateFromView(snap.MandateRealised)
 	}
 }
 

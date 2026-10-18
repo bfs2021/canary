@@ -100,6 +100,9 @@ func TestPolicyCheckOfflineExitsOnErrorsOnly(t *testing.T) {
 type policyCheckConn struct {
 	methods []string
 	failAcc bool
+	// mandate is what policy.snapshot reports for the realised mandate
+	// checks; nil as a daemon from before the field reports.
+	mandate *rpc.MandateRealisedView
 }
 
 func (c *policyCheckConn) Call(_ context.Context, method string, _, out any) error {
@@ -113,7 +116,7 @@ func (c *policyCheckConn) Call(_ context.Context, method string, _, out any) err
 	case rpc.MethodPositionsList:
 		*out.(*rpc.PositionsResult) = rpc.PositionsResult{}
 	case rpc.MethodRiskPolicySnapshot:
-		*out.(*rpc.RiskPolicyResult) = rpc.RiskPolicyResult{Files: []rpc.PolicyFileStatus{{Policy: "protection", Status: "drift"}}}
+		*out.(*rpc.RiskPolicyResult) = rpc.RiskPolicyResult{Files: []rpc.PolicyFileStatus{{Policy: "protection", Status: "drift"}}, MandateRealised: c.mandate}
 	default:
 		return errors.New("unexpected method " + method)
 	}
@@ -154,5 +157,32 @@ func TestPolicyCheckReadsTheLiveBook(t *testing.T) {
 	runPolicy(context.Background(), &Env{Stdout: &out, Stderr: &out, Conn: conn}, []string{"check", "--config", cfg})
 	if !strings.Contains(out.String(), "the account read failed (gateway unavailable)") {
 		t.Fatalf("a failed account read is not named:\n%s", out.String())
+	}
+}
+
+// The realised mandate checks (drawdown, volatility) read figures only the
+// daemon measures: the check takes them from policy.snapshot, and when a
+// daemon reports none it says that, not that no daemon answered.
+func TestPolicyCheckReadsTheMandateFiguresFromTheDaemon(t *testing.T) {
+	cfg := writePolicyCheckHome(t, "5000.0")
+	path := filepath.Join(filepath.Dir(cfg), "policies", "risk-policy.toml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, "\n[mandate]\nmax_loss_pct = 30.0\nvol_target_pct = 15.0\ntax_reserve_base = 70000.0\nstarted_at = \"2026-10-01\"\ngap_shock_pct = 25.0\ngap_room_pct = 33.3\n"...)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	conn := &policyCheckConn{mandate: &rpc.MandateRealisedView{Reason: "no usable equity observation"}}
+	var out bytes.Buffer
+	runPolicy(context.Background(), &Env{Stdout: &out, Stderr: &out, Conn: conn}, []string{"check", "--config", cfg})
+	if text := out.String(); !strings.Contains(text, "WARN  mandate_realised_drawdown") || !strings.Contains(text, "cannot be measured: no usable equity observation") || strings.Contains(text, "realised drawdown and volatility") {
+		t.Fatalf("the daemon's figures were not read:\n%s", text)
+	}
+	out.Reset()
+	runPolicy(context.Background(), &Env{Stdout: &out, Stderr: &out, Conn: &policyCheckConn{}}, []string{"check", "--config", cfg})
+	if text := out.String(); !strings.Contains(text, "skipped      the mandate's realised drawdown and volatility: the daemon reported no mandate figures") || strings.Contains(text, "no daemon answered, so the risk base") {
+		t.Fatalf("a daemon without the figures is not named:\n%s", text)
 	}
 }

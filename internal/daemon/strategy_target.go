@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -316,10 +317,31 @@ func (s *Server) handleStrategyTarget(ctx context.Context, req *rpc.Request) (*r
 	}
 	r, ok := s.resolvedStrategy(c, id)
 	if !ok {
-		return nil, errBadRequest(fmt.Sprintf("no strategy %q in the register; `canary mandate` lists it", id))
+		return nil, errBadRequest(unknownStrategyMessage(id, s.resolvedRegister(c)))
 	}
 	s.refreshMandateForTarget(ctx, c, p.Refresh, now)
 	return s.evaluateStrategyTarget(ctx, now, r), nil
+}
+
+// unknownStrategyMessage names what a read may ask for when its id is not
+// in the register: the ids there, and, when the id is one of their rules
+// (`canary mandate` prints each entry's id and rule side by side), which
+// entry runs it.
+func unknownStrategyMessage(id string, resolved []register.Resolved) string {
+	var ids, runs []string
+	for _, r := range resolved {
+		ids = append(ids, r.Entry.ID)
+		if r.Entry.Rule == id {
+			runs = append(runs, r.Entry.ID)
+		}
+	}
+	if len(runs) > 0 {
+		return fmt.Sprintf("%q is a rule, not a strategy id; the strategy running it is %s (`canary strategy %s`)", id, strings.Join(runs, ", "), runs[0])
+	}
+	if len(ids) == 0 {
+		return fmt.Sprintf("no strategy %q: the register is empty; `canary mandate` shows it", id)
+	}
+	return fmt.Sprintf("no strategy %q in the register; its ids are %s (`canary mandate` lists each with its rule)", id, strings.Join(ids, ", "))
 }
 
 // refreshMandateForTarget measures the mandate again when a target read
@@ -640,11 +662,19 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 			hold("the mandate's capital is unknown: " + strings.Join(verdict.Capital.Reasons, "; "))
 		}
 		if verdict.Status == mandate.StatusUnknown {
+			// mandate.Evaluate copies an unknown capital's reasons into the
+			// verdict's, so a reason the capital hold already names is not
+			// said twice.
 			why := "no reason given"
-			if len(verdict.Reasons) > 0 {
-				why = verdict.Reasons[0]
+			for _, reason := range verdict.Reasons {
+				if verdict.Capital.Known || !slices.Contains(verdict.Capital.Reasons, reason) {
+					why = reason
+					break
+				}
 			}
-			hold("the mandate verdict is unknown, so the holding cannot be confirmed: " + why)
+			if verdict.Capital.Known || why != "no reason given" {
+				hold("the mandate verdict is unknown, so the holding cannot be confirmed: " + why)
+			}
 		}
 		if age := now.Sub(at); age > mandateVerdictMaxAge {
 			hold(fmt.Sprintf("the mandate verdict is %s old", formatQuoteAge(age)))

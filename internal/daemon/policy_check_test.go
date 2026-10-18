@@ -702,3 +702,37 @@ func TestPolicyCheckDocsListEveryRule(t *testing.T) {
 		}
 	}
 }
+
+// The realised mandate checks read figures only the daemon measures. When
+// a daemon answered the files but reported none (a daemon older than the
+// CLI) the skip says so; without a daemon it says that.
+func TestPolicyCheckSaysWhyTheMandateFiguresAreMissing(t *testing.T) {
+	f := pcClean()
+	f.constitution = strings.Replace(f.constitution, "schema_version = 1", "schema_version = 2", 1) + "\n[mandate]\nmax_loss_pct = 30.0\nvol_target_pct = 15.0\ntax_reserve_base = 70000.0\nstarted_at = \"2026-10-01\"\ngap_shock_pct = 25.0\ngap_room_pct = 33.3\n"
+	in := pcInput(t, f)
+	in.FileStatus, in.Mandate = map[string]string{}, nil
+	joined := strings.Join(CheckPolicy(in).Skipped, "\n")
+	if !strings.Contains(joined, "the mandate's realised drawdown and volatility: the daemon reported no mandate figures (a daemon older than this CLI), so the risk base's history is unknown") {
+		t.Fatalf("skipped %q", joined)
+	}
+	in.FileStatus = nil
+	if joined = strings.Join(CheckPolicy(in).Skipped, "\n"); !strings.Contains(joined, "the mandate's realised drawdown and volatility: no daemon answered, so the risk base's history is unknown") {
+		t.Fatalf("skipped %q", joined)
+	}
+	in.FileStatus, in.Mandate = map[string]string{}, &PolicyCheckMandate{Reason: "no usable equity observation"}
+	r := CheckPolicy(in)
+	if joined = strings.Join(r.Skipped, "\n"); strings.Contains(joined, "realised drawdown and volatility") {
+		t.Fatalf("skipped with the figures given: %q", joined)
+	}
+	if _, ok := pcFinding(r, "mandate_realised_drawdown"); !ok {
+		t.Fatalf("the realised check did not run: %+v", r.Findings)
+	}
+	// The view round-trips to the CLI's input, nil for nil.
+	if PolicyCheckMandateFromView(nil) != nil || (*PolicyCheckMandate)(nil).View() != nil {
+		t.Fatal("nil does not round-trip to nil")
+	}
+	m := &PolicyCheckMandate{Known: true, DrawdownPct: 2, Room: 0.93, Samples: 70, Vol20Pct: new(24.0), Vol60Pct: new(16.0), BaseCurrency: "EUR"}
+	if got := PolicyCheckMandateFromView(m.View()); got.Known != m.Known || got.DrawdownPct != m.DrawdownPct || got.Room != m.Room || got.Samples != m.Samples || *got.Vol20Pct != 24 || *got.Vol60Pct != 16 || got.BaseCurrency != "EUR" {
+		t.Fatalf("round trip %+v", got)
+	}
+}

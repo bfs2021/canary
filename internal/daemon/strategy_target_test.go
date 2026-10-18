@@ -183,8 +183,47 @@ func TestStrategyEntryRunsEndToEndInShadow(t *testing.T) {
 	if coreRes, err := srv.handleStrategyTarget(t.Context(), &rpc.Request{Params: []byte(`{"id":"core"}`)}); err != nil || coreRes.Strategy != risk.CoreStrategyID || coreRes.Rule != core.RuleID {
 		t.Fatalf("core by id: %+v %v", coreRes, err)
 	}
-	if _, err := srv.handleStrategyTarget(t.Context(), &rpc.Request{Params: []byte(`{"id":"nobody"}`)}); err == nil || !strings.Contains(err.Error(), "no strategy") {
+	// An unknown id is refused with the register's ids, and a rule's id
+	// (`canary mandate` prints id and rule side by side) names the entry
+	// that runs it.
+	if _, err := srv.handleStrategyTarget(t.Context(), &rpc.Request{Params: []byte(`{"id":"nobody"}`)}); err == nil || !strings.Contains(err.Error(), `no strategy "nobody" in the register; its ids are core, `+trendFundID) {
 		t.Fatalf("an unknown id: %v", err)
+	}
+	if _, err := srv.handleStrategyTarget(t.Context(), &rpc.Request{Params: []byte(`{"id":"` + core.RuleID + `"}`)}); err == nil || !strings.Contains(err.Error(), `"`+core.RuleID+`" is a rule, not a strategy id; the strategy running it is core (`+"`canary strategy core`)") {
+		t.Fatalf("the core's rule as an id: %v", err)
+	}
+}
+
+// An unknown capital holds the strategy once: mandate.Evaluate copies the
+// capital's reasons into the verdict's, and the verdict hold does not say
+// them again after the capital hold has.
+func TestStrategyTargetNamesAnUnknownCapitalOnce(t *testing.T) {
+	c := testCoreConstitution()
+	srv := coreTestServer(t, c, mandateTestPositions(100), 0.25)
+	st := srv.riskCapital
+	st.mu.Lock()
+	m := st.state.Mandate
+	m.FlowSuspect = &mandateFlowSuspect{At: mandateTestNow.Add(-time.Minute), Base: mandateFlowBase{At: mandateTestNow.Add(-3 * time.Minute), EquityBase: 280000},
+		Unexplained: 20000, ThresholdAt: 3000, MoveBase: 20000}
+	st.mu.Unlock()
+	res := coreEvaluate(t, srv)
+	if res.Status != rpc.CoreStatusHold || res.Mandate == nil || res.Mandate.Status != "unknown" {
+		t.Fatalf("status %s mandate %+v reasons %v", res.Status, res.Mandate, res.Reasons)
+	}
+	var capital, verdict, flow int
+	for _, r := range res.Reasons {
+		switch {
+		case strings.HasPrefix(r, "the mandate's capital is unknown: "):
+			capital++
+		case strings.HasPrefix(r, "the mandate verdict is unknown"):
+			verdict++
+		}
+		if strings.Contains(r, "a cash flow is suspected") {
+			flow++
+		}
+	}
+	if capital != 1 || verdict != 0 || flow != 1 {
+		t.Fatalf("the suspicion is named %d times (capital %d, verdict %d): %v", flow, capital, verdict, res.Reasons)
 	}
 }
 

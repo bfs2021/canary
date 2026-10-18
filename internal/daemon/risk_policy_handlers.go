@@ -73,7 +73,9 @@ func (s *Server) handleRiskPolicySnapshot(ctx context.Context, _ *rpc.Request) (
 	if acctErr != nil {
 		acct = nil
 	}
-	res.Plausibility = new(s.policyCheckReport(ctx, now, acct, res.Files))
+	realised := s.policyCheckMandate(now)
+	res.MandateRealised = realised.View()
+	res.Plausibility = new(s.policyCheckReport(ctx, now, acct, res.Files, realised))
 	res.OrderLimits = new(s.orderLimitsInForce(""))
 	res.Effective = s.policyEffectiveView(res.Files, res.Limits)
 	return res, nil
@@ -83,20 +85,31 @@ func (s *Server) handleRiskPolicySnapshot(ctx context.Context, _ *rpc.Request) (
 // check adds to the policy snapshot; past it the position checks are skipped.
 const policyCheckPositionsTimeout = 5 * time.Second
 
+// policyCheckMandate is the mandate's capital state and the realised
+// figures of the risk base as the capital store measures them, for the
+// realised mandate checks; nil while the constitution carries no [mandate]
+// or the daemon has no capital store. The daemon's own check reads it, and
+// policy.snapshot carries it to the CLI's check (`canary policy check`
+// reads the files itself and asks the daemon for what only it measures).
+func (s *Server) policyCheckMandate(now time.Time) *PolicyCheckMandate {
+	c := s.riskPolicies.snapshot().policy
+	if !c.MandateActive() || s.riskCapital == nil {
+		return nil
+	}
+	capital, realised := s.riskCapital.MandateCapitalForScope(c, s.currentBrokerStateScope(), now)
+	return &PolicyCheckMandate{Known: capital.Known, Reason: strings.Join(capital.Reasons, "; "), DrawdownPct: capital.DrawdownPct, Room: capital.Room,
+		Samples: realised.Samples, Vol20Pct: realised.Vol20Pct, Vol60Pct: realised.Vol60Pct, BaseCurrency: capital.BaseCurrency}
+}
+
 // policyCheckReport runs the plausibility check with the daemon's own view:
 // the policy paths, config.toml's [trading], an active floor override,
-// the account the snapshot already read, a bounded positions read, and each
-// policy manager's status for version drift.
-func (s *Server) policyCheckReport(ctx context.Context, now time.Time, acct *rpc.AccountResult, files []rpc.PolicyFileStatus) rpc.PolicyCheckReport {
+// the account the snapshot already read, a bounded positions read, each
+// policy manager's status for version drift and the mandate's figures.
+func (s *Server) policyCheckReport(ctx context.Context, now time.Time, acct *rpc.AccountResult, files []rpc.PolicyFileStatus, mandate *PolicyCheckMandate) rpc.PolicyCheckReport {
 	in := PolicyCheckInput{Now: now, Files: PolicyFileSetFor(s.cfg), Trading: s.effectiveTradingConfig(),
-		OrderCapOverride: s.orderLimitsFloorOverride(s.nowUTC()), FileStatus: map[string]string{}}
+		OrderCapOverride: s.orderLimitsFloorOverride(s.nowUTC()), FileStatus: map[string]string{}, Mandate: mandate}
 	for _, f := range files {
 		in.FileStatus[f.Policy] = f.Status
-	}
-	if c := s.riskPolicies.snapshot().policy; c.MandateActive() && s.riskCapital != nil {
-		capital, realised := s.riskCapital.MandateCapitalForScope(c, s.currentBrokerStateScope(), now)
-		in.Mandate = &PolicyCheckMandate{Known: capital.Known, Reason: strings.Join(capital.Reasons, "; "), DrawdownPct: capital.DrawdownPct, Room: capital.Room,
-			Samples: realised.Samples, Vol20Pct: realised.Vol20Pct, Vol60Pct: realised.Vol60Pct, BaseCurrency: capital.BaseCurrency}
 	}
 	if acct == nil {
 		in.BookSkipped = "the account read failed"

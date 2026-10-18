@@ -1211,3 +1211,23 @@ func TestMandateRealFlowSuspicionSurvivesTheMarketMovingBack(t *testing.T) {
 		t.Fatalf("a real flow cleared because the market moved the equity back: %+v", got)
 	}
 }
+
+// policy.snapshot carries the mandate's capital state and realised figures
+// its own plausibility check read (policyCheckMandate), so `canary policy
+// check` runs the realised checks instead of skipping them; nothing is
+// carried while the constitution has no [mandate].
+func TestPolicyCheckMandateFollowsTheConstitution(t *testing.T) {
+	c := testMandateConstitution()
+	srv, _ := mandateTestServer(t, c)
+	m := srv.policyCheckMandate(mandateTestNow)
+	if m == nil || !m.Known || m.BaseCurrency != c.Capital.BaseCurrency || m.Samples != 1 || m.Room <= 0 {
+		t.Fatalf("mandate figures %+v", m)
+	}
+	if v := m.View(); v == nil || v.Known != m.Known || v.Room != m.Room || v.Samples != m.Samples || v.BaseCurrency != m.BaseCurrency {
+		t.Fatalf("view %+v of %+v", v, m)
+	}
+	srv.riskPolicies.active = testConstitutionV3()
+	if got := srv.policyCheckMandate(mandateTestNow); got != nil {
+		t.Fatalf("figures without [mandate]: %+v", got)
+	}
+}

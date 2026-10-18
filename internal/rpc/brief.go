@@ -1772,6 +1772,11 @@ type RiskPolicyResult struct {
 	// Plausibility is the policy check (`canary policy check`): the values
 	// read against each other, across files and against the live book.
 	Plausibility *PolicyCheckReport `json:"plausibility,omitempty"`
+	// MandateRealised is the mandate's capital state and realised figures
+	// the plausibility check read, for a CLI that runs the check itself.
+	// Daemons before this field leave it empty; the CLI then skips the
+	// realised mandate checks and says so.
+	MandateRealised *MandateRealisedView `json:"mandate_realised,omitempty"`
 	// Effective is every key that governs behaviour, grouped by file and
 	// table, with its value in force, source and meaning. Daemons before
 	// this field leave it empty; the CLI then reads the files itself.

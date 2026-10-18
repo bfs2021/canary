@@ -201,3 +201,25 @@ func FetchMandateRisk(ctx context.Context, conn interface {
 	}
 	return out, nil
 }
+
+// MandateRealisedView is the mandate's capital state and the realised
+// figures of the risk base as the daemon's capital store measures them,
+// carried on policy.snapshot for the realised checks of `canary policy
+// check`, which reads the policy files itself and asks the daemon for what
+// only it measures. Known is false, with Reason, while the capital cannot
+// be measured; DrawdownPct and Room are the drawdown from the high-water
+// mark in percent and the share of the loss budget still open; Vol20Pct
+// and Vol60Pct the realised volatility of the risk base over its last 20
+// and 60 daily samples, annualised in percent, nil while fewer samples
+// exist; Samples the count kept. Absent while the constitution carries no
+// [mandate] table.
+type MandateRealisedView struct {
+	Known        bool     `json:"known"`
+	Reason       string   `json:"reason,omitempty"`
+	DrawdownPct  float64  `json:"drawdown_pct"`
+	Room         float64  `json:"room"`
+	Samples      int      `json:"samples"`
+	Vol20Pct     *float64 `json:"vol_20_pct,omitempty"`
+	Vol60Pct     *float64 `json:"vol_60_pct,omitempty"`
+	BaseCurrency string   `json:"base_currency,omitempty"`
+}

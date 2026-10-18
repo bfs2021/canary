@@ -276,6 +276,26 @@ type PolicyCheckMandate struct {
 	BaseCurrency string
 }
 
+// View is the mandate figures as policy.snapshot carries them to a CLI
+// that runs the check itself.
+func (m *PolicyCheckMandate) View() *rpc.MandateRealisedView {
+	if m == nil {
+		return nil
+	}
+	return &rpc.MandateRealisedView{Known: m.Known, Reason: m.Reason, DrawdownPct: m.DrawdownPct, Room: m.Room, Samples: m.Samples,
+		Vol20Pct: m.Vol20Pct, Vol60Pct: m.Vol60Pct, BaseCurrency: m.BaseCurrency}
+}
+
+// PolicyCheckMandateFromView reads the figures a daemon's policy.snapshot
+// reported; nil when it reported none (a daemon from before the field).
+func PolicyCheckMandateFromView(v *rpc.MandateRealisedView) *PolicyCheckMandate {
+	if v == nil {
+		return nil
+	}
+	return &PolicyCheckMandate{Known: v.Known, Reason: v.Reason, DrawdownPct: v.DrawdownPct, Room: v.Room, Samples: v.Samples,
+		Vol20Pct: v.Vol20Pct, Vol60Pct: v.Vol60Pct, BaseCurrency: v.BaseCurrency}
+}
+
 // PolicyCheckInputFromConfigFile reads config.toml the way the daemon does
 // and resolves the policy paths and the trading mode from it, for a check
 // that runs without a daemon.
@@ -696,7 +716,11 @@ func CheckPolicy(in PolicyCheckInput) rpc.PolicyCheckReport {
 		c.skip("version-bump drift: no daemon answered, so the policies in force are unknown")
 	}
 	if c.mandate == nil && c.constitution != nil && c.constitution.Mandate != nil {
-		c.skip("the mandate's realised drawdown and volatility: no daemon answered, so the risk base's history is unknown")
+		why := "no daemon answered"
+		if c.fileStatus != nil {
+			why = "the daemon reported no mandate figures (a daemon older than this CLI)"
+		}
+		c.skip("the mandate's realised drawdown and volatility: " + why + ", so the risk base's history is unknown")
 	}
 	report := rpc.PolicyCheckReport{AsOf: c.now, Findings: []rpc.PolicyCheckFinding{}}
 	for _, src := range c.sources() {
