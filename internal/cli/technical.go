@@ -22,7 +22,7 @@ func runTechnical(ctx context.Context, env *Env, args []string) int {
 	}
 	rest := fs.Args()
 	if len(rest) != 1 {
-		return fail(env, "technical: usage: canary technical SYM[,SYM...] [--benchmark SPY] [--market us|de]")
+		return fail(env, "technical: usage: canary technical SYM[,SYM...] [--benchmark SPY] [--market us|de|uk]")
 	}
 	params := rpc.TechnicalParams{
 		Symbols:      splitSymbols(rest[0]),

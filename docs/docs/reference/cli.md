@@ -227,7 +227,7 @@ Trend, relative strength, ATR, and liquidity from daily bars.
 Guard `read-only`. Also available as an MCP tool.
 
 ```text
-canary technical SYM[,SYM...] [--benchmark SPY] [--market us|de] [--json]
+canary technical SYM[,SYM...] [--benchmark SPY] [--market us|de|uk] [--json]
 ```
 
 **Flags**
@@ -235,7 +235,7 @@ canary technical SYM[,SYM...] [--benchmark SPY] [--market us|de] [--json]
 | Flag | Takes a value | Allowed values |
 |------|---------------|----------------|
 | `--benchmark` | yes | - |
-| `--market` | yes | `us`, `de` |
+| `--market` | yes | `us`, `de`, `uk` |
 | `--lookback-days` | yes | - |
 | `--exchange` | yes | - |
 | `--primary` | yes | - |
@@ -940,7 +940,7 @@ canary order tws-modify PERM_ID --quantity N --limit PRICE [--terms JSON] [--req
 | `--outside-rth` | no | - |
 | `--replace-order` | yes | - |
 | `--timeout` | yes | - |
-| `--market` | yes | `us`, `de` |
+| `--market` | yes | `us`, `de`, `uk` |
 | `--exchange` | yes | - |
 | `--primary` | yes | - |
 | `--currency` | yes | - |
