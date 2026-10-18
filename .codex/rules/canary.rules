@@ -240,6 +240,22 @@ prefix_rule(
     ],
 )
 
+# The CLI finds the settings verb after flags, so the flag-first form is the
+# same write. These rules match token prefixes and cannot tell a collection
+# assignment from any other, so Codex agents stay refused for every settings
+# write; the daemon refuses an agent's write of anything but a collection key
+# (internal-docs/design/strategy-register.md, "Settings: classes the daemon
+# enforces").
+prefix_rule(
+    pattern = [["ibkr", "canary"], "settings", ["--json", "-json"], "set"],
+    decision = "forbidden",
+    justification = "Runtime settings, freeze, and trading-limit changes are human-only in agent sessions.",
+    match = [
+        "canary settings --json set trading.freeze=true",
+        "canary settings -json set features.stock_protection.enabled=false",
+    ],
+)
+
 prefix_rule(
     pattern = [["ibkr", "canary"], "daemon", ["purge", "reset", "wipe"]],
     decision = "forbidden",

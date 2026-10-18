@@ -103,6 +103,25 @@ run_case bundle-status 0 "$live_frozen" none 'canary proposals bundle-status --b
 run_case settings-set 2 "$live_ready" none 'canary settings set trading.freeze=true'
 run_case daemon-wipe 2 "$live_ready" none 'canary daemon wipe'
 
+# A settings write is any settings invocation with a set word: the CLI finds
+# the verb after flags. Only a collection assignment passes
+# (strategy-register.md, "Settings: classes the daemon enforces").
+run_case settings-flag-before-verb 2 "$live_ready" none 'canary settings --json set trading.freeze=true'
+run_case settings-single-dash-flag 2 "$live_ready" none 'canary settings -json set features.stock_protection.enabled=false'
+run_case settings-flag-after 2 "$live_ready" none 'canary settings set trading.tws_order_control.enabled=true --json'
+run_case settings-protection 2 "$live_ready" none 'canary settings set features.stock_protection.enabled=false'
+run_case settings-off-switch 2 "$live_ready" none 'canary settings set chains.recorder.enabled=false'
+run_case settings-journal-off 2 "$live_ready" none 'canary settings --json set regime.journal.enabled=false'
+run_case settings-mixed 2 "$live_ready" none 'canary settings set chains.recorder.symbols=SPX trading.freeze=true'
+run_case settings-value-flag 2 "$live_ready" none 'canary settings --socket /tmp/x set chains.recorder.symbols=SPX'
+run_case settings-collection-composed 2 "$live_ready" none 'canary settings set chains.recorder.symbols=SPX; echo done'
+run_case settings-collection-odd-value 2 "$live_ready" none 'canary settings set chains.recorder.symbols=$HOME'
+run_case settings-no-assignment 2 "$live_ready" none 'canary settings set'
+run_case settings-collection 0 "$live_ready" none 'canary settings set chains.recorder.symbols=SPX,QQQ'
+run_case settings-collection-json 0 "$live_ready" none 'canary settings --json set chains.recorder.symbols=[]'
+run_case settings-collection-null 0 "$live_ready" none 'canary settings set chains.recorder.symbols=null --json'
+run_case settings-show 0 "$live_ready" none 'canary settings show --json'
+
 # Broker writes consult trading status: route-ready allows, otherwise block.
 run_case cancel-frozen 0 "$live_frozen" status 'canary order cancel 42'
 run_case reduce-submit-live-ready 0 "$live_ready" status 'canary proposals reduce SYNTH --percent 25 --submit --json'

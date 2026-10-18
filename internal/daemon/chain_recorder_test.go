@@ -37,7 +37,7 @@ func newYork(t *testing.T, value string) time.Time {
 
 func setChainRecorder(t *testing.T, srv *Server, recorder string) error {
 	t.Helper()
-	return srv.applyPlatformSettingsPatch(context.Background(), map[string]json.RawMessage{"chains": json.RawMessage(`{"recorder":` + recorder + `}`)}, "")
+	return srv.applyPlatformSettingsPatch(context.Background(), map[string]json.RawMessage{"chains": json.RawMessage(`{"recorder":` + recorder + `}`)}, rpc.OrderOriginHumanTTY)
 }
 
 // Off by default: a due instant runs nothing, opens no file and reads as off.

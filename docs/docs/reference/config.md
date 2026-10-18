@@ -245,17 +245,17 @@ Daemon-owned preferences persisted in `$XDG_STATE_HOME/ibkr/daemon.db` and chang
 
 | Key | Value | Class | Description |
 |-----|-------|-------|-------------|
-| `cash_sweep.currency_priority` | `usd_first/balanced/eur_first/null` | runtime | Cash-sweep ordering only: usd_first, balanced, eur_first, or null for policy/default; never activates reserve policy or changes funding, caps, floors, freeze, or execution authority. |
-| `display.date_format` | `us/eu/us_weekday/eu_weekday/null` | runtime | Calendar-date presentation in the SPA: us, eu, us_weekday, or eu_weekday; it never changes typed timestamps or market-session authority (default us). |
-| `features.stock_protection.enabled` | `true/false/null` | runtime | Allows stock/ETF protection proposal actions; false blocks them with a stock_protection_disabled blocker while proposal snapshots stay readable (default true). |
-| `features.rulebook.enabled` | `true/false/null` | runtime | Turns the advisory daily trading-rulebook checklist on; false hides the SPA card, empties rules.snapshot, and stops advisory rule_* preview warnings — it can never affect broker-write gating (default true). |
-| `features.rulebook.earnings_overrides.<SYMBOL>` | `YYYY-MM-DD[Tamc/Tbmo]/null` | runtime | Manual SYMBOL → YYYY-MM-DD (optional Tamc/Tbmo suffix) earnings pins, authoritative over fetched dates for rules 6-8; patches merge per symbol. |
-| `trading.freeze` | `true/false/null` | runtime | Runtime trading brake: true blocks every new broker write while cancels stay allowed; human-only by policy, and the write origin is audited (default false). |
-| `trading.tws_order_control.enabled` | `true/false/null` | runtime | Lets an owner-confirmed cancel or change reach an order placed by hand in TWS through a separate client-0 connection; paper works once enabled, live also needs the daemon-recorded paper proof (trading.tws_order_control.paper_proven_at); human-only by policy (default false). |
-| `regime.journal.enabled` | `true/false/null` | runtime | Turns forward regime decision-event collection in daemon.db on (default true). |
-| `stress.journal.enabled` | `true/false/null` | runtime | Turns forward portfolio-stress decision-event collection in daemon.db on, mirroring regime.journal.enabled (default true). |
-| `chains.recorder.enabled` | `true/false/null` | runtime | Records a daily option-chain snapshot (quotes, sizes, IV, greeks, open interest) 30 minutes before the US close into option-chains.db beside daemon.db; market-data reads only, within a line reserve for the live display (default false). |
-| `chains.recorder.symbols` | `SYM,SYM,.../[]/null` | runtime | Underlyings the option-chain recorder covers besides held option underlyings, at most 12; null restores SPX, SPY, QQQ. |
+| `cash_sweep.currency_priority` | `usd_first/balanced/eur_first/null` | owner | Cash-sweep ordering only: usd_first, balanced, eur_first, or null for policy/default; never activates reserve policy or changes funding, caps, floors, freeze, or execution authority. |
+| `display.date_format` | `us/eu/us_weekday/eu_weekday/null` | owner | Calendar-date presentation in the SPA: us, eu, us_weekday, or eu_weekday; it never changes typed timestamps or market-session authority (default us). |
+| `features.stock_protection.enabled` | `true/false/null` | owner | Allows stock/ETF protection proposal actions; false blocks them with a stock_protection_disabled blocker while proposal snapshots stay readable (default true). |
+| `features.rulebook.enabled` | `true/false/null` | owner | Turns the advisory daily trading-rulebook checklist on; false hides the SPA card, empties rules.snapshot, and stops advisory rule_* preview warnings — it can never affect broker-write gating (default true). |
+| `features.rulebook.earnings_overrides.<SYMBOL>` | `YYYY-MM-DD[Tamc/Tbmo]/null` | owner | Manual SYMBOL → YYYY-MM-DD (optional Tamc/Tbmo suffix) earnings pins, authoritative over fetched dates for rules 6-8; patches merge per symbol. |
+| `trading.freeze` | `true/false/null` | safety | Runtime trading brake: true blocks every new broker write while cancels stay allowed; human-only by policy, and the write origin is audited (default false). |
+| `trading.tws_order_control.enabled` | `true/false/null` | safety | Lets an owner-confirmed cancel or change reach an order placed by hand in TWS through a separate client-0 connection; paper works once enabled, live also needs the daemon-recorded paper proof (trading.tws_order_control.paper_proven_at); human-only by policy (default false). |
+| `regime.journal.enabled` | `true/false/null` | owner | Turns forward regime decision-event collection in daemon.db on (default true). |
+| `stress.journal.enabled` | `true/false/null` | owner | Turns forward portfolio-stress decision-event collection in daemon.db on, mirroring regime.journal.enabled (default true). |
+| `chains.recorder.enabled` | `true/false/null` | owner | Records a daily option-chain snapshot (quotes, sizes, IV, greeks, open interest) 30 minutes before the US close into option-chains.db beside daemon.db; market-data reads only, within a line reserve for the live display (default false). |
+| `chains.recorder.symbols` | `SYM,SYM,.../[]/null` | collection | Underlyings the option-chain recorder covers besides held option underlyings, at most 12; null restores SPX, SPY, QQQ. |
 
 ## Environment variables
 

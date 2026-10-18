@@ -295,11 +295,22 @@ const (
 	SettingsKindSymbolList SettingsKeyKind = "symbol-list"
 )
 
-// Writability classes the daemon enforces beyond per-kind parsing.
+// Writability classes the daemon enforces by the write's origin, deny by
+// default (internal-docs/design/strategy-register.md, "Settings: classes the
+// daemon enforces"; owner decision 2026-10-18 09:01 CEST: strategies declare
+// the data Canary collects, and the owner keeps the safety controls).
 const (
-	// SettingsClassRuntime keys are runtime-owned. Individual keys may add a
-	// stricter origin policy; trading.freeze is human-terminal-only in every mode.
-	SettingsClassRuntime = "runtime"
+	// SettingsClassSafety keys govern whether a broker write may happen at
+	// all: only a human terminal may change them.
+	SettingsClassSafety = "safety"
+	// SettingsClassOwner keys are the owner's: the protection control, the
+	// collection off switches and every preference. A human terminal or the
+	// owner's paired device may change them; an agent or a missing origin
+	// may not.
+	SettingsClassOwner = "owner"
+	// SettingsClassCollection keys widen or narrow what Canary records and
+	// govern market-data reads only: any origin may change them.
+	SettingsClassCollection = "collection"
 )
 
 // SettingsKeySpec declares one writable runtime setting.
@@ -319,45 +330,45 @@ type SettingsKeySpec struct {
 // SettingsKeys returns the registry in stable display order.
 func SettingsKeys() []SettingsKeySpec {
 	return []SettingsKeySpec{
-		{Key: "cash_sweep.currency_priority", Kind: SettingsKindCashSweepPriority, Class: SettingsClassRuntime, Doc: "Cash-sweep ordering only: usd_first, balanced, eur_first, or null for policy/default; never activates reserve policy or changes funding, caps, floors, freeze, or execution authority."},
+		{Key: "cash_sweep.currency_priority", Kind: SettingsKindCashSweepPriority, Class: SettingsClassOwner, Doc: "Cash-sweep ordering only: usd_first, balanced, eur_first, or null for policy/default; never activates reserve policy or changes funding, caps, floors, freeze, or execution authority."},
 		{
-			Key: "display.date_format", Kind: SettingsKindDateFormat, Class: SettingsClassRuntime,
+			Key: "display.date_format", Kind: SettingsKindDateFormat, Class: SettingsClassOwner,
 			Doc: "Calendar-date presentation in the SPA: us, eu, us_weekday, or eu_weekday; it never changes typed timestamps or market-session authority (default us).",
 		},
 		{
-			Key: "features.stock_protection.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Key: "features.stock_protection.enabled", Kind: SettingsKindBool, Class: SettingsClassOwner,
 			Doc: "Allows stock/ETF protection proposal actions; false blocks them with a stock_protection_disabled blocker while proposal snapshots stay readable (default true).",
 		},
 		{
-			Key: "features.rulebook.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Key: "features.rulebook.enabled", Kind: SettingsKindBool, Class: SettingsClassOwner,
 			Doc: "Turns the advisory daily trading-rulebook checklist on; false hides the SPA card, empties rules.snapshot, and stops advisory rule_* preview warnings — it can never affect broker-write gating (default true).",
 		},
 		{
-			Key: "features.rulebook.earnings_overrides", Kind: SettingsKindDateMap, Class: SettingsClassRuntime,
+			Key: "features.rulebook.earnings_overrides", Kind: SettingsKindDateMap, Class: SettingsClassOwner,
 			Doc: "Manual SYMBOL → YYYY-MM-DD (optional Tamc/Tbmo suffix) earnings pins, authoritative over fetched dates for rules 6-8; patches merge per symbol.",
 		},
 		{
-			Key: "trading.freeze", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Key: "trading.freeze", Kind: SettingsKindBool, Class: SettingsClassSafety,
 			Doc: "Runtime trading brake: true blocks every new broker write while cancels stay allowed; human-only by policy, and the write origin is audited (default false).",
 		},
 		{
-			Key: "trading.tws_order_control.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Key: "trading.tws_order_control.enabled", Kind: SettingsKindBool, Class: SettingsClassSafety,
 			Doc: "Lets an owner-confirmed cancel or change reach an order placed by hand in TWS through a separate client-0 connection; paper works once enabled, live also needs the daemon-recorded paper proof (trading.tws_order_control.paper_proven_at); human-only by policy (default false).",
 		},
 		{
-			Key: "regime.journal.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Key: "regime.journal.enabled", Kind: SettingsKindBool, Class: SettingsClassOwner,
 			Doc: "Turns forward regime decision-event collection in daemon.db on (default true).",
 		},
 		{
-			Key: "stress.journal.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Key: "stress.journal.enabled", Kind: SettingsKindBool, Class: SettingsClassOwner,
 			Doc: "Turns forward portfolio-stress decision-event collection in daemon.db on, mirroring regime.journal.enabled (default true).",
 		},
 		{
-			Key: "chains.recorder.enabled", Kind: SettingsKindBool, Class: SettingsClassRuntime,
+			Key: "chains.recorder.enabled", Kind: SettingsKindBool, Class: SettingsClassOwner,
 			Doc: "Records a daily option-chain snapshot (quotes, sizes, IV, greeks, open interest) 30 minutes before the US close into option-chains.db beside daemon.db; market-data reads only, within a line reserve for the live display (default false).",
 		},
 		{
-			Key: "chains.recorder.symbols", Kind: SettingsKindSymbolList, Class: SettingsClassRuntime,
+			Key: "chains.recorder.symbols", Kind: SettingsKindSymbolList, Class: SettingsClassCollection,
 			Doc: "Underlyings the option-chain recorder covers besides held option underlyings, at most 12; null restores SPX, SPY, QQQ.",
 		},
 	}

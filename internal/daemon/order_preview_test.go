@@ -722,10 +722,6 @@ func TestPlatformSettingsTradingPatchOriginMatrix(t *testing.T) {
 		}
 	}
 
-	srv := newPlatformSettingsTestServer(t, config.Trading{Mode: config.TradingModeLive})
-	if _, err := srv.handleSettingsUpdate(context.Background(), &rpc.Request{Params: []byte(`{"features":{"stock_protection":{"enabled":true}},"origin":"agent"}`)}); err != nil {
-		t.Fatalf("live agent feature patch err = %v, want success", err)
-	}
 }
 
 func newPlatformSettingsTestServer(t *testing.T, tr config.Trading) *Server {

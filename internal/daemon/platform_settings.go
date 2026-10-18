@@ -751,12 +751,10 @@ func (s *Server) applyPlatformSettingsPatch(ctx context.Context, patch map[strin
 	if err != nil {
 		return err
 	}
-	for key := range flat {
-		// Freeze authority is terminal-only in every mode. A paired
-		// device is a human broker-write origin, but it is not authorized to
-		// change the controls that govern later writes.
-		if strings.HasPrefix(key, "trading.") && !settingsTradingOriginAuthorized(origin) {
-			return errBadRequest("trading safety settings are terminal-only; use an interactive human terminal to change the freeze")
+	specs := settingsSpecsByKey()
+	for _, key := range slices.Sorted(maps.Keys(flat)) {
+		if err := settingsOriginRefusal(specs[key], origin); err != nil {
+			return err
 		}
 	}
 	keys := make([]string, 0, len(flat))
@@ -773,8 +771,30 @@ func (s *Server) applyPlatformSettingsPatch(ctx context.Context, patch map[strin
 	})
 }
 
-func settingsTradingOriginAuthorized(origin string) bool {
-	return origin == rpc.OrderOriginHumanTTY
+// settingsOriginRefusal judges one key's class against the write's origin,
+// deny by default (internal-docs/design/strategy-register.md, "Settings:
+// classes the daemon enforces"). Safety keys, the freeze and TWS order
+// control, are terminal-only in every mode: a paired device is a human
+// broker-write origin, but it is not authorized to change the controls that
+// govern later writes. The owner's keys (the protection control, the
+// collection off switches and the preferences) take a human terminal or the
+// owner's paired device; an agent or a missing origin is refused. Collection
+// keys govern market-data reads only and take any origin.
+func settingsOriginRefusal(spec rpc.SettingsKeySpec, origin string) error {
+	switch spec.Class {
+	case rpc.SettingsClassCollection:
+		return nil
+	case rpc.SettingsClassOwner:
+		if origin == rpc.OrderOriginHumanTTY || origin == rpc.OrderOriginPairedDevice {
+			return nil
+		}
+		return errBadRequest(spec.Key + " is the owner's setting: change it from an interactive human terminal or the paired console; an agent may change only the collection settings (chains.recorder.symbols)")
+	default:
+		if origin == rpc.OrderOriginHumanTTY {
+			return nil
+		}
+		return errBadRequest("trading safety settings are terminal-only; use an interactive human terminal to change the freeze")
+	}
 }
 
 func settingsSpecsByKey() map[string]rpc.SettingsKeySpec {

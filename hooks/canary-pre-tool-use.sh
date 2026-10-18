@@ -375,8 +375,57 @@ broker_write_command() {
 	has_re '(^|[[:space:]/])(ibkr|canary)[[:space:]]+(submit|place|transmit|modify|cancel|close)([[:space:]]|$)'
 }
 
+# A settings write is any `settings` invocation with a `set` word: the CLI
+# finds the subcommand after any flags (`canary settings --json set ...`
+# runs), so the two words need not be adjacent.
+settings_write_command() {
+  has_re '(^|[[:space:]/])(ibkr|canary)[[:space:]]+settings([[:space:]]+[^[:space:]]+)*[[:space:]]+set([[:space:]]|$)'
+}
+
+# Collection settings govern market-data reads only, and the daemon takes
+# them from any origin (internal-docs/design/strategy-register.md,
+# "Settings: classes the daemon enforces"); every other key is the owner's
+# or a safety control. collection_settings_keys must equal the registry's
+# collection class (rpc.SettingsKeys; TestHookCollectionKeysMatchRegistry).
+collection_settings_keys=(chains.recorder.symbols)
+
+# collection_settings_write passes a settings write whose every word after
+# `settings` is the verb, the JSON flag, or an assignment of a collection
+# key with a plain symbol-list value. Anything else, including a flag that
+# could take a value, is refused.
+collection_settings_write() {
+  local -a words
+  read -ra words <<<"$command_line"
+  local i=0 n=${#words[@]} found=0 word key value assignments=0 allowed k
+  while [[ "$i" -lt "$n" ]]; do
+    word="${words[$i]}"
+    i=$((i + 1))
+    if [[ "$found" -eq 0 ]]; then
+      if [[ ("${word##*/}" == canary || "${word##*/}" == ibkr) && "$i" -lt "$n" && "${words[$i]}" == settings ]]; then
+        found=1
+        i=$((i + 1))
+      fi
+      continue
+    fi
+    case "$word" in
+    set | --json | -json) continue ;;
+    esac
+    [[ "$word" == *=* ]] || return 1
+    key="${word%%=*}"
+    value="${word#*=}"
+    allowed=0
+    for k in "${collection_settings_keys[@]}"; do
+      [[ "$key" == "$k" ]] && allowed=1
+    done
+    [[ "$allowed" -eq 1 ]] || return 1
+    [[ "$value" =~ ^[][A-Za-z0-9.,_-]*$ ]] || return 1
+    assignments=$((assignments + 1))
+  done
+  [[ "$found" -eq 1 && "$assignments" -gt 0 ]]
+}
+
 state_write_command() {
-  has_re '(^|[[:space:]/])(ibkr|canary)[[:space:]]+settings[[:space:]]+set([[:space:]]|$)' ||
+  settings_write_command ||
     has_re '(^|[[:space:]/])(ibkr|canary)[[:space:]]+rules[[:space:]]+policy[[:space:]]+(set|reset)([[:space:]]|$)' ||
     has_re '(^|[[:space:]/])(ibkr|canary)[[:space:]]+daemon[[:space:]]+(purge|reset|wipe)([[:space:]]|$)'
 }
@@ -398,8 +447,11 @@ if has_re '(^|[[:space:]/])(ibkr|canary)[[:space:]]+rules[[:space:]]+policy[[:sp
   block "Rulebook limits are the owner's policy: the user edits them with canary rules policy set from an interactive session; agents read them with canary rules policy."
 fi
 
-if has_re '(^|[[:space:]/])(ibkr|canary)[[:space:]]+settings[[:space:]]+set([[:space:]]|$)'; then
-  block "Runtime settings writes, including trading.freeze, must be run by the user from an interactive session."
+if settings_write_command; then
+  if collection_settings_write; then
+    exit 0
+  fi
+  block "Runtime settings are the owner's, set from an interactive session: the safety controls (trading.freeze, TWS order control), the protection control, the collection off switches and the preferences. An agent may set only the collection settings, one plain assignment each: canary settings set chains.recorder.symbols=SPX,QQQ"
 fi
 
 if has_re '(^|[[:space:]/])(ibkr|canary)[[:space:]]+daemon[[:space:]]+(purge|reset|wipe)([[:space:]]|$)'; then

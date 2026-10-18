@@ -54,6 +54,25 @@ Every returned setting field carries:
 fields and read-only writes return 400. `null` clears a runtime override and
 reveals the underlying default/config value again.
 
+Every writable key has a class in the registry, and the daemon judges each
+key of a patch by the write's origin, deny by default (2026-10-18;
+[strategy-register.md](strategy-register.md), "Settings: classes the daemon
+enforces"). A patch with one refused key changes nothing.
+
+| Class | Keys | Origins accepted |
+|---|---|---|
+| `safety` | `trading.freeze`, `trading.tws_order_control.enabled` | `human-tty` |
+| `owner` | `features.stock_protection.enabled`, `chains.recorder.enabled`, `regime.journal.enabled`, `stress.journal.enabled`, and the preferences (`display.date_format`, `features.rulebook.*`, `cash_sweep.currency_priority`) | `human-tty`, `human-paired-device` |
+| `collection` | `chains.recorder.symbols` | any |
+
+The CLI marks every write from an agent session or a non-terminal stdin as
+`agent` (`DetectWriteOrigin`), and the app stamps its own as the paired
+device, so an agent may change the collection keys only. The agent hook
+reads a settings write as the CLI does (the verb after any flag) and lets an
+agent's through only for a collection assignment; the Codex rules refuse
+every settings write. The narrow `settings.cash_sweep.set_priority` method
+keeps its own receipts and origin, outside this gate.
+
 An accepted semantic update commits the SQLite state document and its typed
 `platform_settings_update` audit event in one compare-and-swap transaction
 before the daemon publishes the new in-memory/settings-event view. The audit
@@ -178,9 +197,10 @@ decoder, so a rollback never reads the newer preference as an old one.
 2026-10-14) are the option-chain recorder's switch, off by default, and its
 explicit underlyings; `null` on the list restores SPX, SPY, QQQ and `[]` keeps
 held option underlyings only ([option-chain-recorder.md](option-chain-recorder.md)).
-They govern market-data reads, never a broker write, so any origin may change
-them and neither touches the trading-control generation. A version-5 document
-that carries the block is refused by the strict decoder.
+They govern market-data reads, never a broker write, and neither touches the
+trading-control generation. The switch is the owner's (class `owner`); the
+list is a collection key any origin may change. A version-5 document that
+carries the block is refused by the strict decoder.
 
 `regime.journal.enabled` retains its public name but controls forward
 collection of typed regime-decision events in `daemon.db`. It does not enable
@@ -188,7 +208,8 @@ a JSONL writer.
 
 `stress.journal.enabled` similarly controls typed stress-decision events in
 `daemon.db`. It defaults to `true`; disabling it stops future collection
-without deleting existing evidence.
+without deleting existing evidence. Both journal switches are the owner's
+off switches for collection (class `owner`).
 
 `history.rotation.enabled` and `history.rotation.keep_raw_months` are retired.
 There are no live decision JSONL files or rotation worker after cutover.
