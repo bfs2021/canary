@@ -271,10 +271,10 @@ func (s *Server) withStrategySeries(in *mandate.Input, r register.Resolved, k *c
 	if in == nil || k == nil {
 		return in
 	}
-	if _, kept := in.Series[k.Symbol]; kept {
+	if kept, ok := in.Series[k.Symbol]; ok && len(kept.Closes) >= mandate.Closes && !kept.Stale {
 		return in
 	}
-	own := s.mandateHistorySeries(context.Background(), seriesKeyFor(r, k.ConID))
+	own, _ := s.strategyRiskSeries(context.Background(), r, k, s.nowUTC())
 	if own == nil {
 		return in
 	}

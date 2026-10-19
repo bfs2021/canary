@@ -70,6 +70,18 @@ type ConstitutionMandateStrategy struct {
 	// capital K, as the lab's design run writes it; optional, and unwritten
 	// the kill rule cannot fire (strategy-evaluator.md §3).
 	KillDrawdownK *float64 `toml:"kill_drawdown_k" json:"kill_drawdown_k,omitempty"`
+	// The signal series, optional (strategy-evaluator.md §7, 2026-10-19):
+	// another listed share class of the same fund whose daily closes the
+	// signal and the volatility are read on while the traded line's own
+	// closes do not yet fill the evaluator's window, by ISIN and the
+	// listing's currency; SignalIn is the currency its closes are measured
+	// in, converted from SignalCurrency at each session's IDEALPRO close
+	// (the class's own currency for a class listed in another one), and
+	// unwritten the listing's own. The traded line's own closes take over
+	// at the first decision their window is filled.
+	SignalISIN     string `toml:"signal_isin" json:"signal_isin,omitempty"`
+	SignalCurrency string `toml:"signal_currency" json:"signal_currency,omitempty"`
+	SignalIn       string `toml:"signal_in" json:"signal_in,omitempty"`
 }
 
 // StrategyEntry is one register entry in either form, as code reads it.
@@ -90,16 +102,22 @@ type StrategyEntry struct {
 	// The evaluator's keys as the entry writes them (the core's from
 	// [mandate.core]); nil or empty while unwritten. KeyPrefix names the
 	// table the keys are read from ("mandate.core", "mandate.strategies.<id>").
-	KeyPrefix     string   `json:"key_prefix"`
-	ISIN          string   `json:"isin,omitempty"`
-	ConID         *int     `json:"con_id,omitempty"`
-	Exchange      string   `json:"exchange,omitempty"`
-	Currency      string   `json:"currency,omitempty"`
-	Signal        string   `json:"signal,omitempty"`
-	BandPct       *float64 `json:"band_pct,omitempty"`
-	MinOrderBase  *float64 `json:"min_order_base,omitempty"`
-	MaxValuePct   *float64 `json:"max_value_pct,omitempty"`
-	KillDrawdownK *float64 `json:"kill_drawdown_k,omitempty"`
+	KeyPrefix    string   `json:"key_prefix"`
+	ISIN         string   `json:"isin,omitempty"`
+	ConID        *int     `json:"con_id,omitempty"`
+	Exchange     string   `json:"exchange,omitempty"`
+	Currency     string   `json:"currency,omitempty"`
+	Signal       string   `json:"signal,omitempty"`
+	BandPct      *float64 `json:"band_pct,omitempty"`
+	MinOrderBase *float64 `json:"min_order_base,omitempty"`
+	// SignalISIN, SignalCurrency and SignalIn name the signal series of a
+	// [mandate.strategies] entry (ConstitutionMandateStrategy); empty for
+	// the core and for an entry that reads only its own closes.
+	SignalISIN     string   `json:"signal_isin,omitempty"`
+	SignalCurrency string   `json:"signal_currency,omitempty"`
+	SignalIn       string   `json:"signal_in,omitempty"`
+	MaxValuePct    *float64 `json:"max_value_pct,omitempty"`
+	KillDrawdownK  *float64 `json:"kill_drawdown_k,omitempty"`
 	// Unwritten names the keys whose absence holds the strategy.
 	Unwritten []string `json:"unwritten,omitempty"`
 }
@@ -137,7 +155,8 @@ func (m *ConstitutionMandate) Register() []StrategyEntry {
 		key := func(k string) string { return "mandate.strategies." + id + "." + k }
 		e := StrategyEntry{ID: id, Form: StrategyFormEntry, Rule: s.Rule, SpecHash: s.SpecHash, Sleeve: s.Sleeve, Stage: s.Stage, ScalePct: s.ScalePct,
 			KeyPrefix: "mandate.strategies." + id, ISIN: s.ISIN, ConID: s.ConID, Exchange: s.Exchange, Currency: s.Currency, Signal: s.Signal,
-			BandPct: s.BandPct, MinOrderBase: s.MinOrderBase, MaxValuePct: s.MaxValuePct, KillDrawdownK: s.KillDrawdownK}
+			BandPct: s.BandPct, MinOrderBase: s.MinOrderBase, MaxValuePct: s.MaxValuePct, KillDrawdownK: s.KillDrawdownK,
+			SignalISIN: s.SignalISIN, SignalCurrency: s.SignalCurrency, SignalIn: s.SignalIn}
 		var missing []string
 		for _, k := range []struct {
 			name    string
@@ -230,6 +249,9 @@ func (m *ConstitutionMandate) validateRegister() error {
 		if err := validateEvaluatorKeys(key, s.ISIN, s.ConID, s.Exchange, s.Currency, s.Signal, s.BandPct, s.MinOrderBase, s.MaxValuePct, s.KillDrawdownK); err != nil {
 			return err
 		}
+		if err := validateSignalSeriesKeys(key, s); err != nil {
+			return err
+		}
 		if s.Sleeve != "" {
 			switch {
 			case !sleeveShape.MatchString(s.Sleeve):
@@ -269,6 +291,26 @@ func (m *ConstitutionMandate) validateRegister() error {
 		if machine > *t {
 			return fmt.Errorf("mandate.sleeves.core_vol_pct + overlay_vol_pct + every mandate.strategies risk_allocation_pct (%g) must not exceed mandate.vol_target_pct (%g): the machine's allocations sit inside the budget", machine, *t)
 		}
+	}
+	return nil
+}
+
+// validateSignalSeriesKeys refuses a signal series of the wrong shape: an
+// ISIN and its listing's currency written together, never the traded line's
+// own ISIN, and a measuring currency only with them.
+func validateSignalSeriesKeys(key string, s *ConstitutionMandateStrategy) error {
+	ccy := regexp.MustCompile(`^[A-Z]{3}$`)
+	switch {
+	case s.SignalISIN == "" && s.SignalCurrency == "" && s.SignalIn == "":
+		return nil
+	case s.SignalISIN == "" || s.SignalCurrency == "":
+		return fmt.Errorf("%s.signal_isin and %s.signal_currency are written together: the signal series is a listing named by its ISIN and currency", key, key)
+	case !isinShape(s.SignalISIN):
+		return fmt.Errorf("%s.signal_isin %q must be twelve upper-case letters and digits", key, s.SignalISIN)
+	case s.SignalISIN == s.ISIN:
+		return fmt.Errorf("%s.signal_isin is the traded line's own ISIN; leave it unwritten to read the line's own closes", key)
+	case !ccy.MatchString(s.SignalCurrency) || s.SignalIn != "" && !ccy.MatchString(s.SignalIn):
+		return fmt.Errorf("%s.signal_currency and %s.signal_in are three upper-case letters", key, key)
 	}
 	return nil
 }

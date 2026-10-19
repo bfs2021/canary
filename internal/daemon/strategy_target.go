@@ -408,6 +408,7 @@ func (s *Server) refreshStrategies(ctx context.Context) {
 				s.refreshMandateSeries(ctx, conn, instrumentSeriesNeed(seriesKeyFor(r, k.ConID), k))
 			}
 		}
+		s.refreshStrategySignal(ctx, r)
 		s.refreshStrategyTarget(ctx, r)
 	}
 }
@@ -437,6 +438,9 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	case decided && r.State != register.StateLive && !s.shadowDue(ctx, r, latest):
 		return
 	}
+	// An entry measured on a signal line decides on that line's calendar,
+	// whose month-end can differ from the traded line's: it is evaluated
+	// every cadence (its records are written once each all the same).
 	res := s.evaluateStrategyTarget(ctx, now, r)
 	// The shadow record's only writer (strategy-register.md, section 3),
 	// every live entry's decision record's (core_rebalance.go) and a live
@@ -626,23 +630,61 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	trend, trendOK := core.FindTrend(trendID)
 	var sig core.Signal
 	var window core.Window
-	if series != nil && latest != "" && trendOK {
-		sessions, off := coreCalendar(series.Dates, latest, now, contract.Market)
-		for _, d := range off {
-			hold(fmt.Sprintf("the %s history carries a bar on %s, when %s was closed", sym, d, venue))
+	// What the month is measured on: the traded line's own closes, or,
+	// while they do not fill the window, the entry's signal series, another
+	// share class of the fund (strategy_signal.go). Nothing falls back: a
+	// signal series that cannot be read holds the entry, named.
+	var mDates []string
+	var mCloses []float64
+	mMarket, mLatest, mSym, mVenue, mLabel := marketcal.Market(""), latest, sym, venue, digestLabel(r)
+	var mContract *coreContract
+	if series != nil && contract != nil {
+		mDates, mCloses, mMarket, mContract = series.Dates, series.Closes, contract.Market, contract
+	}
+	useSignal := false
+	if !isCore && r.Signal.ISIN != "" && contract != nil && latest != "" {
+		own := strategyOwnSessions(series, latest, now, contract.Market)
+		ev := &rpc.CoreSignalEvidence{ISIN: r.Signal.ISIN, Currency: r.Signal.Currency, MeasuredIn: r.SignalIn, OwnSessions: own}
+		if own < core.WindowCloses {
+			m, holds := s.strategySignalMeasure(ctx, r, name, now)
+			for _, h := range holds {
+				hold(h)
+			}
+			mDates, mCloses = nil, nil
+			if m != nil {
+				ev = m.Evidence
+				ev.OwnSessions = own
+				sLatest, sNext, why := coreDecisionDays(now, m.Market)
+				if why != "" {
+					hold(why)
+				}
+				useSignal = true
+				mDates, mCloses, mMarket, mContract, mLatest = m.Dates, m.Closes, m.Market, m.Contract, sLatest
+				mSym, mVenue, mLabel = m.Contract.Symbol, nonEmptyString(marketcal.Label(m.Market), m.Contract.PrimaryExch), mLabel+m.Label
+				res.NextDecision = sNext
+			}
 		}
-		if series.Dates[len(series.Dates)-1] < latest {
-			hold(fmt.Sprintf("the decision waits for %s's close of %s", sym, latest))
+		if res.Evidence != nil {
+			res.Evidence.Signal = ev
+		}
+	}
+	if len(mDates) > 0 && mLatest != "" && trendOK {
+		sessions, off := coreCalendar(mDates, mLatest, now, mMarket)
+		for _, d := range off {
+			hold(fmt.Sprintf("the %s history carries a bar on %s, when %s was closed", mSym, d, mVenue))
+		}
+		if mDates[len(mDates)-1] < mLatest {
+			hold(fmt.Sprintf("the decision waits for %s's close of %s", mSym, mLatest))
 		} else {
-			sig, window = core.MeasureWith(trend, digestLabel(r), sessions, series.Dates, series.Closes, latest)
+			sig, window = core.MeasureWith(trend, mLabel, sessions, mDates, mCloses, mLatest)
 			if sig.Status != core.StatusOK {
-				hold(fmt.Sprintf("no decision for %s: %s", latest, sig.Reason))
+				hold(fmt.Sprintf("no decision for %s: %s", mLatest, sig.Reason))
 			} else {
 				// The data guard corroborates a jump on the instrument's
 				// returns proxy where the mandate has one; without one a
 				// jump holds for review.
-				proxy := mandate.ReturnsSeriesFor(contract.Symbol, contract.Currency, contract.ISIN)
-				if proxy == contract.Symbol {
+				proxy := mandate.ReturnsSeriesFor(mContract.Symbol, mContract.Currency, mContract.ISIN)
+				if proxy == mContract.Symbol {
 					proxy = ""
 				}
 				index := core.Series{}
@@ -656,7 +698,23 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 				}
 			}
 			res.Decision = &rpc.CoreDecision{Signal: sig}
+			if useSignal {
+				// Sized, limit-checked and marked on the traded line's own
+				// close on or before the decision day.
+				res.Decision.SignalFrom = fmt.Sprintf("%s (%s) in %s", mSym, r.Signal.ISIN, nonEmptyString(r.SignalIn, r.Signal.Currency))
+				if c, _, ok := strategyLineCloseOn(series, sig.Decision); ok {
+					res.Decision.TradedClose = c
+				} else {
+					hold(fmt.Sprintf("no %s close on or before the decision day %s to size the target on", sym, sig.Decision))
+				}
+			}
 		}
+	}
+	// sizeSig is the signal the target is sized on: the decision's close is
+	// the traded line's own when the month was measured on another class.
+	sizeSig := sig
+	if res.Decision != nil && res.Decision.TradedClose > 0 {
+		sizeSig.Close = res.Decision.TradedClose
 	}
 
 	// The mandate: capital for the size, the book for the holding and the
@@ -702,7 +760,9 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	// the entry holds, naming them: it trades only a line it holds alone.
 	held, price, priceSource := 0, 0.0, ""
 	if input != nil && contract != nil && !isCore && strategyReserves(e) {
-		if why := strategyForeignHold(name, sym, strategyOwnerUnitsInBook(input, contract.ConID)); why != "" {
+		if s.strategyOwnFills(ctx, e.ID, contract.ConID).Unread {
+			hold("the order journal could not be read, so " + name + "'s own units of its line are not known; it holds until the journal reads")
+		} else if why := strategyForeignHold(name, sym, strategyOwnerUnitsInBook(input, contract.ConID)); why != "" {
 			hold(why)
 		}
 	}
@@ -757,8 +817,8 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	}
 	if sig.Status == core.StatusOK && verdict != nil && verdict.Capital.Known && sizable && contract != nil {
 		on := core.Sizing{AllocationPct: *e.AllocationPct, ScalePct: *e.ScalePct, MaxValuePct: *e.MaxValuePct, BudgetBase: verdict.Capital.BudgetBase, Room: verdict.Capital.Room}
-		current := core.SizeTarget(sig, on)
-		killOf(killMark{session: sig.Decision, close: sig.Close, sleeveBudget: current.SleeveBudget})
+		current := core.SizeTarget(sizeSig, on)
+		killOf(killMark{session: sig.Decision, close: sizeSig.Close, sleeveBudget: current.SleeveBudget})
 		scope := frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID)
 		frozen := s.coreFrozen(ctx, scope)
 		switch {

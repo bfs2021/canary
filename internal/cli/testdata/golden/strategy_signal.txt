@@ -1,0 +1,82 @@
+# canary strategy trend-fund · COLUMNS=80 · colour off
+trend-fund  ROW PENDING: BUY 159 SYNF
+Rule · timed-holding-v1 · signal trend-sma10m · spec cited cdcdcdcdcdcd ·
+  ZZ0000000001 EUR · sleeve trend
+Stage · live · reserves 25% of its allocation · spec cited
+Contract · 9040 SYNF on LSEETF, EUR · London SETS calendar · from IBKR's
+  record for the ISIN
+Action · buy 159 shares · first buy toward the target
+Row · buy 159 shares SYNF · LMT DAY at the live mid, snapped to the tick grid,
+  never crossing the mid · for the 2026-09-04 session (window 2026-09-01 to
+  2026-09-08) · generated, opening window · key strategy_rebalance:synthetic03
+Last decision · 2026-08-31 · buy 159 shares · first buy toward the target ·
+  decided 14:00:00 TZ · row served, not sent
+Decision · 2026-08-31 · close 95.95 above its 10-month average 89.50: trend on
+  · frozen 14:00:00 TZ · measured on SYNS (ZZ0000000002) in USD; sized on
+  SYNF's close 96.10
+Volatility · 15.0% from the 15% floor · EWMA 13.0% · 252-day 11.6%
+Target · 159 shares (15,280 EUR) · 4% of 230,000 EUR × room 100% ÷ 15.0%
+  volatility, at most 40% (92,000 EUR) · scale 25%
+Holding · 0 shares (0 EUR) · price 96.10 last close
+Band · 10% of the target (16 shares) · minimum order 2,500 EUR
+Mandate · within · risk 3,267 EUR a year of the budget 34,500 EUR
+Kill rule · drawdown 0.01 K on its own fills at 1 decision · bound 3 K
+Next decision · 2026-09-30 after the London SETS close
+
+Month-ends
+  2025-11-28 86.39 · 2025-12-30 89.83 · 2026-01-30 88.91 · 2026-02-27 85.30 ·
+  2026-03-31 86.39 · 2026-04-30 89.03 · 2026-05-29 90.02 · 2026-06-30 92.62 ·
+  2026-07-31 90.53 · 2026-08-31 95.95
+
+Evidence
+  strategy:trend-fund:con:9040 · 320 closes to 2026-09-04 · read 05:00:00 TZ
+    · London SETS calendar
+  Signal · SYNS ZZ0000000002 in USD · decides while SYNF's own closes cover
+    109 of the window's 253 sessions · 320 closes to 2026-09-04 · converted at
+    GBP.USD
+  Mandate verdict · 13:59:00 TZ
+Live: the trend-fund strategy serves its month's row among the proposals, sent
+  on your confirmation on your device or by Desk's controller under the standing
+  mandate you confirmed there; it is never pre-authorised. It is a rule you
+  chose, not an edge claim.
+# canary strategy trend-fund · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mtrend-fund\x1b[0m  \x1b[32m\x1b[1mROW PENDING: BUY 159 SYNF\x1b[0m\x1b[0m
+Rule · timed-holding-v1 · signal trend-sma10m · spec cited cdcdcdcdcdcd ·
+  ZZ0000000001 EUR · sleeve trend
+Stage · live · reserves 25% of its allocation · spec cited
+Contract · 9040 SYNF on LSEETF, EUR · London SETS calendar · from IBKR's
+  record for the ISIN
+Action · buy 159 shares · first buy toward the target
+Row · buy 159 shares SYNF · LMT DAY at the live mid, snapped to the tick grid,
+  never crossing the mid · for the 2026-09-04 session (window 2026-09-01 to
+  2026-09-08) · generated, opening window · key strategy_rebalance:synthetic03
+Last decision · 2026-08-31 · buy 159 shares · first buy toward the target ·
+  decided 14:00:00 TZ · row served, not sent
+Decision · 2026-08-31 · close 95.95 above its 10-month average 89.50: trend on
+  · frozen 14:00:00 TZ · measured on SYNS (ZZ0000000002) in USD; sized on
+  SYNF's close 96.10
+Volatility · 15.0% from the 15% floor · EWMA 13.0% · 252-day 11.6%
+Target · 159 shares (15,280 EUR) · 4% of 230,000 EUR × room 100% ÷ 15.0%
+  volatility, at most 40% (92,000 EUR) · scale 25%
+Holding · 0 shares (0 EUR) · price 96.10 last close
+Band · 10% of the target (16 shares) · minimum order 2,500 EUR
+Mandate · within · risk 3,267 EUR a year of the budget 34,500 EUR
+Kill rule · drawdown 0.01 K on its own fills at 1 decision · bound 3 K
+Next decision · 2026-09-30 after the London SETS close
+
+\x1b[1mMonth-ends\x1b[0m
+  2025-11-28 86.39 · 2025-12-30 89.83 · 2026-01-30 88.91 · 2026-02-27 85.30 ·
+  2026-03-31 86.39 · 2026-04-30 89.03 · 2026-05-29 90.02 · 2026-06-30 92.62 ·
+  2026-07-31 90.53 · 2026-08-31 95.95
+
+\x1b[1mEvidence\x1b[0m
+  strategy:trend-fund:con:9040 · 320 closes to 2026-09-04 · read 05:00:00 TZ
+    · London SETS calendar
+  Signal · SYNS ZZ0000000002 in USD · decides while SYNF's own closes cover
+    109 of the window's 253 sessions · 320 closes to 2026-09-04 · converted at
+    GBP.USD
+  Mandate verdict · 13:59:00 TZ
+Live: the trend-fund strategy serves its month's row among the proposals, sent
+  on your confirmation on your device or by Desk's controller under the standing
+  mandate you confirmed there; it is never pre-authorised. It is a rule you
+  chose, not an edge claim.

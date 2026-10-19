@@ -210,6 +210,16 @@ func goldenStrategyLive() rpc.StrategyTargetResult {
 	return res
 }
 
+// goldenStrategySignal is the live entry measured on its fund's older
+// share class while its own line's closes do not fill the window.
+func goldenStrategySignal() rpc.StrategyTargetResult {
+	res := goldenStrategyLive()
+	res.Decision.SignalFrom, res.Decision.TradedClose = "SYNS (ZZ0000000002) in USD", 96.1
+	res.Evidence.Signal = &rpc.CoreSignalEvidence{ISIN: "ZZ0000000002", Currency: "GBP", MeasuredIn: "USD", Symbol: "SYNS", ConID: 9050, Calendar: "uk_lse",
+		SeriesKey: "strategy:trend-fund:signal:con:9050", Closes: 320, LastClose: "2026-09-04", FXKey: "strategy:trend-fund:fx:GBPUSD", InUse: true, OwnSessions: 109}
+	return res
+}
+
 // goldenStrategyHold is an entry that holds: a key unwritten, so nothing is
 // resolved or decided.
 func goldenStrategyHold() rpc.StrategyTargetResult {

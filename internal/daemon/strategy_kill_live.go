@@ -71,7 +71,7 @@ func (s *Server) liveMarks(ctx context.Context, id string) ([]liveMark, error) {
 // keeps it unique under retries.
 func (s *Server) recordLiveMark(ctx context.Context, res *rpc.StrategyTargetResult, r register.Resolved, now time.Time) {
 	if s.coreStore == nil || res == nil || r.State != register.StateLive || r.Entry.ID == "" || res.Decision == nil || res.Decision.FrozenAt.IsZero() || res.Decision.Drift ||
-		res.Sizing == nil || !(res.Decision.Close > 0) || !(res.Sizing.Current.SleeveBudget > 0) || res.Instrument == nil || res.Instrument.ConID <= 0 {
+		res.Sizing == nil || !(res.Decision.LineClose() > 0) || !(res.Sizing.Current.SleeveBudget > 0) || res.Instrument == nil || res.Instrument.ConID <= 0 {
 		return
 	}
 	key := liveMarkKey(r.Entry.ID, res.Decision.Decision)
@@ -82,7 +82,7 @@ func (s *Server) recordLiveMark(ctx context.Context, res *rpc.StrategyTargetResu
 	if s.liveMarkFillsForTest != nil {
 		own = s.liveMarkFillsForTest()
 	}
-	m := liveMark{Version: 1, Strategy: r.Entry.ID, Session: res.Decision.Decision, Close: res.Decision.Close, Units: own.Units, Cash: own.Cash, SleeveBudget: res.Sizing.Current.SleeveBudget, RecordedAt: now}
+	m := liveMark{Version: 1, Strategy: r.Entry.ID, Session: res.Decision.Decision, Close: res.Decision.LineClose(), Units: own.Units, Cash: own.Cash, SleeveBudget: res.Sizing.Current.SleeveBudget, RecordedAt: now}
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return

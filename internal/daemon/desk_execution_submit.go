@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/osauer/canary/v2/internal/core"
+	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
@@ -427,23 +428,29 @@ func (s *Server) deskExecutionOutcomeOf(res rpc.TradeProposalSubmitResult, err, 
 }
 
 // deskRegisterDigest fingerprints the strategy register as the owner wrote
-// it: every key of every entry the evaluator and the register read (rule,
-// cited spec, sleeve, stage, scale, allocation, the fund, its pins, the
-// signal and its series, the band, the minimum, the value cap and the kill
-// bound). "" while no constitution or register is in force.
+// it: the [mandate.core] and [mandate.strategies] tables and the core's
+// and the overlay's allocations, key by key as written (absent keys are omitted, so a build
+// that adds an optional key keeps every standing arming), never the
+// register's derived fields. "" while no register is written.
 func (s *Server) deskRegisterDigest() string {
 	if s == nil || s.riskPolicies == nil {
 		return ""
 	}
 	c := s.riskPolicies.snapshot().policy
-	if c == nil || c.Mandate == nil {
+	if c == nil || c.Mandate == nil || c.Mandate.Core == nil && len(c.Mandate.Strategies) == 0 {
 		return ""
 	}
-	entries := c.Mandate.Register()
-	if len(entries) == 0 {
-		return ""
+	var coreVol, overlayVol *float64
+	if sl := c.Mandate.Sleeves; sl != nil {
+		coreVol, overlayVol = sl.CoreVolPct, sl.OverlayVolPct
 	}
-	raw, _ := json.Marshal(entries)
+	raw, _ := json.Marshal(struct {
+		Version    int                                          `json:"v"`
+		Core       *risk.ConstitutionMandateCore                `json:"core,omitempty"`
+		Strategies map[string]*risk.ConstitutionMandateStrategy `json:"strategies,omitempty"`
+		CoreVol    *float64                                     `json:"core_vol_pct,omitempty"`
+		OverlayVol *float64                                     `json:"overlay_vol_pct,omitempty"`
+	}{1, c.Mandate.Core, c.Mandate.Strategies, coreVol, overlayVol})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }

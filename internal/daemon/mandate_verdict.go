@@ -236,7 +236,6 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	}
 	evidence := &rpc.MandateEvidence{EvaluatedAt: now, EquityAsOf: capital.EquityAsOf}
 	pos, err := s.mandatePositions(ctx)
-	positionsKnown := false
 	switch {
 	case err != nil:
 		in.Reasons = append(in.Reasons, "positions could not be read: "+errText(err))
@@ -246,8 +245,6 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		in.Reasons = append(in.Reasons, "the positions read belongs to another account than the selected one")
 	case pos.Portfolio != nil && pos.Portfolio.BaseCurrency != "" && base != "" && normCcy(pos.Portfolio.BaseCurrency) != base:
 		in.Reasons = append(in.Reasons, fmt.Sprintf("the account base currency %s differs from capital.base_currency %s", pos.Portfolio.BaseCurrency, base))
-	default:
-		positionsKnown = true
 	}
 	if pos != nil {
 		evidence.PositionsAsOf = pos.AsOf
@@ -278,12 +275,12 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	// the legs, since a live strategy on hold keeps its reservation only
 	// while its sleeve holds positions.
 	resolved := s.resolvedRegister(c)
-	placement := s.mandateStrategyPlacement(ctx, c, resolved, in.Legs, positionsKnown)
+	// A register entry's young line is measured on its signal series' returns
+	// until its own closes fill the history (strategy_signal.go).
+	s.withStrategyRiskSeries(ctx, resolved, &in, evidence, now)
+	placement := s.mandateStrategyPlacement(ctx, c, resolved, in.Legs)
 	in.Legs = placement.Legs
 	in.Allocations = mandateAllocationPlanPlaced(c, resolved, placement.Placed, in.Legs)
-	if in.Allocations != nil {
-		in.Allocations.Unknown = strings.Join(placement.Unknown, "; ")
-	}
 	verdict := mandate.Evaluate(in)
 	// The owner sleeve's drawdown stop reads this verdict's legs and use, and
 	// the kept input carries it, so every evaluation sized or judged on this
@@ -537,10 +534,14 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: fmt.Sprintf("Mandate budget: the verdict is %s old and cannot be shown current; this order adds risk.", formatQuoteAge(age)) + open, Action: action}
 	}
 	ccy := result.Verdict.BaseCurrency
-	// While some line's placement is unknown (rule 4) every sleeve's use is
-	// unknown, so nothing that adds risk passes.
-	if input.Allocations != nil && input.Allocations.Unknown != "" {
-		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: the risk allocations cannot be measured: " + input.Allocations.Unknown + "; this order adds risk." + open, Action: action}
+	// A live entry's line is the entry's to add to: a hand buy of it would
+	// mix the owner's units into the line it trades, so it is refused while
+	// the entry is live; sales stay open (strategy_placement.go).
+	if draft.RegisterEntry == "" {
+		if why := s.mandateEntryLineRefusal(c, draft); why != "" {
+			return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + why + "." + open,
+				Action: "Let the strategy trade its line, or write its stage = \"suspended\" with a higher policy_version to trade it by hand."}
+		}
 	}
 	// The order is placed by its origin, as the verdict places fills
 	// (strategy_placement.go): the core's contract is the core's whoever

@@ -578,7 +578,7 @@ func coreRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources
 		p.Notional = price * float64(plan.Quantity)
 	}
 	p.Core = &rpc.TradeProposalCore{Decision: d.Decision, TrendOn: d.TrendOn, Kind: plan.Kind, Target: target, Held: held, ScalePct: in.ScalePct,
-		ConID: k.ConID, Currency: k.Currency, DecisionClose: d.Close, Session: plan.Session, Sleeve: risk.CoreStrategyID, Stage: string(in.State), Terms: terms}
+		ConID: k.ConID, Currency: k.Currency, DecisionClose: d.LineClose(), Session: plan.Session, Sleeve: risk.CoreStrategyID, Stage: string(in.State), Terms: terms}
 	if !in.isCore() {
 		p.Core.Sleeve, p.Core.Strategy = in.Entry.Entry.Sleeve, in.Entry.Entry.ID
 		if in.Entry.Rule != nil {

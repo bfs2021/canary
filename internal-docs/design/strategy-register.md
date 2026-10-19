@@ -307,17 +307,14 @@ last decision. A live entry keeps no shadow record.
 
 Placement (`strategy_placement.go`; `mandate-risk-budget.md`, "Placement",
 as built 2026-10-19): by lineage. A live or suspended entry's units of its
-line are what its own fills left (the executions of the orders its
-submitted rows sent, read from the proposal and order journals by order
-reference), never more than the broker holds; every other unit is the
-owner's, a hand buy included. A line the entry holds alone is placed whole
-in its sleeve; a line both hold is split into the owner's leg and the
-entry's own; while the owner holds any units of the line the entry holds,
-naming them, and trades again once they are sold. While one of its orders
-on the line is in flight and the journal and the position disagree, the
-placement is unknown and no risk-adding order passes (at most ten minutes;
-the placement is a ledger carried from verdict to verdict, so a hand sale
-of the entry's units lowers them for good). An order is placed by
+line are what its own fills left (the orders its submitted rows sent, read
+from the proposal and order journals by order reference), never more than
+the broker holds, read afresh at every verdict; every other unit is the
+owner's. While an entry is live a hand buy of its line is refused (sales
+stay open), so a line the entry holds is its alone and placed whole in its
+sleeve; owner's units beside it (from before its first fill, or a trade
+outside Canary) split the line and hold the entry, named, until sold. An
+order is placed by
 its origin: the entry's own row (`OrderDraft.RegisterEntry`, daemon-set) in
 its sleeve, anything else on the line in the owner's; a strategy order that
 is not a stock order of its own line is refused before the hedge or the
@@ -334,6 +331,14 @@ signal, band, minimum, cap, kill bound) withdraws the mandate for strategy
 buys until the owner confirms again (`deskRegisterDigest`, checked before
 journaling and again inside the fenced attempt); sales, reductions and
 protection still go, so an edit never stops the mandate's de-risking.
+
+An entry may name a signal series apart from its traded line
+(`signal_isin`, `signal_currency`, `signal_in`; `strategy-evaluator.md` §7):
+another listed share class of the same fund that decides the month while
+the traded line's own closes do not fill the window, read under
+`strategy:<id>:signal:con:<id>` (and its rate under `strategy:<id>:fx:<pair>`),
+never a book key. Two entries may not name one fund line; the signal line is
+not a traded line and reserves nothing.
 
 `canary status` lists each entry's stage and its row (or why none stands)
 from the engine's last generation (`HealthResult.Strategies`).

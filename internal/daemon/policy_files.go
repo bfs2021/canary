@@ -1403,13 +1403,19 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # ISIN and currency (the account's base currency, in this build), a signal
 # from the library (trend-sma10m), the no-trade band, the minimum order and
 # the value cap, as [mandate.core] writes them; con_id and exchange are
-# optional pins. canary strategy ID shows what it would trade.
+# optional pins. A live entry serves its month's row as the core does.
+# signal_isin and signal_currency name another listed share class of the
+# same fund whose closes the signal reads while the traded line's own do
+# not fill the evaluator's window, and signal_in the currency its closes
+# are measured in (converted at each session's IDEALPRO close); the traded
+# line's closes take over once they fill it. canary strategy ID shows what
+# it would trade.
 # [mandate.strategies.example]
 # rule = "timed-holding-v1"
 # spec_hash = ""
 # sleeve = "example"
 # risk_allocation_pct = 2.0
-# stage = "shadow"
+# stage = "live"
 # scale_pct = 25.0
 # isin = ""
 # currency = "EUR"
@@ -1418,6 +1424,9 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # min_order_base = 2500.0
 # max_value_pct = 40.0
 # kill_drawdown_k = 1.0
+# signal_isin = ""
+# signal_currency = "GBP"
+# signal_in = "USD"
 `)
 	return []byte(b.String())
 }

@@ -446,9 +446,6 @@ type Server struct {
 	// coreTargets keeps every registered strategy's frozen monthly decisions
 	// and contract pins (strategy_target.go, core_resolve.go).
 	coreTargets coreTargetStore
-	// strategyLedgers keeps each register entry's placement of its line,
-	// carried from verdict to verdict (strategy_ledger.go).
-	strategyLedgers strategyLedgerStore
 	// liveMarkFillsForTest replaces the journals' own fills a live entry's
 	// kill mark is written with (strategy_kill_live.go). Tests only.
 	liveMarkFillsForTest func() strategyFills

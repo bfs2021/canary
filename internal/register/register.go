@@ -178,6 +178,12 @@ type Resolved struct {
 	Data       Data       `json:"data,omitzero"`
 	// KillDrawdownK is the kill rule's drawdown bound, nil while unwritten.
 	KillDrawdownK *float64 `json:"kill_drawdown_k,omitempty"`
+	// Signal is the listing the signal is read on while the traded line's
+	// own closes do not fill the window, and SignalIn the currency its
+	// closes are measured in (strategy-evaluator.md §7); zero for an entry
+	// that reads only its own closes, and for the core.
+	Signal   Instrument `json:"signal,omitzero"`
+	SignalIn string     `json:"signal_in,omitempty"`
 }
 
 // Reserves reports whether the entry reserves any of its allocation.
@@ -252,6 +258,14 @@ func resolveOne(e risk.StrategyEntry, rules []Rule) Resolved {
 		r.Instrument = Instrument{ISIN: e.ISIN, Currency: e.Currency, Exchange: e.Exchange}
 		r.Trend, r.SpecHash = e.Signal, e.SpecHash
 		r.Data = Data{Series: []SeriesNeed{{ISIN: e.ISIN, Currency: e.Currency, Sessions: core.WindowCloses}}}
+		if e.SignalISIN != "" {
+			r.Signal = Instrument{ISIN: e.SignalISIN, Currency: e.SignalCurrency}
+			r.SignalIn = e.SignalIn
+			if r.SignalIn == "" {
+				r.SignalIn = e.SignalCurrency
+			}
+			r.Data.Series = append(r.Data.Series, SeriesNeed{ISIN: e.SignalISIN, Currency: e.SignalCurrency, Sessions: core.WindowCloses})
+		}
 	} else {
 		r.Instrument, r.Trend, r.SpecHash, r.Data = rule.Instrument, rule.Trend, rule.SpecHash, rule.Data
 		r.Instrument.Exchange = e.Exchange

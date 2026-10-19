@@ -19,24 +19,24 @@ import (
 // Placement for the register's other entries (internal-docs/design/
 // mandate-risk-budget.md, "Placement", rules 1 to 5; built with the first
 // order path that sends a non-core entry's rows, 2026-10-19). Each entry
-// trades one line, and its units of the line are what its own rows filled:
-// the executions of the orders its submitted rows sent, read from the
-// proposal journal (the rows' submitted events carry the entry's id and
-// line) and the order journal. An opening fill of its own order places
-// units in its sleeve (rule 1); a sale takes its own units (rule 2), and a
-// sale the broker's position shows beyond the owner's units takes the
-// entry's (the owner's hand sale takes the owner's first); every other unit
-// of the line is the owner's, a hand buy included. The placed units always
-// sum to the broker's position (rule 4): a line the entry holds alone is
-// placed in its sleeve whole, a line both hold is split into the owner's leg
-// and the entry's own (strategyLegID), and while one of the entry's orders
-// on the line is in flight and the journal and the position disagree, the
-// placement is unknown and no risk-adding order passes until it is known.
-// Nothing is re-placed by hand (rule 5). An order is placed by its origin:
-// the entry's own row (OrderDraft.RegisterEntry) in the entry's sleeve,
-// anything else on the line in the owner's, so the gate and the verdict
-// agree. The core's reserved contract is unchanged: every unit of it is the
-// core's whoever bought it.
+// trades one line, and its units of the line are what its own rows filled
+// (rule 1): the orders its submitted rows sent, read from the proposal
+// journal (the rows' submitted events carry the entry's id and line) and the
+// order journal, never more than the broker holds; every other unit of the
+// line is the owner's. A sale of the entry's units, its own or by hand,
+// lowers them (rule 2: the owner's units go first, and while the entry is
+// live the owner holds none of its line). While an entry is live a hand buy
+// of its line is refused at the gate (mandateEntryLineRefusal), so the line
+// is held by the entry alone and is placed whole in its sleeve; the owner's
+// units can stand beside the entry's only from before its first fill or
+// from a trade outside Canary, and then the line is split into the owner's
+// leg and the entry's own and the entry holds, naming them (rule 4: the
+// placed units sum to the broker's position). The units are read afresh at
+// every verdict, so a late journal or position read corrects itself on the
+// next one and nothing is ever re-placed by hand (rule 5). An order is
+// placed by its origin: the entry's own row (OrderDraft.RegisterEntry) in
+// the entry's sleeve, anything else in the owner's. The core's reserved
+// contract is unchanged: every unit of it is the core's whoever bought it.
 
 // strategyFills is what an entry's own rows filled on its line: the shares
 // bought less the shares sold, the cash those fills moved in the line's
@@ -47,6 +47,9 @@ type strategyFills struct {
 	Cash  float64
 	Execs int
 	ByRef map[string]float64
+	// Unread says the journals could not be read: no fill is known, and the
+	// entry holds rather than trade on a guess.
+	Unread bool
 }
 
 // strategyOwnFills reads an entry's own fills on a line from the journals,
@@ -76,12 +79,12 @@ func (s *Server) strategyOwnFills(ctx context.Context, id string, conID int) str
 	}
 	store, err := s.orderJournal.coreStore()
 	if err != nil {
-		return strategyFills{ByRef: map[string]float64{}}
+		return strategyFills{ByRef: map[string]float64{}, Unread: true}
 	}
 	for _, ref := range refs {
 		records, err := store.LoadOrderEvents(ctx, corestore.OrderQuery{OrderRef: ref, Limit: 10_000})
 		if err != nil {
-			return strategyFills{ByRef: map[string]float64{}}
+			return strategyFills{ByRef: map[string]float64{}, Unread: true}
 		}
 		seen := map[string]bool{}
 		side, execShares, execCash, statusFilled, avg := 0.0, 0.0, 0.0, 0.0, 0.0
@@ -186,74 +189,19 @@ func strategyLineUnits(held float64, own strategyFills) (entry, owner float64) {
 	return entry, held - entry
 }
 
-// strategyOrderInFlight reports whether one of an entry's orders on a line
-// is in flight: a row of it submitted in the last strategyInFlightFor whose
-// order the journal shows no terminal state for. While one is, a broker
-// position that disagrees with the journal's fills is an execution not yet
-// journaled, so the line's placement is unknown rather than guessed.
-func (s *Server) strategyOrderInFlight(ctx context.Context, id string, conID int) bool {
-	if s == nil || s.tradeProposals == nil || s.tradeProposals.store == nil || s.orderJournal == nil {
-		return false
-	}
-	scope := s.currentBrokerStateScope()
-	since := s.nowUTC().Add(-strategyInFlightFor)
-	store, err := s.orderJournal.coreStore()
-	if err != nil {
-		return false
-	}
-	for _, ev := range s.tradeProposals.store.eventsSince(since) {
-		if ev.Type != "submitted" || ev.Bucket != rpc.TradeProposalBucketStrategyRebalance || ev.Strategy != id || ev.ConID != conID || ev.OrderRef == "" ||
-			!sameBrokerScope(scope, brokerStateScope{Account: ev.AccountID, Mode: ev.AccountMode}) {
-			continue
-		}
-		records, err := store.LoadOrderEvents(ctx, corestore.OrderQuery{OrderRef: ev.OrderRef, Limit: 10_000})
-		if err != nil {
-			return true // unreadable: not known to be done
-		}
-		done := false
-		for _, record := range records {
-			if o, err := decodeCoreOrderEvent(record); err == nil && strategyOrderTerminal(o) {
-				done = true
-			}
-		}
-		if !done {
-			return true
-		}
-	}
-	return false
-}
-
-// strategyInFlightFor bounds how long a submitted row counts as in flight
-// without a terminal state: a DAY order ends with its session, so a row
-// older than this is no longer working whatever the journal says.
-const strategyInFlightFor = 3 * 24 * time.Hour
-
-func strategyOrderTerminal(ev orderJournalEvent) bool {
-	if ev.SendState == orderSendStateTerminal || ev.Type == orderJournalEventReconciledAbsent || ev.Type == orderJournalEventSendError {
-		return true
-	}
-	switch strings.ToLower(strings.TrimSpace(ev.Status)) {
-	case "filled", "cancelled", "apicancelled", "inactive":
-		return true
-	}
-	return false
-}
-
 // strategyPlacement is the register's placement of the book's lines: the
-// leg each machine sleeve's units are in, the book's legs with the lines
-// both an entry and the owner hold split, and why any line's placement is
-// unknown.
+// leg each machine sleeve's units are in, and the book's legs with the
+// lines both an entry and the owner hold split.
 type strategyPlacement struct {
-	Placed  map[string]string
-	Legs    []mandate.Leg
-	Unknown []string
+	Placed map[string]string
+	Legs   []mandate.Leg
 }
 
 // mandateStrategyPlacement places the book: the core's lines in the core's
 // sleeve (every unit, whoever bought it), and each live or suspended entry's
 // line by its own fills. The core's lines win a collision, which the policy
 // refuses anyway (risk.validateRegister).
-func (s *Server) mandateStrategyPlacement(ctx context.Context, c *risk.Constitution, resolved []register.Resolved, legs []mandate.Leg, positionsKnown bool) strategyPlacement {
+func (s *Server) mandateStrategyPlacement(ctx context.Context, c *risk.Constitution, resolved []register.Resolved, legs []mandate.Leg) strategyPlacement {
 	out := strategyPlacement{Placed: map[string]string{}, Legs: legs}
 	core := map[int]bool{}
 	if c != nil && c.Mandate != nil && c.Mandate.Core != nil {
@@ -273,26 +221,10 @@ func (s *Server) mandateStrategyPlacement(ctx context.Context, c *risk.Constitut
 			}
 			id := mandateConLegID(conID)
 			i := slices.IndexFunc(out.Legs, func(l mandate.Leg) bool { return l.ID == id })
-			held := 0.0
-			if i >= 0 {
-				held = out.Legs[i].Quantity
-			}
-			var entry float64
-			if positionsKnown {
-				// The ledger moves only on a current read of the positions,
-				// never on a book that failed to read (the verdict is unknown
-				// then anyway).
-				var why string
-				entry, why = s.strategyLedgerAdvance(ctx, r.Entry.ID, conID, held, s.strategyOwnFills(ctx, r.Entry.ID, conID), s.strategyOrderInFlight(ctx, r.Entry.ID, conID), s.nowUTC())
-				if why != "" {
-					out.Unknown = append(out.Unknown, strategyName(r.Entry)+"'s placement of "+id+" is being reconciled: "+why)
-				}
-			}
 			if i < 0 {
 				continue // not held: nothing to place
 			}
-			entry = math.Min(math.Max(0, entry), math.Max(0, held))
-			owner := held - entry
+			entry, owner := strategyLineUnits(out.Legs[i].Quantity, s.strategyOwnFills(ctx, r.Entry.ID, conID))
 			switch {
 			case entry <= 0:
 				// The owner's line: the entry holds none of it.
@@ -467,9 +399,12 @@ func (s *Server) strategyLineSeries(conID int, now time.Time) *mandateHistorySer
 		if r.Entry.Form == risk.StrategyFormCore || !slices.Contains(s.strategyLines(ctx, r), conID) {
 			continue
 		}
-		series := s.mandateHistorySeries(ctx, strategySeriesKey(r.Entry.ID, conID))
-		if series != nil && !mandateSeriesStale(series, now) && len(series.Closes) >= mandate.Closes &&
-			(series.Contract.ConID == 0 || series.Contract.ConID == conID) {
+		k, _, _, _ := s.instrumentPinState(s.requestedInstrument(r))
+		if k == nil || k.ConID != conID {
+			k = &coreContract{ConID: conID}
+		}
+		series, _ := s.strategyRiskSeries(ctx, r, k, now)
+		if series != nil && !mandateSeriesStale(series, now) && len(series.Closes) >= mandate.Closes {
 			return series
 		}
 	}
@@ -543,4 +478,23 @@ func mandateLegConID(legID string) int {
 		}
 	}
 	return 0
+}
+
+// mandateEntryLineRefusal says why an order no entry sent may not add to a
+// live entry's line, "" when it may: the line is the entry's to add to, so a
+// hand buy would mix the owner's units into it. Sales are never refused
+// here; the core's line keeps its own rule (every unit the core's).
+func (s *Server) mandateEntryLineRefusal(c *risk.Constitution, draft rpc.OrderDraft) string {
+	if draft.Contract.ConID <= 0 || !strings.EqualFold(strings.TrimSpace(draft.Action), rpc.OrderActionBuy) {
+		return ""
+	}
+	for _, r := range s.resolvedRegister(c) {
+		if r.Entry.Form == risk.StrategyFormCore || r.Entry.Stage != risk.StageLive {
+			continue
+		}
+		if slices.Contains(s.strategyLines(context.Background(), r), draft.Contract.ConID) {
+			return "this fund line is " + strategyName(r.Entry) + "'s while it is live: it buys the line by its own rows only, so a hand buy would mix your units into its line"
+		}
+	}
+	return ""
 }

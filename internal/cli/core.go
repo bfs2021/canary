@@ -157,7 +157,11 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 		if d.Drift {
 			frozen = env.red("drift since " + formatTimeShort(d.FrozenAt.Local()))
 		}
-		riskReadLine(env, "Decision", d.Decision, trend, frozen)
+		measured := ""
+		if d.SignalFrom != "" {
+			measured = "measured on " + d.SignalFrom + "; sized on " + sym + "'s close " + corePrice(d.TradedClose)
+		}
+		riskReadLine(env, "Decision", d.Decision, trend, frozen, measured)
 		binding := map[string]string{core.BindingFloor: "the 15% floor", core.BindingEWMA: "the EWMA", core.Binding252: "the 252-day"}[d.Binding]
 		riskReadLine(env, "Volatility", corePct(d.Sigma)+" from "+binding, "EWMA "+corePct(d.SigmaEWMA), "252-day "+corePct(d.Sigma252))
 	} else if d != nil && d.Reason != "" {
@@ -248,6 +252,21 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 		}
 		if e.ReadError != "" {
 			riskWarnReadLine(env, "  Last read", "failed "+formatTimeShort(e.ReadErrorAt.Local()), e.ReadError)
+		}
+		if sg := e.Signal; sg != nil {
+			line := fmt.Sprintf("%s %s in %s", nonEmpty(sg.Symbol, sg.ISIN), sg.ISIN, nonEmpty(sg.MeasuredIn, sg.Currency))
+			use := fmt.Sprintf("decides while %s's own closes cover %d of the window's %d sessions", sym, sg.OwnSessions, core.WindowCloses)
+			if !sg.InUse {
+				use = fmt.Sprintf("not read: %s's own closes fill the window", sym)
+			}
+			parts := []string{line, use}
+			if sg.Closes > 0 {
+				parts = append(parts, fmt.Sprintf("%d closes to %s", sg.Closes, sg.LastClose))
+			}
+			if sg.FXKey != "" {
+				parts = append(parts, "converted at "+sg.Currency+"."+sg.MeasuredIn)
+			}
+			riskReadLine(env, "  Signal", parts...)
 		}
 	}
 	if m := res.Mandate; m != nil && !m.EvaluatedAt.IsZero() {

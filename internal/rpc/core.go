@@ -254,6 +254,23 @@ type CoreDecision struct {
 	// of the same window's closes differs from the frozen one.
 	FrozenAt time.Time `json:"frozen_at,omitzero"`
 	Drift    bool      `json:"drift,omitempty"`
+	// SignalFrom names the signal series the month was measured on when it
+	// is not the traded line's own (another share class of the fund, while
+	// the traded line's closes do not fill the window); TradedClose is then
+	// the traded line's own close on or before the decision day, which the
+	// target is sized on, the row's limit is checked against and the kill
+	// rule marks. Both empty on the traded line's own closes.
+	SignalFrom  string  `json:"signal_from,omitempty"`
+	TradedClose float64 `json:"traded_close,omitempty"`
+}
+
+// LineClose is the traded line's close of the decision: TradedClose when
+// the month was measured on another share class, else the decision close.
+func (d CoreDecision) LineClose() float64 {
+	if d.TradedClose > 0 {
+		return d.TradedClose
+	}
+	return d.Close
 }
 
 // CoreSizingView is the target in money and shares: frozen at the
@@ -304,6 +321,31 @@ type CoreEvidence struct {
 	// read has succeeded since; ReadErrorAt is when it came.
 	ReadError   string    `json:"read_error,omitempty"`
 	ReadErrorAt time.Time `json:"read_error_at,omitzero"`
+	// Signal is the entry's signal series (another share class of the
+	// fund) while the traded line's own closes do not fill the window; nil
+	// when none is written.
+	Signal *CoreSignalEvidence `json:"signal,omitempty"`
+}
+
+// CoreSignalEvidence is a signal series as the evaluator read it: the
+// listing, the series and, when its closes are measured in another
+// currency, the exchange-rate series that converts them, and whether it
+// decides the month or the traded line's own closes have taken over.
+type CoreSignalEvidence struct {
+	ISIN       string `json:"isin"`
+	Currency   string `json:"currency"`
+	MeasuredIn string `json:"measured_in"`
+	Symbol     string `json:"symbol,omitempty"`
+	ConID      int    `json:"con_id,omitempty"`
+	Calendar   string `json:"calendar,omitempty"`
+	SeriesKey  string `json:"series_key,omitempty"`
+	Closes     int    `json:"closes,omitempty"`
+	LastClose  string `json:"last_close,omitempty"`
+	FXKey      string `json:"fx_key,omitempty"`
+	// InUse says the month is measured on this series; OwnSessions is how
+	// many of the window's sessions the traded line's own closes cover.
+	InUse       bool `json:"in_use"`
+	OwnSessions int  `json:"own_sessions"`
 }
 
 // FetchCoreTarget reads the daemon's core target. The daemon evaluates it

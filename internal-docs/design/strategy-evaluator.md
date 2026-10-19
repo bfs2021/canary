@@ -192,15 +192,55 @@ is unchanged. `canary strategy ID [--refresh] [--json]` and
 register lines name each entry's fund and signal. Shadow records of an
 entry carry its id, rule, cited hash and stage under `shadow/<id>`.
 
-## 7. What the owner decides before the second entry runs
+## 7. The second entry: the decisions as taken (2026-10-19)
 
-1. The trend fund and its line: iMGP DBi (London line DBMG) yes or no; the
-   ISIN and the currency of the line. A line not in EUR cannot run yet (§5).
-2. Its lab spec (registered, with its kill rule and no edge claim, as
-   `s0_core_sleeve`), whose hash the entry cites and whose params it copies.
-3. The entry in `risk-policy.toml` with a higher `policy_version`: the empty
-   overlay as its sleeve, `stage = "shadow"`, the scale, the three numbers.
-4. Whether its contract leaves protection's automatic sales, as the core's.
+The owner's instruction of 2026-10-19 07:07 CEST, "task build 2 and then 6
+as well", with every authorisation given, delegated these to the
+integrating session; each is recorded with its reason.
+
+1. **The fund and its line.** iMGP DBi Managed Futures, in its class hedged
+   to EUR (R EUR HP, ISIN LU3359622902), on Xetra (IBKR primary IBIS2,
+   symbol MFEH), in EUR. The rule chose it: a EUR line on a venue Canary
+   serves comes before the London line DBMG (the USD class quoted in GBP),
+   which would have needed FX sizing and funding; the Paris EUR class has
+   no calendar Canary embeds. §5's currency hold therefore still stands for
+   any other currency.
+2. **The signal series** (integrating session on the owner's delegated
+   judgement, 2026-10-19 07:31 CEST, verbatim in substance: "The trend
+   signal is the fund's, not the share class's, so read the ten-month
+   month-end series from the fund's oldest share class with enough history
+   ... A seven-month data hold on a live entry is a shadow by another name,
+   and the owner ruled shadow out"). The EUR class listed on 18 May 2026, so
+   its own closes fill the 253-session window only about mid-May 2027. The
+   entry names a signal series separately from the traded instrument
+   (`signal_isin`, `signal_currency`, `signal_in`): the fund's R USD class
+   (LU2951555585) on its London line (DBMG, GBP, closes since April 2025),
+   measured in USD, converted at each session's GBP.USD IDEALPRO close,
+   since the class's own currency is the dollar and a GBP quote of it would
+   mix sterling into the fund's trend. Until the EUR class's own closes
+   fill the window the month is measured on that series, on London's
+   calendar; the target is sized, the row's limit checked and the kill
+   rule marked on MFEH's own close; the mandate measures MFEH on the
+   series' returns, as it measures the core's fund on SPY's. From the first
+   decision whose window MFEH's closes fill, they take over. A signal line
+   that cannot be resolved, a series or a rate missing or stale, holds the
+   entry, named; nothing falls back. "Same fund" is the owner's citation in
+   the policy and the lab spec, checked for shape (another ISIN than the
+   traded line's), not by Canary.
+3. **The lab spec**: `s6_trend_fund`, registered (no edge claim; the same
+   ten-month filter on month-end closes; the kill rule a drawdown bound of
+   0.35 K, set a priori at about twice the replicated CTA index's recent
+   worst drawdown, wide on the owner's "aggressive side"). Its hash is the
+   entry's `spec_hash`.
+4. **The entry**: `[mandate.strategies.s6-trend]`, live, its own sleeve
+   `trend` with `risk_allocation_pct` at the budget's room left beside the
+   core's and the overlay's allocations (the file refuses more), scale 25
+   (the ladder's first live step, as the core's), band 10%, minimum 2,500,
+   cap 40%, `kill_drawdown_k = 0.35`; risk policy v16, written after the
+   daemon that reads it was installed.
+5. **Protection's automatic sales** leave its line out while the entry
+   holds it alone, as the core's (D5, extended); a hand buy of its line is
+   refused while it is live.
 
 ## 8. Build and verification
 

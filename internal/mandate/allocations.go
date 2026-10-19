@@ -49,12 +49,6 @@ type MachineAllocation struct {
 type AllocationPlan struct {
 	Machine []MachineAllocation
 	Placed  map[string]string
-	// Unknown names why some line's placement is unknown (an order of a
-	// machine sleeve on it is in flight and the broker's position and the
-	// journal's fills disagree): the additions gate refuses every
-	// risk-adding order until it is known (mandate-risk-budget.md,
-	// "Placement", rule 4). Empty while placement is total.
-	Unknown string
 }
 
 // SleeveOf names the sleeve a leg is placed in; every leg is the owner's
@@ -74,7 +68,7 @@ func (p *AllocationPlan) WithPlaced(legID, sleeve string) *AllocationPlan {
 	if p == nil {
 		return nil
 	}
-	out := &AllocationPlan{Machine: p.Machine, Placed: make(map[string]string, len(p.Placed)+1), Unknown: p.Unknown}
+	out := &AllocationPlan{Machine: p.Machine, Placed: make(map[string]string, len(p.Placed)+1)}
 	maps.Copy(out.Placed, p.Placed)
 	if sleeve != "" && sleeve != SleeveOwner {
 		out.Placed[legID] = sleeve

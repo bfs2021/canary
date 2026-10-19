@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -288,6 +289,13 @@ func TestStrategyLineIsPlacedByLineage(t *testing.T) {
 	if res := liveTrendTarget(t, srv); res.Holding.Shares != 159 || res.Status != rpc.CoreStatusHold {
 		t.Fatalf("beside the owner's units: holding %+v status %s", res.Holding, res.Status)
 	}
+	// The forced reduction sizes a split line as one line on the broker's
+	// position, so the entry's units are within its reach (refuter R2).
+	merged := mandateMergedLegs(input.Legs)
+	if i := slices.IndexFunc(merged, func(l mandate.Leg) bool { return l.ID == line }); i < 0 || merged[i].Quantity != 659 ||
+		slices.ContainsFunc(merged, func(l mandate.Leg) bool { return strings.HasPrefix(l.ID, "sleeve:") }) {
+		t.Fatalf("R2: the reduction's legs %+v", merged)
+	}
 
 	// The owner sells their 500: the line is the entry's alone, placed whole,
 	// out of protection's automatic sales; the entry trades again.
@@ -301,34 +309,25 @@ func TestStrategyLineIsPlacedByLineage(t *testing.T) {
 	if !engine.coreLine(ownerRow) {
 		t.Fatal("the entry's own line is inside protection's automatic sales")
 	}
-	// A hand sale beyond the owner's units takes the entry's (rule 2), for
-	// good: a later hand buy is the owner's (refuter round 2, R1: the units
-	// were recomputed from all the entry's fills, so the hand buy refilled
-	// them).
+	// A hand sale beyond the owner's units takes the entry's (rule 2).
 	if input := withPositions(t, srv, withSYNF(base, 100, 90)); strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 100 {
 		t.Fatalf("after a hand sale of the entry's units: %+v", input.Legs)
 	}
-	if input := withPositions(t, srv, withSYNF(base, 150, 90)); strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 100 || strategyOwnerUnitsInBook(input, trendFundConID) != 50 {
-		t.Fatalf("R1: a hand buy after the hand sale: %+v", input.Legs)
+	// While the entry is live a hand buy of its line is refused, so the
+	// owner's units never mix into it again through Canary (refuter round
+	// 2, R1); the entry's own row buys it, and its line stays its own.
+	hand := rpc.OrderDraft{Action: rpc.OrderActionBuy, Contract: rpc.ContractParams{ConID: trendFundConID, Symbol: "SYNF", SecType: "STK", Currency: "EUR"}, Quantity: 10, OrderType: rpc.OrderTypeLMT, LimitPrice: 90}
+	if b := srv.mandateBudgetGate(hand, rpc.OrderPositionImpact{Effect: rpc.OrderPositionEffectIncrease}); b == nil || !strings.Contains(b.Message, "this fund line is the trend-fund strategy's while it is live") {
+		t.Fatalf("R1: a hand buy of a live entry's line passed: %+v", b)
 	}
-	// The forced reduction sizes a split line as one line, so the entry's
-	// units are within its reach (R2).
-	_, input, _, _ = srv.mandateVerdicts.current()
-	merged := mandateMergedLegs(input.Legs)
-	if i := slices.IndexFunc(merged, func(l mandate.Leg) bool { return l.ID == line }); i < 0 || merged[i].Quantity != 150 ||
-		slices.ContainsFunc(merged, func(l mandate.Leg) bool { return strings.HasPrefix(l.ID, "sleeve:") }) {
-		t.Fatalf("R2: the reduction's legs %+v", merged)
+	handSale := hand
+	handSale.Action = rpc.OrderActionSell
+	if b := srv.mandateBudgetGate(handSale, rpc.OrderPositionImpact{Effect: rpc.OrderPositionEffectReduce}); b != nil {
+		t.Fatalf("a hand sale of the entry's line was refused: %+v", b)
 	}
-	withPositions(t, srv, base)
-	if input := withPositions(t, srv, withSYNF(base, 50, 90)); strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 0 || input.Allocations.SleeveOf(line) != mandate.SleeveOwner {
-		t.Fatalf("R1: sold to zero by hand, then 50 bought by hand: %+v placed %+v", input.Legs, input.Allocations.Placed)
-	}
-	// The owner sells the 50 again and the entry's own row buys 100: its line
-	// alone once more, for the order placement below.
-	withPositions(t, srv, base)
 	recordEntryFill(t, srv, "synthetic-trend-4", "exec-trend-4", rpc.OrderActionBuy, 100, 90, coreDecisionNow.Add(-30*time.Minute))
-	if input := withPositions(t, srv, withSYNF(base, 100, 90)); input.Allocations.SleeveOf(line) != trendLiveSleeve || strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 100 {
-		t.Fatalf("the entry's own buy after the hand trades: %+v placed %+v", input.Legs, input.Allocations.Placed)
+	if input := withPositions(t, srv, withSYNF(base, 200, 90)); input.Allocations.SleeveOf(line) != trendLiveSleeve || strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 200 {
+		t.Fatalf("the entry's own buy after the hand sale: %+v placed %+v", input.Legs, input.Allocations.Placed)
 	}
 
 	// Orders are placed by origin (F1): a hand buy of the entry's line is
@@ -336,7 +335,6 @@ func TestStrategyLineIsPlacedByLineage(t *testing.T) {
 	// a strategy order that is not a stock order of its own line, a
 	// combination or a hedge put included, is refused before any pass.
 	_, input, _, _ = srv.mandateVerdicts.current()
-	hand := rpc.OrderDraft{Action: rpc.OrderActionBuy, Contract: rpc.ContractParams{ConID: trendFundConID, Symbol: "SYNF", SecType: "STK", Currency: "EUR"}, Quantity: 10, OrderType: rpc.OrderTypeLMT, LimitPrice: 90}
 	if sleeve, leg := mandateOrderPlacement(input.Allocations, hand, ""); sleeve != mandate.SleeveOwner || leg != line+":owner" {
 		t.Fatalf("F1: a hand buy of the entry's line placed %s on %q", sleeve, leg)
 	}
@@ -364,57 +362,28 @@ func TestStrategyLineIsPlacedByLineage(t *testing.T) {
 	}
 }
 
-// While one of the entry's orders on its line is in flight and the broker's
-// position disagrees with its journaled fills, the line's placement is
-// unknown and no risk-adding order passes until the fill is journaled
-// (rule 4; refuter finding F5). The first build placed such a line by a
-// guess for one verdict.
-func TestStrategyPlacementIsUnknownWhileItsOrderIsInFlight(t *testing.T) {
+// The entry's units are read afresh at every verdict (no state to drift):
+// an execution journaled before the position updates, or the reverse, reads
+// right on the next verdict; an order journal that cannot be read holds the
+// entry rather than let it trade on a guess (refuter round 3, L1 and L2).
+func TestStrategyUnitsReadAfreshEachVerdict(t *testing.T) {
 	base := mandateTestPositions(100)
 	srv, _ := liveTrendServer(t, testLiveTrendConstitution(), base, coreDecisionNow)
-	scope := srv.currentBrokerStateScope()
-	st := srv.tradeProposals.store
-	st.mu.Lock()
-	st.events = append(st.events, proposalEvent{At: coreDecisionNow.Add(-time.Minute), Type: "submitted", Key: "strategy_rebalance:synthetic", Bucket: rpc.TradeProposalBucketStrategyRebalance,
-		AccountID: scope.Account, AccountMode: scope.Mode, OrderRef: "synthetic-trend-2", Strategy: trendFundID, Sleeve: trendLiveSleeve, ConID: trendFundConID})
-	st.mu.Unlock()
-	working := originTestOrder("synthetic-trend-2", 931, coreDecisionNow.Add(-time.Minute))
-	working.Type, working.Status, working.ConID, working.Symbol, working.Action = orderJournalEventStatusUpdated, "Submitted", trendFundConID, "SYNF", rpc.OrderActionBuy
-	if err := srv.orderJournal.Append(working); err != nil {
-		t.Fatal(err)
-	}
-	input := withPositions(t, srv, withSYNF(base, 159, 90))
-	if input.Allocations.Unknown == "" || !strings.Contains(input.Allocations.Unknown, "is being reconciled") {
-		t.Fatalf("placement while the order is in flight: %q", input.Allocations.Unknown)
-	}
-	buy := rpc.OrderDraft{Action: rpc.OrderActionBuy, Contract: rpc.ContractParams{ConID: 4242, Symbol: "SYNX", SecType: "STK", Currency: "USD"}, Quantity: 1, OrderType: rpc.OrderTypeLMT, LimitPrice: 10}
-	if b := srv.mandateBudgetGate(buy, rpc.OrderPositionImpact{Effect: rpc.OrderPositionEffectOpen}); b == nil || !strings.Contains(b.Message, "the risk allocations cannot be measured") {
-		t.Fatalf("an addition passed while placement is unknown: %+v", b)
-	}
-	// The fill is journaled: placement is known again.
+	// Journaled first: the position still reads flat, the entry holds none.
 	recordEntryFill(t, srv, "synthetic-trend-2", "exec-trend-2", rpc.OrderActionBuy, 159, 90, coreDecisionNow)
-	if input := withPositions(t, srv, withSYNF(base, 159, 90)); input.Allocations.Unknown != "" || input.Allocations.SleeveOf(mandateConLegID(trendFundConID)) != trendLiveSleeve {
-		t.Fatalf("after the fill: unknown %q placed %+v", input.Allocations.Unknown, input.Allocations.Placed)
+	if input := withPositions(t, srv, base); strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 0 {
+		t.Fatalf("before the position updates: %+v", input.Legs)
 	}
-	// A difference that outlasts the settle window is booked as the
-	// owner's, so placement never stays unknown (R3): 20 more units arrive
-	// while a second order works and nothing is journaled for them.
-	st.mu.Lock()
-	st.events = append(st.events, proposalEvent{At: coreDecisionNow, Type: "submitted", Key: "strategy_rebalance:synthetic", Bucket: rpc.TradeProposalBucketStrategyRebalance,
-		AccountID: scope.Account, AccountMode: scope.Mode, OrderRef: "synthetic-trend-3", Strategy: trendFundID, Sleeve: trendLiveSleeve, ConID: trendFundConID})
-	st.mu.Unlock()
-	third := originTestOrder("synthetic-trend-3", 932, coreDecisionNow)
-	third.Type, third.Status, third.ConID, third.Symbol, third.Action = orderJournalEventStatusUpdated, "Submitted", trendFundConID, "SYNF", rpc.OrderActionBuy
-	if err := srv.orderJournal.Append(third); err != nil {
+	// The position catches up: the line is the entry's, whole.
+	if input := withPositions(t, srv, withSYNF(base, 159, 90)); input.Allocations.SleeveOf(mandateConLegID(trendFundConID)) != trendLiveSleeve || strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 159 {
+		t.Fatalf("after the position updates: %+v", input.Allocations.Placed)
+	}
+	// The journal cannot be read: the entry holds and names it.
+	if err := srv.orderJournal.authority.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if input := withPositions(t, srv, withSYNF(base, 179, 90)); input.Allocations.Unknown == "" {
-		t.Fatal("an unjournaled change while an order works did not make placement unknown")
-	}
-	later := coreDecisionNow.Add(strategyLedgerSettle + time.Minute)
-	srv.now = func() time.Time { return later }
-	if input := withPositions(t, srv, withSYNF(base, 179, 90)); input.Allocations.Unknown != "" || strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 159 || strategyOwnerUnitsInBook(input, trendFundConID) != 20 {
-		t.Fatalf("after the settle window: unknown %q legs %+v", input.Allocations.Unknown, input.Legs)
+	if res := liveTrendTarget(t, srv); res.Status != rpc.CoreStatusHold || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "the order journal could not be read") }) {
+		t.Fatalf("with the journal unreadable: %s %v", res.Status, res.Reasons)
 	}
 }
 
@@ -508,5 +477,113 @@ func TestProposalContractFromAnIBIS2Position(t *testing.T) {
 	c := proposalContractFromPosition(rpc.PositionView{Symbol: "SYNX", SecType: rpc.SecTypeStock, ConID: 9041, Exchange: "IBIS2", Currency: "EUR", Quantity: 10, Multiplier: 1}, "STK")
 	if c.Market != "de" || c.PrimaryExch != "IBIS2" || c.Exchange != "SMART" || c.Currency != "EUR" || quoteMarketForStockContract(c) != marketcal.MarketDEXetra {
 		t.Fatalf("contract %+v", c)
+	}
+}
+
+const (
+	signalISIN  = "ZZ0000000002"
+	signalConID = 9050
+)
+
+// signalListing is IBKR's synthetic answer for the fund's older share class:
+// one GBP line on London.
+func signalListing() ibkrlib.Listing {
+	return ibkrlib.Listing{ConID: signalConID, Symbol: "SYNS", SecType: "STK", Exchange: "SMART", PrimaryExch: "LSEETF", Currency: "GBP", TradingClass: "SYNS",
+		ISIN: signalISIN, ValidExchanges: "SMART,LSEETF", Forms: []string{"STK by ISIN on SMART"}}
+}
+
+// signalTrendServer is the live trend fund whose own line holds only its
+// last sessions, with the older class written as its signal series, read in
+// USD from its GBP line at a GBP.USD rate.
+func signalTrendServer(t *testing.T, ownSessions int, withRate bool) *Server {
+	t.Helper()
+	c := testLiveTrendConstitution()
+	e := c.Mandate.Strategies[trendFundID]
+	e.SignalISIN, e.SignalCurrency, e.SignalIn = signalISIN, "GBP", "USD"
+	pos := mandateTestPositions(100)
+	srv := coreTestServer(t, c, pos, 0.25)
+	srv.now = func() time.Time { return coreDecisionNow }
+	srv.coreListingsForTest = (&byISINListings{listings: []ibkrlib.Listing{coreTestListing(), trendFundListing(), signalListing()}}).lookup
+	dates := coreTestDatesOn(t, marketcal.MarketUKLSE)
+	own := coreTestSeriesOn(t, trendFundListing(), marketcal.MarketUKLSE, dates, 0.25)
+	own.Key = strategySeriesKey(trendFundID, trendFundConID)
+	own.Dates, own.Closes = own.Dates[len(own.Dates)-ownSessions:], own.Closes[len(own.Closes)-ownSessions:]
+	sig := coreTestSeriesOn(t, signalListing(), marketcal.MarketUKLSE, dates, 0.25)
+	sig.Key = strategySignalSeriesKey(trendFundID, signalConID)
+	for _, series := range []*mandateHistorySeries{own, sig} {
+		if err := srv.saveMandateSeries(t.Context(), series); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if withRate {
+		need := strategyFXNeed(trendFundID, "GBP", "USD")
+		fx := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: need.Key, Dates: dates, FetchedAt: mandateTestNow.Add(-time.Hour), Source: "test", Contract: need.Contract}
+		for range dates {
+			fx.Closes = append(fx.Closes, 1.25)
+		}
+		if err := srv.saveMandateSeries(t.Context(), fx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.orderJournal = newTestOrderJournalStore(t, filepath.Join(t.TempDir(), "orders"))
+	srv.tradeProposals = &proposalEngine{server: srv, now: srv.now, queued: &queuedAuthStore{}, store: &proposalStore{}}
+	measure(t, srv)
+	return srv
+}
+
+// The trend is the fund's, not one share class's (strategy-evaluator.md §7,
+// 2026-10-19): while the traded class's own closes do not fill the window,
+// the month is measured on the older class's series, in the currency it is
+// measured in, and sized, limit-checked and marked on the traded line's own
+// close; a missing rate holds the entry, named; once the traded class's
+// closes fill the window they take over.
+func TestStrategyMeasuresOnItsSignalSeriesUntilItsOwnFillsTheWindow(t *testing.T) {
+	srv := signalTrendServer(t, 100, true)
+	res := liveTrendTarget(t, srv)
+	if res.Status != rpc.CoreStatusReady || res.Decision == nil || res.Decision.Decision != "2026-09-30" {
+		t.Fatalf("status %s reasons %v decision %+v", res.Status, res.Reasons, res.Decision)
+	}
+	own := srv.mandateHistorySeries(t.Context(), strategySeriesKey(trendFundID, trendFundConID))
+	ownClose, _, _ := strategyLineCloseOn(own, "2026-09-30")
+	if !strings.Contains(res.Decision.SignalFrom, "SYNS ("+signalISIN+") in USD") || res.Decision.TradedClose != ownClose || res.Decision.LineClose() != ownClose {
+		t.Fatalf("signal from %q, traded close %g (own %g)", res.Decision.SignalFrom, res.Decision.TradedClose, ownClose)
+	}
+	sigSeries := srv.mandateHistorySeries(t.Context(), strategySignalSeriesKey(trendFundID, signalConID))
+	if gbp, _, _ := strategyLineCloseOn(sigSeries, "2026-09-30"); math.Abs(res.Decision.Close-gbp*1.25) > 1e-9 {
+		t.Fatalf("the signal close %g is not the GBP close %g in USD", res.Decision.Close, gbp)
+	}
+	if ev := res.Evidence.Signal; ev == nil || !ev.InUse || ev.OwnSessions >= core.WindowCloses || ev.ConID != signalConID || ev.MeasuredIn != "USD" || ev.FXKey == "" {
+		t.Fatalf("signal evidence %+v", res.Evidence.Signal)
+	}
+	if want := int(math.Floor(res.Sizing.Current.Notional * 25 / 100 / ownClose)); res.Sizing.Current.TargetShares != want {
+		t.Fatalf("target %d shares, want %d on the traded close", res.Sizing.Current.TargetShares, want)
+	}
+	_, rows, _ := strategyGeneration(t, srv, srv.tradeProposals, mandateTestPositions(100))
+	if len(rows) != 1 || rows[0].Core.DecisionClose != ownClose {
+		t.Fatalf("rows %+v", rows)
+	}
+
+	// Held, the young line is measured on the older class's returns, so the
+	// book's verdict stays measurable (it needs more closes than the young
+	// line has).
+	recordEntryFill(t, srv, "synthetic-signal-1", "exec-signal-1", rpc.OrderActionBuy, 50, ownClose, coreDecisionNow.Add(-time.Hour))
+	held := withSYNF(mandateTestPositions(100), 50, ownClose)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return held, nil }
+	verdict := srv.evaluateMandate(t.Context(), false)
+	if verdict.Verdict == nil || verdict.Verdict.Status == mandate.StatusUnknown ||
+		!slices.ContainsFunc(verdict.Evidence.Series, func(e rpc.MandateSeriesEvidence) bool {
+			return strings.Contains(e.Source, "returns of SYNS, standing in for SYNF")
+		}) {
+		t.Fatalf("the book with the young line held: %+v reasons %v", verdict.Verdict.Status, verdict.Verdict.Reasons)
+	}
+
+	// No rate: the entry holds and names it.
+	if res := liveTrendTarget(t, signalTrendServer(t, 100, false)); res.Status != rpc.CoreStatusHold || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "no daily GBP.USD rate yet") }) {
+		t.Fatalf("without a rate: %s %v", res.Status, res.Reasons)
+	}
+	// The traded class's own closes fill the window: they take over.
+	full := liveTrendTarget(t, signalTrendServer(t, mandateHistoryKeep, true))
+	if full.Status != rpc.CoreStatusReady || full.Decision.SignalFrom != "" || full.Decision.TradedClose != 0 || full.Evidence.Signal == nil || full.Evidence.Signal.InUse {
+		t.Fatalf("own closes filling the window: %s %v %+v %+v", full.Status, full.Reasons, full.Decision, full.Evidence.Signal)
 	}
 }

@@ -277,6 +277,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "strategy_shadow", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategyShadow()}},
 		{name: "strategy_hold", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategyHold()}},
 		{name: "strategy_live", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategyLive()}},
+		{name: "strategy_signal", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategySignal()}},
 		{name: "core_resolve", argv: []string{"core", "resolve"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolve()}},
 		{name: "core_resolve_pinned", argv: []string{"core", "resolve"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolvePinned()}},
 		{name: "core_resolve_none", argv: []string{"core", "resolve", "--isin", "IE00B5BMR087", "--currency", "EUR"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolveNone()}},
