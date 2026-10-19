@@ -809,6 +809,7 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	// holding) or in shadow on the paper sleeve, with this reading marked
 	// when it is not recorded yet; past the bound the strategy holds before
 	// the month can be frozen.
+	killUnreadable := false
 	killOf := func(mark killMark) {
 		on := "the shadow record"
 		if r.State == register.StateLive && contract != nil {
@@ -819,7 +820,8 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 			if err != nil {
 				// A kill rule that cannot be measured is no kill rule:
 				// the entry holds until the marks read (refuter round 3).
-				hold(fmt.Sprintf("kill rule: the marks of %s cannot be read, so its drawdown cannot be measured: buys stop (%v)", name, err))
+				killUnreadable = true
+				hold(fmt.Sprintf("kill rule: the marks of %s cannot be read, so its drawdown cannot be measured: buys stop until the mark is repaired (%v)", name, err))
 				return
 			}
 			res.Kill, on = kill, "its own fills"
@@ -876,7 +878,7 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 		}
 	}
 
-	if res.Kill == nil {
+	if res.Kill == nil && !killUnreadable {
 		killOf(killMark{})
 	}
 

@@ -290,8 +290,9 @@ func TestOwnerReviewRowStaysOutOfTheSameContractMerge(t *testing.T) {
 // (refuter rounds 1 and 2, 2026-10-19): every unit of its line is the
 // core's whoever bought it, its shadow record is not written while it is
 // live, and its rows' own fills would miss a hand-built holding. Each
-// change of holding is taken at the close it is marked at, the first mark
-// adopts the holding, and the drawdown is in units of the stage's capital.
+// change of holding is taken at the previous mark's close (the decision
+// close the rule acted on), the first mark adopts the holding, and the
+// drawdown is in units of the stage's capital.
 // A hand-built holding of 100 bought at 100 and marked at 80 is a fall the
 // bound sees; before this fix it read 0.00 K on a frozen paper sleeve.
 func TestCoreKillIsMeasuredOnItsHoldingMarkedAtDecisions(t *testing.T) {
@@ -352,7 +353,12 @@ func TestUnreadableKillMarksHoldTheEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	res := coreEvaluate(t, srv)
-	if res.Status != rpc.CoreStatusHold || res.Kill != nil || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "kill rule: the marks of the core cannot be read") }) {
+	named := func(r string) bool { return strings.Contains(r, "kill rule: the marks of the core cannot be read") }
+	if res.Status != rpc.CoreStatusHold || res.Kill != nil || !slices.ContainsFunc(res.Reasons, named) {
 		t.Fatalf("status %s kill %+v reasons %v, want a hold naming the marks", res.Status, res.Kill, res.Reasons)
+	}
+	// Said once, by the mark's key, in no decoder's words.
+	if n := len(slices.DeleteFunc(slices.Clone(res.Reasons), func(r string) bool { return !named(r) })); n != 1 || !strings.Contains(res.Reasons[slices.IndexFunc(res.Reasons, named)], "strategy:core:2026-08-31:mark") || strings.Contains(strings.Join(res.Reasons, " "), "daemon.") {
+		t.Fatalf("reasons %v, want the hold once naming the mark's key", res.Reasons)
 	}
 }

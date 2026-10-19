@@ -126,7 +126,9 @@ func (s *Server) liveMarks(ctx context.Context, id string) ([]liveMark, error) {
 	for _, ev := range events {
 		var m liveMark
 		if err := json.Unmarshal(ev.PayloadJSON, &m); err != nil {
-			return nil, fmt.Errorf("strategy mark %s cannot be read: %w", ev.EventKey, err)
+			// Named by its key, which the owner can find; the decoder's
+			// words name Go types and stay out of the hold.
+			return nil, fmt.Errorf("the mark %s is not a mark", ev.EventKey)
 		}
 		out = append(out, m)
 	}
