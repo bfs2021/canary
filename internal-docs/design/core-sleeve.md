@@ -816,7 +816,7 @@ after this release.
 #### For your review, the kill rule and the per-sleeve buy (2026-10-19)
 
 A review of the whole system on 2026-10-19 found three defects in this path,
-fixed in v3.25.2. A row served while the entry holds (a data hold, the kill
+fixed in v3.25.3. A row served while the entry holds (a data hold, the kill
 rule; the sale to zero its frozen month wants, review S6) now carries
 `core.owner_review` and goes to the owner: `desk.execution.submit` refuses it
 under the standing mandate (`owner_review`, before journaling and again at
