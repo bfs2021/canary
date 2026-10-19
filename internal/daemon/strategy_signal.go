@@ -74,6 +74,13 @@ func strategyOwnSessions(series *mandateHistorySeries, decision string, now time
 // and the rate that converts them, each named in a hold when it is missing,
 // stale or does not match its contract.
 func (s *Server) strategySignalMeasure(ctx context.Context, r register.Resolved, name string, now time.Time) (*strategyMeasure, []string) {
+	return s.strategySignalSeries(ctx, r, name, now, true)
+}
+
+// strategySignalSeries reads the signal series: for the decision
+// (forDecision) up to the decision day, waiting for the rate its close
+// converts at; for the mandate's measure every close a rate converts.
+func (s *Server) strategySignalSeries(ctx context.Context, r register.Resolved, name string, now time.Time, forDecision bool) (*strategyMeasure, []string) {
 	inst := r.Signal
 	var holds []string
 	hold := func(format string, args ...any) { holds = append(holds, fmt.Sprintf(format, args...)) }
@@ -128,14 +135,41 @@ func (s *Server) strategySignalMeasure(ctx context.Context, r register.Resolved,
 		hold("the %s rate series is stale: last close %s", pair, fx.Dates[len(fx.Dates)-1])
 		return nil, holds
 	}
-	closes := make([]float64, len(series.Closes))
-	for i, d := range series.Dates {
+	// The decision day's close converts at the previous weekday's rate,
+	// which must be in: until it is, the month waits, so it is never frozen
+	// on an older rate a later read would replace.
+	decision := ""
+	if forDecision {
+		decision, _, _ = coreDecisionDays(now, k.Market)
+	}
+	if decision != "" {
+		if want := strategyPrevWeekday(decision); fx.Dates[len(fx.Dates)-1] < want {
+			hold("the signal waits for the %s rate of %s to measure %s's close of %s", pair, want, k.Symbol, decision)
+			return nil, holds
+		}
+	}
+	// Only the sessions up to the decision day are measured: later closes
+	// (the month running) are left out, and every session of the window
+	// must convert; an older one without a rate is dropped.
+	end := len(series.Dates)
+	if decision != "" {
+		end, _ = slices.BinarySearch(series.Dates, decision)
+		if end < len(series.Dates) && series.Dates[end] == decision {
+			end++
+		}
+	}
+	closes := make([]float64, end)
+	for i, d := range series.Dates[:end] {
 		rate, ok := strategyRateOn(fx, d)
+		if !ok && !forDecision && i > 0 && closes[i-1] > 0 {
+			// The mandate reads the series to its last convertible close.
+			end = i
+			closes = closes[:i]
+			break
+		}
 		if !ok {
-			// Only a session inside the evaluator's window must convert:
-			// an older one is dropped from the measured series.
-			if len(series.Dates)-i <= core.WindowCloses {
-				hold("no %s rate on or within four days before %s to measure the signal line %s in %s", pair, d, k.Symbol, r.SignalIn)
+			if end-i <= core.WindowCloses {
+				hold("no %s rate within four days before %s to measure the signal line %s in %s", pair, d, k.Symbol, r.SignalIn)
 				return nil, holds
 			}
 			closes[i] = 0
@@ -149,21 +183,22 @@ func (s *Server) strategySignalMeasure(ctx context.Context, r register.Resolved,
 		hold("no %s rate covers the signal line %s's closes", pair, k.Symbol)
 		return nil, holds
 	}
-	m.Dates, m.Closes = series.Dates[first:], closes[first:]
+	m.Dates, m.Closes = series.Dates[first:end], closes[first:]
 	return m, holds
 }
 
-// strategyRateOn is a rate series' close on a date, or its last close before
-// it within strategyFXMaxGap.
+// strategyRateOn is the rate a session's close converts at: the rate
+// series' last close before the session's date, within strategyFXMaxGap.
+// The rate dated the session itself is never read: it completes only after
+// the US close, hours after a European close, so a month decided on it
+// would read differently once it arrived; the previous session's rate is
+// fixed when the month freezes.
 func strategyRateOn(fx *mandateHistorySeries, date string) (float64, bool) {
 	day, err := time.Parse(time.DateOnly, date)
 	if err != nil {
 		return 0, false
 	}
-	i, found := slices.BinarySearch(fx.Dates, date)
-	if found {
-		return fx.Closes[i], fx.Closes[i] > 0
-	}
+	i, _ := slices.BinarySearch(fx.Dates, date)
 	if i == 0 {
 		return 0, false
 	}
@@ -172,6 +207,18 @@ func strategyRateOn(fx *mandateHistorySeries, date string) (float64, bool) {
 		return 0, false
 	}
 	return fx.Closes[i-1], fx.Closes[i-1] > 0
+}
+
+// strategyPrevWeekday is the weekday before a date: the rate session a
+// close of that date converts at.
+func strategyPrevWeekday(date string) string {
+	day, err := time.Parse(time.DateOnly, date)
+	if err != nil {
+		return ""
+	}
+	for day = day.AddDate(0, 0, -1); day.Weekday() == time.Saturday || day.Weekday() == time.Sunday; day = day.AddDate(0, 0, -1) {
+	}
+	return day.Format(time.DateOnly)
 }
 
 // strategyLineCloseOn is the traded line's own close on or before a date in
@@ -223,7 +270,7 @@ func (s *Server) strategyRiskSeries(ctx context.Context, r register.Resolved, k 
 	if own != nil && !mandateSeriesStale(own, now) && len(own.Closes) >= mandate.Closes || r.Signal.ISIN == "" {
 		return own, ""
 	}
-	m, holds := s.strategySignalMeasure(ctx, r, strategyName(r.Entry), now)
+	m, holds := s.strategySignalSeries(ctx, r, strategyName(r.Entry), now, false)
 	if m == nil || len(holds) > 0 || len(m.Closes) < mandate.Closes {
 		return own, ""
 	}
@@ -261,4 +308,25 @@ func (s *Server) withStrategyRiskSeries(ctx context.Context, resolved []register
 				Source: "returns of " + from + ", standing in for " + k.Symbol + " until its own closes fill the history"})
 		}
 	}
+}
+
+// strategyLastSessionOnOrBefore is a market's last session on or before a
+// date, "" when the calendar does not cover the days before it.
+func strategyLastSessionOnOrBefore(date string, market marketcal.Market, now time.Time) string {
+	day, err := time.Parse(time.DateOnly, date)
+	if err != nil {
+		return ""
+	}
+	cal := marketcal.NewWithClock(func() time.Time { return now })
+	for range 10 {
+		res, err := cal.Query(marketcal.Query{Market: market, Date: day.Format(time.DateOnly), Days: 1})
+		if err != nil || res.Session.State == marketcal.StateUnknown {
+			return ""
+		}
+		if res.Session.State == marketcal.StateRegular || res.Session.State == marketcal.StateEarlyClose {
+			return res.Session.Date
+		}
+		day = day.AddDate(0, 0, -1)
+	}
+	return ""
 }

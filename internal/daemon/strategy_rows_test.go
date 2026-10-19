@@ -385,6 +385,11 @@ func TestStrategyUnitsReadAfreshEachVerdict(t *testing.T) {
 	if res := liveTrendTarget(t, srv); res.Status != rpc.CoreStatusHold || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "the order journal could not be read") }) {
 		t.Fatalf("with the journal unreadable: %s %v", res.Status, res.Reasons)
 	}
+	// ...and the verdict keeps the line the entry's, so protection's
+	// automatic sales and the owner's sleeve never take its units (P1).
+	if input := withPositions(t, srv, withSYNF(base, 159, 90)); input.Allocations.SleeveOf(mandateConLegID(trendFundConID)) != trendLiveSleeve {
+		t.Fatalf("P1: with the journal unreadable the line is placed %+v", input.Allocations.Placed)
+	}
 }
 
 // A standing mandate armed before the register changed sends no strategy
@@ -516,10 +521,14 @@ func signalTrendServer(t *testing.T, ownSessions int, withRate bool) *Server {
 		}
 	}
 	if withRate {
+		// The rate trades every weekday, a London holiday included.
 		need := strategyFXNeed(trendFundID, "GBP", "USD")
-		fx := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: need.Key, Dates: dates, FetchedAt: mandateTestNow.Add(-time.Hour), Source: "test", Contract: need.Contract}
-		for range dates {
-			fx.Closes = append(fx.Closes, 1.25)
+		fx := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: need.Key, FetchedAt: mandateTestNow.Add(-time.Hour), Source: "test", Contract: need.Contract}
+		first, _ := time.Parse(time.DateOnly, dates[0])
+		for day := first.AddDate(0, 0, -7); day.Format(time.DateOnly) <= dates[len(dates)-1]; day = day.AddDate(0, 0, 1) {
+			if day.Weekday() != time.Saturday && day.Weekday() != time.Sunday {
+				fx.Dates, fx.Closes = append(fx.Dates, day.Format(time.DateOnly)), append(fx.Closes, 1.25)
+			}
 		}
 		if err := srv.saveMandateSeries(t.Context(), fx); err != nil {
 			t.Fatal(err)
@@ -585,5 +594,84 @@ func TestStrategyMeasuresOnItsSignalSeriesUntilItsOwnFillsTheWindow(t *testing.T
 	full := liveTrendTarget(t, signalTrendServer(t, mandateHistoryKeep, true))
 	if full.Status != rpc.CoreStatusReady || full.Decision.SignalFrom != "" || full.Decision.TradedClose != 0 || full.Evidence.Signal == nil || full.Evidence.Signal.InUse {
 		t.Fatalf("own closes filling the window: %s %v %+v %+v", full.Status, full.Reasons, full.Decision, full.Evidence.Signal)
+	}
+}
+
+// The signal month never drifts on its rate (refuter round 4, S1): a close
+// converts at the previous weekday's rate, so the decision day's own rate,
+// which arrives after the US close, changes nothing once the month froze;
+// until the previous weekday's rate is in, the month waits for it.
+func TestSignalMonthConvertsAtThePreviousSessionsRate(t *testing.T) {
+	srv := signalTrendServer(t, 100, true)
+	need := strategyFXNeed(trendFundID, "GBP", "USD")
+	fx := srv.mandateHistorySeries(t.Context(), need.Key)
+	cut := slices.Index(fx.Dates, "2026-09-30")
+	if cut < 0 {
+		t.Fatal("no rate for the decision day in the fixture")
+	}
+	// Without the decision day's rate: the month freezes.
+	early := *fx
+	early.Dates, early.Closes = slices.Clone(fx.Dates[:cut]), slices.Clone(fx.Closes[:cut])
+	if err := srv.saveMandateSeries(t.Context(), &early); err != nil {
+		t.Fatal(err)
+	}
+	first := liveTrendTarget(t, srv)
+	if first.Status != rpc.CoreStatusReady || first.Decision == nil || first.Decision.FrozenAt.IsZero() {
+		t.Fatalf("before the decision day's rate: %s %v", first.Status, first.Reasons)
+	}
+	// The decision day's rate arrives, at another level: no drift.
+	late := *fx
+	late.Dates, late.Closes = slices.Clone(fx.Dates), slices.Clone(fx.Closes)
+	late.Closes[cut] = 1.40
+	if err := srv.saveMandateSeries(t.Context(), &late); err != nil {
+		t.Fatal(err)
+	}
+	if again := liveTrendTarget(t, srv); again.Status != rpc.CoreStatusReady || again.Decision.Drift {
+		t.Fatalf("S1: the decision day's rate made the month drift: %s %v", again.Status, again.Reasons)
+	}
+	// The previous weekday's rate missing: the month waits for it.
+	short := *fx
+	short.Dates, short.Closes = slices.Clone(fx.Dates[:cut-1]), slices.Clone(fx.Closes[:cut-1])
+	srv2 := signalTrendServer(t, 100, true)
+	if err := srv2.saveMandateSeries(t.Context(), &short); err != nil {
+		t.Fatal(err)
+	}
+	if res := liveTrendTarget(t, srv2); res.Status != rpc.CoreStatusHold || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "the signal waits for the GBP.USD rate of") }) {
+		t.Fatalf("without the previous weekday's rate: %s %v", res.Status, res.Reasons)
+	}
+}
+
+// A month frozen on the signal series keeps it until the next decision
+// (S2): the line's own closes filling the window inside that month do not
+// decide it again.
+func TestSignalMonthKeepsItsSeriesUntilTheNextDecision(t *testing.T) {
+	srv := signalTrendServer(t, 100, true)
+	if res := liveTrendTarget(t, srv); res.Decision == nil || res.Decision.SignalFrom == "" || res.Decision.FrozenAt.IsZero() {
+		t.Fatalf("first reading %+v %v", res.Decision, res.Reasons)
+	}
+	full := coreTestSeriesOn(t, trendFundListing(), marketcal.MarketUKLSE, coreTestDatesOn(t, marketcal.MarketUKLSE), 0.25)
+	full.Key = strategySeriesKey(trendFundID, trendFundConID)
+	if err := srv.saveMandateSeries(t.Context(), full); err != nil {
+		t.Fatal(err)
+	}
+	if res := liveTrendTarget(t, srv); res.Decision == nil || res.Decision.SignalFrom == "" || res.Decision.Drift || res.Status != rpc.CoreStatusReady {
+		t.Fatalf("S2: the month was decided again on the line's own closes: %s %+v %v", res.Status, res.Decision, res.Reasons)
+	}
+}
+
+// The target is sized on the traded line's close of its last session on or
+// before the decision day, never an older one (S3).
+func TestSignalMonthWaitsForTheTradedLinesClose(t *testing.T) {
+	srv := signalTrendServer(t, 100, true)
+	own := srv.mandateHistorySeries(t.Context(), strategySeriesKey(trendFundID, trendFundConID))
+	cut := slices.Index(own.Dates, "2026-09-30")
+	short := *own
+	short.Dates, short.Closes = slices.Clone(own.Dates[:cut]), slices.Clone(own.Closes[:cut])
+	if err := srv.saveMandateSeries(t.Context(), &short); err != nil {
+		t.Fatal(err)
+	}
+	if res := liveTrendTarget(t, srv); res.Status != rpc.CoreStatusHold || res.Decision != nil && res.Decision.TradedClose != 0 ||
+		!slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "the decision waits for SYNF's close of 2026-09-30") }) {
+		t.Fatalf("S3: without the decision day's own close: %s %v", res.Status, res.Reasons)
 	}
 }

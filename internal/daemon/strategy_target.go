@@ -99,6 +99,10 @@ type coreFrozenTarget struct {
 	// Row is the month's decision as recorded while the core was live
 	// (core_rebalance.go); nil while the core decided the month in shadow.
 	Row *coreDecisionRow `json:"row,omitempty"`
+	// Measure is "signal" when the month was measured on the entry's signal
+	// series (strategy_signal.go): the month keeps that series until its
+	// next decision, so a hand-over never decides one month twice.
+	Measure string `json:"measure,omitempty"`
 }
 
 type coreTargetStore struct {
@@ -645,7 +649,14 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	if !isCore && r.Signal.ISIN != "" && contract != nil && latest != "" {
 		own := strategyOwnSessions(series, latest, now, contract.Market)
 		ev := &rpc.CoreSignalEvidence{ISIN: r.Signal.ISIN, Currency: r.Signal.Currency, MeasuredIn: r.SignalIn, OwnSessions: own}
-		if own < core.WindowCloses {
+		// A month frozen on the signal series keeps it: the line's own
+		// closes take over at the next decision, never inside a month whose
+		// two calendars end on different days.
+		stay := false
+		if f := s.coreFrozen(ctx, frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID)); f != nil && f.Measure == "signal" && len(f.Decision) >= 7 && len(latest) >= 7 && f.Decision[:7] == latest[:7] {
+			stay = true
+		}
+		if own < core.WindowCloses || stay {
 			m, holds := s.strategySignalMeasure(ctx, r, name, now)
 			for _, h := range holds {
 				hold(h)
@@ -702,10 +713,13 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 				// Sized, limit-checked and marked on the traded line's own
 				// close on or before the decision day.
 				res.Decision.SignalFrom = fmt.Sprintf("%s (%s) in %s", mSym, r.Signal.ISIN, nonEmptyString(r.SignalIn, r.Signal.Currency))
-				if c, _, ok := strategyLineCloseOn(series, sig.Decision); ok {
+				// The traded line's close of its own last session on or
+				// before the decision day, never an older one.
+				want := strategyLastSessionOnOrBefore(sig.Decision, contract.Market, now)
+				if c, d, ok := strategyLineCloseOn(series, sig.Decision); ok && d == want {
 					res.Decision.TradedClose = c
 				} else {
-					hold(fmt.Sprintf("no %s close on or before the decision day %s to size the target on", sym, sig.Decision))
+					hold(fmt.Sprintf("the decision waits for %s's close of %s to size the target on", sym, nonEmptyString(want, sig.Decision)))
 				}
 			}
 		}
@@ -829,6 +843,9 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 			res.Decision.FrozenAt = frozen.FrozenAt
 		case len(res.Reasons) == 0:
 			frozen = &coreFrozenTarget{Version: coreTargetDocVer, Scope: scope, Decision: sig.Decision, Digest: sig.Digest, FrozenAt: now, Signal: sig, On: on, Size: current}
+			if res.Decision.SignalFrom != "" {
+				frozen.Measure = "signal"
+			}
 			if err := s.freezeCore(ctx, frozen); err != nil && s.logger != nil {
 				s.logger.Warnf("%s target %s: frozen in memory, the database save failed: %v", e.ID, sig.Decision, err)
 			}

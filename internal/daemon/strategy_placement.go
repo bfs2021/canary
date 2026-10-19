@@ -224,7 +224,15 @@ func (s *Server) mandateStrategyPlacement(ctx context.Context, c *risk.Constitut
 			if i < 0 {
 				continue // not held: nothing to place
 			}
-			entry, owner := strategyLineUnits(out.Legs[i].Quantity, s.strategyOwnFills(ctx, r.Entry.ID, conID))
+			own := s.strategyOwnFills(ctx, r.Entry.ID, conID)
+			entry, owner := strategyLineUnits(out.Legs[i].Quantity, own)
+			if own.Unread && r.Entry.Stage == risk.StageLive {
+				// The journal cannot be read: the line keeps its last known
+				// lineage, the entry's alone while the gate refuses hand buys,
+				// so protection's automatic sales and the owner's sleeve never
+				// take the entry's units for a verdict (refuter round 4, P1).
+				entry, owner = math.Max(0, out.Legs[i].Quantity), 0
+			}
 			switch {
 			case entry <= 0:
 				// The owner's line: the entry holds none of it.
