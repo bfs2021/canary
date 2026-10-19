@@ -2261,7 +2261,9 @@ func quoteMarketForStockContract(c rpc.ContractParams) marketcal.Market {
 	switch {
 	case market == "de" || market == "germany" || market == "xetra" || market == "ibis":
 		return marketcal.MarketDEXetra
-	case exchange == "IBIS" || primary == "IBIS":
+	case exchange == "IBIS" || primary == "IBIS" || exchange == "IBIS2" || primary == "IBIS2":
+		// IBIS2 is Xetra's second segment (the trend fund's EUR line, 2026-10-19):
+		// the same Xetra calendar, never the US one.
 		return marketcal.MarketDEXetra
 	case market == "uk" || market == "london" || market == "lse":
 		return marketcal.MarketUKLSE

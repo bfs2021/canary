@@ -2178,7 +2178,7 @@ func proposalContractFromPosition(row rpc.PositionView, secType string) rpc.Cont
 			contract.PrimaryExch = primary
 		}
 		contract.Exchange = "SMART"
-		if primary == "IBIS" {
+		if primary == "IBIS" || primary == "IBIS2" {
 			contract.Market = "de"
 			contract.Currency = nonEmptyString(row.Currency, "EUR")
 		}
@@ -2936,8 +2936,14 @@ func proposalOrderPreviewParams(prop rpc.TradeProposal, qty, timeoutMs int) rpc.
 		strategy = rpc.OrderStrategyBrokerTrail
 	}
 	trail := cloneTrailSpec(prop.Trail)
-	return rpc.OrderPreviewParams{Action: prop.Action, Contract: prop.Contract, Quantity: qty, OrderType: orderType, Trail: trail, TriggerMethod: proposalTriggerMethod(prop), Strategy: strategy, TIF: proposalTIF(prop), OutsideRTH: prop.OutsideRTH, TimeoutMs: timeoutMs, Source: proposalOrderSource,
+	params := rpc.OrderPreviewParams{Action: prop.Action, Contract: prop.Contract, Quantity: qty, OrderType: orderType, Trail: trail, TriggerMethod: proposalTriggerMethod(prop), Strategy: strategy, TIF: proposalTIF(prop), OutsideRTH: prop.OutsideRTH, TimeoutMs: timeoutMs, Source: proposalOrderSource,
 		Bond: cashSweepOrderTerms(prop), FX: currencyLevelingOrderTerms(prop)}
+	if prop.Bucket == rpc.TradeProposalBucketStrategyRebalance && prop.Core != nil {
+		// The entry's own row: the mandate gate places its units in the
+		// entry's sleeve (strategy_placement.go), never by contract alone.
+		params.RegisterEntry = prop.Core.Strategy
+	}
+	return params
 }
 
 // proposalTIF normalizes a proposal's TIF for preview params and the

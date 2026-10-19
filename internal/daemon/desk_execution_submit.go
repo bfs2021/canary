@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -264,6 +265,12 @@ func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateS
 	if class == rpc.DeskClassAdd && *priorUnknown {
 		return deskExecutionRefusal(item, now, rpc.TradingBlocker{Code: rpc.DeskBlockerPriorUnknown, Message: "an earlier item of this submission ended unknown; additions after it are not sent"})
 	}
+	// A strategy row is sent only under the register the owner armed: an
+	// entry added, promoted or re-sized since withdraws the mandate for
+	// strategy rows until the owner confirms again on the device.
+	if blocker := s.deskExecutionRegisterChanged(authority, item.Intent.Proposal.Key); blocker != nil {
+		return deskExecutionRefusal(item, now, *blocker)
+	}
 	// A strategy row is sent in session at the live mid, inside its window.
 	// One that is not ready now (its exchange closed, the opening window, a
 	// stale quote) is refused before journaling, so the session's episode
@@ -408,4 +415,52 @@ func (s *Server) deskExecutionOutcomeOf(res rpc.TradeProposalSubmitResult, err, 
 	default:
 		return deskExecutionOutcomeRow{Outcome: rpc.DeskOutcomeRefused, Blockers: blockers, Message: reason}
 	}
+}
+
+// deskRegisterDigest fingerprints the strategy register as the owner wrote
+// it: each entry's id, rule, cited spec, sleeve, stage, scale and
+// allocation. "" while no constitution or register is in force.
+func (s *Server) deskRegisterDigest() string {
+	if s == nil || s.riskPolicies == nil {
+		return ""
+	}
+	c := s.riskPolicies.snapshot().policy
+	if c == nil || c.Mandate == nil {
+		return ""
+	}
+	type term struct {
+		ID, Rule, SpecHash, Sleeve, Stage string
+		ScalePct, AllocationPct           *float64
+	}
+	var terms []term
+	for _, e := range c.Mandate.Register() {
+		terms = append(terms, term{ID: e.ID, Rule: e.Rule, SpecHash: e.SpecHash, Sleeve: e.Sleeve, Stage: e.Stage, ScalePct: e.ScalePct, AllocationPct: e.AllocationPct})
+	}
+	if len(terms) == 0 {
+		return ""
+	}
+	raw, _ := json.Marshal(terms)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// deskExecutionRegisterChanged refuses a strategy row whose register is not
+// the one the standing mandate was armed under; nil for any other row, or
+// while the register is unchanged.
+func (s *Server) deskExecutionRegisterChanged(authority deskAuthorityRecord, key string) *rpc.TradingBlocker {
+	if s == nil || s.tradeProposals == nil {
+		return nil
+	}
+	prop, ok := servedProposal(s.tradeProposals.snapshotForRead(false, false), key)
+	if !ok || !rpc.StrategyRowBucket(prop.Bucket) {
+		return nil
+	}
+	// An arming recorded before the register was bound reads empty, so it
+	// meets any register written since and refuses.
+	if authority.RegisterDigest == s.deskRegisterDigest() {
+		return nil
+	}
+	return &rpc.TradingBlocker{Code: rpc.DeskBlockerAuthorityChanged,
+		Message: "the strategy register changed since the mandate was armed (an entry added, promoted, re-sized or re-cited); confirm the mandate again on your device to send strategy rows; nothing was sent",
+		Action:  "Review the register (`canary mandate`) and confirm the mandate again."}
 }

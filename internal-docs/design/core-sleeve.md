@@ -660,6 +660,15 @@ What happens while `[mandate.core]` reads `stage = "live"` with `spec_hash`
   now with the terms the live row would carry and for the window's first
   session (the one builder, `coreRowTerms`).
 
+Every live register entry since 2026-10-19 (`strategy-register.md`, "Rows
+for every live entry"): the same builder, terms, window, due time, readiness,
+blockers and typed exception serve each live `[mandate.strategies.<id>]`
+entry's month as a `strategy_rebalance` row on its own line, under its own
+episode (`strategy:<id>:<account>:<mode>:<YYYY-MM>`) and sleeve; the core's
+row, its key, its episode, its words and its goldens are unchanged
+(`TestStrategyRowOnTheDecisionDayBesideTheCore` serves both in one
+generation).
+
 Not built in phase 2, by decision or scope: the sweep's planned need (item
 10); Desk's core line and notice (items 6 and 11); the contract-details
 check at preview (12a); the `send_after` due time and the window as policy

@@ -275,7 +275,12 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	// the legs, since a live strategy on hold keeps its reservation only
 	// while its sleeve holds positions.
 	resolved := s.resolvedRegister(c)
-	in.Allocations = mandateAllocationPlanReserved(c, resolved, s.mandateReservedContracts(ctx, c, resolved, in.Legs), in.Legs)
+	placement := s.mandateStrategyPlacement(ctx, c, resolved, in.Legs)
+	in.Legs = placement.Legs
+	in.Allocations = mandateAllocationPlanPlaced(c, resolved, placement.Placed, in.Legs)
+	if in.Allocations != nil {
+		in.Allocations.Unknown = strings.Join(placement.Unknown, "; ")
+	}
 	verdict := mandate.Evaluate(in)
 	// The owner sleeve's drawdown stop reads this verdict's legs and use, and
 	// the kept input carries it, so every evaluation sized or judged on this
@@ -502,16 +507,25 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 	if s == nil || s.riskPolicies == nil || s.riskCapital == nil {
 		return nil
 	}
+	const open = " Reductions, closes, cancels and hedges stay open."
+	const action = "Reduce or close instead, or wait for the verdict to read within; `canary mandate` has the measurement."
+	c := s.riskPolicies.snapshot().policy
+	// A machine sleeve's own order is a stock order of its own line, before
+	// any other test: neither the hedge pass (a put on a Rulebook hedge
+	// symbol) nor the unmeasured pass of a combination is ever a machine
+	// sleeve's (mandate-risk-budget.md, "Placement": the two gate gaps).
+	if draft.RegisterEntry != "" {
+		if why := s.mandateEntryOrderRefusal(c, draft); why != "" {
+			return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + why + "." + open, Action: "Refresh proposals; a strategy sends only its own row."}
+		}
+	}
 	if !s.riskAddingOrder(draft, position) || mandateBillBuy(draft) {
 		return nil
 	}
-	c := s.riskPolicies.snapshot().policy
 	if !c.MandateActive() {
 		return nil
 	}
 	now := s.nowUTC()
-	const open = " Reductions, closes, cancels and hedges stay open."
-	const action = "Reduce or close instead, or wait for the verdict to read within; `canary mandate` has the measurement."
 	result, input, at, fp := s.mandateVerdicts.current()
 	if result == nil || result.Verdict == nil || input == nil || fp != c.FingerprintKey() {
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: no verdict has been measured for the policy in force yet; this order adds risk." + open, Action: action}
@@ -520,16 +534,15 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: fmt.Sprintf("Mandate budget: the verdict is %s old and cannot be shown current; this order adds risk.", formatQuoteAge(age)) + open, Action: action}
 	}
 	ccy := result.Verdict.BaseCurrency
-	// The order is placed as the kept verdict placed its line, so the gate
-	// and the verdict never disagree on whose units an order adds to.
-	sleeve := mandateReservedOrderSleeve(mandateReservedFromPlan(input.Allocations), draft)
-	// A machine sleeve trades its own fund line only: a combination order
-	// passes this gate unmeasured and a put on a Rulebook hedge symbol as a
-	// hedge, and neither pass is a machine sleeve's (mandate-risk-budget.md,
-	// "Placement": the two gate gaps closed before a non-core entry sends).
-	if sleeve != mandate.SleeveOwner && !strings.EqualFold(strings.TrimSpace(draft.Contract.SecType), "STK") {
-		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + mandateSleeveName(sleeve) + " trades only its own fund line; a " + nonEmptyString(draft.Contract.SecType, "non-stock") + " order on it is never passed unmeasured." + open, Action: action}
+	// While some line's placement is unknown (rule 4) every sleeve's use is
+	// unknown, so nothing that adds risk passes.
+	if input.Allocations != nil && input.Allocations.Unknown != "" {
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: the risk allocations cannot be measured: " + input.Allocations.Unknown + "; this order adds risk." + open, Action: action}
 	}
+	// The order is placed by its origin, as the verdict places fills
+	// (strategy_placement.go): the core's contract is the core's whoever
+	// sends it, an entry's own row is the entry's, anything else the owner's.
+	sleeve, legID := mandateOrderPlacement(input.Allocations, draft, s.registerSleeveOf(c, draft.RegisterEntry))
 	// A book over budget adds nothing, except in a sleeve inside its own risk
 	// allocation (owner, 2026-10-18 15:31 CEST: "yes, it should. unless you
 	// advise differently"): that sleeve keeps adding inside its allocation
@@ -579,7 +592,11 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		return mandateUnpricedOrderGate(draft, result.Verdict, book, sleeve, overBudget, ccy, open, action)
 	}
 	// The order's units open in its sleeve: the allocations are judged with it
-	// placed there.
+	// placed there, as a leg of its own where the line's placed units belong
+	// to another sleeve.
+	if legID != "" {
+		leg.ID = legID
+	}
 	book.Allocations = book.Allocations.WithPlaced(leg.ID, sleeve)
 	with := mandate.Evaluate(mandate.WithLeg(book, leg))
 	if with.Status == mandate.StatusUnknown || with.Risk == nil {
@@ -873,8 +890,8 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 		if contract.ConID == 0 {
 			for _, leg := range in.Legs {
 				if leg.Underlying == sym && leg.Kind == mandate.KindStock {
-					id, err := strconv.Atoi(strings.TrimPrefix(leg.ID, "con:"))
-					if err != nil || id <= 0 || (contract.ConID > 0 && contract.ConID != id) {
+					id := mandateLegConID(leg.ID)
+					if id <= 0 || (contract.ConID > 0 && contract.ConID != id) {
 						return book, []mandateMissing{{reason: "daily history for " + sym + " is ambiguous across distinct contracts"}}
 					}
 					contract.ConID = id
@@ -885,7 +902,7 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 			if leg.Underlying != sym {
 				continue
 			}
-			if normCcy(leg.Currency) != ccy || leg.Kind == mandate.KindStock && contract.ConID > 0 && leg.ID != mandateConLegID(contract.ConID) {
+			if normCcy(leg.Currency) != ccy || leg.Kind == mandate.KindStock && contract.ConID > 0 && mandateLegConID(leg.ID) != contract.ConID {
 				return book, []mandateMissing{{reason: "daily history for " + sym + " is ambiguous across distinct contracts"}}
 			}
 		}

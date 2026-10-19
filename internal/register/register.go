@@ -87,7 +87,7 @@ type Rule struct {
 	Form     Form   `json:"form"`
 	// Sends is whether this build serves the rule's rows. Every compiled
 	// rule does; a policy that writes an entry live on a rule that does not
-	// is refused (LiveRefusals), never run as anything else.
+	// is refused (Refusals), never run as anything else.
 	Sends bool `json:"sends"`
 	// Bucket is the proposal bucket of the rule's rows; never
 	// pre-authorisable.
@@ -188,7 +188,7 @@ func (r Resolved) Reserves() bool { return r.State == StateLive && r.ReservedPct
 // written spec hash that is not the rule's, or a rule in the other form. A
 // live stage runs live: no entry written live runs as anything else (owner,
 // 2026-10-18 21:05 CEST: "we NEVER want shadow"), and a policy writing one
-// live on a rule without rows is refused at load (LiveRefusals). Only a
+// live on a rule without rows is refused at load (Refusals). Only a
 // live entry reserves its allocation, at its scale.
 func Resolve(entries []risk.StrategyEntry, rules []Rule) []Resolved {
 	out := make([]Resolved, 0, len(entries))
@@ -278,7 +278,7 @@ func resolveOne(e risk.StrategyEntry, rules []Rule) Resolved {
 	case stage == risk.StageLive && r.Rule.Sends:
 		r.State, r.ReservedPct = StateLive, r.ScalePct
 	case stage == risk.StageLive:
-		// LiveRefusals keeps such a file from loading; a caller that resolves
+		// Refusals keeps such a file from loading; a caller that resolves
 		// one anyway sees it hold, never run in another stage.
 		r.State, r.ScalePct = StateHold, 0
 		r.Reasons = append(r.Reasons, fmt.Sprintf("rule %s serves no rows in this build", r.Rule.ID))
@@ -288,21 +288,65 @@ func resolveOne(e risk.StrategyEntry, rules []Rule) Resolved {
 	return r
 }
 
-// LiveRefusals names every entry written live on a compiled rule that serves
-// no rows in this build: the policy manager refuses such a file and keeps
-// the last good policy, since a live entry either produces rows or does not
-// load. A rule that is not compiled holds its entry instead, named on it.
-func LiveRefusals(entries []risk.StrategyEntry, rules []Rule) []string {
+// Refusals names what refuses a policy file against this build's rules:
+// every entry written live on a compiled rule that serves no rows (a live
+// entry either produces rows or the file does not load), and every two
+// entries that name one fund line (the same ISIN and currency, or the same
+// con_id; the core's compiled fund when its keys are unwritten), since two
+// strategies on one line would each count the other's units as their own
+// (placement, mandate-risk-budget.md). The policy manager refuses such a
+// file and keeps the last good policy. A rule that is not compiled holds its
+// entry instead, named on it.
+func Refusals(entries []risk.StrategyEntry, rules []Rule) []string {
 	var out []string
+	type line struct{ isin, ccy string }
+	lines := map[line]string{}
+	conIDs := map[int]string{}
 	for _, e := range entries {
-		if e.Stage != risk.StageLive {
-			continue
+		table := "[" + nonEmptyKey(e) + "]"
+		if rule, ok := Find(rules, e.Rule); ok && e.Stage == risk.StageLive && !rule.Sends {
+			out = append(out, fmt.Sprintf("%s is written live, but rule %s serves no rows in this build; write stage = \"suspended\" or install a build that sends it", table, rule.ID))
 		}
-		if rule, ok := Find(rules, e.Rule); ok && !rule.Sends {
-			out = append(out, fmt.Sprintf("[%s] is written live, but rule %s serves no rows in this build; write stage = \"suspended\" or install a build that sends it", e.KeyPrefix, rule.ID))
+		isin, ccy := strings.TrimSpace(e.ISIN), strings.ToUpper(strings.TrimSpace(e.Currency))
+		if e.Form == risk.StrategyFormCore {
+			if rule, ok := Find(rules, e.Rule); ok && !rule.Parameterised {
+				isin, ccy = nonEmpty(isin, rule.Instrument.ISIN), nonEmpty(ccy, rule.Instrument.Currency)
+			}
+		}
+		if isin != "" && ccy != "" {
+			k := line{isin, ccy}
+			if other, taken := lines[k]; taken {
+				out = append(out, fmt.Sprintf("%s names the fund %s in %s, as %s does: one strategy per fund line", table, isin, ccy, other))
+			} else {
+				lines[k] = table
+			}
+		}
+		if e.ConID != nil && *e.ConID > 0 {
+			if other, taken := conIDs[*e.ConID]; taken {
+				out = append(out, fmt.Sprintf("%s pins con_id %d, as %s does: one strategy per fund line", table, *e.ConID, other))
+			} else {
+				conIDs[*e.ConID] = table
+			}
 		}
 	}
 	return out
+}
+
+func nonEmptyKey(e risk.StrategyEntry) string {
+	if e.KeyPrefix != "" {
+		return e.KeyPrefix
+	}
+	if e.Form == risk.StrategyFormCore {
+		return "mandate.core"
+	}
+	return "mandate.strategies." + e.ID
+}
+
+func nonEmpty(v, fallback string) string {
+	if v != "" {
+		return v
+	}
+	return fallback
 }
 
 func formOf(e risk.StrategyEntry) Form {

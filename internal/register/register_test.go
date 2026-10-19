@@ -64,7 +64,7 @@ func TestResolveStages(t *testing.T) {
 
 // No entry written live runs as anything else (owner, 2026-10-18 21:05
 // CEST: "we NEVER want shadow"): a rule this build serves no rows for holds
-// the entry, named, and LiveRefusals refuses the file before it loads. The
+// the entry, named, and Refusals refuses the file before it loads. The
 // first build's fallback ran it as shadow and said "this build sends no
 // orders"; it is gone.
 func TestLiveOnARuleWithoutRowsHoldsAndRefusesTheFile(t *testing.T) {
@@ -75,11 +75,11 @@ func TestLiveOnARuleWithoutRowsHoldsAndRefusesTheFile(t *testing.T) {
 			t.Fatalf("%s: %+v", e.ID, got)
 		}
 		e.KeyPrefix = "mandate.strategies." + e.ID
-		refused := LiveRefusals([]risk.StrategyEntry{e}, testRules(false, false))
+		refused := Refusals([]risk.StrategyEntry{e}, testRules(false, false))
 		if len(refused) != 1 || !strings.Contains(refused[0], "["+e.KeyPrefix+"] is written live, but rule "+e.Rule+" serves no rows in this build") {
 			t.Fatalf("%s refusals %q", e.ID, refused)
 		}
-		if refused := LiveRefusals([]risk.StrategyEntry{e}, testRules(true, true)); len(refused) != 0 {
+		if refused := Refusals([]risk.StrategyEntry{e}, testRules(true, true)); len(refused) != 0 {
 			t.Fatalf("%s refused on a build that sends: %q", e.ID, refused)
 		}
 	}
@@ -244,5 +244,28 @@ func TestResolveParameterisedHolds(t *testing.T) {
 	cited.SpecHash = strings.Repeat("ef", 32)
 	if got := Resolve([]risk.StrategyEntry{cited}, Catalogue())[0]; got.State != StateShadow || got.SpecHash != cited.SpecHash {
 		t.Fatalf("a cited spec on a parameterised rule: %+v", got)
+	}
+}
+
+// Two strategies on one fund line refuse the file (refuter finding F3,
+// 2026-10-19): an entry naming the core's compiled fund while the core's
+// keys are unwritten served a strategy_rebalance row beside the core's on
+// the same contract, each counting the other's units as its own; two entries
+// pinning one con_id are refused alike.
+func TestTwoStrategiesOnOneFundLineRefuseTheFile(t *testing.T) {
+	c := coreEntry(risk.StageLive, core.SpecHash, 25)
+	onCore := timedEntry()
+	onCore.ISIN, onCore.Currency, onCore.KeyPrefix = core.ISIN, core.Currency, "mandate.strategies.trend-fund"
+	refused := Refusals([]risk.StrategyEntry{c, onCore}, Catalogue())
+	if len(refused) != 1 || !strings.Contains(refused[0], "[mandate.strategies.trend-fund] names the fund "+core.ISIN+" in EUR, as [mandate.core] does") {
+		t.Fatalf("an entry on the core's fund: %q", refused)
+	}
+	a, b := timedEntry(), timedEntry()
+	a.ConID, b.ConID, b.ISIN, b.ID, b.KeyPrefix = new(777), new(777), "XS0000000002", "other", "mandate.strategies.other"
+	if refused := Refusals([]risk.StrategyEntry{a, b}, Catalogue()); len(refused) != 1 || !strings.Contains(refused[0], "pins con_id 777") {
+		t.Fatalf("two entries on one con_id: %q", refused)
+	}
+	if refused := Refusals([]risk.StrategyEntry{c, timedEntry()}, Catalogue()); len(refused) != 0 {
+		t.Fatalf("distinct lines refused: %q", refused)
 	}
 }

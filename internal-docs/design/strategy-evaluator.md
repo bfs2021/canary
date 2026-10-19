@@ -6,7 +6,10 @@ Written: 2026-10-18 18:10 CEST. Status: built on Canary branch
 write and creates no policy. It carries out plan item 4 of the review of
 2026-10-18 (Desk `output/secret-sauce-20261018/review.md`, finding 2: "a
 strategy is a project, not a register entry") against `strategy-register.md`
-and `core-sleeve.md`.
+and `core-sleeve.md`. Revised 2026-10-19 09:30 CEST: every live entry serves
+its rows (build 2; §5), the kill rule is measured on a live entry's own fills
+(§3), and §7 records the owner's decisions on the second entry as taken
+(owner instruction 2026-10-19 07:07 CEST, "task build 2 and then 6 as well").
 
 Sources read: Canary main `73577985` (`internal/core`, `internal/register`,
 `internal/risk`, the daemon's core files), the lab `0870f3b` (`core_rule.py`,
@@ -23,8 +26,8 @@ Sources read: Canary main `73577985` (`internal/core`, `internal/register`,
   read one number per strategy.
 - Protected behaviour: the core's verdict is unchanged (its goldens and the
   parity fixture prove it); no entry adds risk, reserves allocation, creates
-  a proposal or places an order: every entry rule sends nothing, so every
-  entry runs in shadow at most in this build. That is the build's reach, not a step the owner wants: on 2026-10-18 21:05 CEST the owner decided "we NEVER want shadow, it's useless", so an entry goes live on the owner's word and the rows for entries other than the core are the next build (Desk docs/strategy-engine.md, build 6). The one order path is untouched.
+  a proposal or places an order: every entry rule sent nothing, so every
+  entry ran in shadow at most in this first build. That was the build's reach, not a step the owner wants: on 2026-10-18 21:05 CEST the owner decided "we NEVER want shadow, it's useless", so an entry goes live on the owner's word. Since 2026-10-19 (build 2) every live entry serves its month's row through the one order path (`strategy-register.md`, "Rows for every live entry").
 - Policy owner: the desk owner, who writes every entry, promotion and number;
   this build proposes keys only (§2). Status: built; the second entry (the
   trend fund) waits on the owner's decisions (§7).
@@ -105,9 +108,19 @@ spec says. Written, the evaluator marks the paper sleeve (cash and the paper
 position) at each decision close on the shadow record and at the current
 reading, and past the bound holds the strategy before the month can be
 frozen: buys stop, a sale the rule wants goes to the owner, the month is
-recorded as a hold naming it, and the owner suspends. The live measurement
-(the sleeve's own fills) comes with the first rule that sends; the spec's
-(b) and (c) are the scorecard's and the cost report's, not this.
+recorded as a hold naming it, and the owner suspends.
+
+Live (built 2026-10-19, `strategy_kill_live.go`): a live entry keeps no
+shadow record, so the drawdown is measured on its own fills. At each frozen
+decision the background refresh keeps one mark (scope `strategy/<id>`,
+never read by an order path): the decision close, the units and the cash
+its own fills (the executions of its rows' orders) left, and S at that
+decision; the sleeve's equity is cash plus units times the close, its peak
+starts at zero as the paper position's does, and the drawdown in K is
+measured from the running peak, this reading included. A hand trade of the
+line is not an own fill, so it moves the measure nothing. The spec's other
+tests are the scorecard's and the cost report's, not this. The core keeps
+its measure on its shadow record (it writes no bound).
 
 ## 4. Parity: how the lab's fixture tests any entry
 
@@ -147,17 +160,26 @@ fixture per filter; Canary pins each.
   `strategy:<id>:con:<contract id>` (register review S2), so an entry never
   ages the book's verdict; a test pins that no such key enters its evidence.
 - Holding and placement: every unit of the core's contract is the core's.
-  An entry's holding is what the allocation plan places in its sleeve;
-  nothing in this build, so its live holding reads zero and its shadow
-  holding is the paper position. In the hypothetical book an entry's paper
+  An entry's holding is what the placement puts in its sleeve: the units
+  its own fills left, never more than the broker holds (by lineage,
+  `mandate-risk-budget.md`, "Placement", as built 2026-10-19); while the
+  owner holds units of its line it holds, naming them; in shadow the paper
+  position. In the hypothetical book an entry's paper
   position is a leg of its own (`sleeve:<sleeve>:con:<id>`), placed in its
   sleeve beside the owner's real units of the same fund, and the fund is
   measured on the entry's own closes where the book keeps none; the core's
   real units are replaced, as today.
-- Protection's automatic sales leave out the core's contract (D5). Whether a
-  second entry's contract leaves them too is the owner's; not extended here.
-- No rows, no proposal, no exception: `timed-holding-v1` sends nothing, so
-  every entry runs as shadow at most and the shadow record is all it writes; shadow is the technical state of an entry not yet written live, never a required step (owner, 2026-10-18 21:05 CEST).
+- Protection's automatic sales leave out the core's contract (D5) and, since
+  2026-10-19, every line the verdict places whole in another entry's sleeve
+  (the entry holds it alone; carried out under the owner's instruction of
+  07:07 CEST, the brief naming the exclusion "as the core's");
+  `mandateReservedIDs`. A line the owner holds units of keeps its automatic
+  protection. The forced reduction still covers them all.
+- Rows (built 2026-10-19): `timed-holding-v1` sends, so a live entry serves
+  its month's `strategy_rebalance` row with the core's terms and gates, its
+  units placed by lineage (`strategy-register.md`, "Rows for every live
+  entry"); shadow is the technical state of an entry not yet written live,
+  never a required step (owner, 2026-10-18 21:05 CEST).
 
 ## 6. Surfaces
 

@@ -34,7 +34,7 @@ func installDeskMandate(t *testing.T, s *Server, scope brokerStateScope, armed s
 	terms := rpc.DeskAuthorityTerms{AuthorityEpoch: head.AuthorityEpoch, Version: 1, Kind: "desk_automatic_authority", ID: "synthetic-mandate-" + armed, AccountID: scope.Account, AccountMode: scope.Mode, MaximumScope: "full", ControllerHash: hex.EncodeToString(hash[:]),
 		ConfirmBefore: s.orderNow().Add(time.Minute), Pricing: "fixed-midpoint", Algorithm: "Adaptive", TIF: "DAY", Protection: "existing-policy", Capacity: "existing-policy-reuse-confirmed-funds", Selection: "desk-deterministic-controller"}
 	preferences := strings.Repeat("a", 64)
-	row := deskAuthorityRecord{Terms: &terms, Scope: armed, Running: running, PreferencesHash: preferences, AdaptivePriority: "Normal", ControlProcess: s.startedAt}
+	row := deskAuthorityRecord{Terms: &terms, Scope: armed, Running: running, PreferencesHash: preferences, AdaptivePriority: "Normal", ControlProcess: s.startedAt, RegisterDigest: s.deskRegisterDigest()}
 	current, err := s.readDeskAuthority(t.Context())
 	if err != nil {
 		t.Fatal(err)

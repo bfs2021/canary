@@ -317,6 +317,11 @@ func TestCoreWindowSkipsSessionsTheUSIsClosed(t *testing.T) {
 	if got := coreWindow("2026-09-30", marketcal.MarketDEXetra, mandateTestNow); !slices.Equal(got, coreWindowSessions) {
 		t.Fatalf("Xetra, October 2026: %v", got)
 	}
+	// Xetra's second segment (IBIS2, the trend fund's EUR line) quotes on
+	// the Xetra calendar; before 2026-10-19 it fell through to the US one.
+	if market := quoteMarketForStockContract(rpc.ContractParams{Symbol: "SYNX", SecType: "STK", Exchange: "SMART", PrimaryExch: "IBIS2", Currency: "EUR"}); market != marketcal.MarketDEXetra {
+		t.Fatalf("an IBIS2 line quotes on %s", market)
+	}
 	if market := quoteMarketForStockContract(rpc.ContractParams{Symbol: "IXSE", SecType: "STK", Exchange: "SMART", PrimaryExch: "LSEETF", Currency: "EUR"}); market != marketcal.MarketUKLSE {
 		t.Fatalf("a London line reads the %s calendar", market)
 	}

@@ -558,7 +558,7 @@ type TradeProposalSnapshot struct {
 	// generation, by id; absent while the register carries no other entry.
 	StrategyRebalance []TradeProposalCoreStatus `json:"strategy_rebalance,omitempty"`
 	Blockers          []TradingBlocker          `json:"blockers,omitempty"`
-	LoadedFromState bool                     `json:"loaded_from_state,omitempty"`
+	LoadedFromState   bool                      `json:"loaded_from_state,omitempty"`
 	// CashSweep is the cash sweep's typed status for this generation: per
 	// currency, the band figures and why it invests, redeems, holds or
 	// generates nothing. Absent while the bucket is not enabled.

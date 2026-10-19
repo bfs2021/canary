@@ -2732,6 +2732,11 @@ type OrderPreviewParams struct {
 	// ResolvedStrategy is daemon-internal. External RPC callers can identify a
 	// strategy only through StrategyPreviewParams and cannot author combo legs.
 	ResolvedStrategy *StrategyOrderDraft `json:"-"`
+	// RegisterEntry is daemon-internal: the register entry whose own
+	// strategy_rebalance row the preview is for, set only by the proposal
+	// engine, so the mandate gate places the order in that entry's sleeve.
+	// No RPC caller can set it.
+	RegisterEntry string `json:"-"`
 	// Bounded is daemon-internal: the bound a bounded-limit strategy prices
 	// inside. No RPC caller can set it.
 	Bounded *OrderBoundedLimit `json:"-"`
@@ -2817,6 +2822,11 @@ type OrderDraft struct {
 	OpenClose        string              `json:"open_close,omitempty"`
 	Source           string              `json:"source,omitempty"`
 	StrategyGroup    *StrategyOrderDraft `json:"strategy_group,omitempty"`
+	// RegisterEntry names the register entry whose own row this order is
+	// (OrderPreviewParams.RegisterEntry, daemon-set, carried in the signed
+	// preview token): the mandate gate places it in that entry's sleeve.
+	// Empty for every other order, whose units are placed by contract.
+	RegisterEntry string `json:"register_entry,omitempty"`
 	// OCAGroup and OCAType are the broker one-cancels-all membership the
 	// daemon gives the order when it sends it (never from a request): a
 	// protective stop's own group, or the group of Canary's own working stop

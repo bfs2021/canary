@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -9,8 +10,8 @@ import (
 
 	"github.com/osauer/canary/v2/internal/core"
 	edgecore "github.com/osauer/canary/v2/internal/edge"
-	"github.com/osauer/canary/v2/internal/marketcal"
 	"github.com/osauer/canary/v2/internal/mandate"
+	"github.com/osauer/canary/v2/internal/marketcal"
 	"github.com/osauer/canary/v2/internal/register"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
@@ -115,9 +116,8 @@ func recordEntryFill(t *testing.T, srv *Server, ref, execID, side string, shares
 // core's terms (a DAY limit at the live mid, the window, the due time) under
 // the entry's own episode, keyed by its id and sleeve; it passes the typed
 // exception within its sized quantity only, is classified a strategy
-// addition for Desk, is never pre-authorised and never queued, its line
-// leaves protection's automatic sales, and its decision, row view, status
-// line and kill mark are recorded once. The core's row is unchanged.
+// addition for Desk, is never pre-authorised and never queued, and its
+// decision, row view, status line and kill mark are recorded once. The core's row is unchanged.
 func TestStrategyRowOnTheDecisionDayBesideTheCore(t *testing.T) {
 	pos := mandateTestPositions(100)
 	srv, engine := liveTrendServer(t, testLiveTrendConstitution(), pos, coreDecisionNow)
@@ -186,8 +186,10 @@ func TestStrategyRowOnTheDecisionDayBesideTheCore(t *testing.T) {
 	if validPreAuthorisedBucket(rpc.TradeProposalBucketStrategyRebalance) || automaticBucketFor(p) != "" || engine.automaticBucket(p) != "" {
 		t.Fatal("a strategy row is pre-authorisable")
 	}
-	if !engine.coreLine(p) {
-		t.Fatal("the live entry's line is inside protection's automatic sales")
+	if engine.coreLine(p) {
+		// Nobody holds the line yet; once the entry's own fills hold it alone
+		// it leaves protection's automatic sales (TestStrategyLineIsPlacedByLineage).
+		t.Fatal("a line nobody holds left protection's automatic sales")
 	}
 	// The decision is recorded once with the row's key, the row is served on
 	// the entry's verdict and on `canary status`, and the kill rule's first
@@ -195,7 +197,10 @@ func TestStrategyRowOnTheDecisionDayBesideTheCore(t *testing.T) {
 	for range 2 {
 		srv.refreshStrategies(t.Context())
 	}
-	scope := frozenScopeFor(func() register.Resolved { r, _ := srv.resolvedStrategy(srv.riskPolicies.snapshot().policy, trendFundID); return r }(), srv.currentBrokerStateScope(), trendFundConID)
+	scope := frozenScopeFor(func() register.Resolved {
+		r, _ := srv.resolvedStrategy(srv.riskPolicies.snapshot().policy, trendFundID)
+		return r
+	}(), srv.currentBrokerStateScope(), trendFundConID)
 	if f := srv.coreFrozen(t.Context(), scope); f == nil || f.Row == nil || !f.Row.Served || f.Row.RowKey != p.Key || f.Row.Kind != core.ActionBuy || f.Row.Stage != "live" {
 		t.Fatalf("recorded decision %+v", f)
 	}
@@ -224,59 +229,176 @@ func TestStrategyRowOnTheDecisionDayBesideTheCore(t *testing.T) {
 	}
 }
 
-// Units of the line the account holds that the entry never bought stay the
-// owner's (placement rule 1): the line is placed in the owner's sleeve and
-// the live entry holds, naming them, with no row. Once the entry's own row
-// has filled, the line is reserved to its sleeve: every unit counts as its
-// holding, the gate places a hand order on it in the entry's sleeve, a
-// non-stock order on it is refused, and its fills score in its sleeve.
-func TestStrategyLineIsReservedOnlyOnceItsOwnFillsHoldIt(t *testing.T) {
-	pos := withSYNF(mandateTestPositions(100), 500, 90)
-	srv, engine := liveTrendServer(t, testLiveTrendConstitution(), pos, coreDecisionNow)
+// withPositions swaps the book the mandate reads and measures it again.
+func withPositions(t *testing.T, srv *Server, pos *rpc.PositionsResult) *mandate.Input {
+	t.Helper()
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
+	measure(t, srv)
+	_, input, _, _ := srv.mandateVerdicts.current()
+	return input
+}
+
+// Placement by lineage (mandate-risk-budget.md, "Placement"; refuter
+// findings F1, F2 and F4, 2026-10-19): units of the line the owner bought
+// stay the owner's, the entry's are what its own fills left, a line both
+// hold is split into two legs, a hand sale beyond the owner's units takes
+// the entry's, and the entry holds while the owner holds any of its line.
+// The first build reserved the whole line on the first fill and adopted the
+// owner's units.
+func TestStrategyLineIsPlacedByLineage(t *testing.T) {
+	base := mandateTestPositions(100)
+	srv, engine := liveTrendServer(t, testLiveTrendConstitution(), withSYNF(base, 500, 90), coreDecisionNow)
 	own := *srv.mandateHistorySeries(t.Context(), strategySeriesKey(trendFundID, trendFundConID))
 	own.Key = "u:SYNF"
 	if err := srv.saveMandateSeries(t.Context(), &own); err != nil {
 		t.Fatal(err)
 	}
-	measure(t, srv)
-	_, input, _, _ := srv.mandateVerdicts.current()
-	if sleeve := input.Allocations.SleeveOf(mandateConLegID(trendFundConID)); sleeve != mandate.SleeveOwner {
-		t.Fatalf("the owner's units were placed in %s", sleeve)
+	line := mandateConLegID(trendFundConID)
+	split := strategyLegID(trendLiveSleeve, trendFundConID)
+
+	// The owner's 500 units, the entry with no fill: the owner's line; the
+	// entry holds, names them and serves no row; protection keeps the line.
+	input := withPositions(t, srv, withSYNF(base, 500, 90))
+	if input.Allocations.SleeveOf(line) != mandate.SleeveOwner {
+		t.Fatalf("the owner's units placed in %s", input.Allocations.SleeveOf(line))
 	}
 	res := liveTrendTarget(t, srv)
-	if res.Status != rpc.CoreStatusHold || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "500 units of SYNF are held that the trend-fund strategy did not buy") }) || res.Holding.Shares != 0 {
+	if res.Status != rpc.CoreStatusHold || res.Holding.Shares != 0 || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "500 units of SYNF are yours") }) {
 		t.Fatalf("status %s reasons %v holding %+v", res.Status, res.Reasons, res.Holding)
 	}
-	if _, rows, _ := strategyGeneration(t, srv, engine, pos); len(rows) != 0 {
-		t.Fatalf("rows over units the entry did not buy: %+v", rows)
+	if _, rows, _ := strategyGeneration(t, srv, engine, withSYNF(base, 500, 90)); len(rows) != 0 {
+		t.Fatalf("rows over the owner's units: %+v", rows)
+	}
+	ownerRow := rpc.TradeProposal{Contract: rpc.ContractParams{ConID: trendFundConID}}
+	if engine.coreLine(ownerRow) {
+		t.Fatal("F2: the owner's holding lost protection's automatic sales")
 	}
 
-	// The entry's own row fills: the same 500 units, now bought by it.
-	recordEntryFill(t, srv, "synthetic-trend-1", "exec-trend-1", rpc.OrderActionBuy, 500, 90, coreDecisionNow.Add(-time.Hour))
-	if f := srv.strategyOwnFills(t.Context(), trendFundID, trendFundConID); f.Units != 500 || f.Cash != -45000 || f.Execs != 1 {
+	// The entry's own row fills 159 beside the owner's 500: the line splits,
+	// the entry holds its 159 and still holds while the owner's units stand.
+	recordEntryFill(t, srv, "synthetic-trend-1", "exec-trend-1", rpc.OrderActionBuy, 159, 90, coreDecisionNow.Add(-time.Hour))
+	if f := srv.strategyOwnFills(t.Context(), trendFundID, trendFundConID); f.Units != 159 || f.Cash != -14310 || f.Execs != 1 {
 		t.Fatalf("own fills %+v", f)
 	}
-	measure(t, srv)
-	_, input, _, _ = srv.mandateVerdicts.current()
-	if sleeve := input.Allocations.SleeveOf(mandateConLegID(trendFundConID)); sleeve != trendLiveSleeve {
-		t.Fatalf("the entry's line is placed in %s", sleeve)
+	input = withPositions(t, srv, withSYNF(base, 659, 90))
+	if input.Allocations.SleeveOf(line) != mandate.SleeveOwner || input.Allocations.SleeveOf(split) != trendLiveSleeve ||
+		strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 159 || strategyOwnerUnitsInBook(input, trendFundConID) != 500 {
+		t.Fatalf("F4: split legs %+v placed %+v", input.Legs, input.Allocations.Placed)
 	}
-	if res := liveTrendTarget(t, srv); res.Holding.Shares != 500 || slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "did not buy") }) {
+	if res := liveTrendTarget(t, srv); res.Holding.Shares != 159 || res.Status != rpc.CoreStatusHold {
+		t.Fatalf("beside the owner's units: holding %+v status %s", res.Holding, res.Status)
+	}
+
+	// The owner sells their 500: the line is the entry's alone, placed whole,
+	// out of protection's automatic sales; the entry trades again.
+	input = withPositions(t, srv, withSYNF(base, 159, 90))
+	if input.Allocations.SleeveOf(line) != trendLiveSleeve || strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 159 {
+		t.Fatalf("the entry's line alone: %+v", input.Allocations.Placed)
+	}
+	if res := liveTrendTarget(t, srv); res.Holding.Shares != 159 || slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "are yours") }) {
 		t.Fatalf("holding %+v reasons %v", res.Holding, res.Reasons)
 	}
-	reserved := mandateReservedFromPlan(input.Allocations)
-	hand := rpc.OrderDraft{Action: rpc.OrderActionBuy, Contract: rpc.ContractParams{ConID: trendFundConID, Symbol: "SYNF", SecType: "STK", Currency: "EUR"}, Quantity: 10, OrderType: rpc.OrderTypeLMT, LimitPrice: 90}
-	if mandateReservedOrderSleeve(reserved, hand) != trendLiveSleeve || mandateReservedOrderSleeve(reserved, rpc.OrderDraft{Contract: rpc.ContractParams{ConID: 4242}}) != mandate.SleeveOwner {
-		t.Fatal("orders are not placed by the reserved line")
+	if !engine.coreLine(ownerRow) {
+		t.Fatal("the entry's own line is inside protection's automatic sales")
 	}
-	combo := hand
+	// A hand sale beyond the owner's units takes the entry's (rule 2).
+	if input := withPositions(t, srv, withSYNF(base, 100, 90)); strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 100 {
+		t.Fatalf("after a hand sale of the entry's units: %+v", input.Legs)
+	}
+
+	// Orders are placed by origin (F1): a hand buy of the entry's line is
+	// the owner's, on a leg of its own; the entry's own row is the entry's;
+	// a strategy order that is not a stock order of its own line, a
+	// combination or a hedge put included, is refused before any pass.
+	_, input, _, _ = srv.mandateVerdicts.current()
+	hand := rpc.OrderDraft{Action: rpc.OrderActionBuy, Contract: rpc.ContractParams{ConID: trendFundConID, Symbol: "SYNF", SecType: "STK", Currency: "EUR"}, Quantity: 10, OrderType: rpc.OrderTypeLMT, LimitPrice: 90}
+	if sleeve, leg := mandateOrderPlacement(input.Allocations, hand, ""); sleeve != mandate.SleeveOwner || leg != line+":owner" {
+		t.Fatalf("F1: a hand buy of the entry's line placed %s on %q", sleeve, leg)
+	}
+	entryBuy := hand
+	entryBuy.RegisterEntry = trendFundID
+	if sleeve, leg := mandateOrderPlacement(input.Allocations, entryBuy, trendLiveSleeve); sleeve != trendLiveSleeve || leg != "" {
+		t.Fatalf("the entry's own buy placed %s on %q", sleeve, leg)
+	}
+	if b := srv.mandateBudgetGate(entryBuy, rpc.OrderPositionImpact{Effect: rpc.OrderPositionEffectIncrease}); b != nil && strings.Contains(b.Message, "trades only its own fund line") {
+		t.Fatalf("the entry's own stock buy refused as foreign: %+v", b)
+	}
+	combo := entryBuy
 	combo.Contract.SecType = "BAG"
-	if b := srv.mandateBudgetGate(combo, rpc.OrderPositionImpact{Effect: rpc.OrderPositionEffectIncrease}); b == nil || !strings.Contains(b.Message, "the trend sleeve trades only its own fund line") {
-		t.Fatalf("a combination order on the entry's line: %+v", b)
+	put := rpc.OrderDraft{Action: rpc.OrderActionBuy, Contract: rpc.ContractParams{ConID: 777001, Symbol: "SPY", SecType: "OPT", Right: "P", Currency: "USD"}, Quantity: 1, OrderType: rpc.OrderTypeLMT, LimitPrice: 2, RegisterEntry: trendFundID}
+	other := entryBuy
+	other.Contract.ConID = 4242
+	for name, d := range map[string]rpc.OrderDraft{"a combination": combo, "a hedge put": put, "another contract": other} {
+		if b := srv.mandateBudgetGate(d, rpc.OrderPositionImpact{Effect: rpc.OrderPositionEffectOpen}); b == nil || !strings.Contains(b.Message, "trades only its own fund line") {
+			t.Fatalf("F8: %s named as the entry's own passed: %+v", name, b)
+		}
 	}
 	resolver := scorecardSleeveResolver([]orderJournalEvent{{ExecID: "exec-trend-1", OrderRef: "synthetic-trend-1"}}, srv.tradeProposals.store.eventsSince(time.Time{}))
 	if got := resolver(edgecore.PositionChange{ExecutionIDs: []string{"exec-trend-1"}}); got.Name != trendLiveSleeve || got.StrategyRef != trendFundID || got.Origin != "proposal:strategy_rebalance" {
 		t.Fatalf("scorecard sleeve %+v", got)
+	}
+}
+
+// While one of the entry's orders on its line is in flight and the broker's
+// position disagrees with its journaled fills, the line's placement is
+// unknown and no risk-adding order passes until the fill is journaled
+// (rule 4; refuter finding F5). The first build placed such a line by a
+// guess for one verdict.
+func TestStrategyPlacementIsUnknownWhileItsOrderIsInFlight(t *testing.T) {
+	base := mandateTestPositions(100)
+	srv, _ := liveTrendServer(t, testLiveTrendConstitution(), base, coreDecisionNow)
+	scope := srv.currentBrokerStateScope()
+	st := srv.tradeProposals.store
+	st.mu.Lock()
+	st.events = append(st.events, proposalEvent{At: coreDecisionNow.Add(-time.Minute), Type: "submitted", Key: "strategy_rebalance:synthetic", Bucket: rpc.TradeProposalBucketStrategyRebalance,
+		AccountID: scope.Account, AccountMode: scope.Mode, OrderRef: "synthetic-trend-2", Strategy: trendFundID, Sleeve: trendLiveSleeve, ConID: trendFundConID})
+	st.mu.Unlock()
+	working := originTestOrder("synthetic-trend-2", 931, coreDecisionNow.Add(-time.Minute))
+	working.Type, working.Status, working.ConID, working.Symbol, working.Action = orderJournalEventStatusUpdated, "Submitted", trendFundConID, "SYNF", rpc.OrderActionBuy
+	if err := srv.orderJournal.Append(working); err != nil {
+		t.Fatal(err)
+	}
+	input := withPositions(t, srv, withSYNF(base, 159, 90))
+	if input.Allocations.Unknown == "" || !strings.Contains(input.Allocations.Unknown, "in flight") {
+		t.Fatalf("placement while the order is in flight: %q", input.Allocations.Unknown)
+	}
+	buy := rpc.OrderDraft{Action: rpc.OrderActionBuy, Contract: rpc.ContractParams{ConID: 4242, Symbol: "SYNX", SecType: "STK", Currency: "USD"}, Quantity: 1, OrderType: rpc.OrderTypeLMT, LimitPrice: 10}
+	if b := srv.mandateBudgetGate(buy, rpc.OrderPositionImpact{Effect: rpc.OrderPositionEffectOpen}); b == nil || !strings.Contains(b.Message, "the risk allocations cannot be measured") {
+		t.Fatalf("an addition passed while placement is unknown: %+v", b)
+	}
+	// The fill is journaled: placement is known again.
+	recordEntryFill(t, srv, "synthetic-trend-2", "exec-trend-2", rpc.OrderActionBuy, 159, 90, coreDecisionNow)
+	if input := withPositions(t, srv, withSYNF(base, 159, 90)); input.Allocations.Unknown != "" || input.Allocations.SleeveOf(mandateConLegID(trendFundConID)) != trendLiveSleeve {
+		t.Fatalf("after the fill: unknown %q placed %+v", input.Allocations.Unknown, input.Allocations.Placed)
+	}
+}
+
+// A standing mandate armed before the register changed sends no strategy
+// row until the owner confirms again (refuter finding F6; strategy-register
+// section 2): the first build sent a newly written live entry's row under an
+// arming that never named it.
+func TestDeskExecutionRefusesStrategyRowsAfterARegisterEdit(t *testing.T) {
+	srv, engine := liveTrendServer(t, testLiveTrendConstitution(), mandateTestPositions(100), coreDecisionNow)
+	_, rows, _ := strategyGeneration(t, srv, engine, mandateTestPositions(100))
+	if len(rows) != 1 {
+		t.Fatalf("rows %+v", rows)
+	}
+	engine.snapshot = rpc.TradeProposalSnapshot{Kind: "trade-proposals", Proposals: rows, AccountID: srv.currentBrokerStateScope().Account, AccountMode: srv.currentBrokerStateScope().Mode}
+	armed := deskAuthorityRecord{RegisterDigest: srv.deskRegisterDigest()}
+	if armed.RegisterDigest == "" || srv.deskExecutionRegisterChanged(armed, rows[0].Key) != nil {
+		t.Fatalf("the armed register refused its own row (digest %q)", armed.RegisterDigest)
+	}
+	c := testLiveTrendConstitution()
+	c.Mandate.Strategies[trendFundID].ScalePct = new(50.0)
+	srv.riskPolicies.active = c
+	if b := srv.deskExecutionRegisterChanged(armed, rows[0].Key); b == nil || b.Code != rpc.DeskBlockerAuthorityChanged || !strings.Contains(b.Message, "the strategy register changed since the mandate was armed") {
+		t.Fatalf("a re-sized entry's row under the old arming: %+v", b)
+	}
+	if b := srv.deskExecutionRegisterChanged(deskAuthorityRecord{}, rows[0].Key); b == nil {
+		t.Fatal("an arming that names no register sent a strategy row")
+	}
+	if srv.deskExecutionRegisterChanged(deskAuthorityRecord{}, "trailing_stop:none") != nil {
+		t.Fatal("a row that is not a strategy row was refused for the register")
 	}
 }
 
@@ -308,7 +430,7 @@ func TestStrategyKillOnOwnFillsHoldsPastTheBound(t *testing.T) {
 
 func appendTestLiveMark(t *testing.T, srv *Server, m liveMark) {
 	t.Helper()
-	res := &rpc.StrategyTargetResult{Decision: &rpc.CoreDecision{Signal: core.Signal{Decision: m.Session, Close: m.Close}, FrozenAt: m.RecordedAt},
+	res := &rpc.StrategyTargetResult{Decision: &rpc.CoreDecision{Decision: m.Session, Close: m.Close, FrozenAt: m.RecordedAt},
 		Sizing: &rpc.CoreSizingView{Current: core.Size{SleeveBudget: m.SleeveBudget}}, Instrument: &rpc.CoreInstrument{ConID: trendFundConID}}
 	r, _ := srv.resolvedStrategy(srv.riskPolicies.snapshot().policy, trendFundID)
 	// The writer reads the entry's own fills: journal them so the kept mark
@@ -316,4 +438,15 @@ func appendTestLiveMark(t *testing.T, srv *Server, m liveMark) {
 	srv.liveMarkFillsForTest = func() strategyFills { return strategyFills{Units: m.Units, Cash: m.Cash, Execs: 1} }
 	defer func() { srv.liveMarkFillsForTest = nil }()
 	srv.recordLiveMark(t.Context(), res, r, m.RecordedAt)
+}
+
+// A held line on Xetra's second segment (IBIS2, the trend fund's EUR line)
+// is a German line on every row built from the position: market de, its
+// venue kept as the primary exchange, routed SMART; before 2026-10-19 only
+// IBIS was, so a reduction of an IBIS2 line quoted on the US calendar.
+func TestProposalContractFromAnIBIS2Position(t *testing.T) {
+	c := proposalContractFromPosition(rpc.PositionView{Symbol: "SYNX", SecType: rpc.SecTypeStock, ConID: 9041, Exchange: "IBIS2", Currency: "EUR", Quantity: 10, Multiplier: 1}, "STK")
+	if c.Market != "de" || c.PrimaryExch != "IBIS2" || c.Exchange != "SMART" || c.Currency != "EUR" || quoteMarketForStockContract(c) != marketcal.MarketDEXetra {
+		t.Fatalf("contract %+v", c)
+	}
 }

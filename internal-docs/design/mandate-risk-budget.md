@@ -764,6 +764,35 @@ Each position stays in the sleeve of whoever opened it, fixed for its life.
   within (`mandateUnpricedOrderGate`, an unmodelled security type), and a
   BUY of a put on a Rulebook hedge symbol counts as a hedge whoever sends
   it; a machine sleeve's order gets neither pass.
+- **As built for the register's other entries (2026-10-19, with the first
+  order path that sends a non-core entry's rows; `strategy_placement.go`).**
+  Each entry trades one line. Rule 1: its units are what its own fills
+  left (the executions of the orders its submitted rows sent, read from
+  the proposal and order journals by order reference); every other unit of
+  the line is the owner's, a hand buy included, so no holding is ever
+  adopted. Rule 2: its own sale takes its units; a sale the broker's
+  position shows beyond the owner's units (the owner's hand sale took the
+  owner's first) takes the entry's. Rule 4: the placed units sum to the
+  broker's position: a line the entry holds alone is placed whole in its
+  sleeve, a line both hold is split into the owner's leg and the entry's own
+  (`sleeve:<sleeve>:con:<id>`), and while one of the entry's orders on the
+  line is in flight and the journal and the position disagree, the line's
+  placement is unknown and the gate refuses every risk-adding order until
+  the fill is journaled. Rule 5: nothing is re-placed. While the owner
+  holds units of the line the entry holds (no rows but a sale to zero for
+  review), naming them: it trades only a line it holds alone. Orders are
+  placed by origin, as fills are: the entry's own row carries its id in the
+  signed draft (`OrderDraft.RegisterEntry`, daemon-set) and is judged in
+  its sleeve, any other order on the line in the owner's. The two gate gaps
+  are closed for a machine sleeve: an order naming an entry that is not a
+  stock order of that entry's line is refused before the hedge pass and the
+  unmeasured pass are reached. Two strategies on one fund line refuse the
+  file. Residuals: a hand trade of the line in TWS outside Canary's client
+  is not in Canary's journal (`canary status`, "Executions"); the forced
+  reduction cuts only the owner's leg of a split line (rows are sized per
+  position row), and a forced or protective sale of the entry's line is not
+  an own fill, so it lowers the entry's units through rule 2 but not its
+  own-fill kill measure.
 - **Unknown placement never guesses**: while any contract's placement is
   unknown the allocations are unknown and the allocation check refuses every
   risk-adding order (the uses add up, so one unknown contract leaves every

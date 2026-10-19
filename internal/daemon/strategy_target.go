@@ -697,12 +697,12 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 
 	// The holding: every unit of the core's contract is the core's, and any
 	// other line of the fund holds the core; a later entry's holding is what
-	// the allocation plan places in its sleeve: its whole line while it
-	// reserves it (strategy_placement.go), and nothing while the account
-	// holds units of it the entry did not open, which hold the entry.
+	// the placement puts in its sleeve: the units its own fills left
+	// (strategy_placement.go). While the owner holds units of the line too,
+	// the entry holds, naming them: it trades only a line it holds alone.
 	held, price, priceSource := 0, 0.0, ""
 	if input != nil && contract != nil && !isCore && strategyReserves(e) {
-		if why := strategyForeignHold(name, sym, strategyForeignUnits(input.Legs, contract.ConID, s.strategyOwnFills(ctx, e.ID, contract.ConID))); why != "" && input.Allocations.SleeveOf(mandateConLegID(contract.ConID)) != e.Sleeve {
+		if why := strategyForeignHold(name, sym, strategyOwnerUnitsInBook(input, contract.ConID)); why != "" {
 			hold(why)
 		}
 	}
@@ -718,9 +718,10 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 				qty += l.Quantity
 			case isCore && (input.LineISINs[l.ID] == contract.ISIN || (l.Underlying == core.Symbol || l.Underlying == contract.Symbol) && normCcy(l.Currency) == contract.Currency):
 				hold(fmt.Sprintf("a second line of the fund (%s) is held under %s; the core counts only %s", l.Symbol, l.ID, contract.label()))
-			case !isCore && l.ID == id && input.Allocations.SleeveOf(l.ID) == e.Sleeve:
-				qty += l.Quantity
 			}
+		}
+		if !isCore {
+			qty = strategyUnitsInBook(input, e.Sleeve, contract.ConID)
 		}
 		if qty < 0 {
 			hold(fmt.Sprintf("the book is short %s; %s never shorts", sym, name))

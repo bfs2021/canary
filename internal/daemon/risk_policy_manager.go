@@ -249,7 +249,7 @@ func validateRegisterBuild(c *risk.Constitution) error {
 	if c == nil || c.Mandate == nil {
 		return nil
 	}
-	if refused := register.LiveRefusals(c.Mandate.Register(), register.Catalogue()); len(refused) > 0 {
+	if refused := register.Refusals(c.Mandate.Register(), register.Catalogue()); len(refused) > 0 {
 		return fmt.Errorf("risk policy refused: %s", strings.Join(refused, "; "))
 	}
 	return nil

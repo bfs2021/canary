@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -62,28 +63,26 @@ func resolvedCore(resolved []register.Resolved) (register.Resolved, bool) {
 // places units in a machine sleeve by its fills, so placement is total and
 // never unknown.
 func mandateAllocationPlan(c *risk.Constitution, resolved []register.Resolved, coreContracts []int, legs []mandate.Leg) *mandate.AllocationPlan {
-	reserved := map[int]string{}
-	for _, id := range coreContracts {
-		reserved[id] = mandate.SleeveCore
+	placed := map[string]string{}
+	if c != nil && c.Mandate != nil && c.Mandate.Core != nil {
+		for _, id := range coreContracts {
+			placed[mandateConLegID(id)] = mandate.SleeveCore
+		}
 	}
-	return mandateAllocationPlanReserved(c, resolved, reserved, legs)
+	return mandateAllocationPlanPlaced(c, resolved, placed, legs)
 }
 
-// mandateAllocationPlanReserved is mandateAllocationPlan with every
-// reserved line placed in its sleeve: the core's in the core's, and each
-// other entry's in its own (strategy_placement.go).
-func mandateAllocationPlanReserved(c *risk.Constitution, resolved []register.Resolved, reserved map[int]string, legs []mandate.Leg) *mandate.AllocationPlan {
+// mandateAllocationPlanPlaced is mandateAllocationPlan on the register's
+// placement of the book (strategy_placement.go): each placed leg in its
+// sleeve, the core's lines in the core's and each entry's own units in its
+// own.
+func mandateAllocationPlanPlaced(c *risk.Constitution, resolved []register.Resolved, placed map[string]string, legs []mandate.Leg) *mandate.AllocationPlan {
 	if c == nil || c.Mandate == nil {
 		return nil
 	}
 	m := c.Mandate
 	plan := &mandate.AllocationPlan{Placed: map[string]string{}}
-	for id, sleeve := range reserved {
-		if sleeve == mandate.SleeveCore && m.Core == nil {
-			continue
-		}
-		plan.Placed[mandateConLegID(id)] = sleeve
-	}
+	maps.Copy(plan.Placed, placed)
 	holds := func(sleeve string) bool {
 		for _, l := range legs {
 			if l.Quantity != 0 && plan.SleeveOf(l.ID) == sleeve {
@@ -192,19 +191,6 @@ func (s *Server) mandateCoreContracts(ctx context.Context, c *risk.Constitution)
 func mandateOrderSleeve(coreContracts []int, draft rpc.OrderDraft) string {
 	if draft.Contract.ConID > 0 && slices.Contains(coreContracts, draft.Contract.ConID) {
 		return mandate.SleeveCore
-	}
-	return mandate.SleeveOwner
-}
-
-// mandateReservedOrderSleeve places an order by its contract id among every
-// reserved line: a reserved line is its sleeve's whoever sends the order
-// (the core's and each live entry's, strategy_placement.go), everything else
-// the owner's.
-func mandateReservedOrderSleeve(reserved map[int]string, draft rpc.OrderDraft) string {
-	if draft.Contract.ConID > 0 {
-		if sleeve, ok := reserved[draft.Contract.ConID]; ok && sleeve != "" {
-			return sleeve
-		}
 	}
 	return mandate.SleeveOwner
 }

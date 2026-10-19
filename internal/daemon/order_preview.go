@@ -528,6 +528,7 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 		OrderRef:         previewOrderRef(now),
 		OpenClose:        orderOpenCloseForEffect(position.Effect),
 		Source:           strings.TrimSpace(p.Source),
+		RegisterEntry:    p.RegisterEntry,
 		Bond:             bondTerms,
 		FX:               fxTerms,
 	}

@@ -6,7 +6,10 @@ section "Build"), 2026-10-18. Revised 18:40 CEST: the strategy evaluator
 (`strategy-evaluator.md`) runs every entry through one code path; sections
 1, 3, 4, 9 and 12 say what that changed. Nothing here writes policy:
 every entry and every promotion is the owner's, written by the owner into
-`risk-policy.toml`.
+`risk-policy.toml`. Revised 2026-10-19 09:00 CEST: every live entry serves
+its month's row (Desk `docs/strategy-engine.md`, build 2; owner instruction
+2026-10-19 07:07 CEST, "task build 2 and then 6 as well"); sections 2, 5 and
+9 and the new section "Rows for every live entry" say what that changed.
 
 This record follows `.agents/docs/risk-policy-contract.md`. It records the
 owner's decision of 2026-10-18 09:01 CEST and proposes the schema, the code
@@ -220,7 +223,7 @@ declared data is still collected while its rule is compiled (section 4).
 |---|---|---|---|
 | `ID`, `SpecID`, `SpecHash` | The rule and the lab spec it implements | `core.RuleID`, `core.SpecID`, `core.SpecHash` | the id only: the entry cites its spec |
 | `Form` | `core` (only as `[mandate.core]`) or `entry` | `core` | `entry` |
-| `Sends` | Whether this build serves the rule's orders (replaces `coreSendsOrders`) | false (phase 2 rows not built) | false |
+| `Sends` | Whether this build serves the rule's rows (replaces `coreSendsOrders`) | true (phase 2, 2026-10-18) | true (build 2, 2026-10-19) |
 | `Bucket` | The proposal bucket of its rows, never pre-authorisable | `core_rebalance` | `strategy_rebalance` |
 | `Data` | Its declared daily series and option chains (section 4) | its fund's daily closes on its listing, 253 sessions; no chains | from the entry: its fund's closes, 253 sessions |
 | `Parameterised`, `Instrument`, `Trend` | Whether the entry's keys supply the fund, the filter and the numbers; else the compiled ones | compiled: IE00B3ZW0K18 EUR, `trend-sma10m` | parameterised |
@@ -240,7 +243,7 @@ evaluator runs: its instrument, filter, terms, spec and declared data.
 |---|---|---|---|
 | `shadow` | shadow | the verdict, read-only; the shadow record | nothing |
 | `live`, scale s, every key written, rule compiled, hash matching, `Sends` | live | the verdict and its rows as proposals, sent only through the rule's own authorisation | s/100 × its allocation |
-| `live`, but this build sends no orders for the rule | shadow, "live written; this build sends no orders for X, so it runs as shadow" | as shadow | nothing |
+| `live`, but this build serves no rows for the rule | the file is refused at load, naming the entry and the rule (`register.LiveRefusals`, 2026-10-19); the last good policy stays. Until 2026-10-19 such an entry ran as shadow ("live written; this build sends no orders"); that fallback is gone, since a live entry either produces rows or does not load | — | — |
 | `suspended` (or the core's first-form `scale_pct = 0`) | suspended | its state only | nothing |
 | `live`, with an entry hold | hold | its hold | s/100 × its allocation while its sleeve holds positions, else nothing |
 | any other, with an entry hold | hold | its hold | nothing |
@@ -277,6 +280,58 @@ Phase 3 (Option B) arms terms that name the rule, the spec hash, the scale
 and the allocation (`core-sleeve.md`, "Option B's armed terms"); when it is
 built, a register edit that changes any of them withdraws the standing
 terms.
+
+### Rows for every live entry (built 2026-10-19)
+
+Every compiled rule sends, so a live entry runs live. The core's row
+builder (`core_rebalance.go`) serves each live `[mandate.strategies.<id>]`
+entry's month exactly as it serves the core's (`core-sleeve.md`, "Phase 2
+as built"): at most one `strategy_rebalance` row per entry and decision, a
+DAY limit at the live mid for a named session in the first five sessions
+after the decision that the US also trades, due fifteen minutes after the US
+cash open of its session (`core_due.go`), with the core's readiness, its
+blockers (an open breach episode or a reduction of the line holds a buy; a
+working order on the line holds any row), the owner's ignore, and the typed
+exception to `close_reduce_only` bound to the row's own contract, currency
+and sized quantity. The row carries the entry's id, rule and sleeve
+(`TradeProposalCore.Strategy`, `.Rule`, `.Sleeve`), its episode is
+`strategy:<id>:<account>:<mode>:<YYYY-MM>` and its revision names the
+session, so two entries' rows never share a key or an episode. It reaches
+the same paths as the core's: `trade.proposals`, the prepared proposal the
+owner confirms on a device, and `desk.execution.submit` under the standing
+mandate (class `add` for its buy, `reduce` for its sale; the session's
+episode); it is never pre-authorisable and never queued to the open. The
+month's decision is recorded beside the entry's frozen month
+(`recordStrategyDecision`), and `canary strategy ID` shows the row and the
+last decision. A live entry keeps no shadow record.
+
+Placement (`strategy_placement.go`; `mandate-risk-budget.md`, "Placement",
+as built 2026-10-19): by lineage. A live or suspended entry's units of its
+line are what its own fills left (the executions of the orders its
+submitted rows sent, read from the proposal and order journals by order
+reference), never more than the broker holds; every other unit is the
+owner's, a hand buy included. A line the entry holds alone is placed whole
+in its sleeve; a line both hold is split into the owner's leg and the
+entry's own; while the owner holds any units of the line the entry holds,
+naming them, and trades again once they are sold. While one of its orders
+on the line is in flight and the journal and the position disagree, the
+placement is unknown and no risk-adding order passes. An order is placed by
+its origin: the entry's own row (`OrderDraft.RegisterEntry`, daemon-set) in
+its sleeve, anything else on the line in the owner's; a strategy order that
+is not a stock order of its own line is refused before the hedge or the
+unmeasured pass (the two gate gaps). A line the entry holds alone leaves
+protection's automatic sales, as the core's (D5, extended); a line the owner
+holds units of keeps them. Two strategies on one fund line (one ISIN and
+currency, or one `con_id`, the core's compiled fund included) refuse the
+file (`register.Refusals`). A fund the book does not hold yet is measured on
+the entry's own series at the headroom and at the gate, so its first row is
+never refused unmeasured. Under the standing mandate a strategy row is sent
+only under the register it was armed with: an edit of any entry's rule,
+cited spec, sleeve, stage, scale or allocation withdraws the mandate for
+strategy rows until the owner confirms again (`deskRegisterDigest`).
+
+`canary status` lists each entry's stage and its row (or why none stands)
+from the engine's last generation (`HealthResult.Strategies`).
 
 ## 3. Shadow on the production path
 
@@ -446,6 +501,10 @@ a rule bucket, or the journal origin is `daemon-preauthorised` or
 `daemon-protective-guard`, or the transmit origin is `daemon_internal`;
 otherwise the owner's.
 
+- **Registered strategies' rows (2026-10-19).** A `strategy_rebalance` fill
+  is matched by its order reference to the submitted row and scores in the
+  entry's sleeve, origin `proposal:strategy_rebalance`, with the entry's id
+  as its strategy reference; a `core_rebalance` fill in the core's, as before.
 - **Entry rules today.** Desk cannot arm them, and `desk.execution.submit`
   (served since 2026-10-19 for proposal rows under the standing mandate)
   refuses an entry-rule addition `intent_not_served`, so no entry rule sends
@@ -537,7 +596,7 @@ otherwise the owner's.
 | Failure | Guard |
 |---|---|
 | A new build changes a rule's spec while the policy names the old one | the hash check holds the strategy; a live one keeps its reservation while it holds positions |
-| The owner writes `live` before the build can send | runs as shadow and says so; reserves nothing |
+| The owner writes `live` on a rule this build serves no rows for | the file is refused at load, naming the entry; the last good policy stays |
 | Two entries for one sleeve or rule | the file is refused; the last good policy stays |
 | A shadow fill written twice | the event log's unique key; one writer |
 | The core's real holding and the shadow holding both counted | the hypothetical book replaces the reserved contract's units |

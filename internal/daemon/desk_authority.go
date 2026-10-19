@@ -28,6 +28,12 @@ type deskAuthorityRecord struct {
 	// was confirmed; a later engagement holds full at protection.
 	BrakeEpisode uint64                     `json:"brake_episode,omitempty"`
 	Confirmation rpc.CashPolicyConfirmation `json:"confirmation"`
+	// RegisterDigest is the strategy register the owner armed under (every
+	// entry's rule, cited spec, sleeve, stage, scale and allocation,
+	// deskRegisterDigest): a register edit after it withdraws the mandate
+	// for strategy rows until the owner confirms again (strategy-register.md
+	// section 2, "Option B's armed terms").
+	RegisterDigest string `json:"register_digest,omitempty"`
 }
 
 func decodeDeskAuthority(raw []byte, out any) error {
@@ -190,7 +196,8 @@ func (s *Server) handleDeskAuthorityConfirm(ctx context.Context, req *rpc.Reques
 	if err != nil {
 		return rpc.DeskAuthorityStatus{}, err
 	}
-	next := deskAuthorityRecord{Terms: &terms, Scope: terms.MaximumScope, ConfirmedAt: s.orderNow(), Verified: verified, Confirmation: in.Confirmation, BrakeEpisode: episode}
+	next := deskAuthorityRecord{Terms: &terms, Scope: terms.MaximumScope, ConfirmedAt: s.orderNow(), Verified: verified, Confirmation: in.Confirmation, BrakeEpisode: episode,
+		RegisterDigest: s.deskRegisterDigest()}
 	// Confirmation does not resume execution. The reconciled controller must
 	// explicitly fence its current preferences before any subsequent dispatch.
 	return s.saveDeskAuthority(ctx, current.Generation, next, "confirmed")

@@ -30,7 +30,7 @@ func TestDeskAuthorityExpiryDuringFinalWireChecksRefusesSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	terms := rpc.DeskAuthorityTerms{AuthorityEpoch: head.AuthorityEpoch, Version: 1, Kind: "desk_automatic_authority", ID: "synthetic-wire-deadline", AccountID: auth.Status.Account, AccountMode: auth.Status.Mode, MaximumScope: "full", ControllerHash: strings.Repeat("a", 64), ConfirmBefore: now.Add(time.Minute), Pricing: "fixed-midpoint", Algorithm: "Adaptive", TIF: "DAY", Protection: "existing-policy", Capacity: "existing-policy-reuse-confirmed-funds", Selection: "desk-deterministic-controller"}
-	row := deskAuthorityRecord{DeskAuthorityStatus: rpc.DeskAuthorityStatus{Terms: &terms, Scope: "full", Running: true, PreferencesHash: strings.Repeat("b", 64), AdaptivePriority: "Normal"}, ControlProcess: now}
+	row := deskAuthorityRecord{DeskAuthorityStatus: rpc.DeskAuthorityStatus{Terms: &terms, Scope: "full", Running: true, PreferencesHash: strings.Repeat("b", 64), AdaptivePriority: "Normal"}, ControlProcess: now, RegisterDigest: s.deskRegisterDigest()}
 	if _, err := s.saveDeskAuthority(t.Context(), 0, row, "test-confirmed"); err != nil {
 		t.Fatal(err)
 	}
