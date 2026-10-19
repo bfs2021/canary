@@ -299,8 +299,15 @@ func TestCoreKillIsMeasuredOnItsHoldingMarkedAtDecisions(t *testing.T) {
 	if first.Units != 100 || first.Cash != -10000 {
 		t.Fatalf("the first mark adopts the holding at its close: %+v", first)
 	}
-	if next := coreSleeveFills(&liveMark{Units: 100, Cash: -10000}, 150, 90); next.Units != 150 || next.Cash != -14500 {
-		t.Fatalf("a change of holding is taken at the mark's close: %+v", next)
+	// A change of holding is taken at the previous mark's close, the
+	// decision close the rule acted on (refuter round 3): the row's 300
+	// bought at 100 carry the fall to 80, and 300 the rule sold at 100
+	// carry none of it.
+	if bought := coreSleeveFills(&liveMark{Units: 0, Cash: 0, Close: 100}, 300, 80); bought.Cash+bought.Units*80 != -6000 {
+		t.Fatalf("the row's units carry their first month: %+v", bought)
+	}
+	if sold := coreSleeveFills(&liveMark{Units: 300, Cash: -30000, Close: 100}, 0, 80); sold.Cash+sold.Units*80 != 0 {
+		t.Fatalf("units the rule sold carry nothing: %+v", sold)
 	}
 	pos := withIBCF(mandateTestPositions(100), 100, 100)
 	c := testCoreConstitution()
@@ -332,5 +339,20 @@ func TestCoreKillIsMeasuredOnItsHoldingMarkedAtDecisions(t *testing.T) {
 	marks, err := kept.liveMarks(t.Context(), risk.CoreStrategyID)
 	if err != nil || len(marks) != 1 || marks[0].Session != res.Decision.Decision || marks[0].Units != 100 || marks[0].Cash != -100*res.Decision.LineClose() || marks[0].ScalePct != 100 || marks[0].SleeveBudget != res.Sizing.Current.SleeveBudget {
 		t.Fatalf("the core's mark %+v %v, want its holding adopted at the decision close", marks, err)
+	}
+}
+
+// Marks that cannot be read hold a live entry, the core included: a kill
+// rule that cannot be measured is no kill rule, and an unreadable mark
+// must not clear the unwritten-bound hold either (refuter round 3).
+func TestUnreadableKillMarksHoldTheEntry(t *testing.T) {
+	pos := withIBCF(mandateTestPositions(100), 100, 100)
+	srv := coreTestServer(t, testCoreConstitution(), pos, 0.25)
+	if _, err := srv.coreStore.AppendEvents(t.Context(), []corestore.EventInput{{ScopeKey: liveMarkScope(risk.CoreStrategyID), EventKey: liveMarkKey(risk.CoreStrategyID, "2026-08-31"), Type: liveMarkType, Action: "mark", Origin: coreEventOriginDaemon, OccurredAt: coreDecisionNow, PayloadJSON: []byte(`"x"`)}}); err != nil {
+		t.Fatal(err)
+	}
+	res := coreEvaluate(t, srv)
+	if res.Status != rpc.CoreStatusHold || res.Kill != nil || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "kill rule: the marks of the core cannot be read") }) {
+		t.Fatalf("status %s kill %+v reasons %v, want a hold naming the marks", res.Status, res.Kill, res.Reasons)
 	}
 }

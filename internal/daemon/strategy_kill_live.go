@@ -29,10 +29,12 @@ import (
 // 2026-10-19): every unit of its line is the core's whoever bought it
 // (placement), and its shadow record is not written while it is live, so
 // its sleeve is the line's holding, marked at each decision close, each
-// change of holding taken at the close it is marked at (the paper
-// convention) and the first mark adopting the holding (coreSleeveFills):
-// between decisions the sleeve's P&L is the holding times the move of the
-// close, s0's test (a) on the sleeve.
+// change of holding taken at the previous mark's close (the decision close
+// the rule acted on, the paper convention) and the first mark adopting the
+// holding at its own close (coreSleeveFills): between decisions the
+// sleeve's P&L is the holding times the move of the close, s0's test (a)
+// on the sleeve. Marks that cannot be read hold the entry: a kill rule
+// that cannot be measured is no kill rule (refuter round 3).
 
 const (
 	liveMarkType  = "strategy.mark.v1"
@@ -77,13 +79,16 @@ func stageCapital(sleeveBudget, scalePct float64) float64 {
 
 // coreSleeveFills is the core's sleeve as its marks read it: the line's
 // holding as its units, with each change of holding since the previous
-// mark taken at this mark's close and the first mark adopting the holding
-// at its close, so the sleeve's equity starts at zero as a paper sleeve's
-// does and moves with the holding times the close between decisions.
+// mark taken at that mark's close (the decision close the rule acted on:
+// the row's units carry the month that follows, and units the rule sold
+// carry none of it) and the first mark adopting the holding at its own
+// close, so the sleeve's equity starts at zero as a paper sleeve's does and
+// moves with the holding times the close between decisions. A hand trade
+// between decisions is measured as if done at the previous decision close.
 func coreSleeveFills(prev *liveMark, units, close float64) strategyFills {
 	cash := -units * close
 	if prev != nil {
-		cash = prev.Cash - (units-prev.Units)*close
+		cash = prev.Cash - (units-prev.Units)*nonZero(prev.Close, close)
 	}
 	return strategyFills{Units: units, Cash: cash, ByRef: map[string]float64{}}
 }
@@ -171,13 +176,13 @@ func (s *Server) recordLiveMark(ctx context.Context, res *rpc.StrategyTargetResu
 // strategyKillLive is the kill test of a live entry on its own fills: the
 // kept marks, and this reading marked at the decision close when it is not
 // kept yet. Past the bound the entry holds before the month can be frozen.
-func (s *Server) strategyKillLive(ctx context.Context, r register.Resolved, mark killMark, conID int) *rpc.KillView {
+func (s *Server) strategyKillLive(ctx context.Context, r register.Resolved, mark killMark, conID int) (*rpc.KillView, error) {
 	if s.coreStore == nil {
-		return nil
+		return nil, nil
 	}
 	marks, err := s.liveMarks(ctx, r.Entry.ID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	kill := &rpc.KillView{MaxDrawdownK: r.KillDrawdownK, Source: rpc.KillSourceOwnFills, ScalePct: r.ScalePct}
 	// The sleeve's own P&L starts at zero, as the paper position does; the
@@ -202,9 +207,11 @@ func (s *Server) strategyKillLive(ctx context.Context, r register.Resolved, mark
 		}
 	}
 	if !marked && mark.session != "" && mark.close > 0 && mark.sleeveBudget > 0 {
-		own := s.strategyOwnFills(ctx, r.Entry.ID, conID)
+		var own strategyFills
 		if r.Entry.Form == risk.StrategyFormCore {
 			own = coreSleeveFills(lastLiveMark(marks), mark.units, mark.close)
+		} else {
+			own = s.strategyOwnFills(ctx, r.Entry.ID, conID)
 		}
 		at(own.Cash+own.Units*mark.close, mark.sleeveBudget, mark.scalePct)
 	}
@@ -216,5 +223,5 @@ func (s *Server) strategyKillLive(ctx context.Context, r register.Resolved, mark
 	case !kill.Measured:
 		kill.Note = "no decision marked yet: the drawdown is measured on its own fills from its first decision live"
 	}
-	return kill
+	return kill, nil
 }

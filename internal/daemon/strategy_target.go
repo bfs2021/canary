@@ -805,16 +805,24 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	}
 	res.Holding = &rpc.CoreHolding{Shares: held, Price: price, ValueBase: float64(held) * price, PriceSource: priceSource}
 
-	// The kill rule's drawdown test on the shadow record, with this
-	// reading marked when it is not recorded yet; past the bound the
-	// strategy holds before the month can be frozen.
+	// The kill rule's drawdown test, on a live entry's own fills (the core's
+	// holding) or in shadow on the paper sleeve, with this reading marked
+	// when it is not recorded yet; past the bound the strategy holds before
+	// the month can be frozen.
 	killOf := func(mark killMark) {
 		on := "the shadow record"
 		if r.State == register.StateLive && contract != nil {
 			// A live entry keeps no shadow record: its own fills are the
 			// measure, and the core's sleeve is its line's holding marked
 			// at each decision (strategy_kill_live.go).
-			res.Kill, on = s.strategyKillLive(ctx, r, mark, contract.ConID), "its own fills"
+			kill, err := s.strategyKillLive(ctx, r, mark, contract.ConID)
+			if err != nil {
+				// A kill rule that cannot be measured is no kill rule:
+				// the entry holds until the marks read (refuter round 3).
+				hold(fmt.Sprintf("kill rule: the marks of %s cannot be read, so its drawdown cannot be measured: buys stop (%v)", name, err))
+				return
+			}
+			res.Kill, on = kill, "its own fills"
 			if isCore {
 				on = "its holding"
 			}

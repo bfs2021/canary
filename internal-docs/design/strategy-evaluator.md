@@ -137,14 +137,17 @@ line's holding (refuter, 2026-10-19): every unit of the line is the core's
 whoever bought it (placement), its shadow record is not written while it is
 live, and its rows' own fills would miss a hand-built holding. So its marks
 carry the holding, each change of holding since the previous mark taken at
-the close it is marked at (the paper convention) and the first mark
-adopting the holding at its close (`coreSleeveFills`): between decisions
-the sleeve's equity moves by the holding times the move of the close,
-s0's test (a) on the sleeve, and `canary core` reads the drawdown "on its
-holding". A hand sale between decisions leaves the measure alone until the
-next mark, which takes the smaller holding at that close. The core's bound
-is the owner's to write (`[mandate.core] kill_drawdown_k`); until it is
-written the live core holds.
+that mark's close, the decision close the rule acted on (the paper
+convention: the row's units carry the month that follows, units the rule
+sold carry none of it), and the first mark adopting the holding at its own
+close (`coreSleeveFills`): between decisions the sleeve's equity moves by
+the holding times the move of the close, s0's test (a) on the sleeve, and
+`canary core` reads the drawdown "on its holding". A hand trade between
+decisions is measured as if done at the previous decision close. Marks that
+cannot be read hold the entry ("kill rule: the marks of … cannot be read"),
+the core and every live entry alike. The core's bound is the owner's to
+write (`[mandate.core] kill_drawdown_k`); until it is written the live core
+holds.
 
 ## 4. Parity: how the lab's fixture tests any entry
 
