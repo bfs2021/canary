@@ -143,8 +143,16 @@ func (s *Server) strategySignalSeries(ctx context.Context, r register.Resolved, 
 		decision, _, _ = coreDecisionDays(now, k.Market)
 	}
 	if decision != "" {
-		if want := strategyPrevWeekday(decision); fx.Dates[len(fx.Dates)-1] < want {
+		want := strategyPrevWeekday(decision)
+		if fx.Dates[len(fx.Dates)-1] < want {
 			hold("the signal waits for the %s rate of %s to measure %s's close of %s", pair, want, k.Symbol, decision)
+			return nil, holds
+		}
+		// An IDEALPRO daily bar closes at 17:00 New York; one read before
+		// then is partial and a later read rewrites it, so the month waits
+		// for a read of the rate series after that roll.
+		if roll, ok := strategyFXRoll(want); !ok || fx.FetchedAt.Before(roll) {
+			hold("the signal waits for the final %s rate of %s (IDEALPRO's daily bar closes at 17:00 New York) to measure %s's close of %s", pair, want, k.Symbol, decision)
 			return nil, holds
 		}
 	}
@@ -329,4 +337,18 @@ func strategyLastSessionOnOrBefore(date string, market marketcal.Market, now tim
 		day = day.AddDate(0, 0, -1)
 	}
 	return ""
+}
+
+// strategyFXRoll is the instant an IDEALPRO daily bar of a date is final:
+// 17:00 New York that day.
+func strategyFXRoll(date string) (time.Time, bool) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return time.Time{}, false
+	}
+	day, err := time.ParseInLocation(time.DateOnly, date, ny)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return day.Add(17 * time.Hour), true
 }

@@ -675,3 +675,27 @@ func TestSignalMonthWaitsForTheTradedLinesClose(t *testing.T) {
 		t.Fatalf("S3: without the decision day's own close: %s %v", res.Status, res.Reasons)
 	}
 }
+
+// A rate series read before IDEALPRO's 17:00 New York roll of the decision
+// day's previous rate holds the month until a later read (refuter round 5,
+// F1): the partial bar would be rewritten and the frozen month drift.
+func TestSignalMonthWaitsForTheFinalRate(t *testing.T) {
+	srv := signalTrendServer(t, 100, true)
+	fx := *srv.mandateHistorySeries(t.Context(), strategyFXNeed(trendFundID, "GBP", "USD").Key)
+	fx.FetchedAt = time.Date(2026, 9, 29, 20, 30, 0, 0, time.UTC) // 16:30 New York, before the 29th's bar closes
+	if err := srv.saveMandateSeries(t.Context(), &fx); err != nil {
+		t.Fatal(err)
+	}
+	if res := liveTrendTarget(t, srv); res.Status != rpc.CoreStatusHold || !slices.ContainsFunc(res.Reasons, func(r string) bool {
+		return strings.Contains(r, "the signal waits for the final GBP.USD rate of 2026-09-29")
+	}) {
+		t.Fatalf("F1: a partial rate bar: %s %v", res.Status, res.Reasons)
+	}
+	fx.FetchedAt = time.Date(2026, 9, 29, 21, 30, 0, 0, time.UTC)
+	if err := srv.saveMandateSeries(t.Context(), &fx); err != nil {
+		t.Fatal(err)
+	}
+	if res := liveTrendTarget(t, srv); res.Status != rpc.CoreStatusReady {
+		t.Fatalf("after the roll: %s %v", res.Status, res.Reasons)
+	}
+}
