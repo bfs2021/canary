@@ -502,11 +502,21 @@ func mandatePositionRows(pos *rpc.PositionsResult) map[string]rpc.PositionView {
 	return out
 }
 
-// mandateMergedLegs sums the verdict's legs per contract, in their order.
+// mandateMergedLegs sums the verdict's legs per contract, in their order. A
+// line the owner and a register entry both hold is split in the verdict
+// (strategy_placement.go); the reduction sizes it as one line, its row on
+// the position the broker holds, so the entry's units are within its reach,
+// and its fill takes the owner's units first, then the entry's (placement
+// rule 2, strategy_ledger.go).
 func mandateMergedLegs(legs []mandate.Leg) []mandate.Leg {
 	index := map[string]int{}
 	var out []mandate.Leg
 	for _, l := range legs {
+		if strings.HasPrefix(l.ID, "sleeve:") {
+			if id := mandateLegConID(l.ID); id > 0 {
+				l.ID = mandateConLegID(id)
+			}
+		}
 		if i, ok := index[l.ID]; ok {
 			out[i].Quantity += l.Quantity
 			continue

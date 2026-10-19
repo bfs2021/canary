@@ -48,6 +48,9 @@ const (
 type deskExecutionGrant struct {
 	Key, Revision, Class string
 	Fence                deskAuthorityFence
+	// RegisterDigest is the register the mandate was armed under; a strategy
+	// row's addition is refused inside the attempt when it moved since.
+	RegisterDigest string
 }
 
 // deskExecutionClass is Canary's own classification of a served row for the
@@ -143,6 +146,12 @@ func (e *proposalEngine) deskSubmitBlockers(prop rpc.TradeProposal, grant *deskE
 	}
 	if want := deskExecutionStrategyEpisode(prop); want != "" && want != episode {
 		return []rpc.TradingBlocker{{Code: deskBlockerEpisodeMismatch, Message: fmt.Sprintf("a strategy row's item names the row's session episode %q; this item names %q", want, episode)}}
+	}
+	// The register check again, on the revalidated row inside the fenced
+	// attempt, so a row the admission's snapshot did not carry, or a policy
+	// edit since, is caught here.
+	if b := e.server.deskRegisterBlocker(grant.RegisterDigest, prop); b != nil {
+		return []rpc.TradingBlocker{*b}
 	}
 	if paused, sections := e.server.configPausesAutomation(); paused {
 		return []rpc.TradingBlocker{{Code: "config_automation_paused", Message: fmt.Sprintf("automatic submission is paused while config.toml [%s] runs on Canary's defaults", strings.Join(sections, "], [")), Action: "Fix config.toml and run `canary restart`, or confirm the row on your device."}}
@@ -368,7 +377,7 @@ func (s *Server) deskExecutionAttempt(ctx context.Context, authority deskAuthori
 		return deskExecutionOutcomeRow{Outcome: rpc.DeskOutcomeRefused, Blockers: []rpc.TradingBlocker{{Code: "proposal_engine_unavailable", Message: "proposal engine is unavailable"}}}
 	}
 	now := s.orderNow()
-	grant := &deskExecutionGrant{Key: item.Intent.Proposal.Key, Revision: item.Intent.Proposal.Revision, Class: item.Intent.Class,
+	grant := &deskExecutionGrant{Key: item.Intent.Proposal.Key, Revision: item.Intent.Proposal.Revision, Class: item.Intent.Class, RegisterDigest: authority.RegisterDigest,
 		Fence: deskAuthorityFence{ID: authority.Terms.ID, Generation: authority.Generation, PreferencesHash: authority.PreferencesHash, AdaptivePriority: authority.AdaptivePriority, Action: deskFenceAction(item.Intent.Class), ValidUntil: now.Add(deskExecutionFenceWindow)}}
 	s.deskExecutionGrant.Store(grant)
 	defer s.deskExecutionGrant.Store(nil)
@@ -418,8 +427,10 @@ func (s *Server) deskExecutionOutcomeOf(res rpc.TradeProposalSubmitResult, err, 
 }
 
 // deskRegisterDigest fingerprints the strategy register as the owner wrote
-// it: each entry's id, rule, cited spec, sleeve, stage, scale and
-// allocation. "" while no constitution or register is in force.
+// it: every key of every entry the evaluator and the register read (rule,
+// cited spec, sleeve, stage, scale, allocation, the fund, its pins, the
+// signal and its series, the band, the minimum, the value cap and the kill
+// bound). "" while no constitution or register is in force.
 func (s *Server) deskRegisterDigest() string {
 	if s == nil || s.riskPolicies == nil {
 		return ""
@@ -428,39 +439,43 @@ func (s *Server) deskRegisterDigest() string {
 	if c == nil || c.Mandate == nil {
 		return ""
 	}
-	type term struct {
-		ID, Rule, SpecHash, Sleeve, Stage string
-		ScalePct, AllocationPct           *float64
-	}
-	var terms []term
-	for _, e := range c.Mandate.Register() {
-		terms = append(terms, term{ID: e.ID, Rule: e.Rule, SpecHash: e.SpecHash, Sleeve: e.Sleeve, Stage: e.Stage, ScalePct: e.ScalePct, AllocationPct: e.AllocationPct})
-	}
-	if len(terms) == 0 {
+	entries := c.Mandate.Register()
+	if len(entries) == 0 {
 		return ""
 	}
-	raw, _ := json.Marshal(terms)
+	raw, _ := json.Marshal(entries)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
 
-// deskExecutionRegisterChanged refuses a strategy row whose register is not
-// the one the standing mandate was armed under; nil for any other row, or
-// while the register is unchanged.
+// deskExecutionRegisterChanged is deskRegisterBlocker before journaling, on
+// the served row; nil while the row is not served (the attempt checks the
+// revalidated one).
 func (s *Server) deskExecutionRegisterChanged(authority deskAuthorityRecord, key string) *rpc.TradingBlocker {
 	if s == nil || s.tradeProposals == nil {
 		return nil
 	}
 	prop, ok := servedProposal(s.tradeProposals.snapshotForRead(false, false), key)
-	if !ok || !rpc.StrategyRowBucket(prop.Bucket) {
+	if !ok {
+		return nil
+	}
+	return s.deskRegisterBlocker(authority.RegisterDigest, prop)
+}
+
+// deskRegisterBlocker refuses a strategy row's buy whose register is not the
+// one the standing mandate was armed under (an entry added, promoted,
+// re-sized or re-cited since); its sales, every reduction and protection
+// still go, so a register edit never stops the mandate's de-risking.
+func (s *Server) deskRegisterBlocker(armed string, prop rpc.TradeProposal) *rpc.TradingBlocker {
+	if !rpc.StrategyRowBucket(prop.Bucket) || deskExecutionClass(prop) != rpc.DeskClassAdd {
 		return nil
 	}
 	// An arming recorded before the register was bound reads empty, so it
 	// meets any register written since and refuses.
-	if authority.RegisterDigest == s.deskRegisterDigest() {
+	if armed == s.deskRegisterDigest() {
 		return nil
 	}
 	return &rpc.TradingBlocker{Code: rpc.DeskBlockerAuthorityChanged,
-		Message: "the strategy register changed since the mandate was armed (an entry added, promoted, re-sized or re-cited); confirm the mandate again on your device to send strategy rows; nothing was sent",
+		Message: "the strategy register changed since the mandate was armed (an entry added, promoted, re-sized or re-cited); confirm the mandate again on your device to send strategy buys; nothing was sent",
 		Action:  "Review the register (`canary mandate`) and confirm the mandate again."}
 }

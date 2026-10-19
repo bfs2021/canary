@@ -778,7 +778,19 @@ Each position stays in the sleeve of whoever opened it, fixed for its life.
   (`sleeve:<sleeve>:con:<id>`), and while one of the entry's orders on the
   line is in flight and the journal and the position disagree, the line's
   placement is unknown and the gate refuses every risk-adding order until
-  the fill is journaled. Rule 5: nothing is re-placed. While the owner
+  the fill is journaled. The placement is a ledger carried from verdict to
+  verdict (`strategy_ledger.go`), never recomputed from all of the entry's
+  fills: at each verdict on a current read of the positions, the change in
+  the broker's position is split into the entry's own fills since the last
+  verdict and the rest, which is the owner's (a rise the owner's, a fall the
+  owner's units first, then the entry's), so a hand sale that took the
+  entry's units lowers them for good and a later hand buy is the owner's.
+  While the rest is not zero and the entry's own fills moved or one of its
+  orders works, the position and the journal have not met yet: the ledger
+  stays and the placement is unknown, for at most ten minutes, after which
+  the rest is booked as the owner's. An order's fill is the larger of its
+  journaled executions and its last reported filled quantity, so an
+  execution the journal missed still counts. Rule 5: nothing is re-placed. While the owner
   holds units of the line the entry holds (no rows but a sale to zero for
   review), naming them: it trades only a line it holds alone. Orders are
   placed by origin, as fills are: the entry's own row carries its id in the
@@ -787,12 +799,13 @@ Each position stays in the sleeve of whoever opened it, fixed for its life.
   are closed for a machine sleeve: an order naming an entry that is not a
   stock order of that entry's line is refused before the hedge pass and the
   unmeasured pass are reached. Two strategies on one fund line refuse the
-  file. Residuals: a hand trade of the line in TWS outside Canary's client
-  is not in Canary's journal (`canary status`, "Executions"); the forced
-  reduction cuts only the owner's leg of a split line (rows are sized per
-  position row), and a forced or protective sale of the entry's line is not
-  an own fill, so it lowers the entry's units through rule 2 but not its
-  own-fill kill measure.
+  file. The forced reduction sizes a split line as one line on the position
+  the broker holds, ranked in the owner's sleeve; its fill takes the owner's
+  units first, then the entry's (rule 2). Residuals: a hand trade of the
+  line in TWS outside Canary's client is not in Canary's journal (`canary
+  status`, "Executions") and reads as the owner's; a forced or protective
+  sale of the entry's units is not an own fill, so it lowers the entry's
+  units through rule 2 but not its own-fill kill measure.
 - **Unknown placement never guesses**: while any contract's placement is
   unknown the allocations are unknown and the allocation check refuses every
   risk-adding order (the uses add up, so one unknown contract leaves every

@@ -40,18 +40,23 @@ import (
 
 // strategyFills is what an entry's own rows filled on its line: the shares
 // bought less the shares sold, the cash those fills moved in the line's
-// currency (spent negative), and how many executions.
+// currency (spent negative), how many orders filled, and the signed shares
+// each order filled, by order reference.
 type strategyFills struct {
 	Units float64
 	Cash  float64
 	Execs int
+	ByRef map[string]float64
 }
 
 // strategyOwnFills reads an entry's own fills on a line from the journals,
-// in the selected broker scope. An unreadable journal reads as no fills, so
-// a holding of the line holds the entry (fail closed).
+// in the selected broker scope: per order, the larger of its executions'
+// shares and the filled quantity its last status reported (an execution the
+// journal missed, through a restart say, still counts), signed by the
+// order's side. An unreadable journal reads as no fills, so a holding of the
+// line holds the entry (fail closed).
 func (s *Server) strategyOwnFills(ctx context.Context, id string, conID int) strategyFills {
-	var out strategyFills
+	out := strategyFills{ByRef: map[string]float64{}}
 	if s == nil || s.tradeProposals == nil || s.tradeProposals.store == nil || s.orderJournal == nil || conID <= 0 {
 		return out
 	}
@@ -71,36 +76,57 @@ func (s *Server) strategyOwnFills(ctx context.Context, id string, conID int) str
 	}
 	store, err := s.orderJournal.coreStore()
 	if err != nil {
-		return out
+		return strategyFills{ByRef: map[string]float64{}}
 	}
-	seen := map[string]bool{}
 	for _, ref := range refs {
 		records, err := store.LoadOrderEvents(ctx, corestore.OrderQuery{OrderRef: ref, Limit: 10_000})
 		if err != nil {
-			return strategyFills{}
+			return strategyFills{ByRef: map[string]float64{}}
 		}
+		seen := map[string]bool{}
+		side, execShares, execCash, statusFilled, avg := 0.0, 0.0, 0.0, 0.0, 0.0
 		for _, record := range records {
 			ev, err := decodeCoreOrderEvent(record)
-			if err != nil || ev.Type != orderJournalEventStatusUpdated || strings.TrimSpace(ev.ExecID) == "" || !(ev.ExecShares > 0) || seen[ev.ExecID] {
+			if err != nil {
 				continue
 			}
-			price := ev.LastFillPrice
-			if !(price > 0) {
-				price = ev.AvgFillPrice
+			switch strings.ToUpper(strings.TrimSpace(ev.Action)) {
+			case rpc.OrderActionBuy:
+				side = 1
+			case rpc.OrderActionSell:
+				side = -1
 			}
-			switch strings.ToUpper(strings.TrimSpace(nonEmptyString(ev.ExecSide, ev.Action))) {
-			case "BOT", "BUY":
-				out.Units += ev.ExecShares
-				out.Cash -= ev.ExecShares * price
-			case "SLD", "SELL":
-				out.Units -= ev.ExecShares
-				out.Cash += ev.ExecShares * price
-			default:
+			if ev.Type != orderJournalEventStatusUpdated {
 				continue
 			}
-			seen[ev.ExecID] = true
-			out.Execs++
+			if ev.Filled > statusFilled {
+				statusFilled = ev.Filled
+			}
+			if ev.AvgFillPrice > 0 {
+				avg = ev.AvgFillPrice
+			}
+			if id := strings.TrimSpace(ev.ExecID); id != "" && ev.ExecShares > 0 && !seen[id] {
+				seen[id] = true
+				price := ev.LastFillPrice
+				if !(price > 0) {
+					price = ev.AvgFillPrice
+				}
+				execShares += ev.ExecShares
+				execCash += ev.ExecShares * price
+			}
 		}
+		if side == 0 {
+			continue
+		}
+		filled := math.Max(execShares, statusFilled)
+		if !(filled > 0) {
+			continue
+		}
+		cash := execCash + (filled-execShares)*avg
+		out.ByRef[ref] = side * filled
+		out.Units += side * filled
+		out.Cash -= side * cash
+		out.Execs++
 	}
 	return out
 }
@@ -227,7 +253,7 @@ type strategyPlacement struct {
 // sleeve (every unit, whoever bought it), and each live or suspended entry's
 // line by its own fills. The core's lines win a collision, which the policy
 // refuses anyway (risk.validateRegister).
-func (s *Server) mandateStrategyPlacement(ctx context.Context, c *risk.Constitution, resolved []register.Resolved, legs []mandate.Leg) strategyPlacement {
+func (s *Server) mandateStrategyPlacement(ctx context.Context, c *risk.Constitution, resolved []register.Resolved, legs []mandate.Leg, positionsKnown bool) strategyPlacement {
 	out := strategyPlacement{Placed: map[string]string{}, Legs: legs}
 	core := map[int]bool{}
 	if c != nil && c.Mandate != nil && c.Mandate.Core != nil {
@@ -247,16 +273,26 @@ func (s *Server) mandateStrategyPlacement(ctx context.Context, c *risk.Constitut
 			}
 			id := mandateConLegID(conID)
 			i := slices.IndexFunc(out.Legs, func(l mandate.Leg) bool { return l.ID == id })
+			held := 0.0
+			if i >= 0 {
+				held = out.Legs[i].Quantity
+			}
+			var entry float64
+			if positionsKnown {
+				// The ledger moves only on a current read of the positions,
+				// never on a book that failed to read (the verdict is unknown
+				// then anyway).
+				var why string
+				entry, why = s.strategyLedgerAdvance(ctx, r.Entry.ID, conID, held, s.strategyOwnFills(ctx, r.Entry.ID, conID), s.strategyOrderInFlight(ctx, r.Entry.ID, conID), s.nowUTC())
+				if why != "" {
+					out.Unknown = append(out.Unknown, strategyName(r.Entry)+"'s placement of "+id+" is being reconciled: "+why)
+				}
+			}
 			if i < 0 {
 				continue // not held: nothing to place
 			}
-			own := s.strategyOwnFills(ctx, r.Entry.ID, conID)
-			held := out.Legs[i].Quantity
-			if held != math.Max(0, own.Units) && s.strategyOrderInFlight(ctx, r.Entry.ID, conID) {
-				out.Unknown = append(out.Unknown, fmt.Sprintf("an order of %s on %s is in flight and the broker's position (%g) and its journaled fills (%g) differ; placement is known again once the order's fills are journaled",
-					strategyName(r.Entry), nonEmptyString(out.Legs[i].Symbol, id), held, own.Units))
-			}
-			entry, owner := strategyLineUnits(held, own)
+			entry = math.Min(math.Max(0, entry), math.Max(0, held))
+			owner := held - entry
 			switch {
 			case entry <= 0:
 				// The owner's line: the entry holds none of it.

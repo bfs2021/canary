@@ -315,7 +315,9 @@ in its sleeve; a line both hold is split into the owner's leg and the
 entry's own; while the owner holds any units of the line the entry holds,
 naming them, and trades again once they are sold. While one of its orders
 on the line is in flight and the journal and the position disagree, the
-placement is unknown and no risk-adding order passes. An order is placed by
+placement is unknown and no risk-adding order passes (at most ten minutes;
+the placement is a ledger carried from verdict to verdict, so a hand sale
+of the entry's units lowers them for good). An order is placed by
 its origin: the entry's own row (`OrderDraft.RegisterEntry`, daemon-set) in
 its sleeve, anything else on the line in the owner's; a strategy order that
 is not a stock order of its own line is refused before the hedge or the
@@ -325,10 +327,13 @@ holds units of keeps them. Two strategies on one fund line (one ISIN and
 currency, or one `con_id`, the core's compiled fund included) refuse the
 file (`register.Refusals`). A fund the book does not hold yet is measured on
 the entry's own series at the headroom and at the gate, so its first row is
-never refused unmeasured. Under the standing mandate a strategy row is sent
-only under the register it was armed with: an edit of any entry's rule,
-cited spec, sleeve, stage, scale or allocation withdraws the mandate for
-strategy rows until the owner confirms again (`deskRegisterDigest`).
+never refused unmeasured. Under the standing mandate a strategy row's buy
+is sent only under the register it was armed with: an edit of any key of
+any entry (rule, spec, sleeve, stage, scale, allocation, fund, pins,
+signal, band, minimum, cap, kill bound) withdraws the mandate for strategy
+buys until the owner confirms again (`deskRegisterDigest`, checked before
+journaling and again inside the fenced attempt); sales, reductions and
+protection still go, so an edit never stops the mandate's de-risking.
 
 `canary status` lists each entry's stage and its row (or why none stands)
 from the engine's last generation (`HealthResult.Strategies`).

@@ -236,6 +236,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	}
 	evidence := &rpc.MandateEvidence{EvaluatedAt: now, EquityAsOf: capital.EquityAsOf}
 	pos, err := s.mandatePositions(ctx)
+	positionsKnown := false
 	switch {
 	case err != nil:
 		in.Reasons = append(in.Reasons, "positions could not be read: "+errText(err))
@@ -245,6 +246,8 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		in.Reasons = append(in.Reasons, "the positions read belongs to another account than the selected one")
 	case pos.Portfolio != nil && pos.Portfolio.BaseCurrency != "" && base != "" && normCcy(pos.Portfolio.BaseCurrency) != base:
 		in.Reasons = append(in.Reasons, fmt.Sprintf("the account base currency %s differs from capital.base_currency %s", pos.Portfolio.BaseCurrency, base))
+	default:
+		positionsKnown = true
 	}
 	if pos != nil {
 		evidence.PositionsAsOf = pos.AsOf
@@ -275,7 +278,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	// the legs, since a live strategy on hold keeps its reservation only
 	// while its sleeve holds positions.
 	resolved := s.resolvedRegister(c)
-	placement := s.mandateStrategyPlacement(ctx, c, resolved, in.Legs)
+	placement := s.mandateStrategyPlacement(ctx, c, resolved, in.Legs, positionsKnown)
 	in.Legs = placement.Legs
 	in.Allocations = mandateAllocationPlanPlaced(c, resolved, placement.Placed, in.Legs)
 	if in.Allocations != nil {

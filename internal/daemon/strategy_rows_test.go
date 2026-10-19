@@ -301,9 +301,34 @@ func TestStrategyLineIsPlacedByLineage(t *testing.T) {
 	if !engine.coreLine(ownerRow) {
 		t.Fatal("the entry's own line is inside protection's automatic sales")
 	}
-	// A hand sale beyond the owner's units takes the entry's (rule 2).
+	// A hand sale beyond the owner's units takes the entry's (rule 2), for
+	// good: a later hand buy is the owner's (refuter round 2, R1: the units
+	// were recomputed from all the entry's fills, so the hand buy refilled
+	// them).
 	if input := withPositions(t, srv, withSYNF(base, 100, 90)); strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 100 {
 		t.Fatalf("after a hand sale of the entry's units: %+v", input.Legs)
+	}
+	if input := withPositions(t, srv, withSYNF(base, 150, 90)); strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 100 || strategyOwnerUnitsInBook(input, trendFundConID) != 50 {
+		t.Fatalf("R1: a hand buy after the hand sale: %+v", input.Legs)
+	}
+	// The forced reduction sizes a split line as one line, so the entry's
+	// units are within its reach (R2).
+	_, input, _, _ = srv.mandateVerdicts.current()
+	merged := mandateMergedLegs(input.Legs)
+	if i := slices.IndexFunc(merged, func(l mandate.Leg) bool { return l.ID == line }); i < 0 || merged[i].Quantity != 150 ||
+		slices.ContainsFunc(merged, func(l mandate.Leg) bool { return strings.HasPrefix(l.ID, "sleeve:") }) {
+		t.Fatalf("R2: the reduction's legs %+v", merged)
+	}
+	withPositions(t, srv, base)
+	if input := withPositions(t, srv, withSYNF(base, 50, 90)); strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 0 || input.Allocations.SleeveOf(line) != mandate.SleeveOwner {
+		t.Fatalf("R1: sold to zero by hand, then 50 bought by hand: %+v placed %+v", input.Legs, input.Allocations.Placed)
+	}
+	// The owner sells the 50 again and the entry's own row buys 100: its line
+	// alone once more, for the order placement below.
+	withPositions(t, srv, base)
+	recordEntryFill(t, srv, "synthetic-trend-4", "exec-trend-4", rpc.OrderActionBuy, 100, 90, coreDecisionNow.Add(-30*time.Minute))
+	if input := withPositions(t, srv, withSYNF(base, 100, 90)); input.Allocations.SleeveOf(line) != trendLiveSleeve || strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 100 {
+		t.Fatalf("the entry's own buy after the hand trades: %+v placed %+v", input.Legs, input.Allocations.Placed)
 	}
 
 	// Orders are placed by origin (F1): a hand buy of the entry's line is
@@ -359,7 +384,7 @@ func TestStrategyPlacementIsUnknownWhileItsOrderIsInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := withPositions(t, srv, withSYNF(base, 159, 90))
-	if input.Allocations.Unknown == "" || !strings.Contains(input.Allocations.Unknown, "in flight") {
+	if input.Allocations.Unknown == "" || !strings.Contains(input.Allocations.Unknown, "is being reconciled") {
 		t.Fatalf("placement while the order is in flight: %q", input.Allocations.Unknown)
 	}
 	buy := rpc.OrderDraft{Action: rpc.OrderActionBuy, Contract: rpc.ContractParams{ConID: 4242, Symbol: "SYNX", SecType: "STK", Currency: "USD"}, Quantity: 1, OrderType: rpc.OrderTypeLMT, LimitPrice: 10}
@@ -370,6 +395,26 @@ func TestStrategyPlacementIsUnknownWhileItsOrderIsInFlight(t *testing.T) {
 	recordEntryFill(t, srv, "synthetic-trend-2", "exec-trend-2", rpc.OrderActionBuy, 159, 90, coreDecisionNow)
 	if input := withPositions(t, srv, withSYNF(base, 159, 90)); input.Allocations.Unknown != "" || input.Allocations.SleeveOf(mandateConLegID(trendFundConID)) != trendLiveSleeve {
 		t.Fatalf("after the fill: unknown %q placed %+v", input.Allocations.Unknown, input.Allocations.Placed)
+	}
+	// A difference that outlasts the settle window is booked as the
+	// owner's, so placement never stays unknown (R3): 20 more units arrive
+	// while a second order works and nothing is journaled for them.
+	st.mu.Lock()
+	st.events = append(st.events, proposalEvent{At: coreDecisionNow, Type: "submitted", Key: "strategy_rebalance:synthetic", Bucket: rpc.TradeProposalBucketStrategyRebalance,
+		AccountID: scope.Account, AccountMode: scope.Mode, OrderRef: "synthetic-trend-3", Strategy: trendFundID, Sleeve: trendLiveSleeve, ConID: trendFundConID})
+	st.mu.Unlock()
+	third := originTestOrder("synthetic-trend-3", 932, coreDecisionNow)
+	third.Type, third.Status, third.ConID, third.Symbol, third.Action = orderJournalEventStatusUpdated, "Submitted", trendFundConID, "SYNF", rpc.OrderActionBuy
+	if err := srv.orderJournal.Append(third); err != nil {
+		t.Fatal(err)
+	}
+	if input := withPositions(t, srv, withSYNF(base, 179, 90)); input.Allocations.Unknown == "" {
+		t.Fatal("an unjournaled change while an order works did not make placement unknown")
+	}
+	later := coreDecisionNow.Add(strategyLedgerSettle + time.Minute)
+	srv.now = func() time.Time { return later }
+	if input := withPositions(t, srv, withSYNF(base, 179, 90)); input.Allocations.Unknown != "" || strategyUnitsInBook(input, trendLiveSleeve, trendFundConID) != 159 || strategyOwnerUnitsInBook(input, trendFundConID) != 20 {
+		t.Fatalf("after the settle window: unknown %q legs %+v", input.Allocations.Unknown, input.Legs)
 	}
 }
 
@@ -394,6 +439,21 @@ func TestDeskExecutionRefusesStrategyRowsAfterARegisterEdit(t *testing.T) {
 	if b := srv.deskExecutionRegisterChanged(armed, rows[0].Key); b == nil || b.Code != rpc.DeskBlockerAuthorityChanged || !strings.Contains(b.Message, "the strategy register changed since the mandate was armed") {
 		t.Fatalf("a re-sized entry's row under the old arming: %+v", b)
 	}
+	// Any key the evaluator reads binds the arming (R5): a raised value cap.
+	moved := testLiveTrendConstitution()
+	moved.Mandate.Strategies[trendFundID].MaxValuePct = new(80.0)
+	srv.riskPolicies.active = moved
+	if srv.deskRegisterBlocker(armed.RegisterDigest, rows[0]) == nil {
+		t.Fatal("R5: a raised value cap kept the arming")
+	}
+	// A strategy row's sale still goes under a changed register (R6): the
+	// edit stops buys, never the mandate's de-risking.
+	sale := rows[0]
+	sale.Action, sale.PositionEffect = rpc.OrderActionSell, rpc.OrderPositionEffectReduce
+	if srv.deskRegisterBlocker(armed.RegisterDigest, sale) != nil {
+		t.Fatal("R6: a strategy sale was refused for a register edit")
+	}
+	srv.riskPolicies.active = c
 	if b := srv.deskExecutionRegisterChanged(deskAuthorityRecord{}, rows[0].Key); b == nil {
 		t.Fatal("an arming that names no register sent a strategy row")
 	}
