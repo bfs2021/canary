@@ -132,13 +132,19 @@ measured from the running peak, this reading included; each mark keeps the
 stage's scale it was sized at (`scale_pct`; a mark kept before 2026-10-19
 reads the entry's current scale). A hand trade of the line is not an own
 fill, so it moves the measure nothing. The spec's other tests are the
-scorecard's and the cost report's, not this. The core keeps its measure on
-its shadow record's paper sleeve, at the stage's capital, live or not: every
-unit of its line is the core's whoever bought it (placement), so its rows'
-own fills would not cover a hand-built holding, and s0's test (a) is on the
-sleeve marked at month-ends, not on own fills (refuter, 2026-10-19). The
-core's bound is the owner's to write (`[mandate.core] kill_drawdown_k`);
-until it is written the live core holds.
+scorecard's and the cost report's, not this. The live core's sleeve is its
+line's holding (refuter, 2026-10-19): every unit of the line is the core's
+whoever bought it (placement), its shadow record is not written while it is
+live, and its rows' own fills would miss a hand-built holding. So its marks
+carry the holding, each change of holding since the previous mark taken at
+the close it is marked at (the paper convention) and the first mark
+adopting the holding at its close (`coreSleeveFills`): between decisions
+the sleeve's equity moves by the holding times the move of the close,
+s0's test (a) on the sleeve, and `canary core` reads the drawdown "on its
+holding". A hand sale between decisions leaves the measure alone until the
+next mark, which takes the smaller holding at that close. The core's bound
+is the owner's to write (`[mandate.core] kill_drawdown_k`); until it is
+written the live core holds.
 
 ## 4. Parity: how the lab's fixture tests any entry
 

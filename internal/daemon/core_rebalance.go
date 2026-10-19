@@ -432,9 +432,9 @@ func corePlanDecided(in coreRowInput, now time.Time) corePlan {
 
 // coreRebalanceProposals serves the core's row for this generation, or
 // none, with the core's status. Nil status while the constitution carries no
-// [mandate.core]. A buy is served blocked while the mandate's breach episode
-// is open or a reduction of the line stands, and any row while an order for
-// the contract works, so nobody sends it; the refusal is on the row.
+// [mandate.core]. A buy is served blocked while a reduction of the line
+// stands, and any row while an order for the contract works, so nobody
+// sends it; the refusal is on the row.
 func (e *proposalEngine) coreRebalanceProposals(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, in coreRowInput, sources rpc.TradeProposalSourceFingerprints, now time.Time) ([]rpc.TradeProposal, *rpc.TradeProposalCoreStatus) {
 	if !in.Active {
 		return nil, nil

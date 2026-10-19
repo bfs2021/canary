@@ -827,8 +827,8 @@ until then the row said "for your review" while
 the controller took the sale as a candidate and the daemon sent it (owner,
 2026-10-19: for your review means the owner's review). The kill rule's bound
 is measured against the sleeve's capital at its stage (the core's on its
-shadow record's paper sleeve, since every unit of its line is the core's
-whoever bought it), and a live entry without a written bound holds
+line's holding marked at each decision, since every unit of its line is the
+core's whoever bought it), and a live entry without a written bound holds
 (`strategy-evaluator.md` §3); `[mandate.core]` writes no bound yet, so the
 core holds until the owner writes one. The core's buy is judged by its own
 sleeve as the gate judges an order, and an open breach episode no longer

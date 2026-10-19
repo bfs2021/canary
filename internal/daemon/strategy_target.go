@@ -451,9 +451,7 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	// entry's kill marks' (strategy_kill_live.go).
 	s.recordStrategyShadow(ctx, res, r, now)
 	s.recordStrategyDecision(ctx, res, r, now)
-	if r.Entry.Form != risk.StrategyFormCore {
-		s.recordLiveMark(ctx, res, r, now)
-	}
+	s.recordLiveMark(ctx, res, r, now)
 }
 
 // coreScope keys a frozen month by account, mode and the core's contract.
@@ -812,14 +810,14 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	// strategy holds before the month can be frozen.
 	killOf := func(mark killMark) {
 		on := "the shadow record"
-		if !isCore && r.State == register.StateLive && contract != nil {
+		if r.State == register.StateLive && contract != nil {
 			// A live entry keeps no shadow record: its own fills are the
-			// measure (strategy_kill_live.go). The core stays on its shadow
-			// record's paper sleeve: every unit of its line is the core's
-			// whoever bought it, so its rows' fills would not cover a
-			// hand-built holding, and s0's test is on the sleeve
-			// (strategy-evaluator.md §3; refuter, 2026-10-19).
+			// measure, and the core's sleeve is its line's holding marked
+			// at each decision (strategy_kill_live.go).
 			res.Kill, on = s.strategyKillLive(ctx, r, mark, contract.ConID), "its own fills"
+			if isCore {
+				on = "its holding"
+			}
 		} else {
 			res.Kill = s.strategyKill(ctx, r, mark)
 		}
@@ -843,7 +841,7 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	if sig.Status == core.StatusOK && verdict != nil && verdict.Capital.Known && sizable && contract != nil {
 		on := core.Sizing{AllocationPct: *e.AllocationPct, ScalePct: *e.ScalePct, MaxValuePct: *e.MaxValuePct, BudgetBase: verdict.Capital.BudgetBase, Room: verdict.Capital.Room}
 		current := core.SizeTarget(sizeSig, on)
-		killOf(killMark{session: sig.Decision, close: sizeSig.Close, sleeveBudget: current.SleeveBudget, scalePct: on.ScalePct})
+		killOf(killMark{session: sig.Decision, close: sizeSig.Close, sleeveBudget: current.SleeveBudget, scalePct: on.ScalePct, units: float64(held)})
 		scope := frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID)
 		frozen := s.coreFrozen(ctx, scope)
 		switch {

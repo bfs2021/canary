@@ -210,7 +210,7 @@ hold, the kill rule past its bound and, since 2026-10-19, a live entry's
 unwritten `kill_drawdown_k`, the core's included ("kill rule:
 kill_drawdown_k is unwritten in [table], so the kill rule cannot fire: buys
 stop until the bound is written"). They leave the entry live: its target is
-served, its shadow record and marks continue, its buys stop, and a sale its
+served, its marks continue once a month is frozen, its buys stop, and a sale its
 rule wants is served for the owner's review (`core.owner_review`). A shadow
 entry runs on the note, since it sends nothing.
 

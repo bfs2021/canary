@@ -211,6 +211,9 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 			on := "the shadow record"
 			if k.Source == rpc.KillSourceOwnFills {
 				on = "its own fills"
+				if isCore {
+					on = "its holding"
+				}
 			}
 			line = append(line, fmt.Sprintf("drawdown %.2f K on %s at %d %s", k.DrawdownK, on, k.Decisions, pluralWord(k.Decisions, "decision", "decisions")))
 		}
@@ -281,7 +284,7 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	}
 	switch {
 	case isCore && !res.ReadOnly:
-		riskReadLine(env, "", "Live: the core serves its month's row among the proposals for your confirmation on your device; nothing is sent without it, and the core is never pre-authorised. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
+		riskReadLine(env, "", "Live: the core serves its month's row among the proposals, sent on your confirmation on your device or by Desk's controller under the standing mandate you confirmed there; a row served while the core holds goes to you alone, and the core is never pre-authorised. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
 	case isCore:
 		riskReadLine(env, "", "Read-only: the core proposes nothing and places no order while it is not live. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
 	case !res.ReadOnly:

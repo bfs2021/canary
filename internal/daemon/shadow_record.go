@@ -412,8 +412,10 @@ type killMark struct {
 	close        float64
 	sleeveBudget float64
 	// scalePct is the stage's scale the reading is sized at: the bound is
-	// measured against what the stage invests (stageCapital).
+	// measured against what the stage invests (stageCapital); units is the
+	// line's holding, the core's sleeve at this reading (coreSleeveFills).
 	scalePct float64
+	units    float64
 }
 
 // strategyKill is the kill rule's drawdown test on the shadow record

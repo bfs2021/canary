@@ -10,6 +10,7 @@ import (
 	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
 	"github.com/osauer/canary/v2/internal/register"
+	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
@@ -24,10 +25,14 @@ import (
 // stage (stageCapital): S / 0.15 times the stage's scale, S the sleeve's
 // risk allocation in money at that decision, as on the shadow record. Units
 // the owner sells by hand leave the measure alone: it reads the entry's own
-// trading, not the line's holding. The core is not measured here: every
-// unit of its line is the core's whoever bought it, so its rows' fills
-// would not cover a hand-built holding; it keeps its measure on its shadow
-// record's paper sleeve, at the stage's capital (shadow_record.go).
+// trading, not the line's holding. The core is the exception (refuter,
+// 2026-10-19): every unit of its line is the core's whoever bought it
+// (placement), and its shadow record is not written while it is live, so
+// its sleeve is the line's holding, marked at each decision close, each
+// change of holding taken at the close it is marked at (the paper
+// convention) and the first mark adopting the holding (coreSleeveFills):
+// between decisions the sleeve's P&L is the holding times the move of the
+// close, s0's test (a) on the sleeve.
 
 const (
 	liveMarkType  = "strategy.mark.v1"
@@ -68,6 +73,27 @@ func stageCapital(sleeveBudget, scalePct float64) float64 {
 		return 0
 	}
 	return sleeveBudget * scalePct / 100 / core.VolFloor
+}
+
+// coreSleeveFills is the core's sleeve as its marks read it: the line's
+// holding as its units, with each change of holding since the previous
+// mark taken at this mark's close and the first mark adopting the holding
+// at its close, so the sleeve's equity starts at zero as a paper sleeve's
+// does and moves with the holding times the close between decisions.
+func coreSleeveFills(prev *liveMark, units, close float64) strategyFills {
+	cash := -units * close
+	if prev != nil {
+		cash = prev.Cash - (units-prev.Units)*close
+	}
+	return strategyFills{Units: units, Cash: cash, ByRef: map[string]float64{}}
+}
+
+// lastLiveMark is the last mark kept, nil without one.
+func lastLiveMark(marks []liveMark) *liveMark {
+	if len(marks) == 0 {
+		return nil
+	}
+	return &marks[len(marks)-1]
 }
 
 // nonZero is v, or fallback while v is not positive.
@@ -114,9 +140,22 @@ func (s *Server) recordLiveMark(ctx context.Context, res *rpc.StrategyTargetResu
 	if _, ok, err := s.coreStore.GetEvent(ctx, liveMarkScope(r.Entry.ID), key); err != nil || ok {
 		return
 	}
-	own := s.strategyOwnFills(ctx, r.Entry.ID, res.Instrument.ConID)
-	if s.liveMarkFillsForTest != nil {
+	var own strategyFills
+	switch {
+	case s.liveMarkFillsForTest != nil:
 		own = s.liveMarkFillsForTest()
+	case r.Entry.Form == risk.StrategyFormCore:
+		// The core's sleeve is its holding (coreSleeveFills).
+		if res.Holding == nil {
+			return
+		}
+		marks, err := s.liveMarks(ctx, r.Entry.ID)
+		if err != nil {
+			return
+		}
+		own = coreSleeveFills(lastLiveMark(marks), float64(res.Holding.Shares), res.Decision.LineClose())
+	default:
+		own = s.strategyOwnFills(ctx, r.Entry.ID, res.Instrument.ConID)
 	}
 	m := liveMark{Version: 1, Strategy: r.Entry.ID, Session: res.Decision.Decision, Close: res.Decision.LineClose(), Units: own.Units, Cash: own.Cash, SleeveBudget: res.Sizing.Current.SleeveBudget, ScalePct: r.ScalePct, RecordedAt: now}
 	raw, err := json.Marshal(m)
@@ -164,6 +203,9 @@ func (s *Server) strategyKillLive(ctx context.Context, r register.Resolved, mark
 	}
 	if !marked && mark.session != "" && mark.close > 0 && mark.sleeveBudget > 0 {
 		own := s.strategyOwnFills(ctx, r.Entry.ID, conID)
+		if r.Entry.Form == risk.StrategyFormCore {
+			own = coreSleeveFills(lastLiveMark(marks), mark.units, mark.close)
+		}
 		at(own.Cash+own.Units*mark.close, mark.sleeveBudget, mark.scalePct)
 	}
 	switch {

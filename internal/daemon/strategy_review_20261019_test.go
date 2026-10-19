@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"slices"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/osauer/canary/v2/internal/core"
+	"github.com/osauer/canary/v2/internal/daemon/corestore"
 	"github.com/osauer/canary/v2/internal/mandate"
+	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
@@ -280,5 +283,54 @@ func TestOwnerReviewRowStaysOutOfTheSameContractMerge(t *testing.T) {
 	mergeSameContractProposals(rows, nil)
 	if rows[1].CoveredBy != rows[0].Key || len(rows[0].Covers) != 1 {
 		t.Fatalf("an open core sale no longer covers the reduction of its line: %+v %+v", rows[0], rows[1])
+	}
+}
+
+// The live core's kill measure is its holding marked at each decision close
+// (refuter rounds 1 and 2, 2026-10-19): every unit of its line is the
+// core's whoever bought it, its shadow record is not written while it is
+// live, and its rows' own fills would miss a hand-built holding. Each
+// change of holding is taken at the close it is marked at, the first mark
+// adopts the holding, and the drawdown is in units of the stage's capital.
+// A hand-built holding of 100 bought at 100 and marked at 80 is a fall the
+// bound sees; before this fix it read 0.00 K on a frozen paper sleeve.
+func TestCoreKillIsMeasuredOnItsHoldingMarkedAtDecisions(t *testing.T) {
+	first := coreSleeveFills(nil, 100, 100)
+	if first.Units != 100 || first.Cash != -10000 {
+		t.Fatalf("the first mark adopts the holding at its close: %+v", first)
+	}
+	if next := coreSleeveFills(&liveMark{Units: 100, Cash: -10000}, 150, 90); next.Units != 150 || next.Cash != -14500 {
+		t.Fatalf("a change of holding is taken at the mark's close: %+v", next)
+	}
+	pos := withIBCF(mandateTestPositions(100), 100, 100)
+	c := testCoreConstitution()
+	c.Mandate.Core.KillDrawdownK = new(0.03)
+	srv := coreTestServer(t, c, pos, 0.25)
+	for _, m := range []liveMark{{Session: "2026-07-31", Close: 100, Units: 100, Cash: -10000}, {Session: "2026-08-31", Close: 80, Units: 100, Cash: -10000}} {
+		m.Version, m.Strategy, m.SleeveBudget, m.ScalePct, m.RecordedAt = 1, risk.CoreStrategyID, 9200, 100, coreDecisionNow
+		raw, _ := json.Marshal(m)
+		if _, err := srv.coreStore.AppendEvents(t.Context(), []corestore.EventInput{{ScopeKey: liveMarkScope(m.Strategy), EventKey: liveMarkKey(m.Strategy, m.Session), Type: liveMarkType, Action: "mark", Origin: coreEventOriginDaemon, OccurredAt: m.RecordedAt, PayloadJSON: raw}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := coreEvaluate(t, srv)
+	want := 2000 / stageCapital(9200, 100)
+	if res.Kill == nil || res.Kill.Source != rpc.KillSourceOwnFills || res.Kill.Decisions != 3 || res.Kill.ScalePct != 100 || res.Kill.DrawdownK < want-1e-9 || !res.Kill.Breached {
+		t.Fatalf("the core's kill %+v, want at least %.4f K on its holding, past the 0.03 K bound", res.Kill, want)
+	}
+	if res.Status != rpc.CoreStatusHold || !slices.ContainsFunc(res.Reasons, func(r string) bool { return strings.Contains(r, "kill rule: the drawdown on its holding is") }) {
+		t.Fatalf("status %s reasons %v", res.Status, res.Reasons)
+	}
+	// Inside the bound, the refresh keeps the month's mark of the holding.
+	c.Mandate.Core.KillDrawdownK = new(0.35)
+	kept := coreTestServer(t, c, pos, 0.25)
+	res = coreEvaluate(t, kept)
+	if res.Status != rpc.CoreStatusReady || res.Decision.FrozenAt.IsZero() {
+		t.Fatalf("status %s %v", res.Status, res.Reasons)
+	}
+	kept.refreshCoreTarget(t.Context())
+	marks, err := kept.liveMarks(t.Context(), risk.CoreStrategyID)
+	if err != nil || len(marks) != 1 || marks[0].Session != res.Decision.Decision || marks[0].Units != 100 || marks[0].Cash != -100*res.Decision.LineClose() || marks[0].ScalePct != 100 || marks[0].SleeveBudget != res.Sizing.Current.SleeveBudget {
+		t.Fatalf("the core's mark %+v %v, want its holding adopted at the decision close", marks, err)
 	}
 }
