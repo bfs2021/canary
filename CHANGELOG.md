@@ -17,6 +17,10 @@ nothing is frozen, recorded or sent.
 
 - `strategy.replay` and `canary strategy ID --replay FROM TO [--json]`: the entry's decision table (close, ten-month average, trend, volatility, target and the paper action under a fixed, printed sizing and the entry's band and minimum) over the span, with the series it ran on and any bar dated on a closed day; the owner's monthly "did we build the right thing" check beside the lab's table.
 
+### Fixed
+
+- The mandate's cash-flow check no longer holds the room when the broker re-marks the book while its daily P&L figure still reads zero (IBKR's pre-market open at 04:00 New York): the reading that would raise a suspicion also reads the account's total cash and a fingerprint of the book's quantities from the portfolio cache, and an equity move that neither the cash nor the quantities carry is the positions' marks, journaled `mandate_mark_move`, never a hold. On 2026-10-19 at 08:01 UTC such a reading held every machine sleeve, the standing reductions and the owner's additions until the next statement. A deposit spent on a purchase in the same reading, a transfer in kind, an assignment, a cash-carried move, and any reading without the cash figure or a current positions cache are held as before; cash and quantities are read only at that reading, never to clear a hold (mandate-risk-budget.md).
+
 ## v3.25.0 — 2026-10-19 09:45 CEST
 
 ### What's new

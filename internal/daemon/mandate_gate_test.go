@@ -549,6 +549,13 @@ func observeWithPnL(st *riskCapitalStore, c *risk.Constitution, equity, pnl floa
 	st.ObserveWithPnL(equity, mandatePnLReading{DailyBase: &pnl, Session: mandateSessionDate(at)}, at, c, testLiveObserveScope, true)
 }
 
+// observeWithPnLCash is observeWithPnL with the broker's total cash and the
+// book's quantities fingerprint on the reading, as the live account read
+// carries them ("" where the portfolio cache is not current).
+func observeWithPnLCash(st *riskCapitalStore, c *risk.Constitution, equity, cash, pnl float64, book string, at time.Time) {
+	st.ObserveWithPnL(equity, mandatePnLReading{DailyBase: &pnl, Session: mandateSessionDate(at), CashBase: &cash, PositionsKey: book}, at, c, testLiveObserveScope, true)
+}
+
 // mandateFlowTestStore is a capital store seeded at 300,000 an hour before
 // mandateTestNow, with the helpers the flow tests read it through.
 func mandateFlowTestStore(t *testing.T) (*riskCapitalStore, *risk.Constitution, time.Time, func() mandate.Capital) {
@@ -1185,6 +1192,82 @@ func TestMandateFlowCheckIgnoresAPnLJumpWhileEquityStandsStill(t *testing.T) {
 	if got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); got.Known || len(got.Reasons) == 0 || !strings.Contains(got.Reasons[0], "a cash flow is suspected") {
 		t.Fatalf("a deposit passed: %+v", got)
 	}
+}
+
+// An equity move the P&L figure does not explain, with the broker's cash and
+// the book's quantities unchanged, is the positions' marks (IBKR re-marks
+// the book when its pre-market opens while the daily figure still reads
+// zero), never a flow: 2026-10-19 08:01 UTC held every machine sleeve on
+// such a reading. A move that cash carries is a flow, deposit or withdrawal;
+// a move that changes the quantities (a transfer in kind, a deposit spent
+// on a purchase in the same reading) is held as before; so is a reading
+// without the cash figure or a current positions cache.
+func TestMandateFlowCheckReadsAMarkMoveWithCashAndQuantitiesUnchangedAsMarks(t *testing.T) {
+	utc := func(day, hour, minute int) time.Time { return time.Date(2026, 10, day, hour, minute, 0, 0, time.UTC) }
+	suspected := func(got mandate.Capital) bool {
+		return !got.Known && len(got.Reasons) > 0 && strings.Contains(got.Reasons[0], "a cash flow is suspected")
+	}
+	fresh := func(t *testing.T) (*riskCapitalStore, *risk.Constitution, func(at time.Time, equity, cash, pnl float64, book string), func() mandate.Capital) {
+		clock := utc(19, 7, 58)
+		st := newTestRiskCapitalStore(t)
+		st.now = func() time.Time { return clock }
+		c := testMandateConstitution()
+		reconcileNow(t, st)
+		read := func(at time.Time, equity, cash, pnl float64, book string) {
+			clock = at.Add(time.Second)
+			observeWithPnLCash(st, c, equity, cash, pnl, book, at)
+		}
+		capital := func() mandate.Capital { got, _ := st.MandateCapitalForScope(c, brokerStateScope{}, clock); return got }
+		return st, c, read, capital
+	}
+	t.Run("marks", func(t *testing.T) {
+		_, _, read, capital := fresh(t)
+		read(utc(19, 7, 58), 300000, 100000, 0, "book-a")
+		read(utc(19, 8, 1), 304000, 100000, 0, "book-a") // the pre-market opens: the marks move the equity, the figure still reads zero
+		if got := capital(); !got.Known {
+			t.Fatalf("a mark move with cash and quantities unchanged read as a flow: %v", got.Reasons)
+		}
+		read(utc(19, 8, 3), 304000, 100000, 4000, "book-a") // the figure catches up with the equity unchanged
+		if got := capital(); !got.Known {
+			t.Fatalf("the figure catching up read as a flow: %v", got.Reasons)
+		}
+		read(utc(19, 8, 5), 324000, 120000, 4000, "book-a") // a deposit: equity and cash move together
+		if got := capital(); !suspected(got) {
+			t.Fatalf("a deposit carried by cash passed: %+v", got)
+		}
+	})
+	t.Run("withdrawal under a gain in the marks", func(t *testing.T) {
+		_, _, read, capital := fresh(t)
+		read(utc(19, 7, 58), 300000, 100000, 0, "book-a")
+		read(utc(19, 8, 1), 276000, 80000, 4000, "book-a")
+		if got := capital(); !suspected(got) {
+			t.Fatalf("a withdrawal carried by cash passed: %+v", got)
+		}
+	})
+	t.Run("transfer in kind", func(t *testing.T) {
+		_, _, read, capital := fresh(t)
+		read(utc(19, 7, 58), 300000, 100000, 0, "book-a")
+		read(utc(19, 8, 1), 320000, 100000, 0, "book-b") // shares arrive: cash unchanged, the quantities not
+		if got := capital(); !suspected(got) {
+			t.Fatalf("a transfer in kind passed as marks: %+v", got)
+		}
+	})
+	t.Run("deposit spent on a purchase in the same reading", func(t *testing.T) {
+		_, _, read, capital := fresh(t)
+		read(utc(19, 7, 58), 300000, 100000, 0, "book-a")
+		read(utc(19, 8, 1), 320000, 101000, 0, "book-b") // 20,000 in, 19,000 of it spent on shares
+		if got := capital(); !suspected(got) {
+			t.Fatalf("a deposit spent on a purchase passed as marks: %+v", got)
+		}
+	})
+	t.Run("positions cache not current", func(t *testing.T) {
+		_, _, read, capital := fresh(t)
+		read(utc(19, 7, 58), 300000, 100000, 0, "")
+		read(utc(19, 8, 1), 304000, 100000, 0, "") // the same mark move, the quantities unknown: the rule as it was
+		if got := capital(); !suspected(got) {
+			t.Fatalf("a move with the quantities unknown passed as marks: %+v", got)
+		}
+	})
 }
 
 // A suspicion raised by a real equity move stays even when the market later

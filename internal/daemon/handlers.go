@@ -241,6 +241,19 @@ func (s *Server) buildAccountSummaryWithAuthority(ctx context.Context, observe b
 			strings.EqualFold(pol.Capital.BaseCurrency, res.BaseCurrency) && c.SessionCurrent(healthBinding) && sameBrokerScope(scope, s.currentBrokerStateScope()) {
 			capitalScope := scope
 			pnl := mandatePnLReading{DailyBase: cloneFloat64Ptr(res.DailyPnL), Session: pnlSessionKey}
+			if f := res.Authority.Fields; f != nil && f.TotalCash {
+				cash := res.TotalCash
+				pnl.CashBase = &cash
+			}
+			// The book's quantities from the portfolio cache, only while it
+			// is current and in scope; a stale or foreign cache leaves the
+			// key empty and the flow check without the mark shortcut. The
+			// cache is judged at the clock of this read, not at the
+			// snapshot's parse time: a frame that lands during the read's
+			// own waits is evidence, not the future (refuter, 2026-10-19).
+			if raw, health, err := s.readOrderIntegrityCachedPositions(ctx); err == nil && cachedPositionsMatchBrokerScope(raw, scope) && classifyPortfolioStreamHealth(scope, health, s.nowUTC()) == orderIntegrityHealthCurrent {
+				pnl.PositionsKey = mandatePositionsKey(raw)
+			}
 			if firstDailyObservation := s.riskCapital.ObserveWithPnL(res.NetLiquidation, pnl, res.AsOf, pol, capitalScope, recoveryAllowed); firstDailyObservation {
 				// Re-evaluate when today's first runtime account observation arrives.
 				s.evaluateRiskPolicyV3Reconciliation()

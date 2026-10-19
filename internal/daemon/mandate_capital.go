@@ -1,13 +1,18 @@
 package daemon
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/risk"
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 // Mandate capital state (internal-docs/design/mandate-risk-budget.md): the
@@ -73,15 +78,27 @@ func mandateSessionDate(at time.Time) string {
 type mandatePnLReading struct {
 	DailyBase *float64
 	Session   string
+	// CashBase is the account's total cash in base currency at the same
+	// read, nil where the broker did not report it. A cash flow moves cash;
+	// a mark moves positions. The flow check reads it only at the reading
+	// that would raise a suspicion (mandateFlowCheckLocked).
+	CashBase *float64
+	// PositionsKey fingerprints the book's quantities (mandatePositionsKey)
+	// from the portfolio cache when it is current and in scope, else "". A
+	// transfer in kind, a trade, an assignment or an expiry changes it; a
+	// mark does not.
+	PositionsKey string
 }
 
 // mandateFlowBase is one observation as the flow check keeps it.
 type mandateFlowBase struct {
-	At         time.Time `json:"at"`
-	EquityBase float64   `json:"equity_base"`
-	FlowsBase  float64   `json:"flows_base"`
-	DailyPnL   *float64  `json:"daily_pnl_base,omitempty"`
-	Session    string    `json:"session,omitempty"`
+	At           time.Time `json:"at"`
+	EquityBase   float64   `json:"equity_base"`
+	FlowsBase    float64   `json:"flows_base"`
+	DailyPnL     *float64  `json:"daily_pnl_base,omitempty"`
+	Session      string    `json:"session,omitempty"`
+	CashBase     *float64  `json:"cash_base,omitempty"`
+	PositionsKey string    `json:"positions_key,omitempty"`
 }
 
 // mandateFlowSuspect is an equity move that neither declared or statement
@@ -239,6 +256,30 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 			})
 		}
 		if math.Abs(move) > threshold && math.Abs(unexplained) > threshold {
+			// A cash flow moves cash and a transfer in kind moves quantities;
+			// a mark moves neither. When both readings carry the broker's
+			// total cash and the book's quantities, the cash moved, net of
+			// flows, by no more than the threshold and the quantities are the
+			// same, nothing but the marks can have moved the equity (IBKR
+			// re-marks the book when its pre-market opens at 04:00 New York
+			// while its daily P&L figure still reads the new day's zero:
+			// 2026-10-19 08:01 UTC, a 3,965 move with the figure at zero held
+			// every machine sleeve, the standing reductions and the owner's
+			// additions until the next statement). Journaled as
+			// mandate_mark_move, never a hold. A deposit beside a purchase,
+			// a transfer in kind, an assignment or an expiry changes the
+			// quantities and is held as before; a reading without the cash
+			// figure or a current in-scope positions cache keeps the rule as
+			// it was.
+			if cashMove, known := mandateCashMove(*m.Last, pnl, flows); known && math.Abs(cashMove) <= threshold && mandateQuantitiesUnchanged(*m.Last, pnl) {
+				st.appendRiskPolicyJournal(map[string]any{
+					"version": 1, "at": now.UTC(), "kind": "mandate_mark_move",
+					"equity_move_base": move, "cash_move_base": cashMove, "pnl_move_base": step, "unexplained_base": unexplained, "threshold_base": threshold, "equity_base": equityBase, "equity_as_of": asOf.UTC(), "positions_key": pnl.PositionsKey,
+					"policy_fingerprint": constitutionFingerprint(c),
+				})
+				m.Last = mandateFlowBaseOf(asOf, equityBase, flows, pnl)
+				return
+			}
 			m.FlowSuspect = &mandateFlowSuspect{At: asOf, Base: *m.Last, PnLSince: step, Unexplained: unexplained, ThresholdAt: threshold, MoveBase: move}
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_suspected",
@@ -248,7 +289,46 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 			})
 		}
 	}
-	m.Last = &mandateFlowBase{At: asOf, EquityBase: equityBase, FlowsBase: flows, DailyPnL: cloneFloat64Ptr(pnl.DailyBase), Session: pnl.Session}
+	m.Last = mandateFlowBaseOf(asOf, equityBase, flows, pnl)
+}
+
+func mandateFlowBaseOf(asOf time.Time, equityBase, flows float64, pnl mandatePnLReading) *mandateFlowBase {
+	return &mandateFlowBase{At: asOf, EquityBase: equityBase, FlowsBase: flows, DailyPnL: cloneFloat64Ptr(pnl.DailyBase), Session: pnl.Session, CashBase: cloneFloat64Ptr(pnl.CashBase), PositionsKey: pnl.PositionsKey}
+}
+
+// mandateQuantitiesUnchanged reports whether both readings fingerprint the
+// book's quantities and the fingerprints agree.
+func mandateQuantitiesUnchanged(last mandateFlowBase, pnl mandatePnLReading) bool {
+	return last.PositionsKey != "" && pnl.PositionsKey == last.PositionsKey
+}
+
+// mandatePositionsKey fingerprints the quantities of a positions cache:
+// contract and quantity of every non-flat row, sorted, hashed. Marks,
+// prices and valuations are left out on purpose.
+func mandatePositionsKey(raw []*ibkrlib.RawPosition) string {
+	rows := make([]string, 0, len(raw))
+	for _, p := range raw {
+		if p == nil || p.Position == 0 {
+			continue
+		}
+		rows = append(rows, strconv.Itoa(p.Contract.ConID)+":"+strconv.FormatFloat(p.Position, 'f', -1, 64))
+	}
+	slices.Sort(rows)
+	sum := sha256.Sum256([]byte(strings.Join(rows, "\n")))
+	return hex.EncodeToString(sum[:8])
+}
+
+// mandateCashMove is the broker's total cash move between two consecutive
+// readings, net of the flows declared or incorporated between them, and
+// whether both readings carried the figure. Trades move cash into positions
+// and back, so the figure says something only across one reading interval:
+// the flow check reads it at the reading that would raise a suspicion and
+// never to clear one.
+func mandateCashMove(last mandateFlowBase, pnl mandatePnLReading, flows float64) (float64, bool) {
+	if last.CashBase == nil || pnl.CashBase == nil {
+		return 0, false
+	}
+	return *pnl.CashBase - *last.CashBase - (flows - last.FlowsBase), true
 }
 
 // observeMandateLocked folds one equity observation into the mandate state.

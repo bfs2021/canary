@@ -418,7 +418,40 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   the threshold since its base, `legacy_flat_equity` in the journal). More
   than max(1% of equity, 1,000 in base currency) unexplained, on such a
   move, is a suspected flow (`flow_suspect`, journaled
-  `mandate_flow_suspected` with `equity_move_base`). The price of the rule: a
+  `mandate_flow_suspected` with `equity_move_base`). A cash flow moves cash,
+  a transfer in kind moves quantities, and a mark moves neither, so since
+  2026-10-19 13:30 CEST the reading that would raise a suspicion also reads
+  the broker's total cash (the account read's `total_cash`, kept on each
+  observation as `cash_base`) and a fingerprint of the book's quantities
+  from the portfolio cache, taken only while that cache is current and in
+  scope (`positions_key`: contract and quantity of every non-flat row,
+  sorted and hashed; marks and valuations left out): when both readings
+  carry both, the cash moved, net of declared and statement flows, by no
+  more than the threshold, and the quantities are the same, the equity
+  move is the marks', and the reading is journaled `mandate_mark_move`,
+  never a hold, with two residues no reading can tell apart: a quantity
+  change booked in the seconds between the broker's position push and the
+  account read is not yet in the cache (a transfer in kind landing in that
+  window passes until the statement incorporates it), and a cash posting
+  from an accrual the equity already carried (a dividend or interest paid
+  out) can net a withdrawal of its size in the same two minutes. The incident: on 2026-10-19 at 08:01
+  UTC, when IBKR's pre-market opened at 04:00 New York, the book was
+  re-marked (3,965 up) while the daily figure still read the new day's
+  zero; the rule held every machine sleeve, the standing reductions and the
+  owner's additions until the next statement, and would have done so on
+  every such morning. What stays held as before: a deposit spent on a
+  purchase in the same reading, a transfer in kind, an assignment or an
+  expiry (the quantities change); a morning where cash itself carries the
+  move, as a futures variation margin, the revaluation of foreign-currency
+  cash or a weekend assignment can (the cash moves); and any reading
+  without the cash figure or a current positions cache. Cash and quantities
+  are read only at the raising reading, never to clear a hold: over hours
+  trades move cash into positions and back, so an unchanged figure says
+  nothing then. Taken by the integrating session on the owner's standing
+  instruction that the machine runs by itself (refuted twice, 2026-10-19
+  13:05 and 13:30 CEST: the first version read cash alone and would have
+  passed a transfer in kind); the owner may reverse it. The price of the
+  rule: a
   flow that lands in the same reading as an opposite market move of about the
   same size, netting under the threshold, is not suspected until the next
   statement incorporates it; readings run every two minutes in the session, so
