@@ -16,7 +16,9 @@ submit as the core's row, and its fills count in its own sleeve. A strategy
 whose traded share class is too young for its trend window reads the trend
 on an older class of the same fund until its own closes fill the window. The
 managed-futures trend fund, on its EUR-hedged Xetra line, is the register's
-second entry.
+second entry. This release also keeps automatic submission's receipts
+through a broker outage, holds a cash-flow check correctly across a second
+deposit, and words execution visibility as unproven until it is observed.
 
 ### Added
 
