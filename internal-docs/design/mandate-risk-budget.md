@@ -451,6 +451,21 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   to the trading day still open and that day's statement covers it (the
   first build compared UTC dates, and Friday's statement, fetched Saturday
   morning, never covered a suspicion raised at 23:59 New York Friday).
+  Owner instruction recorded 2026-10-19 06:35 UTC: close #109 as the
+  owner's documented decision; retain the net-equity admission filter and
+  do not reinstate the residual-only rule declined on 2026-10-18 22:15 CEST. Fix #111 only as the two-deposit clearing
+  hole: once a suspicion exists, accumulate P&L using the same-session
+  difference or the new session's own figure, without treating a near-zero
+  figure as evidence of a reset. Otherwise a second deposit offset by a
+  loss can disappear from the residual and declaring only the first clears
+  both. The net-equity admission filter and its numeric reset heuristic
+  remain in force for readings without an existing suspicion. A held
+  reading compatible with both a reset and continuous P&L persists its
+  ambiguity immediately: neither numerical recovery nor even a full flow
+  declaration proves the basis. Only a statement covering the latest such
+  reading clears it. Otherwise a real reset from negative P&L to zero can
+  itself look like a gain that erases a deposit. This retains an existing
+  hold; it does not create the declined new hold.
   How the owner clears it: declare
   the flow (`canary policy capital-event deposit|withdrawal --amount …
   --effective-at …`), or let the next statement reconciliation cover the

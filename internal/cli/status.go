@@ -207,7 +207,7 @@ func formatExecutionVisibilityValue(env *Env, v rpc.ExecutionVisibilityHealth) s
 		}
 		return env.green(value)
 	}
-	return env.yellow(fmt.Sprintf("this client's own orders only · set TWS Master API client ID to %d to see hand and other-client fills", v.ClientID))
+	return env.yellow(fmt.Sprintf("other-client fills not yet observed · check TWS Master API client ID is %d", v.ClientID))
 }
 
 // formatPortRejectionValue renders the port_rejecting phase as one fact:

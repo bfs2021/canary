@@ -101,6 +101,10 @@ type mandateFlowSuspect struct {
 	// the v3.23.1 install; v3.23.2 dropped the clearing rule for such records,
 	// which could also have cleared a real flow the market later offset.
 	MoveBase float64 `json:"move_base"`
+	// PnLResetAmbiguousAt is the latest held reading compatible with both a
+	// broker reset and continuous P&L. Only a statement covering this reading
+	// can settle that ambiguity; declarations alone cannot prove either basis.
+	PnLResetAmbiguousAt time.Time `json:"pnl_reset_ambiguous_at,omitzero"`
 }
 
 // mandateFlowFloorBase is the least unexplained move, in base currency,
@@ -138,12 +142,25 @@ func mandatePnLResetBand(equityBase float64) float64 {
 // on the readings it needs, the step counts zero: the whole move is
 // unexplained.
 func mandatePnLStep(last mandateFlowBase, pnl mandatePnLReading, move, band float64) float64 {
+	if mandateNumericPnLReset(last, pnl, move, band) {
+		return *pnl.DailyBase
+	}
+	return mandateSessionPnLStep(last, pnl)
+}
+
+func mandateNumericPnLReset(last mandateFlowBase, pnl mandatePnLReading, move, band float64) bool {
+	return pnl.DailyBase != nil && last.Session == pnl.Session && math.Abs(*pnl.DailyBase) <= band && math.Abs(move-*pnl.DailyBase) <= band
+}
+
+// mandateSessionPnLStep accumulates a held flow's P&L using session evidence,
+// not the near-zero admission heuristic. Owner instruction 2026-10-19
+// 06:35 UTC: fix #111 only as the two-deposit clearing hole; preserve the
+// admission rule retained on 2026-10-18 22:15 CEST (#109).
+func mandateSessionPnLStep(last mandateFlowBase, pnl mandatePnLReading) float64 {
 	switch {
 	case pnl.DailyBase == nil:
 		return 0
 	case last.Session != pnl.Session:
-		return *pnl.DailyBase
-	case math.Abs(*pnl.DailyBase) <= band && math.Abs(move-*pnl.DailyBase) <= band:
 		return *pnl.DailyBase
 	case last.DailyPnL == nil:
 		return 0
@@ -174,12 +191,23 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 	band := mandatePnLResetBand(equityBase)
 	if s := m.FlowSuspect; s != nil {
 		if m.Last != nil {
-			s.PnLSince += mandatePnLStep(*m.Last, pnl, equityBase-m.Last.EquityBase-(flows-m.Last.FlowsBase), band)
+			move := equityBase - m.Last.EquityBase - (flows - m.Last.FlowsBase)
+			if m.Last.DailyPnL != nil && *m.Last.DailyPnL != 0 && mandateNumericPnLReset(*m.Last, pnl, move, band) && *pnl.DailyBase != *m.Last.DailyPnL && asOf.After(s.PnLResetAmbiguousAt) {
+				// A changed figure admits two bases; an unchanged reading
+				// adds no P&L and cannot itself erase a deposit. Keep the
+				// existing hold until statement evidence settles the basis.
+				s.PnLResetAmbiguousAt = asOf
+			}
+			s.PnLSince += mandateSessionPnLStep(*m.Last, pnl)
 		}
 		moveSince := equityBase - s.Base.EquityBase - (flows - s.Base.FlowsBase)
 		s.Unexplained = moveSince - s.PnLSince
-		explained := math.Abs(s.Unexplained) <= threshold
-		statement := !st.state.StatementCoverageTo.IsZero() && mandateSessionDate(s.At) <= st.state.StatementCoverageTo.UTC().Format(time.DateOnly)
+		explained := s.PnLResetAmbiguousAt.IsZero() && math.Abs(s.Unexplained) <= threshold
+		coverageAt := s.At
+		if s.PnLResetAmbiguousAt.After(coverageAt) {
+			coverageAt = s.PnLResetAmbiguousAt
+		}
+		statement := !st.state.StatementCoverageTo.IsZero() && mandateSessionDate(coverageAt) <= st.state.StatementCoverageTo.UTC().Format(time.DateOnly)
 		if explained || statement {
 			st.appendRiskPolicyJournal(map[string]any{
 				"version": 1, "at": now.UTC(), "kind": "mandate_flow_cleared",
@@ -225,7 +253,8 @@ func (st *riskCapitalStore) mandateFlowCheckLocked(m *mandateCapitalStateV1, c *
 
 // observeMandateLocked folds one equity observation into the mandate state.
 // It returns whether the document must persist at once (a start, a new
-// high-water mark, or a flow suspicion raised or cleared); daily samples
+// high-water mark, a flow suspicion raised or cleared, or a new ambiguous
+// P&L reset in an existing hold); daily samples
 // persist with the ordinary throttle.
 func (st *riskCapitalStore) observeMandateLocked(c *risk.Constitution, equityBase float64, pnl mandatePnLReading, asOf time.Time, flows float64, now time.Time) bool {
 	if c == nil || c.Mandate == nil {
@@ -249,8 +278,12 @@ func (st *riskCapitalStore) observeMandateLocked(c *risk.Constitution, equityBas
 	}
 	adjusted := equityBase - (flows - m.FlowsAtStart)
 	suspected := m.FlowSuspect != nil
+	var priorAmbiguity time.Time
+	if suspected {
+		priorAmbiguity = m.FlowSuspect.PnLResetAmbiguousAt
+	}
 	st.mandateFlowCheckLocked(m, c, equityBase, pnl, asOf, flows, now)
-	if (m.FlowSuspect != nil) != suspected {
+	if (m.FlowSuspect != nil) != suspected || (m.FlowSuspect != nil && !m.FlowSuspect.PnLResetAmbiguousAt.Equal(priorAmbiguity)) {
 		force = true
 	}
 	advance := func(to float64) {
@@ -370,8 +403,13 @@ func (st *riskCapitalStore) MandateCapitalForScope(c *risk.Constitution, scope b
 	if m != nil && m.StartedAt == c.Mandate.StartedAt && m.FlowSuspect != nil {
 		s := m.FlowSuspect
 		capital.Known = false
-		capital.Reasons = append([]string{fmt.Sprintf("a cash flow is suspected: an equity move of %s since %s that declared flows and the book's own P&L do not explain; the room is held until the flow is declared (canary policy capital-event) or a statement covering the day is reconciled",
-			mandateMoney(s.Unexplained, in.BaseCurrency), s.At.UTC().Format(time.DateTime))}, capital.Reasons...)
+		reason := fmt.Sprintf("a cash flow is suspected: an equity move of %s since %s that declared flows and the book's own P&L do not explain; the room is held until the flow is declared (canary policy capital-event) or a statement covering the day is reconciled",
+			mandateMoney(s.Unexplained, in.BaseCurrency), s.At.UTC().Format(time.DateTime))
+		if !s.PnLResetAmbiguousAt.IsZero() {
+			reason = fmt.Sprintf("the cash-flow hold raised at %s remains unresolved: daily P&L may have reset at %s; numerical readings and flow declarations alone cannot settle its basis, so a statement covering %s must be reconciled",
+				s.At.UTC().Format(time.DateTime), s.PnLResetAmbiguousAt.UTC().Format(time.DateTime), mandateSessionDate(s.PnLResetAmbiguousAt))
+		}
+		capital.Reasons = append([]string{reason}, capital.Reasons...)
 	}
 	var realised mandateRealised
 	if m != nil && m.StartedAt == c.Mandate.StartedAt {

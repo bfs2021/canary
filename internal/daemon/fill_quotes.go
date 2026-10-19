@@ -864,7 +864,7 @@ func executionVisibility(clientID int, poll fillQuotePoll) rpc.ExecutionVisibili
 		}
 		return v
 	}
-	v.Action = fmt.Sprintf("Only this client's own executions have been seen. Fills entered in TWS or by other API clients reach Canary when %s is Canary's client id (%d); the owner decides that setting.", rpc.ExecutionVisibilitySetting, clientID)
+	v.Action = fmt.Sprintf("No fills from TWS or other API clients have been observed for this account and API client. To include them, check that %s is Canary's client id (%d); the owner decides that setting.", rpc.ExecutionVisibilitySetting, clientID)
 	return v
 }
 

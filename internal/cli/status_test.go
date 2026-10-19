@@ -410,7 +410,7 @@ func TestRenderStatusExecutionsRow(t *testing.T) {
 	}{
 		{rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityAllClients, ProvenAt: time.Date(2026, 10, 18, 13, 35, 0, 0, time.Local), ClientID: 15}, "Executions     all clients (proven 13:35)"},
 		{rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityAllClients, ClientID: 15}, "Executions     all clients\n"},
-		{rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityUnproven, ClientID: 15}, "Executions     this client's own orders only · set TWS Master API client ID to\n               15 to see hand and other-client fills"},
+		{rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityUnproven, ClientID: 15}, "Executions     other-client fills not yet observed"},
 	} {
 		var out bytes.Buffer
 		env := &Env{Stdout: &out, Stderr: &bytes.Buffer{}}
