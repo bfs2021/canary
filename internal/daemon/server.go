@@ -446,6 +446,9 @@ type Server struct {
 	// coreTargets keeps every registered strategy's frozen monthly decisions
 	// and contract pins (strategy_target.go, core_resolve.go).
 	coreTargets coreTargetStore
+	// liveMarkFillsForTest replaces the journals' own fills a live entry's
+	// kill mark is written with (strategy_kill_live.go). Tests only.
+	liveMarkFillsForTest func() strategyFills
 	// coreListingsForTest replaces the broker's listing lookup behind
 	// core.resolve and the core's contract pin.
 	coreListingsForTest func(context.Context, ibkrlib.ListingRequest) ([]ibkrlib.Listing, *ibkrlib.BondLookupTrace, error)

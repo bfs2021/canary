@@ -52,14 +52,14 @@ type deskExecutionGrant struct {
 // deskExecutionClass is Canary's own classification of a served row for the
 // Desk contract, mirroring Desk's batch groups: protection (stops and
 // trails), reductions (sales that reduce or close) and, for a strategy row
-// only, an addition (the core's buy). A buy outside a strategy row, a cash
+// only, an addition (the buy of the core's or another live entry's row). A buy outside a strategy row, a cash
 // sweep or a conversion has no class here and is refused class_mismatch.
 func deskExecutionClass(p rpc.TradeProposal) string {
 	kind, side := strings.ToUpper(strings.TrimSpace(p.OrderType)), strings.ToUpper(strings.TrimSpace(p.Action))
 	switch {
 	case p.Bucket == rpc.TradeProposalBucketCashSweep, p.Bucket == rpc.TradeProposalBucketCurrencyLeveling:
 		return ""
-	case p.Bucket == rpc.TradeProposalBucketCoreRebalance:
+	case rpc.StrategyRowBucket(p.Bucket):
 		if side == rpc.OrderActionBuy {
 			return rpc.DeskClassAdd
 		}
@@ -88,6 +88,9 @@ func deskExecutionStrategyEpisode(p rpc.TradeProposal) string {
 func deskExecutionStrategyName(p rpc.TradeProposal) string {
 	if p.Bucket == rpc.TradeProposalBucketCoreRebalance && p.Core != nil {
 		return fmt.Sprintf("strategy %s, sleeve %s", core.RuleID, nonEmptyString(p.Core.Sleeve, rpc.ScorecardSleeveCore))
+	}
+	if p.Bucket == rpc.TradeProposalBucketStrategyRebalance && p.Core != nil {
+		return fmt.Sprintf("strategy %s (%s), sleeve %s", p.Core.Strategy, nonEmptyString(p.Core.Rule, "rule unnamed"), p.Core.Sleeve)
 	}
 	return ""
 }

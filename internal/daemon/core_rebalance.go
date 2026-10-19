@@ -29,6 +29,13 @@ import (
 // submit, and the daemon never sends it by itself. In shadow the same
 // decision reaches only the shadow record, with the same order terms from
 // the one builder here (coreRowTerms).
+//
+// Every other live register entry ([mandate.strategies.<id>]) is served the
+// same way by the same code (strategy-register.md, section 2; Desk
+// docs/strategy-engine.md, build 2): its month's decision becomes at most
+// one strategy_rebalance row on its own line, with the same terms, window,
+// due time, readiness, netting and typed exception, keyed by the entry's id
+// and sleeve. The input names the entry; the core's input leaves it empty.
 
 // Blocker codes of a core row that is served but may not be sent.
 const (
@@ -56,6 +63,30 @@ type coreRowInput struct {
 	// contract stands this generation: neither admits a core buy.
 	BreachEpisode   string
 	ReductionStands bool
+	// Entry is the register entry the row is for; its zero value (and the
+	// core's own entry) is the core.
+	Entry register.Resolved
+}
+
+// isCore reports whether the input is the core's.
+func (in coreRowInput) isCore() bool {
+	return in.Entry.Entry.Form == "" || in.Entry.Entry.Form == risk.StrategyFormCore
+}
+
+// bucket is the proposal bucket of the input's rows.
+func (in coreRowInput) bucket() string {
+	if in.isCore() {
+		return rpc.TradeProposalBucketCoreRebalance
+	}
+	return rpc.TradeProposalBucketStrategyRebalance
+}
+
+// name is how the input's rows name their strategy.
+func (in coreRowInput) name() string {
+	if in.isCore() {
+		return "the core"
+	}
+	return strategyName(in.Entry.Entry)
 }
 
 // resolveCoreInput honours the test seam, else reads the daemon's own core
@@ -96,6 +127,54 @@ func (s *Server) coreRowInput(ctx context.Context, now time.Time) coreRowInput {
 	}
 	in.Contract, _, _, _ = s.corePinState(c.Mandate.Core)
 	return in
+}
+
+// resolveStrategyInputs is every other register entry's input for this
+// generation, by id: the entry's verdict on the kept mandate verdict, its
+// line and its register state, with the mandate's state from this
+// generation's rows. The engine's test seam answers for the server.
+func (e *proposalEngine) resolveStrategyInputs(ctx context.Context, scope brokerStateScope, mandateStatus *rpc.TradeProposalMandateStatus, rows []rpc.TradeProposal, now time.Time) []coreRowInput {
+	var ins []coreRowInput
+	switch {
+	case e != nil && e.strategyInputs != nil:
+		ins = e.strategyInputs(now)
+	case e != nil && e.server != nil:
+		ins = e.server.strategyRowInputs(ctx, now)
+	}
+	for i := range ins {
+		in := &ins[i]
+		in.Scope = scope
+		if mandateStatus != nil {
+			in.BreachEpisode = mandateStatus.Episode
+		}
+		if in.Contract != nil {
+			in.ReductionStands = slices.ContainsFunc(rows, func(p rpc.TradeProposal) bool {
+				return p.Bucket == rpc.TradeProposalBucketMandateReduction && p.Contract.ConID == in.Contract.ConID
+			})
+		}
+	}
+	return ins
+}
+
+// strategyRowInputs evaluates every register entry but the core, as
+// strategy.target does, each with its resolved line.
+func (s *Server) strategyRowInputs(ctx context.Context, now time.Time) []coreRowInput {
+	if s == nil || s.riskPolicies == nil {
+		return nil
+	}
+	c := s.riskPolicies.snapshot().policy
+	var out []coreRowInput
+	for _, r := range s.resolvedRegister(c) {
+		if r.Entry.Form == risk.StrategyFormCore {
+			continue
+		}
+		in := coreRowInput{Active: true, Entry: r, State: r.State, ScalePct: r.ScalePct, Result: s.evaluateStrategyTarget(ctx, now, r)}
+		if r.Instrument.ISIN != "" {
+			in.Contract, _, _, _ = s.instrumentPinState(s.requestedInstrument(r))
+		}
+		out = append(out, in)
+	}
+	return out
 }
 
 // coreWindow lists the sessions a decision's row is served for: the first
@@ -199,11 +278,27 @@ func coreEpisode(scope brokerStateScope, decision string) string {
 	return fmt.Sprintf("core:%s:%s:%s", strings.TrimSpace(scope.Account), scope.Mode, month)
 }
 
+// strategyEpisode keys a month's rows of the input's entry: the core's
+// episode, or strategy:<id>:<account>:<mode>:<YYYY-MM> for another entry,
+// so two entries' rows of one month never share an episode.
+func strategyEpisode(in coreRowInput, scope brokerStateScope, decision string) string {
+	if in.isCore() {
+		return coreEpisode(scope, decision)
+	}
+	return "strategy:" + in.Entry.Entry.ID + ":" + strings.TrimPrefix(coreEpisode(scope, decision), "core:")
+}
+
 // coreRowTerms builds the order terms of a decision's row: the one builder
 // the live row and the shadow intent share, so a shadow intent carries the
 // terms its live row would (strategy-register.md, section 3).
 func coreRowTerms(k *coreContract, decision string, scope brokerStateScope, now time.Time) rpc.CoreRowTerms {
-	terms := rpc.CoreRowTerms{OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, Limit: coreLimitRule, Exchange: "SMART", Episode: coreEpisode(scope, decision)}
+	return strategyRowTerms(coreRowInput{}, k, decision, scope, now)
+}
+
+// strategyRowTerms is coreRowTerms for the input's entry: the same terms,
+// under the entry's episode.
+func strategyRowTerms(in coreRowInput, k *coreContract, decision string, scope brokerStateScope, now time.Time) rpc.CoreRowTerms {
+	terms := rpc.CoreRowTerms{OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, Limit: coreLimitRule, Exchange: "SMART", Episode: strategyEpisode(in, scope, decision)}
 	if k != nil {
 		terms.PrimaryExchange = k.PrimaryExch
 		terms.Window = coreWindow(decision, k.Market, now)
@@ -257,6 +352,9 @@ func corePlanFor(in coreRowInput, now time.Time) corePlan {
 		plan.Reasons = append(plan.Reasons, "the core sleeve is inactive")
 		return plan
 	}
+	if !in.isCore() {
+		return strategyPlanGate(in, now)
+	}
 	if in.State != register.StateLive {
 		plan.Reasons = append(plan.Reasons, fmt.Sprintf("the core runs in %s and serves no row; its decision reaches the shadow record only", nonEmptyString(string(in.State), "no stage")))
 		return plan
@@ -265,6 +363,36 @@ func corePlanFor(in coreRowInput, now time.Time) corePlan {
 		plan.Reasons = append(plan.Reasons, "the core's contract is not resolved")
 		return plan
 	}
+	return corePlanDecided(in, now)
+}
+
+// strategyPlanGate is corePlanFor's register and contract test for another
+// entry, in the entry's own words: a row only while it is live, never in
+// another stage (a hold names its reasons, suspended serves none).
+func strategyPlanGate(in coreRowInput, now time.Time) corePlan {
+	var plan corePlan
+	name := in.name()
+	switch in.State {
+	case register.StateLive:
+	case register.StateHold:
+		plan.Reasons = append(plan.Reasons, name+" holds and serves no row: "+strings.Join(in.Entry.Reasons, "; "))
+		return plan
+	default:
+		plan.Reasons = append(plan.Reasons, fmt.Sprintf("%s is %s and serves no row", name, nonEmptyString(string(in.State), "unwritten")))
+		return plan
+	}
+	if in.Contract == nil {
+		plan.Reasons = append(plan.Reasons, name+"'s contract is not resolved")
+		return plan
+	}
+	return corePlanDecided(in, now)
+}
+
+// corePlanDecided is corePlanFor past the register: the month's action, the
+// window and the session.
+func corePlanDecided(in coreRowInput, now time.Time) corePlan {
+	res := in.Result
+	var plan corePlan
 	d, a := res.Decision, res.Action
 	if d == nil || d.Decision == "" || a == nil {
 		plan.Reasons = append(plan.Reasons, "no month is decided")
@@ -283,7 +411,7 @@ func corePlanFor(in coreRowInput, now time.Time) corePlan {
 		// Review S6: a data hold stops buys, and the sale to zero the frozen
 		// month wants goes to the owner for review, with the hold named.
 		plan.Kind, plan.Quantity, plan.Hold = core.ActionSellAll, held, true
-		plan.Why = "the trend is off and the core holds: the sale to zero goes to you for review (" + strings.Join(res.Reasons, "; ") + ")"
+		plan.Why = "the trend is off and " + in.name() + " holds: the sale to zero goes to you for review (" + strings.Join(res.Reasons, "; ") + ")"
 	default:
 		plan.Kind, plan.Why = a.Kind, a.Why
 		plan.Reasons = append(plan.Reasons, a.Why)
@@ -320,6 +448,9 @@ func (e *proposalEngine) coreRebalanceProposals(ctx context.Context, policy prot
 	}
 	plan := corePlanFor(in, now)
 	st := &rpc.TradeProposalCoreStatus{State: nonEmptyString(string(in.State), "inactive"), Kind: plan.Kind, Quantity: plan.Quantity, Why: plan.Why, Window: plan.Window, Reasons: plan.Reasons}
+	if !in.isCore() {
+		st.Strategy, st.Sleeve = in.Entry.Entry.ID, in.Entry.Entry.Sleeve
+	}
 	if in.Result != nil && in.Result.Decision != nil {
 		st.Decision = in.Result.Decision.Decision
 	}
@@ -332,11 +463,15 @@ func (e *proposalEngine) coreRebalanceProposals(ctx context.Context, policy prot
 		return nil, st
 	}
 	if plan.Kind == core.ActionBuy {
+		what, line := "core buy", "the core's line"
+		if !in.isCore() {
+			what, line = in.Entry.Entry.ID+" buy", in.name()+"'s line"
+		}
 		switch {
 		case in.BreachEpisode != "":
-			proposalBlock(&p, coreBuyDuringBreachCode, "the mandate's breach episode "+in.BreachEpisode+" is open: no core buy until a verdict reads within and the episode ends")
+			proposalBlock(&p, coreBuyDuringBreachCode, "the mandate's breach episode "+in.BreachEpisode+" is open: no "+what+" until a verdict reads within and the episode ends")
 		case in.ReductionStands:
-			proposalBlock(&p, coreBuyBesideReductionCode, "a mandate reduction of the core's line stands this generation: no core buy beside it")
+			proposalBlock(&p, coreBuyBesideReductionCode, "a mandate reduction of "+line+" stands this generation: no "+what+" beside it")
 		}
 	}
 	for _, b := range e.coreWorkingOrderBlockers(ctx, p) {
@@ -393,15 +528,20 @@ func coreRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources
 		action, effect, verb = rpc.OrderActionSell, rpc.OrderPositionEffectReduce, "sell"
 	}
 	d := res.Decision
-	terms := coreRowTerms(k, d.Decision, in.Scope, now)
+	terms := strategyRowTerms(in, k, d.Decision, in.Scope, now)
 	trend := "trend on"
 	if !d.TrendOn {
 		trend = "trend off"
 	}
-	reason := fmt.Sprintf("core sleeve, decision %s (%s, target %s, %s held): %s %s for the %s session, a DAY limit at the live mid; %s",
-		d.Decision, trend, pluralNoun(target, "share"), pluralNoun(held, "share"), verb, pluralNoun(plan.Quantity, "share"), plan.Session, plan.Why)
+	head, confirm := "core sleeve", "you confirm this row on your device; nothing is sent without that, and the core is never pre-authorised"
+	if !in.isCore() {
+		head = fmt.Sprintf("%s strategy (sleeve %s)", in.Entry.Entry.ID, in.Entry.Entry.Sleeve)
+		confirm = "you confirm this row on your device, or Desk's controller sends it under the standing mandate you confirmed there; nothing else sends it, and it is never pre-authorised"
+	}
+	reason := fmt.Sprintf("%s, decision %s (%s, target %s, %s held): %s %s for the %s session, a DAY limit at the live mid; %s",
+		head, d.Decision, trend, pluralNoun(target, "share"), pluralNoun(held, "share"), verb, pluralNoun(plan.Quantity, "share"), plan.Session, plan.Why)
 	details := []string{
-		"you confirm this row on your device; nothing is sent without that, and the core is never pre-authorised",
+		confirm,
 		fmt.Sprintf("the limit is %s; the mandate gate, funding and every other gate re-check the order at preview and submit", coreLimitRule),
 	}
 	if len(plan.Window) > 0 {
@@ -422,12 +562,13 @@ func coreRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources
 		details = append(details, fmt.Sprintf("sized on the %s mandate verdict of %s, afresh at every generation", res.Mandate.Status, mandateClock(res.Mandate.EvaluatedAt)))
 	}
 	if res.Action != nil && res.Action.HeadroomCut {
-		details = append(details, fmt.Sprintf("cut to the mandate's headroom: the book at most at %.0f%% of the budget and of each gap cap, the core inside its allocation", core.HeadroomFactor*100))
+		details = append(details, fmt.Sprintf("cut to the mandate's headroom: the book at most at %.0f%% of the budget and of each gap cap, %s inside its allocation", core.HeadroomFactor*100, in.name()))
 	}
 	if plan.Hold {
-		details = append(details, "the core holds: "+strings.Join(res.Reasons, "; "))
+		details = append(details, in.name()+" holds: "+strings.Join(res.Reasons, "; "))
 	}
-	p := rpc.TradeProposal{Key: proposalKey(rpc.TradeProposalBucketCoreRebalance, contract, action), State: rpc.TradeProposalStateGenerated, Bucket: rpc.TradeProposalBucketCoreRebalance,
+	bucket := in.bucket()
+	p := rpc.TradeProposal{Key: proposalKey(bucket, contract, action), State: rpc.TradeProposalStateGenerated, Bucket: bucket,
 		Symbol: contract.Symbol, SecType: "STK", Action: action, Quantity: plan.Quantity, MaxQuantity: plan.Quantity, PositionQuantity: float64(held), PositionEffect: effect,
 		OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, Contract: contract, Reason: reason, Details: details,
 		PolicyID: policy.PolicyID, PolicyVersion: policy.PolicyVersion, PolicyFingerprint: status.Fingerprint, SourceFingerprints: sources, CreatedAt: now}
@@ -438,6 +579,12 @@ func coreRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources
 	}
 	p.Core = &rpc.TradeProposalCore{Decision: d.Decision, TrendOn: d.TrendOn, Kind: plan.Kind, Target: target, Held: held, ScalePct: in.ScalePct,
 		ConID: k.ConID, Currency: k.Currency, DecisionClose: d.Close, Session: plan.Session, Sleeve: risk.CoreStrategyID, Stage: string(in.State), Terms: terms}
+	if !in.isCore() {
+		p.Core.Sleeve, p.Core.Strategy = in.Entry.Entry.Sleeve, in.Entry.Entry.ID
+		if in.Entry.Rule != nil {
+			p.Core.Rule = in.Entry.Rule.ID
+		}
+	}
 	if a := res.Action; a != nil && !plan.Hold {
 		p.Core.Diff, p.Core.BandShares, p.Core.HeadroomCut = a.Diff, a.BandShares, a.HeadroomCut
 	}
@@ -462,6 +609,9 @@ func fmtPct(v float64) string {
 // frozen target leaves to buy. Every other bucket, action, contract or size
 // stays close-or-reduce only; a core sale is an ordinary reduction.
 type coreOpenException struct {
+	// Strategy is the register entry of a strategy_rebalance row; empty for
+	// the core's.
+	Strategy      string
 	ConID         int
 	Currency      string
 	MaxQuantity   int
@@ -473,7 +623,9 @@ func coreOpenExceptionFor(prop rpc.TradeProposal) (coreOpenException, bool) {
 	c := prop.Core
 	none := coreOpenException{}
 	switch {
-	case prop.Bucket != rpc.TradeProposalBucketCoreRebalance || c == nil || c.Kind != core.ActionBuy:
+	case !rpc.StrategyRowBucket(prop.Bucket) || c == nil || c.Kind != core.ActionBuy:
+		return none, false
+	case prop.Bucket == rpc.TradeProposalBucketStrategyRebalance && strings.TrimSpace(c.Strategy) == "":
 		return none, false
 	case !strings.EqualFold(strings.TrimSpace(prop.Action), rpc.OrderActionBuy):
 		return none, false
@@ -484,7 +636,11 @@ func coreOpenExceptionFor(prop rpc.TradeProposal) (coreOpenException, bool) {
 	case prop.Quantity < 1 || prop.MaxQuantity != prop.Quantity || prop.Quantity > c.Target-c.Held:
 		return none, false
 	}
-	return coreOpenException{ConID: c.ConID, Currency: normCcy(c.Currency), MaxQuantity: prop.Quantity, DecisionClose: c.DecisionClose}, true
+	x := coreOpenException{ConID: c.ConID, Currency: normCcy(c.Currency), MaxQuantity: prop.Quantity, DecisionClose: c.DecisionClose}
+	if prop.Bucket == rpc.TradeProposalBucketStrategyRebalance {
+		x.Strategy = c.Strategy
+	}
+	return x, true
 }
 
 // previewBlockers says why a preview the close_reduce_only gate would refuse
@@ -502,7 +658,7 @@ func (x coreOpenException) previewBlockers(preview *rpc.OrderPreviewResult) []rp
 		d.Contract.ConID != x.ConID || normCcy(d.Contract.Currency) != x.Currency || !strings.EqualFold(strings.TrimSpace(d.Contract.SecType), "STK") ||
 		!strings.EqualFold(strings.TrimSpace(d.OrderType), rpc.OrderTypeLMT) || !strings.EqualFold(strings.TrimSpace(d.TIF), rpc.OrderTIFDay) || d.OutsideRTH || !positiveFinite(d.LimitPrice) {
 		return []rpc.TradingBlocker{{Code: "preview_effect_not_close_reduce",
-			Message: fmt.Sprintf("preview effect %q or order terms do not match the core row's DAY limit buy of its own contract within its sized quantity", effect),
+			Message: fmt.Sprintf("preview effect %q or order terms do not match the %s row's DAY limit buy of its own contract within its sized quantity", effect, nonEmptyString(x.Strategy, "core")),
 			Action:  "Refresh proposals and positions and preview the row again."}}
 	}
 	if x.DecisionClose > 0 {
@@ -539,27 +695,42 @@ type coreDecisionRow struct {
 // sale to zero to review): the action, its reason (a refused buy names the
 // gate's reading) and the window. A later refresh never rewrites it.
 func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResult, now time.Time) {
-	if s == nil || s.riskPolicies == nil || res == nil || !res.Active || res.Decision == nil || res.Decision.Decision == "" {
+	if s == nil || s.riskPolicies == nil {
 		return
 	}
 	c := s.riskPolicies.snapshot().policy
 	if c == nil || c.Mandate == nil || c.Mandate.Core == nil {
 		return
 	}
-	reg, ok := resolvedCore(s.resolvedRegister(c))
-	if !ok || reg.State != register.StateLive {
+	if reg, ok := resolvedCore(s.resolvedRegister(c)); ok {
+		s.recordStrategyDecision(ctx, res, reg, now)
+	}
+}
+
+// recordStrategyDecision is recordCoreDecision for any register entry: the
+// month's decision kept beside the entry's frozen month while it is live.
+func (s *Server) recordStrategyDecision(ctx context.Context, res *rpc.CoreTargetResult, reg register.Resolved, now time.Time) {
+	if s == nil || s.riskPolicies == nil || res == nil || !res.Active || res.Decision == nil || res.Decision.Decision == "" {
 		return
 	}
-	contract, _, _, _ := s.corePinState(c.Mandate.Core)
+	if reg.State != register.StateLive {
+		return
+	}
+	contract, _, _, _ := s.instrumentPinState(s.requestedInstrument(reg))
 	if contract == nil {
 		return
 	}
 	scope := s.currentBrokerStateScope()
-	f := s.coreFrozen(ctx, coreScope(scope, contract.ConID))
+	frozenScope := frozenScopeFor(reg, scope, contract.ConID)
+	f := s.coreFrozen(ctx, frozenScope)
 	if f == nil || f.Decision != res.Decision.Decision {
 		return
 	}
-	plan := corePlanFor(coreRowInput{Active: true, Result: res, Contract: contract, State: reg.State, ScalePct: reg.ScalePct, Scope: scope}, now)
+	in := coreRowInput{Active: true, Result: res, Contract: contract, State: reg.State, ScalePct: reg.ScalePct, Scope: scope}
+	if reg.Entry.Form != risk.StrategyFormCore {
+		in.Entry = reg
+	}
+	plan := corePlanFor(in, now)
 	if res.Status != rpc.CoreStatusReady && !plan.Hold {
 		return // the month may still clear; nothing is recorded for a hold
 	}
@@ -575,7 +746,7 @@ func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResu
 		if plan.Kind != core.ActionBuy {
 			action = rpc.OrderActionSell
 		}
-		row.Served, row.RowKey = true, proposalKey(rpc.TradeProposalBucketCoreRebalance, coreContractParams(contract), action)
+		row.Served, row.RowKey = true, proposalKey(in.bucket(), coreContractParams(contract), action)
 	}
 	// The record follows the row the window actually serves: a month first
 	// recorded as "no buy" (the verdict read reduce, a breach stood) is
@@ -585,7 +756,7 @@ func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResu
 	// withdrawn or its window ends, with the journal's outcome on it. The
 	// sized quantity alone, which every generation re-sizes, changes no
 	// record.
-	if f.Row != nil && (!coreDecisionChanged(f.Row, row) || f.Row.Served && s.coreDecisionSubmitted(f, coreScope(scope, contract.ConID))) {
+	if f.Row != nil && (!coreDecisionChanged(f.Row, row) || f.Row.Served && s.coreDecisionSubmitted(f, frozenScope)) {
 		return
 	}
 	// A copy replaces the kept month under the store's lock, so no reader
@@ -625,31 +796,43 @@ func (s *Server) coreDecisionSubmitted(f *coreFrozenTarget, scope string) bool {
 	return false
 }
 
-// coreFinish attaches the live core's row and last decision to a verdict:
+// coreFinish attaches a live entry's row and last decision to its verdict:
 // the pending row as the proposal engine serves it, and the recorded
-// decision with what became of its row in the proposal journal. In shadow,
-// suspended or on hold the verdict stays read-only.
+// decision with what became of its row in the proposal journal. Suspended
+// or on hold the verdict stays read-only.
 func (s *Server) coreFinish(ctx context.Context, res *rpc.CoreTargetResult, contract *coreContract, reg register.Resolved) *rpc.CoreTargetResult {
-	// Only the core's rows are built: every other entry stays read-only.
-	res.ReadOnly = reg.Entry.Form != risk.StrategyFormCore || reg.State != register.StateLive
+	res.ReadOnly = reg.State != register.StateLive
 	if res.ReadOnly || contract == nil {
 		return res
 	}
-	res.Row = s.corePendingRow(contract)
-	res.LastDecision = s.coreLastDecision(ctx, coreScope(s.currentBrokerStateScope(), contract.ConID))
+	bucket := rpc.TradeProposalBucketCoreRebalance
+	if reg.Entry.Form != risk.StrategyFormCore {
+		bucket = rpc.TradeProposalBucketStrategyRebalance
+	}
+	res.Row = s.strategyPendingRow(bucket, reg.Entry.ID, contract)
+	res.LastDecision = s.coreLastDecision(ctx, frozenScopeFor(reg, s.currentBrokerStateScope(), contract.ConID))
 	return res
 }
 
 // corePendingRow is the core's row in the engine's served snapshot, with
 // its blockers and readiness; nil while none stands.
 func (s *Server) corePendingRow(contract *coreContract) *rpc.CoreRowView {
+	return s.strategyPendingRow(rpc.TradeProposalBucketCoreRebalance, risk.CoreStrategyID, contract)
+}
+
+// strategyPendingRow is an entry's row in the served snapshot: its bucket,
+// its line and, for another entry, its id.
+func (s *Server) strategyPendingRow(bucket, id string, contract *coreContract) *rpc.CoreRowView {
 	e := s.tradeProposals
 	if e == nil || contract == nil {
 		return nil
 	}
 	snap := e.snapshotForRead(false, false)
 	for _, p := range snap.Proposals {
-		if p.Bucket != rpc.TradeProposalBucketCoreRebalance || p.Contract.ConID != contract.ConID || p.Core == nil {
+		if p.Bucket != bucket || p.Contract.ConID != contract.ConID || p.Core == nil {
+			continue
+		}
+		if bucket == rpc.TradeProposalBucketStrategyRebalance && p.Core.Strategy != id {
 			continue
 		}
 		v := &rpc.CoreRowView{Key: p.Key, Revision: p.Revision, Action: p.Action, Quantity: p.Quantity, Session: p.Core.Session, State: p.State, Blockers: slices.Clone(p.Blockers), Terms: p.Core.Terms}
@@ -695,6 +878,13 @@ func (s *Server) coreLastDecision(ctx context.Context, scope string) *rpc.CoreDe
 }
 
 func coreDecisionEventMatchesScope(ev proposalEvent, scope string) bool {
+	// Another entry's frozen scope is strategy|<id>|<account>|<mode>|<con>
+	// (frozenScopeFor); the broker scope is the same after its prefix.
+	if rest, ok := strings.CutPrefix(scope, "strategy|"); ok {
+		if _, after, found := strings.Cut(rest, "|"); found {
+			scope = after
+		}
+	}
 	parts := strings.SplitN(scope, "|", 3)
 	return len(parts) == 3 && brokerScopeAccountConcrete(parts[0]) &&
 		sameBrokerScope(brokerStateScope{Account: parts[0], Mode: parts[1]}, brokerStateScope{Account: ev.AccountID, Mode: ev.AccountMode})

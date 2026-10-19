@@ -276,6 +276,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "core_shadow", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreShadow()}},
 		{name: "strategy_shadow", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategyShadow()}},
 		{name: "strategy_hold", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategyHold()}},
+		{name: "strategy_live", argv: []string{"strategy", "trend-fund"}, conn: goldenConn{rpc.MethodStrategyTarget: goldenStrategyLive()}},
 		{name: "core_resolve", argv: []string{"core", "resolve"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolve()}},
 		{name: "core_resolve_pinned", argv: []string{"core", "resolve"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolvePinned()}},
 		{name: "core_resolve_none", argv: []string{"core", "resolve", "--isin", "IE00B5BMR087", "--currency", "EUR"}, conn: goldenConn{rpc.MethodCoreResolve: goldenCoreResolveNone()}},
@@ -706,6 +707,10 @@ func goldenHealthReady(trading rpc.TradingStatus) rpc.HealthResult {
 		Trading:          trading,
 		Executions:       &rpc.ExecutionVisibilityHealth{Visibility: rpc.ExecutionVisibilityAllClients, ProvenAt: goldenAt.Add(-25 * time.Minute), ClientID: 7, Setting: rpc.ExecutionVisibilitySetting},
 		DataHealth:       &rpc.DataHealthResult{Summary: rpc.DataHealthSummary{State: "current", Label: "12 of 12 sources current"}},
+		Strategies: []rpc.StrategyHealth{
+			{ID: "core", Sleeve: "core", State: "live", Row: &rpc.StrategyHealthRow{Key: "core_rebalance:synthetic01", Action: "BUY", Quantity: 908, Symbol: "SYNX", Session: "2026-09-04", State: rpc.TradeProposalStateGenerated, Readiness: "opening_window"}},
+			{ID: "trend-fund", Sleeve: "trend", State: "live", Why: "the 5-session window after 2026-08-31 ended with 2026-09-07; what is left waits for the next decision"},
+		},
 	}
 }
 

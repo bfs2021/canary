@@ -47,6 +47,9 @@ type proposalEngine struct {
 	// monthly row (core_rebalance.go). Test seam; nil evaluates the daemon's
 	// own core target.
 	coreInput func(now time.Time) coreRowInput
+	// strategyInputs resolves every other register entry's input, by id;
+	// a test seam like coreInput.
+	strategyInputs func(now time.Time) []coreRowInput
 	// resolve returns the proposal a preview or submit names. Test seam; nil
 	// re-validates against a fresh refresh (revalidatedProposal).
 	resolve  func(ctx context.Context, key, revision string) (rpc.TradeProposal, []rpc.TradingBlocker, error)
@@ -166,6 +169,11 @@ type proposalEvent struct {
 	// Shadow records that the row was generated under a shadow-mode bucket,
 	// so the journal distinguishes observation from an offer to act.
 	Shadow bool `json:"shadow,omitempty"`
+	// Strategy, Sleeve and ConID name a strategy_rebalance row's register
+	// entry, its sleeve and its line.
+	Strategy string `json:"strategy,omitempty"`
+	Sleeve   string `json:"sleeve,omitempty"`
+	ConID    int    `json:"con_id,omitempty"`
 }
 
 func (s *Server) installProposalEngine() {
@@ -343,7 +351,7 @@ func (e *proposalEngine) snapshotForRead(show, refresh bool) rpc.TradeProposalSn
 	// stays scoped, including budget/cash status with no generated proposals.
 	// Only genuinely unscoped shells without financial evidence pass through.
 	bound := strings.TrimSpace(snap.AccountID) != "" || strings.TrimSpace(snap.AccountMode) != ""
-	if bound || len(snap.Proposals) > 0 || snap.CashSweep != nil || snap.CurrencyLeveling != nil || snap.BudgetReduction != nil || snap.MandateReduction != nil || snap.CoreRebalance != nil || len(snap.OptionHedges) > 0 {
+	if bound || len(snap.Proposals) > 0 || snap.CashSweep != nil || snap.CurrencyLeveling != nil || snap.BudgetReduction != nil || snap.MandateReduction != nil || snap.CoreRebalance != nil || len(snap.StrategyRebalance) > 0 || len(snap.OptionHedges) > 0 {
 		scope := e.currentScope()
 		if blockers := proposalScopeBlockers(snap.AccountID, snap.AccountMode, scope); len(blockers) > 0 {
 			shell := emptyProposalSnapshot(e.clock())
@@ -570,7 +578,7 @@ func (e *proposalEngine) refresh(ctx context.Context, show bool) (rpc.TradePropo
 		}
 		sources.MarketEvents = &fp
 	}
-	proposals, thetaSuppressions, hedges, budget, mandateStatus, coreStatus := e.generateBook(ctx, policy, policyStatus, acct, pos, sources, marketEvents, scope, now)
+	proposals, thetaSuppressions, hedges, budget, mandateStatus, coreStatus, strategyStatus := e.generateBookWithStrategies(ctx, policy, policyStatus, acct, pos, sources, marketEvents, scope, now)
 	sweepRows, sweep := e.cashSweepProposals(ctx, policy, policyStatus, acct, pos, sources, scope, now)
 	proposals = append(proposals, sweepRows...)
 	levelingRows, leveling := e.currencyLevelingProposals(ctx, policy, policyStatus, acct, sources, scope, now)
@@ -641,6 +649,7 @@ func (e *proposalEngine) refresh(ctx context.Context, show bool) (rpc.TradePropo
 		BudgetReduction:            budget,
 		MandateReduction:           mandateStatus,
 		CoreRebalance:              coreStatus,
+		StrategyRebalance:          strategyStatus,
 		Counts:                     proposalCounts(proposals, protectionCoverageBaseCurrency(pos)),
 	}
 	snap.Counts.OptionHedges = len(hedges)
@@ -716,6 +725,14 @@ func (e *proposalEngine) generate(ctx context.Context, policy protectionPolicy, 
 // nil while the constitution carries no [mandate]; the sixth the core
 // sleeve's row status, nil while it carries no [mandate.core].
 func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, scope brokerStateScope, now time.Time) ([]rpc.TradeProposal, []thetaSuppression, []rpc.OptionHedge, *rpc.TradeProposalBudgetStatus, *rpc.TradeProposalMandateStatus, *rpc.TradeProposalCoreStatus) {
+	out, suppressions, hedges, budget, mandateStatus, coreStatus, _ := e.generateBookWithStrategies(ctx, policy, status, acct, pos, sources, marketEvents, scope, now)
+	return out, suppressions, hedges, budget, mandateStatus, coreStatus
+}
+
+// generateBookWithStrategies is generateBook with a seventh value: every
+// other register entry's row status, by id (core_rebalance.go).
+func (e *proposalEngine) generateBookWithStrategies(ctx context.Context, policy protectionPolicy, status rpc.ProtectionPolicyStatus, acct *rpc.AccountResult, pos *rpc.PositionsResult, sources rpc.TradeProposalSourceFingerprints, marketEvents *rpc.MarketEventsResult, scope brokerStateScope, now time.Time) ([]rpc.TradeProposal, []thetaSuppression, []rpc.OptionHedge, *rpc.TradeProposalBudgetStatus, *rpc.TradeProposalMandateStatus, *rpc.TradeProposalCoreStatus, []rpc.TradeProposalCoreStatus) {
+	var strategyStatus []rpc.TradeProposalCoreStatus
 	var hedges []rpc.OptionHedge
 	var out []rpc.TradeProposal
 	var suppressions []thetaSuppression
@@ -766,6 +783,14 @@ func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPoli
 	if rows, st := e.coreRebalanceProposals(ctx, policy, status, e.resolveCoreInput(ctx, scope, mandateStatus, out, now), sources, now); st != nil {
 		out = append(out, rows...)
 		coreStatus = st
+	}
+	// Every other live register entry's month is served the same way, one
+	// row per entry and decision at most, after the core's.
+	for _, in := range e.resolveStrategyInputs(ctx, scope, mandateStatus, out, now) {
+		if rows, st := e.coreRebalanceProposals(ctx, policy, status, in, sources, now); st != nil {
+			out = append(out, rows...)
+			strategyStatus = append(strategyStatus, *st)
+		}
 	}
 	if policy.Buckets.TrailingStop.Enabled {
 		stockEnabled := true
@@ -926,7 +951,7 @@ func (e *proposalEngine) generateBook(ctx context.Context, policy protectionPoli
 			}
 		}
 	}
-	return out, suppressions, hedges, budget, mandateStatus, coreStatus
+	return out, suppressions, hedges, budget, mandateStatus, coreStatus, strategyStatus
 }
 
 // optionHedgeRecord describes one held long option the engine holds as
@@ -3538,7 +3563,14 @@ func (e *proposalEngine) appendBlocked(prop rpc.TradeProposal, key, revision str
 }
 
 func proposalEventForProposal(eventType string, prop rpc.TradeProposal, at time.Time, tokenID, orderRef, msg string) proposalEvent {
-	return proposalEvent{At: at, Type: eventType, Key: prop.Key, Revision: prop.Revision, Bucket: prop.Bucket, PolicyID: prop.PolicyID, PolicyVersion: prop.PolicyVersion, PolicyFingerprint: prop.PolicyFingerprint, PreviewTokenID: tokenID, OrderRef: orderRef, Message: msg, SourceFingerprints: prop.SourceFingerprints, Shadow: prop.Shadow}
+	ev := proposalEvent{At: at, Type: eventType, Key: prop.Key, Revision: prop.Revision, Bucket: prop.Bucket, PolicyID: prop.PolicyID, PolicyVersion: prop.PolicyVersion, PolicyFingerprint: prop.PolicyFingerprint, PreviewTokenID: tokenID, OrderRef: orderRef, Message: msg, SourceFingerprints: prop.SourceFingerprints, Shadow: prop.Shadow}
+	if prop.Bucket == rpc.TradeProposalBucketStrategyRebalance && prop.Core != nil {
+		// The entry's id and sleeve go with its row's events, so its fills
+		// are found by the row's order reference (strategy_placement.go)
+		// and scored in its sleeve.
+		ev.Strategy, ev.Sleeve, ev.ConID = prop.Core.Strategy, prop.Core.Sleeve, prop.Core.ConID
+	}
+	return ev
 }
 
 func (e *proposalEngine) appendEvent(ev proposalEvent) error {
@@ -3673,6 +3705,8 @@ func proposalCounts(proposals []rpc.TradeProposal, baseCurrency string) rpc.Trad
 			out.MandateReduction++
 		case rpc.TradeProposalBucketCoreRebalance:
 			out.CoreRebalance++
+		case rpc.TradeProposalBucketStrategyRebalance:
+			out.StrategyRebalance++
 		}
 	}
 	// A raw sum across different local currencies is meaningless. Rather
@@ -3798,6 +3832,10 @@ func proposalRevisionTerms(p rpc.TradeProposal) []string {
 		// unfilled is proposed afresh, as a new revision, the next session.
 		terms = append(terms, "core-session:"+p.Core.Session)
 	}
+	if p.Bucket == rpc.TradeProposalBucketStrategyRebalance && p.Core != nil && p.Core.Session != "" {
+		// Another entry's row likewise, under its id.
+		terms = append(terms, "strategy-session:"+p.Core.Strategy+":"+p.Core.Session)
+	}
 	if p.OptionExit != nil {
 		// Receipt times/values refresh at preview; scope and resulting role
 		// are semantic revision inputs. Never churn solely on receipt time.
@@ -3917,6 +3955,9 @@ func cloneProposalSnapshot(in rpc.TradeProposalSnapshot) rpc.TradeProposalSnapsh
 	}
 	out.BudgetReduction = cloneBudgetStatus(in.BudgetReduction)
 	out.MandateReduction = rpc.CloneMandateStatus(in.MandateReduction)
+	if in.StrategyRebalance != nil {
+		out.StrategyRebalance = append([]rpc.TradeProposalCoreStatus(nil), in.StrategyRebalance...)
+	}
 	out.CashSweep = rpc.CloneCashSweepStatus(in.CashSweep)
 	out.CurrencyLeveling = rpc.CloneCurrencyLevelingStatus(in.CurrencyLeveling)
 	out.Blockers = append([]rpc.TradingBlocker(nil), in.Blockers...)

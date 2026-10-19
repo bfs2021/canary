@@ -175,7 +175,7 @@ func (e *proposalEngine) classifyReadiness(prop rpc.TradeProposal, blockers []rp
 		decide(rpc.ReadinessOpeningWindow, code)
 	} else if hasDue && now.Before(due) {
 		decide(rpc.ReadinessOpeningWindow, "")
-		out.Message = coreDuePhrase(due)
+		out.Message = strategyDuePhrase(prop, due)
 	} else {
 		decide(rpc.ReadinessReady, "")
 	}

@@ -278,8 +278,9 @@ func (it DeskExecutionItem) Validate() error {
 		return fmt.Errorf("desk execution item %s needs exactly one source", it.RequestID)
 	case in.Proposal != nil && (in.Class != DeskClassProtect && in.Class != DeskClassReduce && in.Class != DeskClassAdd || in.Proposal.Key == "" || in.Proposal.Revision == ""):
 		// A proposal item carries class add only for a strategy row's buy
-		// (the core's core_rebalance); the daemon classifies the row itself
-		// and refuses any other buy with DeskBlockerClassMismatch.
+		// (core_rebalance or strategy_rebalance, StrategyRowBucket); the
+		// daemon classifies the row itself and refuses any other buy with
+		// DeskBlockerClassMismatch.
 		return fmt.Errorf("desk execution item %s: a proposal is a protection, reduction or strategy addition with key and revision", it.RequestID)
 	case in.Add != nil && (in.Class != DeskClassAdd || in.Add.ConID <= 0 || in.Add.Symbol == "" || in.Add.Currency == "" ||
 		in.Add.RuleID == "" || in.Add.RuleRevision == 0 || in.Add.EvidenceID == ""):

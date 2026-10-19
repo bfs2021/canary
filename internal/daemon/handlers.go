@@ -3613,6 +3613,7 @@ func (s *Server) statusHealthSnapshot() *rpc.HealthResult {
 		res.DataHealth = &report
 	}
 	res.GatewayRestart = s.gatewayRestart.snapshot(observedAt, res)
+	res.Strategies = s.strategyHealth()
 	res.Verdict = authoritativeHealthVerdict(res)
 	return res
 }

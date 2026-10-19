@@ -275,7 +275,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	// the legs, since a live strategy on hold keeps its reservation only
 	// while its sleeve holds positions.
 	resolved := s.resolvedRegister(c)
-	in.Allocations = mandateAllocationPlan(c, resolved, s.mandateCoreContracts(ctx, c), in.Legs)
+	in.Allocations = mandateAllocationPlanReserved(c, resolved, s.mandateReservedContracts(ctx, c, resolved, in.Legs), in.Legs)
 	verdict := mandate.Evaluate(in)
 	// The owner sleeve's drawdown stop reads this verdict's legs and use, and
 	// the kept input carries it, so every evaluation sized or judged on this
@@ -520,7 +520,16 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: fmt.Sprintf("Mandate budget: the verdict is %s old and cannot be shown current; this order adds risk.", formatQuoteAge(age)) + open, Action: action}
 	}
 	ccy := result.Verdict.BaseCurrency
-	sleeve := mandateOrderSleeve(s.mandateCoreContracts(context.Background(), c), draft)
+	// The order is placed as the kept verdict placed its line, so the gate
+	// and the verdict never disagree on whose units an order adds to.
+	sleeve := mandateReservedOrderSleeve(mandateReservedFromPlan(input.Allocations), draft)
+	// A machine sleeve trades its own fund line only: a combination order
+	// passes this gate unmeasured and a put on a Rulebook hedge symbol as a
+	// hedge, and neither pass is a machine sleeve's (mandate-risk-budget.md,
+	// "Placement": the two gate gaps closed before a non-core entry sends).
+	if sleeve != mandate.SleeveOwner && !strings.EqualFold(strings.TrimSpace(draft.Contract.SecType), "STK") {
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + mandateSleeveName(sleeve) + " trades only its own fund line; a " + nonEmptyString(draft.Contract.SecType, "non-stock") + " order on it is never passed unmeasured." + open, Action: action}
+	}
 	// A book over budget adds nothing, except in a sleeve inside its own risk
 	// allocation (owner, 2026-10-18 15:31 CEST: "yes, it should. unless you
 	// advise differently"): that sleeve keeps adding inside its allocation
@@ -881,6 +890,11 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 			}
 		}
 		if series, ok := fresh(mandateHistoryNeed{Key: "u:" + sym, Contract: contract}); ok {
+			book.Series[sym] = mandateSeriesInput(series, now)
+		} else if series := s.strategyLineSeries(draft.Contract.ConID, now); series != nil {
+			// A registered strategy's line the book does not hold yet is
+			// measured on the strategy's own closes, as its verdict's
+			// headroom was, so its first row is never refused unmeasured.
 			book.Series[sym] = mandateSeriesInput(series, now)
 		} else {
 			missing = append(missing, mandateMissing{need: mandateHistoryNeed{Key: "u:" + sym, Contract: contract}, reason: "no daily history for " + sym + " yet; the desk is fetching it"})

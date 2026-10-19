@@ -350,6 +350,12 @@ const (
 	// Never pre-authorisable; a buy passes under its own typed exception
 	// to close_reduce_only, bound to the row's contract and sized quantity.
 	TradeProposalBucketCoreRebalance = "core_rebalance"
+	// TradeProposalBucketStrategyRebalance is the monthly row of every
+	// other live register entry (internal-docs/design/strategy-register.md,
+	// [mandate.strategies.<id>]): the core's row terms on the entry's own
+	// line, keyed by the entry's id and sleeve. Never pre-authorisable; a
+	// buy passes under the same typed exception, bound to the row.
+	TradeProposalBucketStrategyRebalance = "strategy_rebalance"
 
 	// BudgetReductionModeShadow and BudgetReductionModeActive are the two
 	// governor modes. Shadow is the policy default.
@@ -547,8 +553,11 @@ type TradeProposalSnapshot struct {
 	MandateReduction *TradeProposalMandateStatus `json:"mandate_reduction,omitempty"`
 	// CoreRebalance is the core sleeve's row status for this generation.
 	// Absent while the constitution carries no [mandate.core].
-	CoreRebalance   *TradeProposalCoreStatus `json:"core_rebalance,omitempty"`
-	Blockers        []TradingBlocker         `json:"blockers,omitempty"`
+	CoreRebalance *TradeProposalCoreStatus `json:"core_rebalance,omitempty"`
+	// StrategyRebalance is every other register entry's row status for this
+	// generation, by id; absent while the register carries no other entry.
+	StrategyRebalance []TradeProposalCoreStatus `json:"strategy_rebalance,omitempty"`
+	Blockers          []TradingBlocker          `json:"blockers,omitempty"`
 	LoadedFromState bool                     `json:"loaded_from_state,omitempty"`
 	// CashSweep is the cash sweep's typed status for this generation: per
 	// currency, the band figures and why it invests, redeems, holds or
@@ -999,6 +1008,7 @@ type TradeProposalCounts struct {
 	// MandateReduction counts the mandate's forced-reduction rows.
 	MandateReduction            int     `json:"mandate_reduction,omitempty"`
 	CoreRebalance               int     `json:"core_rebalance,omitempty"`
+	StrategyRebalance           int     `json:"strategy_rebalance,omitempty"`
 	MarketFlags                 int     `json:"market_flags,omitempty"`
 	ThetaPerDay                 float64 `json:"theta_per_day"`
 	RiskReductionExcessNotional float64 `json:"risk_reduction_excess_notional,omitempty"`
@@ -1163,12 +1173,29 @@ type TradeProposalCore struct {
 	Sleeve  string       `json:"sleeve"`
 	Stage   string       `json:"stage"`
 	Terms   CoreRowTerms `json:"terms"`
+	// Strategy is the register entry's id on a strategy_rebalance row and
+	// Rule its compiled rule; both empty on the core's own row, whose id
+	// and rule are the core's.
+	Strategy string `json:"strategy,omitempty"`
+	Rule     string `json:"rule,omitempty"`
+}
+
+// StrategyRowBucket reports whether a bucket is a register entry's monthly
+// row: the core's core_rebalance or another entry's strategy_rebalance.
+// Both carry TradeProposal.Core, the same terms, the same typed exception
+// and the same due time.
+func StrategyRowBucket(bucket string) bool {
+	return bucket == TradeProposalBucketCoreRebalance || bucket == TradeProposalBucketStrategyRebalance
 }
 
 // TradeProposalCoreStatus is the core sleeve's row status for a
 // generation: the stage it runs in, the month's decision and whether a row
 // is served, held or none is due, and why.
 type TradeProposalCoreStatus struct {
+	// Strategy and Sleeve name the register entry on another entry's
+	// status; both empty on the core's.
+	Strategy string `json:"strategy,omitempty"`
+	Sleeve   string `json:"sleeve,omitempty"`
 	// State is the register's effective stage (live, shadow, suspended,
 	// hold) or inactive.
 	State string `json:"state"`

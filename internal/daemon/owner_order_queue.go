@@ -140,6 +140,9 @@ func (e *proposalEngine) prepareOwnerQueue(ctx context.Context, p rpc.TradePropo
 		if prop.Bucket == rpc.TradeProposalBucketCoreRebalance {
 			return block("queue_bucket_not_queueable", "The core's row is sent in session at the live mid, inside its window; review it while its exchange is open.")
 		}
+		if prop.Bucket == rpc.TradeProposalBucketStrategyRebalance {
+			return block("queue_bucket_not_queueable", "A strategy's row is sent in session at the live mid, inside its window, as the core's is; review it while its exchange is open.")
+		}
 		out.Proposal = &prop
 		quantity := prop.Quantity
 		if p.Quantity < 0 || p.Quantity > prop.Quantity {

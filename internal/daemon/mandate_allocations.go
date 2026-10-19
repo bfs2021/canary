@@ -62,15 +62,27 @@ func resolvedCore(resolved []register.Resolved) (register.Resolved, bool) {
 // places units in a machine sleeve by its fills, so placement is total and
 // never unknown.
 func mandateAllocationPlan(c *risk.Constitution, resolved []register.Resolved, coreContracts []int, legs []mandate.Leg) *mandate.AllocationPlan {
+	reserved := map[int]string{}
+	for _, id := range coreContracts {
+		reserved[id] = mandate.SleeveCore
+	}
+	return mandateAllocationPlanReserved(c, resolved, reserved, legs)
+}
+
+// mandateAllocationPlanReserved is mandateAllocationPlan with every
+// reserved line placed in its sleeve: the core's in the core's, and each
+// other entry's in its own (strategy_placement.go).
+func mandateAllocationPlanReserved(c *risk.Constitution, resolved []register.Resolved, reserved map[int]string, legs []mandate.Leg) *mandate.AllocationPlan {
 	if c == nil || c.Mandate == nil {
 		return nil
 	}
 	m := c.Mandate
 	plan := &mandate.AllocationPlan{Placed: map[string]string{}}
-	if m.Core != nil {
-		for _, id := range coreContracts {
-			plan.Placed[mandateConLegID(id)] = mandate.SleeveCore
+	for id, sleeve := range reserved {
+		if sleeve == mandate.SleeveCore && m.Core == nil {
+			continue
 		}
+		plan.Placed[mandateConLegID(id)] = sleeve
 	}
 	holds := func(sleeve string) bool {
 		for _, l := range legs {
@@ -176,11 +188,23 @@ func (s *Server) mandateCoreContracts(ctx context.Context, c *risk.Constitution)
 
 // mandateOrderSleeve places an order by its contract id, which the order
 // path resolves before every gate: the core's contract is the core's
-// whoever sends it, everything else the owner's (no machine order path in
-// this build sends anything else).
+// whoever sends it, everything else the owner's.
 func mandateOrderSleeve(coreContracts []int, draft rpc.OrderDraft) string {
 	if draft.Contract.ConID > 0 && slices.Contains(coreContracts, draft.Contract.ConID) {
 		return mandate.SleeveCore
+	}
+	return mandate.SleeveOwner
+}
+
+// mandateReservedOrderSleeve places an order by its contract id among every
+// reserved line: a reserved line is its sleeve's whoever sends the order
+// (the core's and each live entry's, strategy_placement.go), everything else
+// the owner's.
+func mandateReservedOrderSleeve(reserved map[int]string, draft rpc.OrderDraft) string {
+	if draft.Contract.ConID > 0 {
+		if sleeve, ok := reserved[draft.Contract.ConID]; ok && sleeve != "" {
+			return sleeve
+		}
 	}
 	return mandate.SleeveOwner
 }

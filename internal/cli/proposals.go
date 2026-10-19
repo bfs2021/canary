@@ -765,7 +765,7 @@ func renderProposalRow(env *Env, out io.Writer, p *rpc.TradeProposal) {
 // pre-authorised bucket's scheduler, or the standing-mandate controller for
 // the core's row. Every other row's time is the earliest a hand may send.
 func proposalSendsByDefault(p rpc.TradeProposal) bool {
-	return p.Queued != nil || p.Automatic != nil && p.Automatic.PreAuthorised || p.Bucket == rpc.TradeProposalBucketCoreRebalance
+	return p.Queued != nil || p.Automatic != nil && p.Automatic.PreAuthorised || rpc.StrategyRowBucket(p.Bucket)
 }
 
 // formatProposalReadiness is the one-line readiness of a row or refusal in

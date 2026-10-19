@@ -191,6 +191,25 @@ func goldenStrategyShadow() rpc.StrategyTargetResult {
 	return res
 }
 
+// goldenStrategyLive is a live entry with its month's row pending, its last
+// decision served, and its kill rule measured on its own fills against a
+// written bound.
+func goldenStrategyLive() rpc.StrategyTargetResult {
+	res := goldenStrategyShadow()
+	res.ReadOnly, res.Shadow = false, nil
+	res.Sleeve = "trend"
+	res.Stage = &rpc.CoreStageView{Written: "live", State: "live", ReservedPct: 25, SpecHashCited: true}
+	res.Action = &core.Decision{Kind: core.ActionBuy, Quantity: 159, Why: "first buy toward the target", Diff: 159, BandShares: 15.9}
+	terms := goldenCoreTerms()
+	terms.PrimaryExchange, terms.Episode = "LSEETF", "strategy:trend-fund:synthetic:paper:2026-08"
+	res.Row = &rpc.CoreRowView{Key: "strategy_rebalance:synthetic03", Revision: "r1", Action: "BUY", Quantity: 159, ReferencePrice: 96.1, Session: "2026-09-04", State: rpc.TradeProposalStateGenerated, Readiness: "opening_window", Terms: terms}
+	res.LastDecision = &rpc.CoreDecisionRecord{Decision: "2026-08-31", DecidedAt: goldenAt.Add(-5 * 24 * time.Hour), Stage: "live", Kind: core.ActionBuy, Quantity: 159, Why: "first buy toward the target",
+		Target: 159, Held: 0, Price: 95.95, Window: terms.Window, RowKey: "strategy_rebalance:synthetic03", Outcome: rpc.CoreDecisionOutcome{Served: true}}
+	bound := 3.0
+	res.Kill = &rpc.KillView{MaxDrawdownK: &bound, DrawdownK: 0.0125, Measured: true, Decisions: 1, Source: rpc.KillSourceOwnFills}
+	return res
+}
+
 // goldenStrategyHold is an entry that holds: a key unwritten, so nothing is
 // resolved or decided.
 func goldenStrategyHold() rpc.StrategyTargetResult {

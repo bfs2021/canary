@@ -35,10 +35,11 @@ import (
 // (the book at most at 0.95 of the budget, the strategy's gap at most at
 // 0.95 of its cap, the sleeve inside its allocation) and serves what the
 // rule would do. The core is the first instance; every entry runs through
-// the same code. In shadow that is all (read-only); live, the core's month's
-// action is served as one proposal row the owner confirms on a device
-// (core_rebalance.go, core-sleeve.md phase 2). The daemon itself sends no
-// order.
+// the same code. In shadow that is all (read-only); live, each entry's
+// month's action is served as one proposal row the owner confirms on a
+// device or Desk's controller sends under the standing mandate
+// (core_rebalance.go, core-sleeve.md phases 2 and 3). The daemon itself
+// sends no order.
 
 const (
 	coreSeriesKeyPrefix     = "core:con:"
@@ -438,10 +439,12 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	}
 	res := s.evaluateStrategyTarget(ctx, now, r)
 	// The shadow record's only writer (strategy-register.md, section 3),
-	// and the core's live decision record's (core_rebalance.go).
+	// every live entry's decision record's (core_rebalance.go) and a live
+	// entry's kill marks' (strategy_kill_live.go).
 	s.recordStrategyShadow(ctx, res, r, now)
-	if r.Entry.Form == risk.StrategyFormCore {
-		s.recordCoreDecision(ctx, res, now)
+	s.recordStrategyDecision(ctx, res, r, now)
+	if r.Entry.Form != risk.StrategyFormCore {
+		s.recordLiveMark(ctx, res, r, now)
 	}
 }
 
@@ -694,9 +697,15 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 
 	// The holding: every unit of the core's contract is the core's, and any
 	// other line of the fund holds the core; a later entry's holding is what
-	// the allocation plan places in its sleeve (nothing, until an order path
-	// sends its rows), the account's units of its fund staying the owner's.
+	// the allocation plan places in its sleeve: its whole line while it
+	// reserves it (strategy_placement.go), and nothing while the account
+	// holds units of it the entry did not open, which hold the entry.
 	held, price, priceSource := 0, 0.0, ""
+	if input != nil && contract != nil && !isCore && strategyReserves(e) {
+		if why := strategyForeignHold(name, sym, strategyForeignUnits(input.Legs, contract.ConID, s.strategyOwnFills(ctx, e.ID, contract.ConID))); why != "" && input.Allocations.SleeveOf(mandateConLegID(contract.ConID)) != e.Sleeve {
+			hold(why)
+		}
+	}
 	if input != nil && contract != nil {
 		id := mandateConLegID(contract.ConID)
 		qty := 0.0
@@ -727,9 +736,16 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	// reading marked when it is not recorded yet; past the bound the
 	// strategy holds before the month can be frozen.
 	killOf := func(mark killMark) {
-		res.Kill = s.strategyKill(ctx, r, mark)
+		on := "the shadow record"
+		if !isCore && r.State == register.StateLive && contract != nil {
+			// A live entry keeps no shadow record: its own fills are the
+			// measure (strategy_kill_live.go).
+			res.Kill, on = s.strategyKillLive(ctx, r, mark, contract.ConID), "its own fills"
+		} else {
+			res.Kill = s.strategyKill(ctx, r, mark)
+		}
 		if res.Kill != nil && res.Kill.Breached {
-			hold(fmt.Sprintf("kill rule: the drawdown on the shadow record is %.2f K, past the bound %g K: buys stop; suspend %s with stage = \"suspended\"", res.Kill.DrawdownK, *res.Kill.MaxDrawdownK, name))
+			hold(fmt.Sprintf("kill rule: the drawdown on %s is %.2f K, past the bound %g K: buys stop; suspend %s with stage = \"suspended\"", on, res.Kill.DrawdownK, *res.Kill.MaxDrawdownK, name))
 		}
 	}
 
@@ -790,7 +806,13 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 		// (strategy-register.md, section 2); in shadow it sends nothing.
 		in.BuyBlocked = name + " runs in " + string(r.State) + " and sends no orders, so it reserves no allocation"
 	} else if want := res.Sizing.Target - held; want > 0 && price > 0 {
-		add := core.Headroom(want, func(q int) bool { return strategyHeadroomFits(input, contract, e.Sleeve, q, price) })
+		book := input
+		if !isCore {
+			// The entry's fund measured on its own closes while the book
+			// keeps none, as the shadow record's hypothetical book is.
+			book = s.withStrategySeries(input, r, contract)
+		}
+		add := core.Headroom(want, func(q int) bool { return strategyHeadroomFits(book, contract, e.Sleeve, q, price) })
 		in.Holdable = held + add
 		res.Sizing.Holdable = &in.Holdable
 	}
@@ -837,7 +859,10 @@ func strategyHeadroomFits(book *mandate.Input, k *coreContract, sleeve string, q
 	}
 	real := mandateConLegID(k.ConID)
 	leg := mandate.Leg{ID: real, Symbol: k.Symbol, Underlying: k.Symbol, Kind: mandate.KindStock, Quantity: float64(q), Multiplier: 1, Currency: k.Currency, Spot: price, ISIN: k.ISIN}
-	if sleeve != mandate.SleeveCore {
+	// A line the plan reserves to the sleeve is the sleeve's leg itself
+	// (strategy_placement.go); otherwise a non-core strategy's units are a
+	// leg of their own beside the owner's real units, which stay the owner's.
+	if sleeve != mandate.SleeveCore && book.Allocations.SleeveOf(real) != sleeve {
 		leg.ID = strategyLegID(sleeve, k.ConID)
 	}
 	for _, l := range book.Legs {

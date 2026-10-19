@@ -143,6 +143,13 @@ func renderStatusText(env *Env, res *rpc.HealthResult, alerts *rpc.AlertCandidat
 	if res.Executions != nil {
 		statusHealthRow(env, out, "Executions", formatExecutionVisibilityValue(env, *res.Executions))
 	}
+	for i, st := range res.Strategies {
+		label := ""
+		if i == 0 {
+			label = "Strategies"
+		}
+		statusHealthRow(env, out, label, formatStrategyHealthValue(env, st))
+	}
 	if alerts != nil {
 		if value := formatAlertCoverageValue(env, alerts.Coverage); value != "" {
 			statusHealthRow(env, out, "Alerts", value)
@@ -898,4 +905,35 @@ func formatDiagnosticBool(value *bool) string {
 // literalStatusRow preserves copyable credentials without inserting whitespace.
 func literalStatusRow(env *Env, out io.Writer, label, value string) {
 	fmt.Fprintf(out, "%s %s\n", env.dim(padRightVisible(label, 14)), value)
+}
+
+// formatStrategyHealthValue is one register entry on `canary status`: its
+// id and stage, then its served row (the order, the session, its state) or
+// why no row stands.
+func formatStrategyHealthValue(env *Env, st rpc.StrategyHealth) string {
+	head := st.ID + " " + st.State
+	if st.Sleeve != "" && st.Sleeve != st.ID {
+		head = st.ID + " (sleeve " + st.Sleeve + ") " + st.State
+	}
+	if r := st.Row; r != nil {
+		row := "row " + r.Action + " " + groupThousands(fmt.Sprint(r.Quantity))
+		if r.Symbol != "" {
+			row += " " + r.Symbol
+		}
+		if r.Session != "" {
+			row += " for " + r.Session
+		}
+		state := r.State
+		if r.Readiness != "" {
+			state += ", " + strings.ReplaceAll(r.Readiness, "_", " ")
+		}
+		if r.State == rpc.TradeProposalStateBlocked {
+			return head + " · " + env.yellow(row+" · "+state)
+		}
+		return head + " · " + row + " · " + state
+	}
+	if st.State == "hold" {
+		return head + " · " + env.yellow(nonEmpty(st.Why, "no reason given"))
+	}
+	return head + " · no row: " + nonEmpty(st.Why, "none is due")
 }

@@ -204,7 +204,11 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 	if k := res.Kill; k != nil && (k.MaxDrawdownK != nil || k.Measured) {
 		line := []string{}
 		if k.Measured {
-			line = append(line, fmt.Sprintf("drawdown %.2f K on the shadow record at %d %s", k.DrawdownK, k.Decisions, pluralWord(k.Decisions, "decision", "decisions")))
+			on := "the shadow record"
+			if k.Source == rpc.KillSourceOwnFills {
+				on = "its own fills"
+			}
+			line = append(line, fmt.Sprintf("drawdown %.2f K on %s at %d %s", k.DrawdownK, on, k.Decisions, pluralWord(k.Decisions, "decision", "decisions")))
 		}
 		switch {
 		case k.MaxDrawdownK != nil && k.Breached:
@@ -254,15 +258,17 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 		riskReadLine(env, "", "Live: the core serves its month's row among the proposals for your confirmation on your device; nothing is sent without it, and the core is never pre-authorised. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
 	case isCore:
 		riskReadLine(env, "", "Read-only: the core proposes nothing and places no order while it is not live. It is a beta allocation with a drawdown filter that you chose, not an edge claim.")
+	case !res.ReadOnly:
+		riskReadLine(env, "", "Live: "+name+" serves its month's row among the proposals, sent on your confirmation on your device or by Desk's controller under the standing mandate you confirmed there; it is never pre-authorised. It is a rule you chose, not an edge claim.")
 	default:
-		riskReadLine(env, "", "Read-only: "+name+" proposes nothing and places no order in this build; its rule sends nothing, so it runs in shadow at most.")
+		riskReadLine(env, "", "Read-only: "+name+" proposes nothing and places no order while it is not live.")
 	}
 }
 
 // runStrategy reads the daemon's target for one registered strategy by its
 // id in the strategy register (internal-docs/design/strategy-evaluator.md),
-// in the core's shape. The daemon evaluates; this renders. Read-only: no
-// entry proposes or sends anything in this build.
+// in the core's shape, with a live entry's row and last decision. The daemon
+// evaluates; this renders, and sends nothing.
 func runStrategy(ctx context.Context, env *Env, args []string) int {
 	fs := flagSet(env, "strategy")
 	jsonOut := fs.Bool("json", false, "emit the typed strategy target")

@@ -451,17 +451,31 @@ func (e *proposalEngine) automaticBucket(p rpc.TradeProposal) string {
 	return ""
 }
 
-// coreLine reports whether a row trades the core sleeve's contract.
+// coreLine reports whether a row trades a reserved line: the core sleeve's
+// contract, or the line a live register entry reserves (strategy_placement.go;
+// D5 extended to every entry on 2026-10-19).
 func (e *proposalEngine) coreLine(p rpc.TradeProposal) bool {
 	if e == nil || e.server == nil || p.Contract.ConID <= 0 {
 		return false
 	}
-	return slices.Contains(e.server.coreContractIDs(context.Background()), p.Contract.ConID)
+	return slices.Contains(e.server.mandateReservedIDs(context.Background()), p.Contract.ConID)
 }
 
 // automaticCoreExcludedReason supersedes a waiting record of the core's
-// contract outside the forced reduction.
-const automaticCoreExcludedReason = "the core sleeve's contract is outside protection's automatic sales (owner decision D5); the mandate's forced reduction still covers it"
+// contract outside the forced reduction; automaticStrategyExcludedReason
+// one of another entry's reserved line.
+const (
+	automaticCoreExcludedReason     = "the core sleeve's contract is outside protection's automatic sales (owner decision D5); the mandate's forced reduction still covers it"
+	automaticStrategyExcludedReason = "a registered strategy's line is outside protection's automatic sales, as the core's is (owner decision D5, extended 2026-10-19); the mandate's forced reduction still covers it"
+)
+
+// automaticExcludedReason names why a reserved line's record is superseded.
+func (e *proposalEngine) automaticExcludedReason(p rpc.TradeProposal) string {
+	if e != nil && e.server != nil && slices.Contains(e.server.coreContractIDs(context.Background()), p.Contract.ConID) {
+		return automaticCoreExcludedReason
+	}
+	return automaticStrategyExcludedReason
+}
 
 // automaticPolicy returns the active policy when it is safe to act on; a
 // drifted or errored policy pre-authorises nothing.
@@ -608,7 +622,7 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 			case queued[rec.Key]:
 				reason = automaticQueuedReason
 			case rec.Bucket != preAuthorisedBucketMandateReduction && e.coreLine(prop):
-				reason = automaticCoreExcludedReason
+				reason = e.automaticExcludedReason(prop)
 			case policyOK && !policy.preAuthorised(rec.Bucket):
 				reason = "bucket is no longer pre-authorised by the active policy"
 			case !policyOK:

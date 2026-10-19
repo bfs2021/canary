@@ -723,14 +723,23 @@ func scorecardSleeveResolver(events []orderJournalEvent, proposals []proposalEve
 		}
 	}
 	bucketByRef := map[string]string{}
+	entryByRef := map[string]proposalEvent{}
 	for _, p := range proposals {
 		if p.Type == "submitted" && p.OrderRef != "" && p.Bucket != "" {
 			bucketByRef[p.OrderRef] = p.Bucket
+			if p.Bucket == rpc.TradeProposalBucketStrategyRebalance {
+				entryByRef[p.OrderRef] = p
+			}
 		}
 	}
 	return func(change edgecore.PositionChange) scorecard.Sleeve {
 		for _, execID := range change.ExecutionIDs {
 			for _, ev := range byExecution[execID] {
+				// Another register entry's row fills in that entry's sleeve,
+				// as the core's in the core's (strategy-register.md, section 5).
+				if p, ok := entryByRef[ev.OrderRef]; ok && ev.OrderRef != "" && p.Sleeve != "" {
+					return scorecard.Sleeve{Name: p.Sleeve, Origin: "proposal:" + rpc.TradeProposalBucketStrategyRebalance, StrategyRef: p.Strategy}
+				}
 				if sleeve, ok := scorecardMachineSleeve(ev, bucketByRef); ok {
 					return sleeve
 				}

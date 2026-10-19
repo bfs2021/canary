@@ -112,7 +112,8 @@ type CoreRowTerms struct {
 	// on the line's calendar after the decision day that the US also
 	// trades. A sale to zero continues past it until sold.
 	Window []string `json:"window,omitempty"`
-	// Episode keys the month's rows: core:<account>:<mode>:<YYYY-MM>.
+	// Episode keys the month's rows: core:<account>:<mode>:<YYYY-MM> for
+	// the core, strategy:<id>:<account>:<mode>:<YYYY-MM> for another entry.
 	Episode string `json:"episode,omitempty"`
 }
 
@@ -214,7 +215,14 @@ type KillView struct {
 	Decisions    int      `json:"decisions"`
 	Breached     bool     `json:"breached,omitempty"`
 	Note         string   `json:"note,omitempty"`
+	// Source is what the drawdown is measured on: absent for the shadow
+	// record (the paper position), "own_fills" for a live entry's own
+	// fills marked at each decision close.
+	Source string `json:"source,omitempty"`
 }
+
+// KillSourceOwnFills marks a kill test measured on a live entry's own fills.
+const KillSourceOwnFills = "own_fills"
 
 // CoreInstrument is the instrument the compiled rule trades: the fund and
 // currency the policy names, and the contract IBKR lists under that ISIN in

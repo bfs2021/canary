@@ -22,8 +22,8 @@ Shadow  the rule on a paper position; nothing is sent
 
 Evidence
   Mandate verdict · 13:59:00 TZ
-Read-only: the trend-fund strategy proposes nothing and places no order in
-  this build; its rule sends nothing, so it runs in shadow at most.
+Read-only: the trend-fund strategy proposes nothing and places no order while
+  it is not live.
 # canary strategy trend-fund · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mtrend-fund\x1b[0m  \x1b[33m\x1b[1mHOLD\x1b[0m\x1b[0m
 Rule · timed-holding-v1 · signal trend-sma10m · spec cited cdcdcdcdcdcd ·
@@ -48,5 +48,5 @@ Mandate · within · risk 3,267 EUR a year of the budget 34,500 EUR
 
 \x1b[1mEvidence\x1b[0m
   Mandate verdict · 13:59:00 TZ
-Read-only: the trend-fund strategy proposes nothing and places no order in
-  this build; its rule sends nothing, so it runs in shadow at most.
+Read-only: the trend-fund strategy proposes nothing and places no order while
+  it is not live.

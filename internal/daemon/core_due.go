@@ -35,7 +35,7 @@ const (
 // or cover (the window never names one, and a sale to zero's open session
 // neither); the row then follows the stock opening offset as before.
 func coreRowDueAt(prop rpc.TradeProposal, now time.Time) (time.Time, bool) {
-	if prop.Bucket != rpc.TradeProposalBucketCoreRebalance || prop.Core == nil || prop.Core.Session == "" {
+	if !rpc.StrategyRowBucket(prop.Bucket) || prop.Core == nil || prop.Core.Session == "" {
 		return time.Time{}, false
 	}
 	cal := marketcal.NewWithClock(func() time.Time { return now })
@@ -48,6 +48,16 @@ func coreRowDueAt(prop rpc.TradeProposal, now time.Time) (time.Time, bool) {
 
 // coreDuePhrase says when the core's row is due and why.
 func coreDuePhrase(due time.Time) string {
+	return strategyDuePhrase(rpc.TradeProposal{}, due)
+}
+
+// strategyDuePhrase says when a strategy row is due: the core's words for
+// the core's row, the same rule in the entry's name for another entry's.
+func strategyDuePhrase(prop rpc.TradeProposal, due time.Time) string {
+	if prop.Bucket == rpc.TradeProposalBucketStrategyRebalance && prop.Core != nil {
+		return fmt.Sprintf("the %s row is sent from %s, %d minutes after the US cash open of its session, as the core's is; before that it holds",
+			prop.Core.Strategy, due.UTC().Format(time.RFC3339), int(coreDueAfterUSOpen/time.Minute))
+	}
 	return fmt.Sprintf("the core's row is sent from %s, %d minutes after the US cash open of its session, when European S&P 500 fund lines quote tightest; before that it holds",
 		due.UTC().Format(time.RFC3339), int(coreDueAfterUSOpen/time.Minute))
 }
@@ -61,6 +71,6 @@ func coreDueBlockers(prop rpc.TradeProposal, now time.Time) []rpc.TradingBlocker
 	if !ok || !now.Before(due) {
 		return nil
 	}
-	return []rpc.TradingBlocker{{Code: coreBeforeDueCode, Message: coreDuePhrase(due),
+	return []rpc.TradingBlocker{{Code: coreBeforeDueCode, Message: strategyDuePhrase(prop, due),
 		Action: "Review the row from its due time; under the standing mandate the controller sends it at its first ready read after it."}}
 }

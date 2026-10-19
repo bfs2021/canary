@@ -41,12 +41,10 @@ func TestResolveStages(t *testing.T) {
 		{"core first form, no stage", coreEntry("", "", 25), false, StateShadow, 0, 25, "stage unwritten"},
 		{"core shadow", coreEntry(risk.StageShadow, core.SpecHash, 25), true, StateShadow, 0, 25, ""},
 		{"core live, build sends", coreEntry(risk.StageLive, core.SpecHash, 25), true, StateLive, 25, 25, ""},
-		{"core live, build sends nothing", coreEntry(risk.StageLive, core.SpecHash, 50), false, StateShadow, 0, 50, "this build sends no orders"},
 		{"core scale 0 suspends", coreEntry(risk.StageLive, core.SpecHash, 0), true, StateSuspended, 0, 0, ""},
 		{"core suspended", coreEntry(risk.StageSuspended, core.SpecHash, 25), true, StateSuspended, 0, 0, ""},
 		{"entry shadow", entry(risk.StageShadow, 25), true, StateShadow, 0, 25, ""},
 		{"entry live", entry(risk.StageLive, 50), true, StateLive, 50, 50, ""},
-		{"entry live, build sends nothing", entry(risk.StageLive, 100), false, StateShadow, 0, 100, "this build sends no orders"},
 		{"entry suspended", entry(risk.StageSuspended, 25), true, StateSuspended, 0, 0, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,6 +59,34 @@ func TestResolveStages(t *testing.T) {
 				t.Fatalf("notes %q lack %q", got.Notes, tc.note)
 			}
 		})
+	}
+}
+
+// No entry written live runs as anything else (owner, 2026-10-18 21:05
+// CEST: "we NEVER want shadow"): a rule this build serves no rows for holds
+// the entry, named, and LiveRefusals refuses the file before it loads. The
+// first build's fallback ran it as shadow and said "this build sends no
+// orders"; it is gone.
+func TestLiveOnARuleWithoutRowsHoldsAndRefusesTheFile(t *testing.T) {
+	for _, e := range []risk.StrategyEntry{coreEntry(risk.StageLive, core.SpecHash, 50), entry(risk.StageLive, 100)} {
+		got := Resolve([]risk.StrategyEntry{e}, testRules(false, false))[0]
+		if got.State != StateHold || got.Reserves() || !slices.ContainsFunc(got.Reasons, func(r string) bool { return strings.Contains(r, "serves no rows in this build") }) ||
+			slices.ContainsFunc(got.Notes, func(n string) bool { return strings.Contains(n, "sends no orders") }) {
+			t.Fatalf("%s: %+v", e.ID, got)
+		}
+		e.KeyPrefix = "mandate.strategies." + e.ID
+		refused := LiveRefusals([]risk.StrategyEntry{e}, testRules(false, false))
+		if len(refused) != 1 || !strings.Contains(refused[0], "["+e.KeyPrefix+"] is written live, but rule "+e.Rule+" serves no rows in this build") {
+			t.Fatalf("%s refusals %q", e.ID, refused)
+		}
+		if refused := LiveRefusals([]risk.StrategyEntry{e}, testRules(true, true)); len(refused) != 0 {
+			t.Fatalf("%s refused on a build that sends: %q", e.ID, refused)
+		}
+	}
+	for _, r := range Catalogue() {
+		if !r.Sends {
+			t.Fatalf("rule %s serves no rows in this build", r.ID)
+		}
 	}
 }
 
@@ -173,8 +199,8 @@ func TestResolveParameterisedEntry(t *testing.T) {
 	}
 	live := timedEntry()
 	live.Stage = risk.StageLive
-	if got := Resolve([]risk.StrategyEntry{live}, Catalogue())[0]; got.State != StateShadow || got.Reserves() || !slices.ContainsFunc(got.Notes, func(n string) bool { return strings.Contains(n, "sends no orders") }) {
-		t.Fatalf("live written on a rule that sends nothing: %+v", got)
+	if got := Resolve([]risk.StrategyEntry{live}, Catalogue())[0]; got.State != StateLive || !got.Reserves() || got.ReservedPct != 25 || len(got.Notes) != 0 || len(got.Reasons) != 0 {
+		t.Fatalf("live written on the parameterised rule: %+v", got)
 	}
 	c := coreEntry(risk.StageShadow, core.SpecHash, 25)
 	c.ISIN, c.Currency, c.BandPct, c.MinOrderBase, c.MaxValuePct = core.ISIN, core.Currency, new(10.0), new(2500.0), new(40.0)

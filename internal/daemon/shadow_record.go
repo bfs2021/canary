@@ -255,23 +255,36 @@ func (s *Server) shadowDecide(res *rpc.StrategyTargetResult, r register.Resolved
 			}
 			book := shadowBook(kept, k, e.Sleeve, reserved, held, price, r.ScalePct)
 			if !isCore {
-				// The hypothetical book measures the fund on its own closes,
-				// the strategy's series, where the book keeps none (the fund
-				// is not held, so the history pass never read it).
-				if own := s.mandateHistorySeries(context.Background(), seriesKeyFor(r, k.ConID)); own != nil {
-					if _, kept := book.Series[k.Symbol]; !kept {
-						book.Series = maps.Clone(book.Series)
-						if book.Series == nil {
-							book.Series = map[string]mandate.Series{}
-						}
-						book.Series[k.Symbol] = mandateSeriesInput(own, s.nowUTC())
-					}
-				}
+				book = s.withStrategySeries(book, r, k)
 			}
 			in.Holdable = held + core.Headroom(want, func(q int) bool { return strategyHeadroomFits(book, k, e.Sleeve, q, price) })
 		}
 	}
 	return core.Decide(in)
+}
+
+// withStrategySeries is a copy of a book that measures an entry's fund on
+// its own closes, the strategy's series, where the book keeps none (the fund
+// is not held, so the mandate's history pass never read it): the hypothetical
+// book of the shadow record and the live entry's headroom read it alike.
+func (s *Server) withStrategySeries(in *mandate.Input, r register.Resolved, k *coreContract) *mandate.Input {
+	if in == nil || k == nil {
+		return in
+	}
+	if _, kept := in.Series[k.Symbol]; kept {
+		return in
+	}
+	own := s.mandateHistorySeries(context.Background(), seriesKeyFor(r, k.ConID))
+	if own == nil {
+		return in
+	}
+	book := *in
+	book.Series = maps.Clone(in.Series)
+	if book.Series == nil {
+		book.Series = map[string]mandate.Series{}
+	}
+	book.Series[k.Symbol] = mandateSeriesInput(own, s.nowUTC())
+	return &book
 }
 
 // shadowBook is the book a live strategy would be judged on: a copy of the

@@ -11,6 +11,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/osauer/canary/v2/internal/register"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
@@ -234,5 +235,22 @@ func (m *riskPolicyManager) loadPolicy() (*risk.Constitution, string, error) {
 	if err := c.Validate(); err != nil {
 		return nil, "", err
 	}
+	if err := validateRegisterBuild(&c); err != nil {
+		return nil, "", err
+	}
 	return &c, policyFileReview(data), nil
+}
+
+// validateRegisterBuild refuses a constitution that writes a register entry
+// live on a compiled rule this build serves no rows for: a live entry either
+// produces rows or the file does not load, and the last good policy stays
+// (strategy-register.md, section 2).
+func validateRegisterBuild(c *risk.Constitution) error {
+	if c == nil || c.Mandate == nil {
+		return nil
+	}
+	if refused := register.LiveRefusals(c.Mandate.Register(), register.Catalogue()); len(refused) > 0 {
+		return fmt.Errorf("risk policy refused: %s", strings.Join(refused, "; "))
+	}
+	return nil
 }

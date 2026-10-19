@@ -17,6 +17,11 @@ Rate rejection not reported
 Subsystems     all 3 ready
 Trading        paper ready
 Executions     all clients (proven 13:35)
+Strategies     core live · row BUY 908 SYNX for 2026-09-04 · generated, opening
+               window
+               trend-fund (sleeve trend) live · no row: the 5-session window
+               after 2026-08-31 ended with 2026-09-07; what is left waits for
+               the next decision
 SPX members    fixture:2026-09-01, 500 names
 Data health    12 of 12 sources current
 Colors         Amber = row needs attention; Gateway verdict is separate.
@@ -40,6 +45,11 @@ IBKR Gateway  \x1b[32m\x1b[1mREADY\x1b[0m\x1b[0m
 \x1b[2mSubsystems    \x1b[0m \x1b[32mall 3 ready\x1b[0m
 \x1b[2mTrading       \x1b[0m \x1b[32mpaper ready\x1b[0m
 \x1b[2mExecutions    \x1b[0m \x1b[32mall clients (proven 13:35)\x1b[0m
+\x1b[2mStrategies    \x1b[0m core live · row BUY 908 SYNX for 2026-09-04 · generated, opening
+               window
+\x1b[2m              \x1b[0m trend-fund (sleeve trend) live · no row: the 5-session window
+               after 2026-08-31 ended with 2026-09-07; what is left waits for
+               the next decision
 \x1b[2mSPX members   \x1b[0m fixture:2026-09-01, 500 names
 \x1b[2mData health   \x1b[0m 12 of 12 sources current
 \x1b[2mColors        \x1b[0m \x1b[2mAmber = row needs attention; Gateway verdict is separate.\x1b[0m

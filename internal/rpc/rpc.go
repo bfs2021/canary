@@ -2469,6 +2469,10 @@ type HealthResult struct {
 	Subsystems  []SubsystemHealth      `json:"subsystems,omitempty"`
 	DataQuality []DataQualityHealth    `json:"data_quality,omitempty"`
 	DataFarms   []DataFarmHealth       `json:"data_farms,omitempty"`
+	// Strategies is each register entry's state and its month's row as the
+	// proposal engine last served it, the core first; absent while the
+	// register is empty.
+	Strategies []StrategyHealth `json:"strategies,omitempty"`
 	// MarketDataAccess lists route keys the gateway is currently refusing
 	// market data for. Empty is the normal case and the only claim absence
 	MarketDataAccess []MarketDataAccessHealth `json:"market_data_access,omitempty"`
@@ -3254,4 +3258,28 @@ type MembersHealth struct {
 	AsOf         time.Time `json:"as_of"`
 	Count        int       `json:"count"`
 	RefreshState string    `json:"refresh_state"`
+}
+
+// StrategyHealth is one register entry on `canary status`: its effective
+// stage and, from the proposal engine's last generation, whether its row is
+// served (with the order and its state) or why none is.
+type StrategyHealth struct {
+	ID     string `json:"id"`
+	Sleeve string `json:"sleeve"`
+	State  string `json:"state"`
+	// Row is the served row, nil while none stands; Why the first reason
+	// none is (or what blocks it), from the generation's status.
+	Row *StrategyHealthRow `json:"row,omitempty"`
+	Why string             `json:"why,omitempty"`
+}
+
+// StrategyHealthRow is a served strategy row in brief.
+type StrategyHealthRow struct {
+	Key       string `json:"key"`
+	Action    string `json:"action"`
+	Quantity  int    `json:"quantity"`
+	Symbol    string `json:"symbol,omitempty"`
+	Session   string `json:"session,omitempty"`
+	State     string `json:"state"`
+	Readiness string `json:"readiness,omitempty"`
 }

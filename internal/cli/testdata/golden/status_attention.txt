@@ -19,6 +19,11 @@ Subsystems     gamma:degraded, breadth:warming 40%, +1 ready
 Trading        paper blocked: market data is delayed
 Executions     this client's own orders only · set TWS Master API client ID to 7
                to see hand and other-client fills
+Strategies     core live · row BUY 908 SYNX for 2026-09-04 · generated, opening
+               window
+               trend-fund (sleeve trend) live · no row: the 5-session window
+               after 2026-08-31 ended with 2026-09-07; what is left waits for
+               the next decision
 Data quality   regime degraded: gamma
 SPX members    fixture:2026-09-01, 500 names
 Data health    10 of 12 sources current
@@ -47,6 +52,11 @@ IBKR Gateway  \x1b[33m\x1b[1mATTENTION\x1b[0m\x1b[0m
 \x1b[2mTrading       \x1b[0m \x1b[33mpaper blocked: market data is delayed\x1b[0m
 \x1b[2mExecutions    \x1b[0m \x1b[33mthis client's own orders only · set TWS Master API client ID to 7
                to see hand and other-client fills\x1b[0m
+\x1b[2mStrategies    \x1b[0m core live · row BUY 908 SYNX for 2026-09-04 · generated, opening
+               window
+\x1b[2m              \x1b[0m trend-fund (sleeve trend) live · no row: the 5-session window
+               after 2026-08-31 ended with 2026-09-07; what is left waits for
+               the next decision
 \x1b[2mData quality  \x1b[0m \x1b[33mregime degraded: gamma\x1b[0m
 \x1b[2mSPX members   \x1b[0m fixture:2026-09-01, 500 names
 \x1b[2mData health   \x1b[0m 10 of 12 sources current

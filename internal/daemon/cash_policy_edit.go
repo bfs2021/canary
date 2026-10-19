@@ -208,6 +208,9 @@ func parseConstitutionFile(data []byte) (*risk.Constitution, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
+	if err := validateRegisterBuild(&c); err != nil {
+		return nil, err
+	}
 	return &c, nil
 }
 
