@@ -19,7 +19,7 @@ Account, positions, orders and risk
   core            See the core sleeve's monthly target, its pending row and what
                   it would trade
   strategy        See a registered strategy's monthly target and what it would
-                  trade
+                  trade, or replay its rule over past month-ends
   brief           Portfolio summary, urgent items first; more with --details
   edge            Review past trading decisions using broker records
   scorecard       Score past decisions per strategy, with the evidence and its
@@ -93,7 +93,7 @@ Start: canary status — check the broker connection
   \x1b[36mcore            \x1b[0mSee the core sleeve's monthly target, its pending row and what
                   it would trade
   \x1b[36mstrategy        \x1b[0mSee a registered strategy's monthly target and what it would
-                  trade
+                  trade, or replay its rule over past month-ends
   \x1b[36mbrief           \x1b[0mPortfolio summary, urgent items first; more with --details
   \x1b[36medge            \x1b[0mReview past trading decisions using broker records
   \x1b[36mscorecard       \x1b[0mScore past decisions per strategy, with the evidence and its

@@ -292,8 +292,25 @@ func runStrategy(ctx context.Context, env *Env, args []string) int {
 	fs := flagSet(env, "strategy")
 	jsonOut := fs.Bool("json", false, "emit the typed strategy target")
 	refresh := fs.Bool("refresh", false, "measure the mandate again before deciding")
+	replay := fs.Bool("replay", false, "replay the rule over the month-ends FROM TO (YYYY-MM-DD) on the daemon's own history, in the lab's table shape; read-only")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
+	}
+	if *replay {
+		if fs.NArg() != 3 {
+			fmt.Fprintln(env.Stderr, "canary strategy --replay: a strategy ID, FROM and TO (YYYY-MM-DD) are required")
+			fs.Usage()
+			return 2
+		}
+		res, err := rpc.FetchStrategyReplay(ctx, env.Conn, fs.Arg(0), fs.Arg(1), fs.Arg(2))
+		if err != nil {
+			return fail(env, "strategy: %v", err)
+		}
+		if *jsonOut {
+			return printJSON(env, res)
+		}
+		renderStrategyReplay(env, res)
+		return 0
 	}
 	if fs.NArg() != 1 {
 		fmt.Fprintln(env.Stderr, "canary strategy: exactly one strategy ID is required")
@@ -534,5 +551,63 @@ func renderCoreShadow(env *Env, v *rpc.ShadowView) {
 		case r.Kind == rpc.ShadowKindHold:
 			riskWarnReadLine(env, "  "+r.Session, "held", r.Reasons...)
 		}
+	}
+}
+
+// renderStrategyReplay renders a replay (strategy-evaluator.md §9): what
+// the rule was run on, the fixed paper sizing, and one line per month-end
+// with the lab's columns, so the eye can hold the two tables side by side
+// before `lab replay-compare` does it exactly.
+func renderStrategyReplay(env *Env, res rpc.StrategyReplayResult) {
+	heading := "Core"
+	if res.Strategy != "" && res.Strategy != "core" {
+		heading = res.Strategy
+	}
+	decided, orders := 0, 0
+	for _, r := range res.Rows {
+		if r.Status == core.StatusOK {
+			decided++
+		}
+		switch r.Action {
+		case core.ActionBuy, core.ActionSell, core.ActionSellAll:
+			orders++
+		}
+	}
+	riskDisplayLine(env, env.bold(heading+" replay")+"  ", fmt.Sprintf("%s to %s: %d month-ends, %d decided, %d paper orders", res.From, res.To, len(res.Rows), decided, orders), env.bold)
+	spec := res.SpecHash
+	if len(spec) > 12 {
+		spec = spec[:12]
+	}
+	riskReadLine(env, "Rule", res.Rule, "signal "+res.Signal, "spec "+nonEmpty(spec, "(none)"))
+	if in := res.Instrument; in != nil {
+		riskReadLine(env, "Line", coreContractLine(*in)...)
+	}
+	series := fmt.Sprintf("%s closes %s to %s", groupThousands(fmt.Sprint(len(res.Dates))), res.SeriesFrom, res.SeriesTo)
+	riskReadLine(env, "Series", series, nonEmpty(res.Source, "source unnamed"), "sessions on the "+nonEmpty(res.CalendarLabel, res.Calendar)+" calendar")
+	if n := len(res.OffCalendar); n > 0 {
+		riskReadLine(env, "", fmt.Sprintf("%d %s on days the exchange was closed, skipped: %s", n, pluralWord(n, "bar", "bars"), strings.Join(res.OffCalendar, ", ")))
+	}
+	s := res.Sizing
+	riskReadLine(env, "Paper", fmt.Sprintf("%s%% of %s × room %s, at most %s%%, scale %s%%", fmtPctNum(s.AllocationPct), groupThousands(fmt.Sprintf("%.0f", s.BudgetBase)), fmtPctNum(s.Room), fmtPctNum(s.MaxValuePct), fmtPctNum(s.ScalePct)),
+		fmt.Sprintf("band %s%%, minimum %s", fmtPctNum(res.Terms.BandPct), groupThousands(fmt.Sprintf("%.0f", res.Terms.MinOrderBase))), "the holding carried from zero; nothing frozen, recorded or sent")
+	fmt.Fprintln(env.Stdout)
+	fmt.Fprintf(env.Stdout, "%-11s %9s %9s %-5s %6s %7s %-14s %7s\n", "Decision", "Close", "SMA10", "Trend", "Sigma", "Target", "Action", "Held")
+	for _, r := range res.Rows {
+		if r.Status != core.StatusOK {
+			fmt.Fprintf(env.Stdout, "%-11s %s: %s\n", r.Decision, r.Status, r.Reason)
+			continue
+		}
+		trend := "off"
+		if r.TrendOn {
+			trend = "on"
+		}
+		action := r.Action
+		switch r.Action {
+		case core.ActionBuy, core.ActionSell:
+			action = fmt.Sprintf("%s %d", r.Action, r.Quantity)
+		case core.ActionSellAll:
+			action = fmt.Sprintf("sell all %d", r.Quantity)
+		}
+		fmt.Fprintf(env.Stdout, "%-11s %9.2f %9.2f %-5s %5.1f%% %7d %-14s %7d\n", r.Decision, r.Close, r.SMA10, trend, r.Sigma*100, r.TargetShares, action, r.HeldAfter)
 	}
 }

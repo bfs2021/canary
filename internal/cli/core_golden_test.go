@@ -235,3 +235,26 @@ func goldenStrategyHold() rpc.StrategyTargetResult {
 	res.Shadow = &rpc.ShadowView{Strategy: "trend-fund", Stage: "hold", Holding: 159, Records: 3, Recent: res.Shadow.Recent}
 	return res
 }
+
+// goldenStrategyReplay is a core replay over a synthetic year: a not_live
+// month, a first buy, a month inside the band, a wait below the minimum, a
+// sale of every share when the trend turns off, and a bar on a closed day.
+func goldenStrategyReplay() rpc.StrategyReplayResult {
+	in := goldenCore().Instrument
+	closes := []float64{95.1, 96.4, 97.2, 98.9, 101.3, 104.2, 103.9, 105.5, 101.2, 97.8}
+	rows := []core.ReplayRow{
+		{Decision: "2025-01-31", Status: core.StatusNotLive, Reason: "needs 253 sessions to 2025-01-31, has 210", Action: core.ActionHold},
+		{Decision: "2025-02-28", Status: core.StatusOK, WindowFrom: "2024-02-29", Close: 101.3, SMA10: 97.47, TrendOn: true, SigmaEWMA: 0.1312, Sigma252: 0.1388, Sigma: 0.15, Binding: core.BindingFloor, Notional: 100000, TargetShares: 987, Action: core.ActionBuy, Quantity: 987, HeldAfter: 987},
+		{Decision: "2025-03-31", Status: core.StatusOK, WindowFrom: "2024-03-28", Close: 104.2, SMA10: 98.9, TrendOn: true, SigmaEWMA: 0.1402, Sigma252: 0.1391, Sigma: 0.15, Binding: core.BindingFloor, Notional: 100000, TargetShares: 959, Action: core.ActionNone, HeldBefore: 987, HeldAfter: 987},
+		{Decision: "2025-04-30", Status: core.StatusOK, WindowFrom: "2024-04-30", Close: 103.9, SMA10: 99.6, TrendOn: true, SigmaEWMA: 0.1512, Sigma252: 0.1405, Sigma: 0.1512, Binding: core.BindingEWMA, Notional: 99206.35, TargetShares: 954, Action: core.ActionNone, HeldBefore: 987, HeldAfter: 987},
+		{Decision: "2025-05-30", Status: core.StatusOK, WindowFrom: "2024-05-31", Close: 105.5, SMA10: 100.3, TrendOn: true, SigmaEWMA: 0.1498, Sigma252: 0.1402, Sigma: 0.15, Binding: core.BindingFloor, Notional: 100000, TargetShares: 947, Action: core.ActionNone, HeldBefore: 987, HeldAfter: 987},
+		{Decision: "2025-06-30", Status: core.StatusHold, Reason: "no close on 2025-06-12", Action: core.ActionHold, HeldBefore: 987, HeldAfter: 987},
+		{Decision: "2025-07-31", Status: core.StatusOK, WindowFrom: "2024-08-01", Close: 97.8, SMA10: 101.1, TrendOn: false, SigmaEWMA: 0.1710, Sigma252: 0.1455, Sigma: 0.1710, Binding: core.BindingEWMA, Action: core.ActionSellAll, Quantity: 987, HeldBefore: 987},
+	}
+	return rpc.StrategyReplayResult{AsOf: goldenAt, Strategy: "core", Rule: core.RuleID, SpecHash: core.SpecHash, Signal: core.TrendSMA10.ID, Instrument: in,
+		From: "2025-01-01", To: "2026-09-30", SeriesFrom: "2024-02-05", SeriesTo: "2025-08-04", Calendar: "de_xetra", CalendarLabel: "Xetra",
+		Source: "IBKR historical bars · TRADES", FetchedAt: goldenAt.Add(-time.Minute),
+		Dates: []string{"2024-02-05", "2024-02-06", "2024-02-07", "2024-02-08", "2024-02-09", "2024-02-12", "2024-02-13", "2024-02-14", "2024-02-15", "2025-08-04"}, Closes: closes,
+		OffCalendar: []string{"2025-05-01"}, Sizing: core.ReplaySizing, Terms: core.ReplayTerms{BandPct: 10, MinOrderBase: 2500},
+		Note: "Paper table: fixed sizing, the paper holding carried under the entry's band and minimum from zero; nothing is frozen, recorded or sent. Compare with `lab replay-compare`.", Rows: rows}
+}

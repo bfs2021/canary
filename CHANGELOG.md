@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.25.1 — Unreleased
+
+### What's new
+
+The strategy replay: `canary strategy ID --replay FROM TO` runs a register
+entry's rule over the month-ends of its instrument on the daemon's own
+five-year daily history and prints the lab's decision table, so the lab's
+`replay-compare` can hold the daemon's decisions against the backtest it
+implements, month-end by month-end (strategy-evaluator.md §9). Read-only:
+nothing is frozen, recorded or sent.
+
+### Added
+
+- `strategy.replay` and `canary strategy ID --replay FROM TO [--json]`: the entry's decision table (close, ten-month average, trend, volatility, target and the paper action under a fixed, printed sizing and the entry's band and minimum) over the span, with the series it ran on and any bar dated on a closed day; the owner's monthly "did we build the right thing" check beside the lab's table.
+
 ## v3.25.0 — 2026-10-19 09:45 CEST
 
 ### What's new

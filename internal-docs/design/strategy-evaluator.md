@@ -260,3 +260,91 @@ unchanged, `strategy_shadow`, `strategy_hold`); the order-path scan and
 `TestOnlyTheDaemonEvaluates` widened. Files: `internal/daemon/strategy_target.go`
 (was `core_target.go`), `core_resolve.go`, `shadow_record.go`,
 `internal/rpc/core.go`, `internal/cli/core.go`, `internal/mcp/tools.go`.
+
+## 9. The replay: did we build the right thing? (2026-10-19)
+
+The parity fixture (§4) proves the arithmetic on synthetic closes. It says
+nothing about the daemon's data, its calendar or the rule as the register
+runs it on real month-ends. The replay does, as the owner asked on
+2026-10-19 (07:58 CEST): the daemon runs the rule over the month-ends of an
+entry's instrument on its own history and prints the lab's decision table;
+the lab prints the same table from its backtest data; a lab script holds the
+two side by side and names every disagreement with the date, both sides'
+numbers and its cause.
+
+- `strategy.replay {id, from, to}` and `canary strategy ID --replay FROM TO
+  [--json]`: the daemon resolves the entry's contract as the evaluator does,
+  reads five years of daily closes through the charts' broker helper (the
+  read that fills the entry's series, `strategyReplayRange`), builds the
+  calendar as the monthly evaluation does (`coreCalendar`: the official
+  sessions where the embedded calendar covers them, the series' own dates
+  before) and runs `core.Replay` from FROM to TO, TO bounded at the last
+  decided month-end. `core.Replay` is `MeasureWith`, `SizeTarget` and
+  `Decide` at every month-end, the paper holding carried from zero under the
+  entry's band and minimum at one fixed, printed sizing (`core.ReplaySizing`:
+  6% of 250,000 at full room, cap 40%, scale 100; the lab's
+  `REPLAY_SIZING`). Read-only: nothing is frozen, recorded or sent, and the
+  evaluator stays the only place the rule runs (`TestOnlyTheDaemonEvaluates`
+  lists `Replay`). The series-file harness
+  (`TestStrategyReplayFromSeriesFile`, env-gated) runs the same function
+  over a `canary market --symbol SYM --range 5Y --exchange X --currency C
+  --json` dump, for a daemon that predates the method or a gateway that is
+  down. A CLI flag, not a test, is the home: the owner runs it monthly,
+  and the daemon owns the data it is judged on.
+- Lab: `lab replay-table SPEC --write` (the table on the spec's
+  `data_requirements.calendar` instrument from the lab's data, committed
+  under `tests/fixtures/replay/`; `--symbol` names another line) and `lab
+  replay-compare SPEC CANARY.json [--series]`, which reports every
+  disagreement and its cause: calendar, data source, precision, terms,
+  rule, history, carried, rounding (`lab/replay.py`).
+
+Monthly, after the first session of a new month and before the row is sent:
+
+```sh
+canary strategy core --replay 2021-10-01 $(date +%Y-%m-%d) --json > ~/core-replay.json
+cd ~/dev/lab && uv run lab replay-table s0_core_sleeve --write --refresh
+uv run lab replay-compare s0_core_sleeve ~/core-replay.json                      # the spec's line (Xetra)
+uv run lab replay-table s0_core_sleeve --symbol IUSE.L --out /tmp/iuse.json && \
+  uv run lab replay-compare s0_core_sleeve ~/core-replay.json --lab /tmp/iuse.json  # the line the daemon trades
+```
+
+The exit code is 1 on any disagreement. The replay JSON and the dump are
+runtime data and stay outside Git; the lab's table is public market data.
+
+First run, 2026-10-19 08:25 CEST, the core over 2021-10-19 to 2026-09-30
+(IBKR's five years for the fund's London line, IUSE on LSEETF in EUR, the
+listing IBKR gives for the ISIN in EUR; the lab on Yahoo). Rule: identical.
+On the 48 month-ends both sides decide (2022-10 to 2026-09; the twelve
+before are `history`, the daemon's window not yet filled), the trend reads
+the same every month, the paper path buys and sells every share in the same
+months, and the volatility and the target differ only where the closes do.
+Three data findings, no defect:
+
+1. Venue: the spec (`s0_core_sleeve`) names Xetra (IBCF.DE); the daemon
+   trades the London line (owner decision 2026-10-18 08:06 CEST: the venue
+   comes from IBKR's record). The two calendars differ in 34 sessions over
+   the span (UK bank holidays; Xetra closed on 24 and 31 December and 1
+   May), four month-ends fall on different sessions (December 2021, 2024
+   and 2025; August 2026), and the target differs by up to 4% (2025-05-30:
+   540 shares on Xetra closes, 519 on London's). The committed table is the
+   spec's line; the London line is compared with `--symbol IUSE.L`. Whether
+   the spec should name the London line or the policy pin `exchange =
+   "IBIS"` is the owner's.
+2. Thin prints: on the same London line, Yahoo and IBKR disagree on 66 of
+   1,260 closes beyond 1e-5, up to 2.4% (2025-05-01, a day Xetra was closed:
+   IBKR 115.24, the day's low on 7,630 units; Yahoo 118.12) and 1.2%
+   (2026-08-28: IBKR 157.52, the low, on 8,100 units; Yahoo 159.35; Xetra
+   158.475). IBKR's TRADES close is the last print of a thin line; the
+   daemon's volatility, and so its target, carries that noise (target
+   523 vs 519 on 2025-05-30). The 8% jump guard does not see a 1 to 2%
+   stale print.
+3. A gap: IBKR has no bar for 2025-09-03 on the London line (Yahoo does).
+   Before 2026 the embedded calendar does not cover the venue, so the
+   evaluator reads the series' own dates as the calendar and cannot name a
+   missing session; from 2026 it holds the month ("no close on …"). No live
+   decision falls before 2026.
+
+Terms: the spec's params carry the 10% band and no minimum; the policy
+writes `min_order_base = 2500`. The compare says so under `terms` every run
+until the spec names it; the owner's number, not a defect.
+

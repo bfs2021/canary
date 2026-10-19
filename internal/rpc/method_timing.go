@@ -108,6 +108,9 @@ var methodTimings = []MethodTiming{
 	// its own stores and runs a few dozen simulations for the headroom.
 	{Method: MethodCoreTarget, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	{Method: MethodStrategyTarget, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
+	// The replay reads five years of daily bars once (the charts' 25 s
+	// read) and runs the rule over about sixty month-ends.
+	{Method: MethodStrategyReplay, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	// The resolver asks up to six contract-details forms, each bounded.
 	{Method: MethodCoreResolve, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	{Method: MethodOrderPlace, Lifetime: MethodLifetimeUnary, DaemonTimeout: 15 * time.Second},

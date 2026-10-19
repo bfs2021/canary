@@ -1,0 +1,38 @@
+# canary strategy core --replay 2025-01-01 2026-09-30 · COLUMNS=80 · colour off
+Core replay  2025-01-01 to 2026-09-30: 7 month-ends, 5 decided, 2 paper orders
+Rule · core-ibcf-v1 · signal trend-sma10m · spec 2408d09e6189
+Line · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for the
+  ISIN
+Series · 10 closes 2024-02-05 to 2025-08-04 · IBKR historical bars · TRADES ·
+  sessions on the Xetra calendar
+1 bar on days the exchange was closed, skipped: 2025-05-01
+Paper · 6% of 250,000 × room 1, at most 40%, scale 100% · band 10%, minimum
+  2,500 · the holding carried from zero; nothing frozen, recorded or sent
+
+Decision        Close     SMA10 Trend  Sigma  Target Action            Held
+2025-01-31  not_live: needs 253 sessions to 2025-01-31, has 210
+2025-02-28     101.30     97.47 on     15.0%     987 buy 987            987
+2025-03-31     104.20     98.90 on     15.0%     959 none               987
+2025-04-30     103.90     99.60 on     15.1%     954 none               987
+2025-05-30     105.50    100.30 on     15.0%     947 none               987
+2025-06-30  hold: no close on 2025-06-12
+2025-07-31      97.80    101.10 off    17.1%       0 sell all 987         0
+# canary strategy core --replay 2025-01-01 2026-09-30 · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mCore replay\x1b[0m  \x1b[1m2025-01-01 to 2026-09-30: 7 month-ends, 5 decided, 2 paper orders\x1b[0m
+Rule · core-ibcf-v1 · signal trend-sma10m · spec 2408d09e6189
+Line · 9030 IBCF on IBIS, EUR · Xetra calendar · from IBKR's record for the
+  ISIN
+Series · 10 closes 2024-02-05 to 2025-08-04 · IBKR historical bars · TRADES ·
+  sessions on the Xetra calendar
+1 bar on days the exchange was closed, skipped: 2025-05-01
+Paper · 6% of 250,000 × room 1, at most 40%, scale 100% · band 10%, minimum
+  2,500 · the holding carried from zero; nothing frozen, recorded or sent
+
+Decision        Close     SMA10 Trend  Sigma  Target Action            Held
+2025-01-31  not_live: needs 253 sessions to 2025-01-31, has 210
+2025-02-28     101.30     97.47 on     15.0%     987 buy 987            987
+2025-03-31     104.20     98.90 on     15.0%     959 none               987
+2025-04-30     103.90     99.60 on     15.1%     954 none               987
+2025-05-30     105.50    100.30 on     15.0%     947 none               987
+2025-06-30  hold: no close on 2025-06-12
+2025-07-31      97.80    101.10 off    17.1%       0 sell all 987         0

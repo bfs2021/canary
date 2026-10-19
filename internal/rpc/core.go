@@ -459,3 +459,66 @@ func FetchCoreResolve(ctx context.Context, conn interface {
 	}
 	return out, nil
 }
+
+// MethodStrategyReplay serves a registered strategy's replay
+// (internal-docs/design/strategy-evaluator.md §9): the rule run over the
+// month-ends of the entry's instrument on the daemon's own daily history,
+// in the lab's table shape, so `lab replay-compare` can hold the daemon's
+// decisions against the lab's backtest. Read-only: nothing is frozen,
+// recorded or sent.
+const MethodStrategyReplay = "strategy.replay"
+
+// StrategyReplayParams is the input for MethodStrategyReplay: the entry's
+// id ("core" is the core) and the span, two ISO dates inclusive; To is
+// bounded at the last decided month-end.
+type StrategyReplayParams struct {
+	ID   string `json:"id"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// StrategyReplayResult is the decision table and the series it was run on.
+type StrategyReplayResult struct {
+	AsOf     time.Time `json:"as_of"`
+	Strategy string    `json:"strategy"`
+	Rule     string    `json:"rule"`
+	SpecHash string    `json:"spec_hash,omitempty"`
+	Signal   string    `json:"signal"`
+	// Instrument is the contract the series was read for, as resolved.
+	Instrument *CoreInstrument `json:"instrument,omitempty"`
+	// From and To bound the decisions; SeriesFrom and SeriesTo the closes.
+	From       string `json:"from"`
+	To         string `json:"to"`
+	SeriesFrom string `json:"series_from,omitempty"`
+	SeriesTo   string `json:"series_to,omitempty"`
+	// Calendar is the exchange calendar the sessions and month-ends were
+	// judged on (the series' own dates before the embedded coverage).
+	Calendar      string `json:"calendar"`
+	CalendarLabel string `json:"calendar_label,omitempty"`
+	// Source and FetchedAt are the broker read's basis and time.
+	Source    string    `json:"source,omitempty"`
+	FetchedAt time.Time `json:"fetched_at,omitzero"`
+	// Dates and Closes are the series replayed; OffCalendar names bars
+	// dated on days the exchange was closed, which the calendar skips.
+	Dates       []string  `json:"dates"`
+	Closes      []float64 `json:"closes"`
+	OffCalendar []string  `json:"off_calendar,omitempty"`
+	// Sizing is the fixed paper sizing and Terms the entry's band and
+	// minimum, printed so the two tables are compared under one sizing.
+	Sizing core.Sizing      `json:"sizing"`
+	Terms  core.ReplayTerms `json:"terms"`
+	Note   string           `json:"note,omitempty"`
+	Rows   []core.ReplayRow `json:"rows"`
+}
+
+// FetchStrategyReplay reads the daemon's replay for one registered
+// strategy over a span.
+func FetchStrategyReplay(ctx context.Context, conn interface {
+	Call(context.Context, string, any, any) error
+}, id, from, to string) (StrategyReplayResult, error) {
+	var out StrategyReplayResult
+	if err := conn.Call(ctx, MethodStrategyReplay, StrategyReplayParams{ID: id, From: from, To: to}, &out); err != nil {
+		return StrategyReplayResult{}, err
+	}
+	return out, nil
+}
