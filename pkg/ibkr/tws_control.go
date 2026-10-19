@@ -256,6 +256,8 @@ func (s *twsOrderControlSession) attach(conn *Connection) {
 		s.offer(twsOrderControlAnswer{event: ev})
 	})
 	conn.RegisterHandler(msgOpenOrderEnd, func([]string) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		s.bindOnce.Do(func() { close(s.bindEnd) })
 	})
 	conn.RegisterHandler(msgOrderStatus, func(fields []string) {
@@ -297,6 +299,23 @@ func (s *twsOrderControlSession) offer(a twsOrderControlAnswer) {
 	case s.answers <- a:
 	default:
 	}
+}
+
+// beginBind forgets what the connect's startup burst delivered: with open
+// orders downloaded on connection, TWS sends client 0's orders and an
+// openOrderEnd before nextValidId, inside Connect. Without it that
+// openOrderEnd ended the bind before the answer to its own reqOpenOrders,
+// whose late statuses then read as the action's acknowledgement. It returns
+// the channel the bind's own openOrderEnd closes.
+func (s *twsOrderControlSession) beginBind() <-chan struct{} {
+	s.mu.Lock()
+	s.bound = nil
+	s.bindEnd = make(chan struct{})
+	s.bindOnce = sync.Once{}
+	end := s.bindEnd
+	s.mu.Unlock()
+	s.drain()
+	return end
 }
 
 func (s *twsOrderControlSession) boundOrders() []OrderLifecycleEvent {
@@ -458,6 +477,7 @@ func bindTWSOrders(ctx context.Context, conn *Connection, session *twsOrderContr
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrTWSOrderControlBind, err)
 	}
+	bindEnd := session.beginBind()
 	msg := conn.encodeMsg(reqOpenOrders, 1)
 	guard, release := cfg.newWireGuard()
 	err = conn.sendMessageWithTypeContextForEpochGuarded(ctx, msg, RequestTypeOrder, epoch, true, guard)
@@ -469,7 +489,7 @@ func bindTWSOrders(ctx context.Context, conn *Connection, session *twsOrderContr
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case <-session.bindEnd:
+	case <-bindEnd:
 		return session.boundOrders(), nil
 	case <-timer.C:
 		return nil, fmt.Errorf("%w: no openOrderEnd within %s", ErrTWSOrderControlBind, timeout)

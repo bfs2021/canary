@@ -152,6 +152,7 @@ func TestManagedStartAPIRetriesLogAtDebug(t *testing.T) {
 	for clientID, managed := range clients {
 		wg.Go(func() {
 			conn := NewConnection(&ConnectionConfig{Host: "127.0.0.1", Port: ln.Addr().(*net.TCPAddr).Port, ClientID: clientID, ConnectTimeout: 2 * time.Second, MaxClientIDRetries: 1, ManagedConnectionLogging: managed})
+			conn.startupReadBudget = time.Second
 			_ = conn.Connect(t.Context())
 			_ = conn.Disconnect()
 		})

@@ -2769,6 +2769,18 @@ func (c *Connector) LastError() string {
 	return c.lastError.Error()
 }
 
+// SessionStartFailure reports why the latest connect attempt's API session
+// did not start after the Gateway accepted the socket and answered the
+// version handshake, and how many messages the Gateway sent after START_API.
+// It is readable while Start is still retrying, and nil before such a
+// failure and once a session starts.
+func (c *Connector) SessionStartFailure() (messages int, err error) {
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	return conn.SessionStartFailure()
+}
+
 // LastConnectError returns the error behind LastError with its wrapping
 // intact, so a caller can classify it — for example with errors.Is against
 // ErrRejectedBeforeHandshake. It is nil when the connector is healthy or
