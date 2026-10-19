@@ -690,25 +690,11 @@ type coreDecisionRow struct {
 	Served    bool      `json:"served"`
 }
 
-// recordCoreDecision keeps the month's decision with its frozen target the
-// first time the core is live and the month reads ready (or holds with a
-// sale to zero to review): the action, its reason (a refused buy names the
-// gate's reading) and the window. A later refresh never rewrites it.
-func (s *Server) recordCoreDecision(ctx context.Context, res *rpc.CoreTargetResult, now time.Time) {
-	if s == nil || s.riskPolicies == nil {
-		return
-	}
-	c := s.riskPolicies.snapshot().policy
-	if c == nil || c.Mandate == nil || c.Mandate.Core == nil {
-		return
-	}
-	if reg, ok := resolvedCore(s.resolvedRegister(c)); ok {
-		s.recordStrategyDecision(ctx, res, reg, now)
-	}
-}
-
-// recordStrategyDecision is recordCoreDecision for any register entry: the
-// month's decision kept beside the entry's frozen month while it is live.
+// recordStrategyDecision keeps a live entry's month's decision with its
+// frozen target the first time the month reads ready (or holds with a sale
+// to zero to review): the action, its reason (a refused buy names the gate's
+// reading) and the window; the core's as since phase 2, every other entry's
+// beside its own frozen month.
 func (s *Server) recordStrategyDecision(ctx context.Context, res *rpc.CoreTargetResult, reg register.Resolved, now time.Time) {
 	if s == nil || s.riskPolicies == nil || res == nil || !res.Active || res.Decision == nil || res.Decision.Decision == "" {
 		return
@@ -812,12 +798,6 @@ func (s *Server) coreFinish(ctx context.Context, res *rpc.CoreTargetResult, cont
 	res.Row = s.strategyPendingRow(bucket, reg.Entry.ID, contract)
 	res.LastDecision = s.coreLastDecision(ctx, frozenScopeFor(reg, s.currentBrokerStateScope(), contract.ConID))
 	return res
-}
-
-// corePendingRow is the core's row in the engine's served snapshot, with
-// its blockers and readiness; nil while none stands.
-func (s *Server) corePendingRow(contract *coreContract) *rpc.CoreRowView {
-	return s.strategyPendingRow(rpc.TradeProposalBucketCoreRebalance, risk.CoreStrategyID, contract)
 }
 
 // strategyPendingRow is an entry's row in the served snapshot: its bucket,

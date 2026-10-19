@@ -46,11 +46,6 @@ func coreRowDueAt(prop rpc.TradeProposal, now time.Time) (time.Time, bool) {
 	return res.Session.Open.Add(coreDueAfterUSOpen).UTC(), true
 }
 
-// coreDuePhrase says when the core's row is due and why.
-func coreDuePhrase(due time.Time) string {
-	return strategyDuePhrase(rpc.TradeProposal{}, due)
-}
-
 // strategyDuePhrase says when a strategy row is due: the core's words for
 // the core's row, the same rule in the entry's name for another entry's.
 func strategyDuePhrase(prop rpc.TradeProposal, due time.Time) string {

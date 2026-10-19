@@ -500,8 +500,8 @@ func (s *Server) mandateEntryOrderRefusal(c *risk.Constitution, draft rpc.OrderD
 // sleeve's leg they are: con:<id>, a split line's sleeve:<sleeve>:con:<id>,
 // or an order's con:<id>:owner. Zero for any other id.
 func mandateLegConID(legID string) int {
-	if i := strings.LastIndex(legID, "con:"); i >= 0 {
-		raw, _, _ := strings.Cut(legID[i+len("con:"):], ":")
+	if _, after, found := strings.CutLast(legID, "con:"); found {
+		raw, _, _ := strings.Cut(after, ":")
 		if id, err := strconv.Atoi(raw); err == nil && id > 0 {
 			return id
 		}
