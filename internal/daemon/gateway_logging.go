@@ -10,8 +10,25 @@ import (
 // attempts and their unavailable-dependent reads. Detailed current evidence
 // remains in status; retries remain visible with debug logging.
 func (s *Server) logGatewayUnavailable(detail string) {
+	s.logGatewayFailure(detail)
+}
+
+// logGatewaySessionNotStarted reports, through the same incident, a Gateway
+// that accepted the API connection and answered while the session did not
+// start. It warns whatever the logging schedule declares: the Gateway is up
+// and talking, so no quiet window explains the failure. The incident keeps
+// that attention until it recovers, so a failover candidate that fails
+// otherwise in the same cycle does not flip it back and re-emit. On
+// 2026-10-19 the attempt's own error stayed in the debug log while the
+// Gateway answered every attempt.
+func (s *Server) logGatewaySessionNotStarted(detail string) {
+	s.gatewaySessionNotStarted.Store(true)
+	s.logGatewayFailure(detail)
+}
+
+func (s *Server) logGatewayFailure(detail string) {
 	now := s.gatewayLogClock()
-	required := s.gatewayLogRequired(now, now)
+	required := s.gatewaySessionNotStarted.Load() || s.gatewayLogRequired(now, now)
 	warn, count, age := s.gatewayLog.ObserveAttention(now, required)
 	if s.logger == nil {
 		return
@@ -30,6 +47,7 @@ func (s *Server) logGatewayUnavailable(detail string) {
 func (s *Server) logGatewayRecovered() {
 	now := s.gatewayLogClock()
 	count, age, attention := s.gatewayLog.RecoverAttention(now)
+	s.gatewaySessionNotStarted.Store(false)
 	if count > 0 && s.logger != nil {
 		log := s.logger.Warnf
 		if !attention && !s.gatewayLogRequired(now.Add(-age), now) {

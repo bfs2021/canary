@@ -169,6 +169,9 @@ type Server struct {
 	lastConnectError string
 	gatewayLog       logepisode.State
 	gatewaySchedule  gatewaySchedule
+	// gatewaySessionNotStarted holds the open gateway incident at attention
+	// once a Gateway answered without its session starting.
+	gatewaySessionNotStarted atomic.Bool
 	// farmTransitions writes each data-farm transition once across the
 	// primary and bulk lanes, which both receive every TWS farm notice.
 	farmTransitions ibkrlib.FarmTransitionLog
@@ -1712,6 +1715,31 @@ type connectErrorReporter interface {
 	LastConnectError() error
 }
 
+// sessionStartReporter is the optional attempter surface that says why an
+// API session did not start after the Gateway accepted the socket and
+// answered the version handshake, and how many messages it sent after
+// START_API.
+type sessionStartReporter interface {
+	SessionStartFailure() (messages int, err error)
+}
+
+// sessionStartVerdict is the verdict for an attempt whose Gateway accepted
+// the API connection and sent messages after START_API while the session did
+// not start: what was observed, never the socket settings the answering
+// listener evidently has on. Empty when the attempter reports no such
+// failure.
+func sessionStartVerdict(a connectAttempter, ep discover.Endpoint) string {
+	r, ok := a.(sessionStartReporter)
+	if !ok {
+		return ""
+	}
+	messages, err := r.SessionStartFailure()
+	if err == nil || messages == 0 {
+		return ""
+	}
+	return fmt.Sprintf("gateway %s:%d accepted the API connection and answered, but the session did not start: %v", ep.Host, ep.Port, err)
+}
+
 // newConnector constructs (but does not start) the IBKR connector from
 // the supplied endpoint. Returns immediately — no network I/O.
 //
@@ -1819,6 +1847,10 @@ func (s *Server) connectWithFailover(ctx context.Context, primary discover.Endpo
 	// refusals collects the process-aware verdicts for candidates whose
 	// local port refused the dial, so the exhaustion verdict can be theirs.
 	var refusals []string
+	// notStarted collects the candidates whose Gateway answered START_API
+	// without the session starting: such a listener is up and talking, so
+	// the exhaustion verdict is theirs.
+	var notStarted []string
 	for i, cand := range candidates {
 		if ctx.Err() != nil {
 			return
@@ -1879,6 +1911,9 @@ func (s *Server) connectWithFailover(ctx context.Context, primary discover.Endpo
 		if refusal != "" {
 			refusals = append(refusals, refusal)
 		}
+		if verdict := sessionStartVerdict(a, cand); verdict != "" {
+			notStarted = append(notStarted, verdict)
+		}
 		if cand.PortOrigin == discover.OriginDiscovered {
 			s.mu.Lock()
 			s.lastHandshakeFailedPort = cand.Port
@@ -1916,6 +1951,7 @@ func (s *Server) connectWithFailover(ctx context.Context, primary discover.Endpo
 		len(candidates), strings.Join(names, ", "),
 	)
 	var rejection *discover.RejectedListener
+	sessionNotStarted := false
 	if len(rejected) == len(candidates) {
 		// Every listener ended the connection before the handshake: the
 		// verdict is theirs, not a checkbox IB Gateway does not have.
@@ -1929,6 +1965,11 @@ func (s *Server) connectWithFailover(ctx context.Context, primary discover.Endpo
 		// Every local port refused the dial and the process list explained
 		// why: the verdict is that explanation, not the handshake checklist.
 		hint = strings.Join(refusals, "; ")
+	} else if len(notStarted) > 0 {
+		// A Gateway answered and its session did not start: the verdict is
+		// what it sent, not the checklist for a listener that stays silent.
+		hint = strings.Join(notStarted, "; ")
+		sessionNotStarted = true
 	}
 	if len(refusals) != len(candidates) {
 		// Something listened, or a failure was not an explained refusal: no
@@ -1942,6 +1983,10 @@ func (s *Server) connectWithFailover(ctx context.Context, primary discover.Endpo
 		s.lastPortRejectionHint = hint
 	}
 	s.mu.Unlock()
+	if sessionNotStarted {
+		s.logGatewaySessionNotStarted(hint)
+		return
+	}
 	s.logGatewayUnavailable(hint)
 }
 
@@ -1959,7 +2004,7 @@ func (s *Server) tryOneHandshake(ctx context.Context, a connectAttempter, ep dis
 
 	watchdogCtx, watchdogCancel := context.WithCancel(candidateCtx)
 	defer watchdogCancel()
-	go s.handshakeWatchdog(watchdogCtx, a.IsConnected, handshakeWatchdogDelay, ep)
+	go s.handshakeWatchdog(watchdogCtx, a, handshakeWatchdogDelay, ep)
 
 	err := a.Start(candidateCtx)
 	// Outer (daemon) ctx cancelled → shutdown raced with us; exit silently
@@ -2011,8 +2056,11 @@ func (s *Server) tryOneHandshake(ctx context.Context, a connectAttempter, ep dis
 		// cycles, and a hint for the app that owns the port instead of
 		// the raw dial, setsockopt or write error the peer's reset left.
 		rejection, isRejected := rejectedListener(ctx, a, nil, ep)
+		notStarted := ""
 		if isRejected {
 			hint = rejection.Hint
+		} else if notStarted = sessionStartVerdict(a, ep); notStarted != "" {
+			hint = notStarted
 		} else if classified, ok := s.classifyRefusedDial(ctx, ep, connectorConnectError(a)); ok {
 			hint, refusal = classified, classified
 		}
@@ -2026,7 +2074,11 @@ func (s *Server) tryOneHandshake(ctx context.Context, a connectAttempter, ep dis
 			s.lastPortRejection, s.lastPortRejectionHint = rejection, hint
 		}
 		s.mu.Unlock()
-		s.logGatewayUnavailable(hint)
+		if notStarted != "" {
+			s.logGatewaySessionNotStarted(hint)
+		} else {
+			s.logGatewayUnavailable(hint)
+		}
 		return false, rejection, refusal
 	}
 	if brokerScopeAccountConcrete(ep.Account) {
@@ -2364,32 +2416,45 @@ func (s *Server) prewarmRegimeSymbols() {
 }
 
 // handshakeWatchdog publishes a degraded-state hint to lastConnectError if
-// the gateway hasn't connected by `delay`. Takes isConnected as a function
-// pointer so tests can drive this directly without a real *Connector.
+// the gateway hasn't connected by `delay`. Tests drive it with a fake
+// attempter.
 //
 // The gate (s.lastConnectError == "") avoids clobbering a real error that
 // the main path may have already set. The success branch in
 // connectGatewayBackground clears the hint when the connect eventually
 // lands (e.g. via the SDK's TLS fallback retry) — so the watchdog is
 // informational only, not authoritative.
-func (s *Server) handshakeWatchdog(ctx context.Context, isConnected func() bool, delay time.Duration, ep discover.Endpoint) {
+//
+// A Gateway that accepted the API connection and answered while the session
+// did not start gets what it sent as the hint. The silent-listener checklist
+// blamed the Gateway's settings all evening on 2026-10-19 while the Gateway
+// sent thirteen startup messages and the ten-message startup read failed.
+func (s *Server) handshakeWatchdog(ctx context.Context, a connectAttempter, delay time.Duration, ep discover.Endpoint) {
 	select {
 	case <-ctx.Done():
 		return
 	case <-time.After(delay):
 	}
-	if isConnected() {
+	if a.IsConnected() {
 		return
 	}
-	hint := fmt.Sprintf(
-		"gateway %s:%d not responding to TWS handshake within %s; check IB Gateway is running and 'Enable ActiveX and Socket Clients' is on",
-		ep.Host, ep.Port, delay,
-	)
+	hint := sessionStartVerdict(a, ep)
+	notStarted := hint != ""
+	if !notStarted {
+		hint = fmt.Sprintf(
+			"gateway %s:%d not responding to TWS handshake within %s; check IB Gateway is running and 'Enable ActiveX and Socket Clients' is on",
+			ep.Host, ep.Port, delay,
+		)
+	}
 	s.mu.Lock()
 	if s.lastConnectError == "" {
 		s.lastConnectError = hint
 	}
 	s.mu.Unlock()
+	if notStarted {
+		s.logGatewaySessionNotStarted(hint)
+		return
+	}
 	s.logGatewayUnavailable(hint)
 }
 

@@ -28,6 +28,7 @@ type twsControlGateway struct {
 	slotBusy   bool // answer client 0's startAPI with code 326 and hang up
 	silentBind bool // list the orders but never send openOrderEnd
 	silentAck  bool // accept cancel and place frames and never answer
+	startup    bool // download the orders at connect, before nextValidId
 	refuseCode int  // answer cancel and place with this broker error
 	clients    []int
 	binds      int
@@ -128,11 +129,19 @@ func (g *twsControlGateway) serve(c net.Conn) {
 	}
 	g.mu.Lock()
 	g.clients = append(g.clients, clientID)
-	busy := g.slotBusy
+	busy, startup := g.slotBusy, g.startup
+	downloaded := append([]twsGatewayOrder(nil), g.orders...)
 	g.mu.Unlock()
 	if busy {
 		s.write(twsGatewayFrame(msgErrMsg, "2", "-1", "326", "Unable to connect as the client id is already in use. Retry with a unique client id."))
 		return
+	}
+	if startup {
+		for _, o := range downloaded {
+			s.write(twsGatewayOpenOrder(o, 0))
+			s.write(twsGatewayOrderStatus(o))
+		}
+		s.write(twsGatewayFrame(msgOpenOrderEnd, "1"))
 	}
 	s.write(twsGatewayFrame(msgNextValidID, "1", "100"))
 	s.write(twsGatewayFrame(msgManagedAccts, "1", "DU1234567"))
@@ -440,6 +449,33 @@ func TestTWSOrderControlSilenceAfterTheSendIsUncertain(t *testing.T) {
 			_, _, cancels, places := g.snapshot()
 			if got := len(cancels) + len(places); got != 1 {
 				t.Fatalf("gateway saw cancels=%v places=%d, want exactly one send", cancels, len(places))
+			}
+		})
+	}
+}
+
+// TWS downloads client 0's orders at connect, with an openOrderEnd of its
+// own, when it downloads open orders on connection. That terminator must not
+// end the bind before the answer to the bind's reqOpenOrders, whose statuses
+// would then arrive after the action and read as its acknowledgement: a
+// silent modify read pending instead of uncertain.
+func TestTWSOrderControlBindIgnoresTheConnectDownload(t *testing.T) {
+	for _, action := range []string{TWSOrderControlCancel, TWSOrderControlModify} {
+		t.Run(action, func(t *testing.T) {
+			order := twsControlTestOrder()
+			order.Bound = 7 // bound in an earlier control session
+			g := startTWSControlGateway(t, order)
+			g.mu.Lock()
+			g.silentAck, g.startup = true, true
+			g.mu.Unlock()
+			cfg := g.config()
+			cfg.AckTimeout = 300 * time.Millisecond
+			receipt, err := RunTWSOrderControl(t.Context(), cfg, action, twsControlTestTarget(), TWSOrderControlReplacement{Quantity: 50, LimitPrice: 149})
+			if !errors.Is(err, ErrTWSOrderControlUncertain) || receipt.Outcome != TWSOrderControlUncertain {
+				t.Fatalf("err=%v receipt=%+v, want an uncertain outcome", err, receipt)
+			}
+			if _, binds, _, _ := g.snapshot(); binds != 1 {
+				t.Fatalf("binds = %d, want 1", binds)
 			}
 		})
 	}

@@ -44,9 +44,24 @@ const (
 	StatusFailed
 )
 
+const (
+	// defaultStartupReadBudget bounds the wait for nextValidId after
+	// START_API. IB Gateway sends the whole startup burst within milliseconds,
+	// a large account's open orders included; the budget leaves room for a
+	// slow machine and stays inside the daemon's 12 s handshake watchdog.
+	defaultStartupReadBudget = 5 * time.Second
+	// startupMessageCap bounds the startup read for a Gateway that streams
+	// without ever sending nextValidId: two messages per open order leaves
+	// room for thousands of open orders.
+	startupMessageCap = 10000
+)
+
 var (
 	errStartAPIFailed  = errors.New("ibkr start api failure")
 	errHandshakeNoData = errors.New("ibkr handshake: no response")
+	// errNoNextValidID marks a START_API the Gateway answered without
+	// nextValidId; SessionStartFailure reports it.
+	errNoNextValidID = errors.New("nextValidId not received during startup")
 	// errClientIDInUse marks the IBKR code-326 client-ID collision.
 	errClientIDInUse = errors.New("IBKR: client ID already in use")
 	// ErrRejectedBeforeHandshake marks a connect attempt the listener ended
@@ -426,6 +441,15 @@ type Connection struct {
 	startAPIMu          sync.Mutex
 	startAPIFailures    int
 	lastStartAPIFailure time.Time
+	// sessionStartErr and sessionStartRead are the latest attempt's failed
+	// START_API and the messages the Gateway sent before it failed.
+	sessionStartErr  error
+	sessionStartRead int
+	// startupReadBudget overrides defaultStartupReadBudget; tests shorten it.
+	startupReadBudget time.Duration
+	// accountsEpoch is the broker session epoch whose managedAccounts
+	// message has been processed.
+	accountsEpoch atomic.Uint64
 
 	// errorMessageAfterInitialEpochCheck is a deterministic receipt-race test seam.
 	errorMessageAfterInitialEpochCheck func()
@@ -1072,6 +1096,7 @@ func (c *Connection) connectAttempt(ctx context.Context, useTLS bool, outboundEp
 	netConn, err := c.dialEndpoint(ctx, useTLS)
 	if err != nil {
 		c.setStatus(StatusDisconnected)
+		c.sessionNotStarted(0, nil) // this attempt never reached START_API
 		return err
 	}
 
@@ -1113,6 +1138,7 @@ func (c *Connection) connectAttempt(ctx context.Context, useTLS bool, outboundEp
 			connectLogger.Errorf("Client %d: Handshake failed: %v", c.config.ClientID, err)
 		}
 		c.setStatus(StatusDisconnected)
+		c.sessionNotStarted(0, nil) // this attempt never reached START_API
 		cancelOnce.Do(func() { _ = netConn.Close() })
 		return fmt.Errorf("handshake failed: %w", err)
 	}
@@ -1120,6 +1146,9 @@ func (c *Connection) connectAttempt(ctx context.Context, useTLS bool, outboundEp
 
 	connectLogger.Infof("Client %d: Starting API...", c.config.ClientID)
 	if err := c.startAPI(); err != nil {
+		if !errors.Is(err, errNoNextValidID) {
+			c.sessionNotStarted(0, nil) // the latest attempt failed otherwise
+		}
 		if isClientIDInUseError(err) {
 			connectLogger.Warnf("Client %d: startAPI rejected client ID in use: %v", c.config.ClientID, err)
 			c.setStatus(StatusDisconnected)
@@ -1909,18 +1938,33 @@ func (c *Connection) startAPI() error {
 		return sendErr
 	}
 
-	// Sent startAPI message
-
-	// Wait for initial responses (managed accounts, next valid ID, etc.)
-	c.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	// Read the startup burst until nextValidId has set the order-ID
+	// namespace and managedAccounts has named the accounts. With "Download
+	// open orders on connection" on, the burst opens with an openOrder and an
+	// orderStatus per open order and openOrderEnd, then managedAccounts and
+	// nextValidId, so its length grows with the open orders. Every message
+	// read is processed: the open orders are wanted. Until 2026-10-19 the read
+	// stopped after ten messages, and four open orders pushed nextValidId past
+	// it. Only time spent waiting on the wire counts against the budget, not
+	// the handlers' work on each message.
+	budget := c.startupReadBudget
+	if budget <= 0 {
+		budget = defaultStartupReadBudget
+	}
+	remaining := budget
 	defer c.conn.SetReadDeadline(time.Time{}) // Clear deadline
 
 	// Track if we get error 326 (client ID already in use)
 	var clientIDError error
+	read := 0
+	var stopped string
+	epoch := c.BrokerSessionEpoch()
 
-	// Read initial responses
-	for range 10 { // Try to read up to 10 initial messages
+	for read < startupMessageCap && clientIDError == nil && !(c.BrokerIDNamespaceReady() && c.accountsEpoch.Load() == epoch) {
+		c.conn.SetReadDeadline(time.Now().Add(remaining))
+		began := time.Now()
 		msgBytes, err := c.readMessage()
+		remaining -= time.Since(began)
 		if err != nil {
 			// Capture a client-ID-collision lastError observed mid-read so
 			// the caller's retry loop branches on errClientIDInUse rather
@@ -1932,7 +1976,8 @@ func (c *Connection) startAPI() error {
 			c.statusMu.RUnlock()
 
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				break // Timeout is expected after initial messages
+				stopped = fmt.Sprintf(" within %s", budget)
+				break // The budget ran out before nextValidId
 			}
 			if errors.Is(err, io.EOF) {
 				// EOF after startAPI: if the gateway told us our client ID
@@ -1949,8 +1994,10 @@ func (c *Connection) startAPI() error {
 			}
 			// Log but don't fail on read errors during initialization
 			c.logReadFailure(connectLogger, true, err, "Error reading initial message: %v", err)
+			stopped = fmt.Sprintf(" (read error: %v)", err)
 			break
 		}
+		read++
 
 		// Process the initial message
 		c.processMessage(msgBytes)
@@ -1967,10 +2014,35 @@ func (c *Connection) startAPI() error {
 		return clientIDError
 	}
 	if !c.BrokerIDNamespaceReady() {
-		return fmt.Errorf("%w: nextValidId not received during startup", errStartAPIFailed)
+		return c.sessionNotStarted(read, fmt.Errorf("%w: %w after %d messages%s", errStartAPIFailed, errNoNextValidID, read, stopped))
 	}
 
 	return nil
+}
+
+// sessionNotStarted records a START_API the Gateway accepted without the
+// session starting, with the messages it sent first, and returns err. An
+// attempt that fails before START_API clears it with a nil err, so the
+// failure reported is always the latest attempt's.
+func (c *Connection) sessionNotStarted(read int, err error) error {
+	c.startAPIMu.Lock()
+	c.sessionStartErr, c.sessionStartRead = err, read
+	c.startAPIMu.Unlock()
+	return err
+}
+
+// SessionStartFailure reports why the latest connect attempt's API session
+// did not start after the Gateway accepted the socket and answered the
+// version handshake, and how many messages the Gateway sent after START_API.
+// It is readable while Connect is still retrying, and nil before such a
+// failure and once a session starts.
+func (c *Connection) SessionStartFailure() (messages int, err error) {
+	if c == nil {
+		return 0, nil
+	}
+	c.startAPIMu.Lock()
+	defer c.startAPIMu.Unlock()
+	return c.sessionStartRead, c.sessionStartErr
 }
 
 // readMessages continuously reads messages from the connection.
@@ -2159,6 +2231,7 @@ func (c *Connection) processMessageAtEpoch(msgBytes []byte, epoch uint64) {
 			}
 		}
 	case msgManagedAccts:
+		c.accountsEpoch.Store(epoch)
 		if acct := managedAccountsField(fields); acct != "" {
 			c.accountMu.Lock()
 			c.account = acct
@@ -2694,6 +2767,7 @@ func (c *Connection) resetStartAPIFailure() {
 	c.startAPIMu.Lock()
 	c.startAPIFailures = 0
 	c.lastStartAPIFailure = time.Time{}
+	c.sessionStartErr, c.sessionStartRead = nil, 0
 	c.startAPIMu.Unlock()
 }
 

@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.25.2 — Unreleased
+
+### What's new
+
+A connection fix. Since v2.3.0 the daemon could not connect to TWS or IB
+Gateway while the account held four or more open orders and the app
+downloads open orders on connection: the session start read only the
+broker's first ten messages, and each open order adds two ahead of the one
+that opens the session. No test connected with open orders, and this
+account first held four at a connect on 19 October; the daemon then redialled
+all evening while its warning blamed the Gateway's API settings.
+
+### Fixed
+
+- The daemon connects whatever the number of open orders, and every open order downloaded at the connect still reaches the order book; a connect no longer waits a second for the start to go quiet (#118).
+- A Gateway that accepts the API connection and answers while the session does not start is reported as that, with the attempt's own error, at WARN whatever the logging schedule, instead of "not responding to TWS handshake; check 'Enable ActiveX and Socket Clients'" (#118).
+- `canary order tws-cancel` and `tws-modify` wait for TWS's answer to their own bind when TWS downloads open orders at connect, so a request TWS never answers reads uncertain; a modify could read pending on the bind's own status.
+
 ## v3.25.1 — 2026-10-19 13:30 CEST
 
 ### What's new

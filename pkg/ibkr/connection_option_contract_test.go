@@ -349,7 +349,7 @@ func buildHandshakeAck(fields ...string) []byte {
 type testOpenOrderProtoCallback struct {
 	OrderID, PermID, ClientID, TriggerMethod                                             int
 	Symbol, SecType, Exchange, PrimaryExch, Currency, LocalSymbol, TradingClass          string
-	Action, Quantity, OrderType, TIF, Account, OrderRef, Status                          string
+	Action, Quantity, OrderType, TIF, Account, OrderRef, Status, OcaGroup                string
 	CommissionCurrency, MarginCurrency, RejectReason, WarningText                        string
 	LimitPrice, AuxPrice, TrailingPercent, TrailStopPrice, LmtPriceOffset                float64
 	InitMarginBefore, MaintMarginBefore, EquityBefore, InitMarginAfter, MaintMarginAfter float64
@@ -438,6 +438,7 @@ func encodeOpenOrderProtoCallbackForTest(f testOpenOrderProtoCallback) []byte {
 	if f.OutsideRth {
 		order = protoAppendBool(order, 19, true)
 	}
+	order = protoAppendString(order, 27, f.OcaGroup)
 	order = protoAppendString(order, 28, f.OrderRef)
 	if f.TriggerMethod != 0 {
 		order = protoAppendInt32(order, 31, int32(f.TriggerMethod))
