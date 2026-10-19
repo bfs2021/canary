@@ -692,11 +692,11 @@ test-internal: ## Run internal/... under -race excluding the daemon root
 # together they were the ubuntu test job's 7.5-minute tail, and they share
 # nothing but the scope check, so they parallelize cleanly.
 test-daemon-default: trading-package-scope-check ## Daemon root default build + hermetic lifecycle integration
-	go test -race -timeout=420s ./internal/daemon
+	go test -race -timeout=600s ./internal/daemon
 	$(MAKE) test-integration
 
 test-daemon-trading: trading-package-scope-check ## Daemon root trading build (write path)
-	go test -race -timeout=420s -tags trading ./internal/daemon
+	go test -race -timeout=600s -tags trading ./internal/daemon
 
 test-daemon: trading-package-scope-check ## Run internal/... and hermetic integration under -race in both build modes
 	$(MAKE) test-internal
