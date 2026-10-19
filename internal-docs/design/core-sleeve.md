@@ -820,12 +820,15 @@ fixed in v3.25.2. A row served while the entry holds (a data hold, the kill
 rule; the sale to zero its frozen month wants, review S6) now carries
 `core.owner_review` and goes to the owner: `desk.execution.submit` refuses it
 under the standing mandate (`owner_review`, before journaling and again at
-the wire on the revalidated row), the row's details say so, and Desk shows
-it as the owner's to confirm; until then the row said "for your review" while
+the wire on the revalidated row), the row's details say so, it stays out of
+the same-contract merge (a forced reduction of the line is never covered by
+it), and Desk, re-pinned on this release, shows it as the owner's to confirm;
+until then the row said "for your review" while
 the controller took the sale as a candidate and the daemon sent it (owner,
 2026-10-19: for your review means the owner's review). The kill rule's bound
-is measured against the sleeve's capital at its stage, the live core's on
-its own rows' fills, and a live entry without a written bound holds
+is measured against the sleeve's capital at its stage (the core's on its
+shadow record's paper sleeve, since every unit of its line is the core's
+whoever bought it), and a live entry without a written bound holds
 (`strategy-evaluator.md` §3); `[mandate.core]` writes no bound yet, so the
 core holds until the owner writes one. The core's buy is judged by its own
 sleeve as the gate judges an order, and an open breach episode no longer
@@ -1063,7 +1066,7 @@ armed may include the core (15–20). Built in phase 1, each with its test: 1
 (`TestCoreTargetFrozenMonthDriftAndCeiling`), 4
 (`TestSizeTargetRoomScaleAndCap`), 5 and the band and minimum of 6
 (`TestDecideBandMinimumAndHeadroom`,
-`TestCoreTargetTrendOffSellsAllAndBlockedBuysStillSell`), the headroom of 6
+`TestCoreTargetTrendOffSellsAllAndOverBudgetBuysInsideTheAllocation`), the headroom of 6
 (`TestCoreTargetBuyCutToTheGapCapMargin`), the contract and data guards of 9
 and 10 that need no order (`TestCoreTargetHolds`,
 `TestGuardHoldsSuspectData`), 20 (`TestCoreHeadroomNeverBreaksTheBudget`), the

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"math"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/osauer/canary/v2/internal/core"
 	"github.com/osauer/canary/v2/internal/mandate"
-	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
@@ -115,41 +113,6 @@ func TestLiveEntryWithoutAKillBoundHolds(t *testing.T) {
 	shadow.refreshStrategies(t.Context())
 	if res := trendFundTarget(t, shadow); res.Status != rpc.CoreStatusReady || res.Kill == nil || res.Kill.MaxDrawdownK != nil || res.Kill.Note != killUnwrittenNote {
 		t.Fatalf("shadow without a bound: %s %v kill %+v", res.Status, res.Reasons, res.Kill)
-	}
-}
-
-// The live core's kill measure is its own rows' fills, as any live entry's:
-// a core_rebalance row's submitted event names its line, the fills are read
-// by the row's order reference, and the shadow record's paper sleeve no
-// longer stands in for the sleeve that trades (2026-10-19).
-func TestCoreKillIsMeasuredOnItsOwnRowsFills(t *testing.T) {
-	pos := withIBCF(mandateTestPositions(100), 50, 100)
-	srv, _ := coreRowServer(t, testCoreConstitution(), pos, 0.25, coreDecisionNow)
-	srv.orderJournal = newTestOrderJournalStore(t, filepath.Join(t.TempDir(), "orders"))
-	scope := srv.currentBrokerStateScope()
-	at := coreDecisionNow.Add(-time.Hour)
-	row := rpc.TradeProposal{Key: "core_rebalance:synthetic", Bucket: rpc.TradeProposalBucketCoreRebalance, Core: &rpc.TradeProposalCore{Sleeve: risk.CoreStrategyID, ConID: coreTestConID}}
-	ev := proposalEventForProposal("submitted", row, at, "", "synthetic-core-1", "")
-	if ev.ConID != coreTestConID || ev.Strategy != "" || ev.Sleeve != risk.CoreStrategyID {
-		t.Fatalf("the core's row's event %+v, want its line and sleeve named and no entry", ev)
-	}
-	ev.AccountID, ev.AccountMode = scope.Account, scope.Mode
-	st := srv.tradeProposals.store
-	st.mu.Lock()
-	st.events = append(st.events, ev)
-	st.mu.Unlock()
-	fill := originTestOrder("synthetic-core-1", 901, at)
-	fill.Type, fill.Status, fill.ConID, fill.Symbol, fill.Action = orderJournalEventStatusUpdated, "Filled", coreTestConID, core.Symbol, rpc.OrderActionBuy
-	fill.ExecID, fill.ExecShares, fill.ExecSide, fill.LastFillPrice, fill.Filled = "exec-core-1", 50, "BOT", 100, 50
-	if err := srv.orderJournal.Append(fill); err != nil {
-		t.Fatal(err)
-	}
-	if f := srv.strategyOwnFills(t.Context(), risk.CoreStrategyID, coreTestConID); f.Units != 50 || f.Cash != -5000 || f.Execs != 1 {
-		t.Fatalf("the core's own fills %+v", f)
-	}
-	res := coreEvaluate(t, srv)
-	if res.Kill == nil || res.Kill.Source != rpc.KillSourceOwnFills || !res.Kill.Measured || res.Kill.ScalePct != 100 || res.Kill.Breached {
-		t.Fatalf("the core's kill %+v, want it measured on its own fills at its scale", res.Kill)
 	}
 }
 
@@ -293,5 +256,29 @@ func TestDeskExecutionSubmitRefusesARowForTheOwnersReview(t *testing.T) {
 	got, err = deskExecutionSubmit(t, s, rpc.DeskExecutionSubmitParams{Automatic: &full, Items: []rpc.DeskExecutionItem{item}})
 	if err != nil || got.Receipts[0].Outcome != rpc.DeskOutcomeRefused || got.Receipts[0].Blockers[0].Code != "proposal_not_found" {
 		t.Fatalf("an open sale at the gate: %+v %v", got, err)
+	}
+}
+
+// A row served for the owner's review never stands for another row: a
+// forced reduction of the same line is neither covered by it nor blocked,
+// so the mandate's de-risking does not wait on a human; an open sale of the
+// core still merges with the reduction as before (refuter round 1,
+// 2026-10-19: the larger review sale covered the reduction).
+func TestOwnerReviewRowStaysOutOfTheSameContractMerge(t *testing.T) {
+	review := sameContractRow(rpc.TradeProposalBucketCoreRebalance, 7, 10, rpc.OrderTypeLMT)
+	review.PositionEffect = rpc.OrderPositionEffectClose
+	review.Core = &rpc.TradeProposalCore{Kind: core.ActionSellAll, OwnerReview: true}
+	reduction := sameContractRow(rpc.TradeProposalBucketMandateReduction, 7, 5, rpc.OrderTypeLMT)
+	rows := []rpc.TradeProposal{review, reduction}
+	mergeSameContractProposals(rows, nil)
+	if rows[1].CoveredBy != "" || len(rows[1].Blockers) != 0 || rows[0].CoveredBy != "" || len(rows[0].Covers) != 0 || len(rows[0].Blockers) != 0 {
+		t.Fatalf("the review sale joined the merge: %+v %+v", rows[0], rows[1])
+	}
+	open := review
+	open.Core = &rpc.TradeProposalCore{Kind: core.ActionSellAll}
+	rows = []rpc.TradeProposal{open, reduction}
+	mergeSameContractProposals(rows, nil)
+	if rows[1].CoveredBy != rows[0].Key || len(rows[0].Covers) != 1 {
+		t.Fatalf("an open core sale no longer covers the reduction of its line: %+v %+v", rows[0], rows[1])
 	}
 }

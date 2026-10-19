@@ -114,6 +114,14 @@ func sameContractMergeable(p rpc.TradeProposal) bool {
 	if p.Mandate != nil && p.Mandate.Held {
 		return false
 	}
+	// A strategy row served for the owner's review (the entry holds; the
+	// sale to zero its frozen month wants) is the owner's alone: it must
+	// not stand for a forced reduction of the line, which the mandate may
+	// send on its own, or the de-risking would wait on a human (refuter,
+	// 2026-10-19).
+	if p.Core != nil && p.Core.OwnerReview {
+		return false
+	}
 	if p.Bucket == rpc.TradeProposalBucketOptionExitReview || p.Bucket == rpc.TradeProposalBucketStrategyExit ||
 		p.OptionExit != nil && p.OptionExit.Kind == "review" {
 		return false

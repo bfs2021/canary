@@ -24,9 +24,10 @@ import (
 // stage (stageCapital): S / 0.15 times the stage's scale, S the sleeve's
 // risk allocation in money at that decision, as on the shadow record. Units
 // the owner sells by hand leave the measure alone: it reads the entry's own
-// trading, not the line's holding. Since 2026-10-19 the core's own fills are
-// measured the same way once the core is live (its rows' fills, never a
-// hand trade of its fund): the lab's bound binds the sleeve that trades.
+// trading, not the line's holding. The core is not measured here: every
+// unit of its line is the core's whoever bought it, so its rows' fills
+// would not cover a hand-built holding; it keeps its measure on its shadow
+// record's paper sleeve, at the stage's capital (shadow_record.go).
 
 const (
 	liveMarkType  = "strategy.mark.v1"

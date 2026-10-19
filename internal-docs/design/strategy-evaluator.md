@@ -132,11 +132,13 @@ measured from the running peak, this reading included; each mark keeps the
 stage's scale it was sized at (`scale_pct`; a mark kept before 2026-10-19
 reads the entry's current scale). A hand trade of the line is not an own
 fill, so it moves the measure nothing. The spec's other tests are the
-scorecard's and the cost report's, not this. Since 2026-10-19 the live core
-is measured the same way, on its own rows' fills (its `core_rebalance` rows'
-submitted events name its line and sleeve); the shadow record's paper sleeve
-measures an entry in shadow only. The core's bound is the owner's to write
-(`[mandate.core] kill_drawdown_k`); until it is written the live core holds.
+scorecard's and the cost report's, not this. The core keeps its measure on
+its shadow record's paper sleeve, at the stage's capital, live or not: every
+unit of its line is the core's whoever bought it (placement), so its rows'
+own fills would not cover a hand-built holding, and s0's test (a) is on the
+sleeve marked at month-ends, not on own fills (refuter, 2026-10-19). The
+core's bound is the owner's to write (`[mandate.core] kill_drawdown_k`);
+until it is written the live core holds.
 
 ## 4. Parity: how the lab's fixture tests any entry
 

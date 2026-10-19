@@ -337,7 +337,7 @@ func TestCoreTargetFrozenMonthDriftAndCeiling(t *testing.T) {
 // sized inside its own allocation (owner, 2026-10-18 15:31 CEST; until
 // 2026-10-19 it blocked the buy) and sales open; a holding inside the band
 // does nothing.
-func TestCoreTargetTrendOffSellsAllAndBlockedBuysStillSell(t *testing.T) {
+func TestCoreTargetTrendOffSellsAllAndOverBudgetBuysInsideTheAllocation(t *testing.T) {
 	c := testCoreConstitution()
 	srv := coreTestServer(t, c, withIBCF(mandateTestPositions(100), 10, 60), -0.6)
 	res := coreEvaluate(t, srv)

@@ -201,10 +201,18 @@ list:
 | The written spec hash is not the compiled rule's | "spec_hash Y is not the spec rule X implements (Z)" |
 | The rule runs in the other form | "rule X runs only as [mandate.core]" or the reverse |
 | An overlay entry while `overlay_vol_pct` is unwritten | `mandate.sleeves.overlay_vol_pct unwritten` |
-| A live entry's `kill_drawdown_k` unwritten (the core's included) | "kill rule: kill_drawdown_k is unwritten in [table], so the kill rule cannot fire: buys stop until the bound is written" (the daemon's hold, `strategy_target.go`, 2026-10-19; a shadow entry runs on the note, since it sends nothing) |
 
 A held strategy serves its hold: no target, no rows, no shadow record. Its
 declared data is still collected while its rule is compiled (section 4).
+
+The daemon's own holds are another kind (`strategy-evaluator.md` §3): a data
+hold, the kill rule past its bound and, since 2026-10-19, a live entry's
+unwritten `kill_drawdown_k`, the core's included ("kill rule:
+kill_drawdown_k is unwritten in [table], so the kill rule cannot fire: buys
+stop until the bound is written"). They leave the entry live: its target is
+served, its shadow record and marks continue, its buys stop, and a sale its
+rule wants is served for the owner's review (`core.owner_review`). A shadow
+entry runs on the note, since it sends nothing.
 
 ### Fingerprints and old files
 

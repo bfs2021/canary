@@ -451,7 +451,9 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	// entry's kill marks' (strategy_kill_live.go).
 	s.recordStrategyShadow(ctx, res, r, now)
 	s.recordStrategyDecision(ctx, res, r, now)
-	s.recordLiveMark(ctx, res, r, now)
+	if r.Entry.Form != risk.StrategyFormCore {
+		s.recordLiveMark(ctx, res, r, now)
+	}
 }
 
 // coreScope keys a frozen month by account, mode and the core's contract.
@@ -810,10 +812,13 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	// strategy holds before the month can be frozen.
 	killOf := func(mark killMark) {
 		on := "the shadow record"
-		if r.State == register.StateLive && contract != nil {
-			// A live entry is measured on its own fills, the core's rows'
-			// included (strategy_kill_live.go); the shadow record is the
-			// paper sleeve's.
+		if !isCore && r.State == register.StateLive && contract != nil {
+			// A live entry keeps no shadow record: its own fills are the
+			// measure (strategy_kill_live.go). The core stays on its shadow
+			// record's paper sleeve: every unit of its line is the core's
+			// whoever bought it, so its rows' fills would not cover a
+			// hand-built holding, and s0's test is on the sleeve
+			// (strategy-evaluator.md §3; refuter, 2026-10-19).
 			res.Kill, on = s.strategyKillLive(ctx, r, mark, contract.ConID), "its own fills"
 		} else {
 			res.Kill = s.strategyKill(ctx, r, mark)

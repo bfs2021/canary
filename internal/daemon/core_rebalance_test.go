@@ -192,7 +192,7 @@ func TestCoreRowHoldsInsideTheBandAndBelowTheMinimum(t *testing.T) {
 // allocation now adds while the reduction runs); the typed exception admits
 // only the row's own buy within its sized quantity near the decision close,
 // and a core sale stays an ordinary reduction.
-func TestCoreRowRecordsTheGatesRefusal(t *testing.T) {
+func TestCoreRowServesBuysBlockedBesideReductionsAndWorkingOrders(t *testing.T) {
 	pos := mandateTestPositions(100)
 	srv, engine := coreRowServer(t, testCoreConstitution(), pos, 0.25, coreDecisionNow)
 	base := srv.coreRowInput(t.Context(), srv.now())
