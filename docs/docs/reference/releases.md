@@ -1,10 +1,23 @@
 # Releases and support
 
-Updated: 2026-10-18
+Updated: 2026-10-19
 
 Every release publishes two binaries per platform, under two different names. One is read-only. The other can send orders to your broker. That difference is compiled in rather than configured, so the filename you download decides it.
 
 [Updating](../start/updating.md) covers how to install a new version. This page covers what you are installing, how to check it is genuine, and how long it keeps getting fixes.
+
+## Moving to 3.25
+
+Nothing changes on upgrade until you write it. A `[mandate.strategies.<id>]`
+entry written `stage = "live"` now serves its month's row, as the core's
+does; a file that writes an entry live on a rule without rows, or two
+strategies on one fund line, is refused and the last policy stays. While an
+entry is live, a hand buy of its fund line is refused (sales stay open);
+write the entry `suspended` to trade the line by hand. A standing automatic
+mandate armed before you edit the register sends no strategy buys until you
+confirm it again on your device; its sales and protection still go. The
+scorecard's v1 fields announced to go in 3.25 (`mean_z`, `clusters`,
+`p_ic_above_*`, `clusters_to_establish`) are still served in 3.25.
 
 ## Moving to 3.24
 

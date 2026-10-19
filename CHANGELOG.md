@@ -2,7 +2,37 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## v3.25.0 — Unreleased
+## v3.25.0 — 2026-10-19 09:45 CEST
+
+### What's new
+
+Every live strategy in the register now trades, not only the core. Each
+`[mandate.strategies.<id>]` entry written live turns its month's decision
+into one row of its own on its own fund line, with the core's terms: a DAY
+limit at the live mid for a named session in the first five sessions the US
+also trades, sent from fifteen minutes after the US cash open. It goes
+through the same proposal path, the same gates and the same standing-mandate
+submit as the core's row, and its fills count in its own sleeve. A strategy
+whose traded share class is too young for its trend window reads the trend
+on an older class of the same fund until its own closes fill the window. The
+managed-futures trend fund, on its EUR-hedged Xetra line, is the register's
+second entry.
+
+### Added
+
+- `strategy_rebalance` rows: a live register entry's monthly buy, sale or sale to zero of its own line, keyed by its id and sleeve (`core.strategy`, `core.rule`, `core.sleeve`; episode `strategy:<id>:<account>:<mode>:<YYYY-MM>`), never pre-authorisable and never queued to the open; `desk.execution.submit` classifies its buy as a strategy addition.
+- An entry's units of its line are the ones its own rows filled, read from Canary's journals; your units of the line stay yours and hold the entry, named, until sold.
+- A live entry's kill rule is measured on its own fills at each decision close (`kill.source: own_fills`); past `kill_drawdown_k` it holds and serves no row.
+- `signal_isin`, `signal_currency` and `signal_in` let an entry read its trend on another share class of the same fund, converted at the previous session's final IDEALPRO rate, until its traded line's closes fill the window; the mandate measures the young line on that class's returns meanwhile.
+- `canary status` lists each strategy in the register with its stage and its row, or why none stands (`strategies` in `--json` and on `canary_status`); `canary strategy ID` shows a live entry's row, its last decision and its signal series.
+
+### Changed
+
+- An entry written `stage = "live"` runs live. A policy file that writes an entry live on a rule this build serves no rows for, or two strategies on one fund line, is refused at load, naming them; until now such an entry ran as shadow.
+- While an entry is live, a hand buy of its fund line is refused; sales stay open. Write the entry `suspended` to trade the line by hand.
+- A standing automatic mandate sends strategy buys only under the register it was armed with; after any register edit it sends none until you confirm it again on your device. Its sales and protection still go.
+- A registered strategy's line it holds alone is outside protection's automatic sales, as the core's is; the mandate's forced reduction still covers it.
+- Lines on Xetra's second segment (`IBIS2`) quote, and build their rows, on the Xetra calendar; they fell through to the US calendar.
 
 ### Fixed
 

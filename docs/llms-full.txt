@@ -1,6 +1,15 @@
 # Canary full context
 
-Updated: 2026-10-18 22:45 CEST
+Updated: 2026-10-19 10:00 CEST
+
+Version 3.25 lets every live strategy in the register trade, not only the
+core: each entry written live turns its month's decision into a row of its
+own on its own line, with the core's terms, gates and standing-mandate path,
+and its fills count in its own sleeve. A strategy whose traded share class
+is young can read its trend on an older class of the same fund until its
+own closes fill the window. The second strategy, a managed-futures fund on
+its EUR-hedged Xetra line, can be written into the register. Existing
+policies load unchanged; standard binaries and MCP remain read-only.
 
 Version 3.24 lets the desk's arming reach the strategies: Canary serves a
 submit path for the standing automatic mandate the owner confirms once on
