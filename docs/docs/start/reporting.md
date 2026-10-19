@@ -332,7 +332,8 @@ reports fills entered in TWS or by other API clients only to its master
 client. To see them, set **Global Configuration → API → Settings → Master API
 client ID** in TWS to Canary's client ID (`15` unless you pinned another);
 `canary status` then shows an `Executions` row reading `all clients` once the
-first such fill has been seen, and `this client's own orders only` until then.
+first such fill has been seen, and `other-client fills not yet observed` until
+then. An unproven row does not establish that the TWS setting is wrong.
 
 ## Fix an existing incomplete query safely
 

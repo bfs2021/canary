@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.25.0 — Unreleased
+
+### Fixed
+
+- Automatic submission replays durable receipts before checking current strategy readiness; a broker outage no longer turns an accepted or unknown send into a definitive refusal. Replayed unknown outcomes also block later new additions in the same batch (#115, #116).
+- An existing cash-flow hold retains a second deposit offset by a market loss when only the first deposit is declared. An ambiguous P&L reset during an existing hold waits for a covering statement, including after restart. The owner's retained net-equity admission rule and its reset heuristic remain unchanged; this fixes cumulative recovery only (#111; #109 closed as the owner's documented decision).
+- Status and reporting describe other-client execution visibility as unproven until observed, with guidance to check the TWS setting instead of claiming it is misconfigured (#112).
+- Core MCP descriptions document both per-order device confirmation and authorized standing-mandate submission, including Fully armed scope for buys; reading either tool still submits nothing (#117).
+
 ## v3.24.2 — 2026-10-18 23:40 CEST
 
 ### What's new

@@ -17,8 +17,8 @@ Answers        history connection answers no history since 13:50 · redial at
 Background     computing dealer zero-gamma
 Subsystems     gamma:degraded, breadth:warming 40%, +1 ready
 Trading        paper blocked: market data is delayed
-Executions     this client's own orders only · set TWS Master API client ID to 7
-               to see hand and other-client fills
+Executions     other-client fills not yet observed · check TWS Master API client
+               ID is 7
 Strategies     core live · row BUY 908 SYNX for 2026-09-04 · generated, opening
                window
                trend-fund (sleeve trend) live · no row: the 5-session window
@@ -50,8 +50,8 @@ IBKR Gateway  \x1b[33m\x1b[1mATTENTION\x1b[0m\x1b[0m
 \x1b[2mBackground    \x1b[0m computing dealer zero-gamma
 \x1b[2mSubsystems    \x1b[0m gamma:\x1b[33mdegraded\x1b[0m, breadth:\x1b[2mwarming\x1b[0m 40%, \x1b[2m+1 ready\x1b[0m
 \x1b[2mTrading       \x1b[0m \x1b[33mpaper blocked: market data is delayed\x1b[0m
-\x1b[2mExecutions    \x1b[0m \x1b[33mthis client's own orders only · set TWS Master API client ID to 7
-               to see hand and other-client fills\x1b[0m
+\x1b[2mExecutions    \x1b[0m \x1b[33mother-client fills not yet observed · check TWS Master API client
+               ID is 7\x1b[0m
 \x1b[2mStrategies    \x1b[0m core live · row BUY 908 SYNX for 2026-09-04 · generated, opening
                window
 \x1b[2m              \x1b[0m trend-fund (sleeve trend) live · no row: the 5-session window

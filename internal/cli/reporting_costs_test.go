@@ -25,7 +25,7 @@ func goldenReportingCosts() rpc.ReportingCostsResult {
 		Coverage: rpc.CostCoverage{Fills: 4, Quoted: 3, Unknown: 1, Ratio: new(0.75)},
 		Observation: rpc.ExecutionObservation{Polling: true, IntervalSeconds: 60, LastPollAt: goldenAt.Add(5 * time.Second), LastPollComplete: true, LastPollExecutions: 2,
 			Visibility: rpc.ExecutionVisibilityUnproven,
-			Action:     "Only this client's own executions have been seen. Fills entered in TWS or by other API clients reach Canary when TWS Global Configuration → API → Settings → Master API client ID is Canary's client id (7); the owner decides that setting."},
+			Action:     "No fills from TWS or other API clients have been observed for this account and API client. To include them, check that TWS Global Configuration → API → Settings → Master API client ID is Canary's client id (7); the owner decides that setting."},
 		ByMonth:  []rpc.CostTotal{{Key: "2026-09", Fills: 4, Measured: 2, Unknown: 2, HalfSpreadBase: new(18.0)}},
 		BySource: []rpc.CostTotal{{Key: rpc.FillQuoteSourceBroker, Fills: 2, Unknown: 2}, {Key: rpc.FillQuoteSourceCanary, Fills: 2, Measured: 2, HalfSpreadBase: new(18.0)}},
 		ByClass:  []rpc.CostTotal{{Key: rpc.CostClassOption, Fills: 2, Measured: 1, Unknown: 1, HalfSpreadBase: new(9.0)}, {Key: rpc.CostClassStock, Fills: 2, Measured: 1, Unknown: 1, HalfSpreadBase: new(9.0)}},
@@ -46,7 +46,7 @@ func goldenReportingCostsEmpty() rpc.ReportingCostsResult {
 	return rpc.ReportingCostsResult{
 		SchemaVersion: rpc.ReportingCostsSchemaVersion, AsOf: goldenAt, Month: "2026-08", Mode: "paper",
 		Observation: rpc.ExecutionObservation{Polling: true, IntervalSeconds: 60, Visibility: rpc.ExecutionVisibilityUnproven,
-			Action: "Only this client's own executions have been seen. Fills entered in TWS or by other API clients reach Canary when TWS Global Configuration → API → Settings → Master API client ID is Canary's client id (7); the owner decides that setting."},
+			Action: "No fills from TWS or other API clients have been observed for this account and API client. To include them, check that TWS Global Configuration → API → Settings → Master API client ID is Canary's client id (7); the owner decides that setting."},
 		ByMonth: []rpc.CostTotal{}, BySource: []rpc.CostTotal{}, ByClass: []rpc.CostTotal{}, Fills: []rpc.CostFill{},
 	}
 }
@@ -85,9 +85,27 @@ func TestReportingCostsPassesTheMonthAndPrintsNoAccount(t *testing.T) {
 			t.Fatalf("JSON omitted %q: %s", required, stdout.String())
 		}
 	}
-	if strings.Contains(stdout.String(), "account") {
-		t.Fatalf("JSON named an account: %s", stdout.String())
+	var payload any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatal(err)
 	}
+	var checkAccountKeys func(any)
+	checkAccountKeys = func(value any) {
+		switch v := value.(type) {
+		case map[string]any:
+			for key, child := range v {
+				if strings.Contains(strings.ToLower(key), "account") {
+					t.Fatalf("JSON exposes account field %q", key)
+				}
+				checkAccountKeys(child)
+			}
+		case []any:
+			for _, child := range v {
+				checkAccountKeys(child)
+			}
+		}
+	}
+	checkAccountKeys(payload)
 	if code := Run(t.Context(), env, "reporting", []string{"costs", "--month", "September"}); code == 0 {
 		t.Fatal("a month that is not YYYY-MM must be refused")
 	}

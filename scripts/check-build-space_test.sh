@@ -94,11 +94,15 @@ rm "$cache/README"; : > "$cache/ab/old-c"; touch -t 200001010000 "$cache/ab/old-
 # low volume no longer stops them before Go. The fixture has no sources, so
 # the synthetic go fails right after; nothing touches runtime state.
 export TEST_CACHE="$fixture/cache parent/new/cache"
-for target in build check test test-pkg test-daemon-default test-daemon-trading; do
-    : > "$TEST_GO_CALLS"
-    (cd "$TEST_REPO" && TEST_REPO_FREE=1024 make "$target") > "$fixture/make-out" 2>&1 || true
-    grep -F 'proceeding anyway' "$fixture/make-out" >/dev/null || { echo "Make $target skipped the space check" >&2; exit 1; }
-    head -1 "$TEST_GO_CALLS" | grep -Fx 'env GOCACHE GOTMPDIR|GOFLAGS=-trimpath' >/dev/null ||
-        { echo "Make $target did not run the check first with GOFLAGS=-trimpath" >&2; cat "$TEST_GO_CALLS" >&2; exit 1; }
+# Isolate both default and uncached-test flags from the invoking gate.
+for flags in '' '-count=1'; do
+    expected="${flags:+$flags }-trimpath"
+    for target in build check test test-pkg test-daemon-default test-daemon-trading; do
+        : > "$TEST_GO_CALLS"
+        (cd "$TEST_REPO" && TEST_REPO_FREE=1024 GOFLAGS="$flags" make "$target") > "$fixture/make-out" 2>&1 || true
+        grep -F 'proceeding anyway' "$fixture/make-out" >/dev/null || { echo "Make $target skipped the space check" >&2; exit 1; }
+        head -1 "$TEST_GO_CALLS" | grep -Fx "env GOCACHE GOTMPDIR|GOFLAGS=$expected" >/dev/null ||
+            { echo "Make $target did not run the check first with GOFLAGS=$expected" >&2; cat "$TEST_GO_CALLS" >&2; exit 1; }
+    done
 done
 printf '%s\n' 'check-build-space test: PASS'

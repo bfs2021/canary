@@ -266,9 +266,29 @@ func deskExecutionRefusal(item rpc.DeskExecutionItem, now time.Time, blockers ..
 // reach the broker, then one attempt through the proposal engine under the
 // grant, then its outcome journaled. A retry of a journaled request answers
 // with that request's receipt and sends nothing.
-func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateScope, authority deskAuthorityRecord, item rpc.DeskExecutionItem, priorUnknown *bool, timeoutMs int) rpc.DeskExecutionReceipt {
+func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateScope, authority deskAuthorityRecord, item rpc.DeskExecutionItem, priorUnknown *bool, timeoutMs int) (receipt rpc.DeskExecutionReceipt) {
+	// Every unknown outcome, including a replay or unreadable journal, fences
+	// later new additions in this batch. Existing receipts still replay.
+	defer func() {
+		if receipt.Outcome == rpc.DeskOutcomeUnknown {
+			*priorUnknown = true
+		}
+	}()
 	now := s.orderNow()
 	class := item.Intent.Class
+	// Recover the durable result before applying current readiness or the
+	// later-addition fence. Only genuinely new requests need those checks;
+	// recordDeskExecutionRequest still atomically arbitrates concurrent sends.
+	previous, lookupErr := s.deskExecutionReceipt(ctx, scope, item.RequestID, now)
+	if lookupErr != nil {
+		return rpc.DeskExecutionReceipt{RequestID: item.RequestID, EpisodeID: item.EpisodeID, Digest: rpc.DeskIntentDigest(item), Class: class, Outcome: rpc.DeskOutcomeUnknown, Message: "the execution journal cannot be read, so a prior send cannot be ruled out: " + lookupErr.Error(), AsOf: now}
+	}
+	if previous.Outcome != rpc.DeskOutcomeAbsent {
+		if previous.Digest != rpc.DeskIntentDigest(item) {
+			return deskExecutionRefusal(item, now, rpc.TradingBlocker{Code: rpc.DeskBlockerRequestConflict, Message: "this request ID was used before for a different order; nothing was sent for this changed intent"})
+		}
+		return previous
+	}
 	if item.Intent.Proposal == nil {
 		return deskExecutionRefusal(item, now, rpc.TradingBlocker{Code: deskBlockerIntentNotServed, Message: "automatic stock entries are not served; only served proposal rows are sent under the mandate"})
 	}
@@ -313,9 +333,6 @@ func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateS
 	}
 	if err := s.recordDeskExecutionOutcome(ctx, scope, item.RequestID, outcome); err != nil {
 		s.warnf("desk execution: record outcome for %s: %v", item.RequestID, err)
-	}
-	if outcome.Outcome == rpc.DeskOutcomeUnknown {
-		*priorUnknown = true
 	}
 	switch outcome.Outcome {
 	case rpc.DeskOutcomeAccepted:
