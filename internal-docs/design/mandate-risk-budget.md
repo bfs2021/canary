@@ -906,6 +906,22 @@ limit it to a book over budget is the owner's call.
   allocation" while the core runs nothing; once it runs, its buys are cut to its
   allocation as to the budget and the gap caps.
 
+The decision step (review, 2026-10-19). A strategy row's buy, the core's
+included, is judged on the standing verdict by the same reading as an order
+at the gate (`mandateVerdictHolds`, one function for both, so the two never
+disagree): within the budget it is sized to the headroom as before; over it
+(`over`, `reduce`) it is sized while its own sleeve is inside its allocation,
+by use and on its own risk, and the whole-book margin then does not bind it,
+while the buy must still create or deepen no gap-cap breach, keep its own gap
+at most at 95% of its cap and keep its sleeve inside its allocation with the
+buy added; an unknown verdict holds the entry; at the maximum loss nothing
+is sized. Until 2026-10-19 the step refused the buy on any verdict but
+`within` ("the mandate verdict reads reduce"), which held the core's October
+2026 row against this rule, and the row builder served a buy blocked while
+the forced reduction's breach episode was open; both are gone. A
+`mandate_reduction` row of the entry's own line still blocks its buy. The
+shadow record's paper decision reads the same way.
+
 ### The forced reduction
 
 The trigger, the episode, the target (0.95 × budget), the gap phase, the

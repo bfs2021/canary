@@ -75,6 +75,10 @@ const (
 	// DeskBlockerClassMismatch: Canary classifies the exact order as a
 	// different class than the item claims.
 	DeskBlockerClassMismatch = "class_mismatch"
+	// DeskBlockerOwnerReview: the row goes to the owner for review (its
+	// entry holds and only the sale the rule wants is served), so the
+	// standing mandate never sends it; nothing is journaled.
+	DeskBlockerOwnerReview = "owner_review"
 	// DeskBlockerPriorUnknown: an earlier item of the same submission ended
 	// unknown, so later additions are not sent; protection and reductions
 	// still are.

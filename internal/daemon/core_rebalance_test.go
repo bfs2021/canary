@@ -187,33 +187,20 @@ func TestCoreRowHoldsInsideTheBandAndBelowTheMinimum(t *testing.T) {
 	}
 }
 
-// The gate's refusal is recorded, not bypassed: a mandate verdict over
-// budget blocks the buy, so no row is served and the month's decision
-// records the refusal; an open breach episode or a standing reduction of
-// the line serves the buy blocked, never open; the typed exception admits
+// A standing reduction of the line serves the buy blocked, never open (an
+// open breach episode did too until 2026-10-19; a sleeve inside its
+// allocation now adds while the reduction runs); the typed exception admits
 // only the row's own buy within its sized quantity near the decision close,
 // and a core sale stays an ordinary reduction.
 func TestCoreRowRecordsTheGatesRefusal(t *testing.T) {
-	over := withIBCF(mandateTestPositions(3000), 100, 100)
-	srv, engine := coreRowServer(t, testCoreConstitution(), over, 0.25, coreDecisionNow)
-	rows, st := coreRows(t, srv, engine, over)
-	if len(rows) != 0 || st == nil || st.Served || st.Kind != core.ActionWait || !strings.Contains(st.Why, "mandate verdict reads") {
-		t.Fatalf("over budget: rows %+v status %+v", rows, st)
-	}
-	srv.refreshCoreTarget(t.Context())
-	if d := srv.evaluateCoreTarget(t.Context(), srv.now()).LastDecision; d == nil || d.Kind != core.ActionWait || !strings.Contains(d.Why, "mandate verdict reads") || d.Outcome.Served {
-		t.Fatalf("recorded refusal %+v", d)
-	}
-
 	pos := mandateTestPositions(100)
-	srv, engine = coreRowServer(t, testCoreConstitution(), pos, 0.25, coreDecisionNow)
+	srv, engine := coreRowServer(t, testCoreConstitution(), pos, 0.25, coreDecisionNow)
 	base := srv.coreRowInput(t.Context(), srv.now())
 	for _, tc := range []struct {
 		name string
 		edit func(*coreRowInput)
 		code string
 	}{
-		{"breach episode", func(in *coreRowInput) { in.BreachEpisode = "mandate:synthetic" }, coreBuyDuringBreachCode},
 		{"reduction stands", func(in *coreRowInput) { in.ReductionStands = true }, coreBuyBesideReductionCode},
 	} {
 		in := base
@@ -229,7 +216,7 @@ func TestCoreRowRecordsTheGatesRefusal(t *testing.T) {
 			ConID: coreTestConID, Symbol: core.Symbol, SecType: "STK", Action: rpc.OrderActionSell, TotalQuantity: 5, Remaining: 5, OrderType: "LMT"}
 		return ibkrlib.OpenOrderSnapshot{Complete: true, AsOf: srv.now(), Orders: []ibkrlib.OrderLifecycleEvent{order}}, srv.currentBrokerStateScope(), nil
 	}
-	rows, _ = coreRows(t, srv, engine, pos)
+	rows, _ := coreRows(t, srv, engine, pos)
 	if len(rows) != 1 || rows[0].State != rpc.TradeProposalStateBlocked || !slices.ContainsFunc(rows[0].Blockers, func(b rpc.TradingBlocker) bool { return b.Code == reductionOrderExistingCode }) {
 		t.Fatalf("beside a working sale of the line: %+v", rows)
 	}
@@ -346,20 +333,22 @@ func TestScorecardSleeveResolverKeepsCoreFillsInTheCoreSleeve(t *testing.T) {
 }
 
 // The month's record follows the row the window serves: a decision first
-// recorded as "no buy" (the verdict read reduce) is re-recorded when a later
-// refresh inside the window serves the buy, with its key, so `canary core`
-// reads the row's outcome; a refresh that changes nothing re-records nothing.
+// recorded as "no buy" (here below the minimum order; until 2026-10-19 the
+// verdict reading reduce) is re-recorded when a later refresh inside the
+// window serves the buy, with its key, so `canary core` reads the row's
+// outcome; a refresh that changes nothing re-records nothing.
 func TestCoreDecisionRecordFollowsTheRowServedLaterInTheWindow(t *testing.T) {
-	over := withIBCF(mandateTestPositions(3000), 100, 100)
-	srv, engine := coreRowServer(t, testCoreConstitution(), over, 0.25, coreDecisionNow)
+	pos := withIBCF(mandateTestPositions(100), 100, 100)
+	c := testCoreConstitution()
+	c.Mandate.Core.MinOrderBase = new(1e9)
+	srv, engine := coreRowServer(t, c, pos, 0.25, coreDecisionNow)
 	srv.refreshCoreTarget(t.Context())
 	first := srv.evaluateCoreTarget(t.Context(), srv.now()).LastDecision
 	if first == nil || first.Kind != core.ActionWait || first.Outcome.Served || first.RowKey != "" {
 		t.Fatalf("first record %+v", first)
 	}
-	// The book comes back within budget inside the window: the buy is served.
-	pos := mandateTestPositions(100)
-	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
+	// The owner lowers the minimum inside the window: the buy is served.
+	c.Mandate.Core.MinOrderBase = new(2500.0)
 	srv.now = func() time.Time { return coreDecisionNow.Add(90 * time.Minute) }
 	if res := srv.evaluateMandate(t.Context(), false); res.Verdict == nil {
 		t.Fatal("no mandate verdict")
@@ -385,11 +374,12 @@ func TestCoreDecisionRecordFollowsTheRowServedLaterInTheWindow(t *testing.T) {
 // since the month was frozen, not since the row's re-record, so the record
 // reads submitted and is final.
 func TestCoreDecisionRecordReadsASendBeforeItsReRecord(t *testing.T) {
-	over := withIBCF(mandateTestPositions(3000), 100, 100)
-	srv, engine := coreRowServer(t, testCoreConstitution(), over, 0.25, coreDecisionNow)
+	pos := withIBCF(mandateTestPositions(100), 100, 100)
+	c := testCoreConstitution()
+	c.Mandate.Core.MinOrderBase = new(1e9)
+	srv, engine := coreRowServer(t, c, pos, 0.25, coreDecisionNow)
 	srv.refreshCoreTarget(t.Context())
-	pos := mandateTestPositions(100)
-	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return pos, nil }
+	c.Mandate.Core.MinOrderBase = new(2500.0)
 	srv.now = func() time.Time { return coreDecisionNow.Add(90 * time.Minute) }
 	if res := srv.evaluateMandate(t.Context(), false); res.Verdict == nil {
 		t.Fatal("no mandate verdict")
@@ -417,8 +407,8 @@ func TestCoreDecisionRecordReadsASendBeforeItsReRecord(t *testing.T) {
 	if got == nil || got.Kind != core.ActionBuy || !got.Outcome.Served || got.RowKey != rows[0].Key || !got.Outcome.Submitted || got.Outcome.OrderRef != "canary-core-1" {
 		t.Fatalf("the send before the re-record is not read: %+v", got)
 	}
-	// Final: a later change of the verdict re-records nothing.
-	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return over, nil }
+	// Final: a later change of the terms re-records nothing.
+	c.Mandate.Core.MinOrderBase = new(1e9)
 	srv.now = func() time.Time { return coreDecisionNow.Add(92 * time.Minute) }
 	if res := srv.evaluateMandate(t.Context(), false); res.Verdict == nil {
 		t.Fatal("no mandate verdict")

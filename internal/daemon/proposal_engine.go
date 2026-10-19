@@ -3570,10 +3570,11 @@ func (e *proposalEngine) appendBlocked(prop rpc.TradeProposal, key, revision str
 
 func proposalEventForProposal(eventType string, prop rpc.TradeProposal, at time.Time, tokenID, orderRef, msg string) proposalEvent {
 	ev := proposalEvent{At: at, Type: eventType, Key: prop.Key, Revision: prop.Revision, Bucket: prop.Bucket, PolicyID: prop.PolicyID, PolicyVersion: prop.PolicyVersion, PolicyFingerprint: prop.PolicyFingerprint, PreviewTokenID: tokenID, OrderRef: orderRef, Message: msg, SourceFingerprints: prop.SourceFingerprints, Shadow: prop.Shadow}
-	if prop.Bucket == rpc.TradeProposalBucketStrategyRebalance && prop.Core != nil {
+	if rpc.StrategyRowBucket(prop.Bucket) && prop.Core != nil {
 		// The entry's id and sleeve go with its row's events, so its fills
 		// are found by the row's order reference (strategy_placement.go)
-		// and scored in its sleeve.
+		// and scored in its sleeve; the core's row names its line and
+		// sleeve and no entry (its id is the core's).
 		ev.Strategy, ev.Sleeve, ev.ConID = prop.Core.Strategy, prop.Core.Sleeve, prop.Core.ConID
 	}
 	return ev

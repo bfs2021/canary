@@ -214,11 +214,18 @@ func renderCore(env *Env, res rpc.CoreTargetResult) {
 			}
 			line = append(line, fmt.Sprintf("drawdown %.2f K on %s at %d %s", k.DrawdownK, on, k.Decisions, pluralWord(k.Decisions, "decision", "decisions")))
 		}
+		// K is the sleeve fully invested at its stage (its allocation over
+		// the 15% floor, times the scale), so the bound reads the same at
+		// every stage.
+		stage := ""
+		if k.ScalePct > 0 {
+			stage = fmt.Sprintf(" of the sleeve at scale %g%%", k.ScalePct)
+		}
 		switch {
 		case k.MaxDrawdownK != nil && k.Breached:
-			line = append(line, env.red(fmt.Sprintf("past the bound %g K: buys stop; suspend it with stage = \"suspended\"", *k.MaxDrawdownK)))
+			line = append(line, env.red(fmt.Sprintf("past the bound %g K%s: buys stop; suspend it with stage = \"suspended\"", *k.MaxDrawdownK, stage)))
 		case k.MaxDrawdownK != nil:
-			line = append(line, fmt.Sprintf("bound %g K", *k.MaxDrawdownK))
+			line = append(line, fmt.Sprintf("bound %g K%s", *k.MaxDrawdownK, stage))
 		default:
 			line = append(line, "no bound written: cannot fire")
 		}

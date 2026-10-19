@@ -227,6 +227,38 @@ func mandateOverBudgetHolds(v *mandate.Verdict, sleeve, ccy string) string {
 	return ""
 }
 
+// mandateVerdictHolds judges a risk-adding order of sleeve on the standing
+// verdict, one reading for the order gate and the strategy decision step
+// (review, 2026-10-19), so the two never disagree: within the budget it
+// passes; over it (over, reduce) it passes while the sleeve adds inside its
+// own risk allocation (mandateOverBudgetHolds), and overBudget then says the
+// whole-book budget check does not bind the order; an unknown verdict, or
+// none, holds every addition. The sentence is the gate's refusal.
+func mandateVerdictHolds(v *mandate.Verdict, sleeve, ccy string) (why string, overBudget bool) {
+	if v == nil {
+		return "no verdict has been measured for the policy in force yet", false
+	}
+	switch v.Status {
+	case mandate.StatusWithin:
+		return "", false
+	case mandate.StatusOver, mandate.StatusReduce:
+		if why := mandateOverBudgetHolds(v, sleeve, ccy); why != "" {
+			return mandateStatusSentence(v, ccy) + "; " + why, false
+		}
+		return "", true
+	default:
+		return mandateStatusSentence(v, ccy), false
+	}
+}
+
+// verdictCurrency is a verdict's base currency, "" without one.
+func verdictCurrency(v *mandate.Verdict) string {
+	if v == nil {
+		return ""
+	}
+	return v.BaseCurrency
+}
+
 // mandateSleeveOver says whether a sleeve is over its allocation, and whether
 // it is so only on its own: a sleeve's use (its Euler contribution) is its
 // standalone risk times its correlation with the book, so a book far over

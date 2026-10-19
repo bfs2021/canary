@@ -2,6 +2,30 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.25.2 — Unreleased
+
+### What's new
+
+Three defects an independent review of the strategy path found on
+2026-10-19, fixed before anything else is built: the kill rule's bound now
+binds the sleeve as it is invested at its stage, a row served "for your
+review" is the owner's alone, and a live strategy's buy is judged by its
+own sleeve's allocation, as the order gate judges an order. The live
+`[mandate.core]` writes no kill bound, so after this release the core holds
+(buys stop; a sale its rule wants goes to the owner) until the owner writes
+`kill_drawdown_k`; the trend fund's bound is written and binds at its scale.
+
+### Fixed
+
+- The kill rule scales with the stage. `kill_drawdown_k` was measured against the full allocation (K = S / 0.15) while the entry trades at `scale_pct`, so at scale 25 a 0.35 K bound was a loss of 140% of the invested amount and could not fire in time. The drawdown is now in units of the sleeve's capital at its stage (K × scale), on own fills and on the shadow record alike; each kept mark records the scale it was sized at, and a mark kept by v3.25.1 reads the entry's current scale. `canary strategy ID` prints the bound "of the sleeve at scale 25%" (strategy-evaluator.md §3).
+- A live entry whose kill rule cannot fire does not trade on it: a live entry without a written bound holds, named ("kill_drawdown_k is unwritten in [mandate.strategies.<id>], so the kill rule cannot fire: buys stop until the bound is written"), as any unwritten key holds; a written bound of 1 K or more (the whole invested sleeve) refuses the policy file at load, and the last good policy stays. A shadow entry runs on the note, since it sends nothing. The live core is measured on its own rows' fills, as every live entry is, and holds the same way until `[mandate.core]` writes its bound (strategy-register.md).
+- "For your review" means the owner's review. A sale served while the entry holds (a data hold, the kill rule: the sale to zero its frozen month wants) said it went to the owner for review while Desk's controller took it as a candidate under the standing mandate and the daemon sent it. The row now carries `core.owner_review`, its details say the standing mandate never sends it, and `desk.execution.submit` refuses it under the mandate with `owner_review` before journaling (nothing is spent; the row stays served for the device) and again at the wire on the revalidated row (desk-execution.md; owner, 2026-10-19).
+- A strategy's buy honours the per-sleeve rule (owner, 2026-10-18 15:31 CEST). The decision step refused a buy on any mandate verdict but `within` ("the mandate verdict reads reduce"), against the rule that a sleeve inside its own allocation adds while the book is over budget: on 2026-09-30 it held the core's October row that way. The step now judges the buy on the standing verdict by the order gate's own reading, one function for both (`mandateVerdictHolds`): over budget the buy is sized while its sleeve is inside its allocation, by use and on its own risk, the whole-book margin not binding it, with no gap-cap breach created or deepened, its own gap at most at 95% of its cap and its sleeve inside its allocation with the buy; an unknown verdict holds the entry; at the maximum loss nothing is sized. The row builder no longer serves a buy blocked while the forced reduction's breach episode is open; a reduction row of the entry's own line still blocks it. The shadow record's paper decision reads the same way (mandate-risk-budget.md, "The gate").
+
+### Changed
+
+- `register.Table` names an entry's policy table; the policy template's `kill_drawdown_k` example reads 0.35 and says what the unit is.
+
 ## v3.25.1 — 2026-10-19 13:30 CEST
 
 ### What's new

@@ -1387,11 +1387,13 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # 50 or 100.
 # spec_hash = "2408d09e618904c84219cacf6bc0f599e1a00ee3c4b04b0effbcc4521f45a441"
 # stage = "shadow"
-# kill_drawdown_k is the kill rule's drawdown bound in units of sleeve
-# capital, the number the lab's design run writes into its registry, not a
-# proposal; unwritten, the kill rule cannot fire
+# kill_drawdown_k is the kill rule's drawdown bound in units of the sleeve
+# fully invested at its stage (its allocation over the 15% floor, times
+# scale_pct), the number the lab's design run writes into its registry, not
+# a proposal. A live entry holds while it is unwritten (the kill rule cannot
+# fire), and a bound of 1.0 or more refuses the file
 # (internal-docs/design/strategy-evaluator.md).
-# kill_drawdown_k = 1.0
+# kill_drawdown_k = 0.35
 # Every later machine strategy is one table of its own, every key yours: a
 # rule compiled into Canary, the lab spec hash it implements, its sleeve,
 # its risk allocation in percent a year of the budget base (the overlay's is
@@ -1423,7 +1425,7 @@ func constitutionPolicyTemplateFrom(release string, src config.Trading, srcRead 
 # band_pct = 10.0
 # min_order_base = 2500.0
 # max_value_pct = 40.0
-# kill_drawdown_k = 1.0
+# kill_drawdown_k = 0.35
 # signal_isin = ""
 # signal_currency = "GBP"
 # signal_in = "USD"

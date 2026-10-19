@@ -64,9 +64,15 @@ func (s *Server) strategyOwnFills(ctx context.Context, id string, conID int) str
 		return out
 	}
 	scope := s.currentBrokerStateScope()
+	// The core's rows are core_rebalance events naming no entry; every other
+	// entry's are strategy_rebalance events naming it.
+	bucket, entry := rpc.TradeProposalBucketStrategyRebalance, id
+	if id == risk.CoreStrategyID {
+		bucket, entry = rpc.TradeProposalBucketCoreRebalance, ""
+	}
 	var refs []string
 	for _, ev := range s.tradeProposals.store.eventsSince(time.Time{}) {
-		if ev.Type != "submitted" || ev.Bucket != rpc.TradeProposalBucketStrategyRebalance || ev.Strategy != id || ev.ConID != conID || ev.OrderRef == "" {
+		if ev.Type != "submitted" || ev.Bucket != bucket || ev.Strategy != entry || ev.ConID != conID || ev.OrderRef == "" {
 			continue
 		}
 		if !sameBrokerScope(scope, brokerStateScope{Account: ev.AccountID, Mode: ev.AccountMode}) || slices.Contains(refs, ev.OrderRef) {

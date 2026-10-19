@@ -302,9 +302,14 @@ func resolveOne(e risk.StrategyEntry, rules []Rule) Resolved {
 	return r
 }
 
+// KillBoundMax is the smallest kill_drawdown_k a live entry is refused on: a
+// drawdown of one stage capital is the whole invested sleeve.
+const KillBoundMax = 1.0
+
 // Refusals names what refuses a policy file against this build's rules:
 // every entry written live on a compiled rule that serves no rows (a live
-// entry either produces rows or the file does not load), and every two
+// entry either produces rows or the file does not load), a live entry whose
+// written kill bound cannot fire (KillBoundMax), and every two
 // entries that name one fund line (the same ISIN and currency, or the same
 // con_id; the core's compiled fund when its keys are unwritten), since two
 // strategies on one line would each count the other's units as their own
@@ -320,6 +325,14 @@ func Refusals(entries []risk.StrategyEntry, rules []Rule) []string {
 		table := "[" + nonEmptyKey(e) + "]"
 		if rule, ok := Find(rules, e.Rule); ok && e.Stage == risk.StageLive && !rule.Sends {
 			out = append(out, fmt.Sprintf("%s is written live, but rule %s serves no rows in this build; write stage = \"suspended\" or install a build that sends it", table, rule.ID))
+		}
+		if e.Stage == risk.StageLive && e.KillDrawdownK != nil && *e.KillDrawdownK >= KillBoundMax {
+			// The bound is in units of the sleeve fully invested at its
+			// stage (stageCapital): at 1 K or more the kill rule fires only
+			// once the whole invested sleeve is lost, which is no kill rule
+			// (review, 2026-10-19). An unwritten bound holds the entry
+			// instead, as any unwritten key does.
+			out = append(out, fmt.Sprintf("%s is written live with kill_drawdown_k = %g: a bound of %g K or more is the whole sleeve invested at its stage, so the kill rule cannot fire before the sleeve is gone; write a bound below %g", table, *e.KillDrawdownK, KillBoundMax, KillBoundMax))
 		}
 		isin, ccy := strings.TrimSpace(e.ISIN), strings.ToUpper(strings.TrimSpace(e.Currency))
 		if e.Form == risk.StrategyFormCore {
@@ -345,6 +358,10 @@ func Refusals(entries []risk.StrategyEntry, rules []Rule) []string {
 	}
 	return out
 }
+
+// Table is the policy table an entry is written in, without brackets:
+// mandate.core, or mandate.strategies.<id>.
+func Table(e risk.StrategyEntry) string { return nonEmptyKey(e) }
 
 func nonEmptyKey(e risk.StrategyEntry) string {
 	if e.KeyPrefix != "" {

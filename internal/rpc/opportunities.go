@@ -1178,6 +1178,12 @@ type TradeProposalCore struct {
 	// and rule are the core's.
 	Strategy string `json:"strategy,omitempty"`
 	Rule     string `json:"rule,omitempty"`
+	// OwnerReview says the row goes to the owner for review: the entry
+	// holds (a data hold, the kill rule) and only the sale to zero its
+	// frozen month wants is served. "For your review" means the owner's, on
+	// the device: the standing mandate never sends such a row, and the
+	// submit path refuses it under the mandate (owner, 2026-10-19).
+	OwnerReview bool `json:"owner_review,omitempty"`
 }
 
 // StrategyRowBucket reports whether a bucket is a register entry's monthly

@@ -269,3 +269,33 @@ func TestTwoStrategiesOnOneFundLineRefuseTheFile(t *testing.T) {
 		t.Fatalf("distinct lines refused: %q", refused)
 	}
 }
+
+// A live entry's written kill bound must be one its stage can reach: at 1 K
+// or more (the whole sleeve invested at its stage) the kill rule fires only
+// once the sleeve is gone, and the file is refused; shadow, which sends
+// nothing, is not refused. An unwritten bound holds the entry in the daemon
+// (strategy_target.go), never the file (review, 2026-10-19).
+func TestLiveEntryWhoseKillRuleCannotFireRefusesTheFile(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		e       risk.StrategyEntry
+		bound   *float64
+		refused bool
+	}{
+		{"entry live at 1 K", entry(risk.StageLive, 25), new(KillBoundMax), true},
+		{"entry live at 1.5 K", entry(risk.StageLive, 100), new(1.5), true},
+		{"entry live at 0.35 K", entry(risk.StageLive, 25), new(0.35), false},
+		{"entry live unwritten", entry(risk.StageLive, 25), nil, false},
+		{"entry shadow at 1 K", entry(risk.StageShadow, 25), new(KillBoundMax), false},
+		{"entry suspended at 1 K", entry(risk.StageSuspended, 25), new(KillBoundMax), false},
+		{"core live at 1 K", coreEntry(risk.StageLive, core.SpecHash, 25), new(KillBoundMax), true},
+		{"core live unwritten", coreEntry(risk.StageLive, core.SpecHash, 25), nil, false},
+	} {
+		e := tc.e
+		e.KillDrawdownK = tc.bound
+		refused := Refusals([]risk.StrategyEntry{e}, testRules(true, true))
+		if (len(refused) == 1) != tc.refused || tc.refused && !strings.Contains(refused[0], "["+Table(e)+"] is written live with kill_drawdown_k = ") || tc.refused && !strings.Contains(refused[0], "cannot fire before the sleeve is gone") {
+			t.Fatalf("%s: refusals %q, want refused %v", tc.name, refused, tc.refused)
+		}
+	}
+}

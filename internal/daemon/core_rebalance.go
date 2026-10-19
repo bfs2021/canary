@@ -39,7 +39,6 @@ import (
 
 // Blocker codes of a core row that is served but may not be sent.
 const (
-	coreBuyDuringBreachCode    = "core_buy_during_breach"
 	coreBuyBesideReductionCode = "core_buy_beside_reduction"
 	coreLimitDistanceCode      = "core_limit_far_from_decision_close"
 )
@@ -58,10 +57,10 @@ type coreRowInput struct {
 	State    register.State
 	ScalePct float64
 	Scope    brokerStateScope
-	// BreachEpisode is the mandate's open breach episode and
-	// ReductionStands whether a mandate_reduction row of the core's
-	// contract stands this generation: neither admits a core buy.
-	BreachEpisode   string
+	// ReductionStands says a mandate_reduction row of the core's contract
+	// stands this generation: no core buy beside it. (An open breach
+	// episode held buys too until 2026-10-19; a sleeve inside its
+	// allocation now adds while the reduction runs, as the gate admits.)
 	ReductionStands bool
 	// Entry is the register entry the row is for; its zero value (and the
 	// core's own entry) is the core.
@@ -100,9 +99,6 @@ func (e *proposalEngine) resolveCoreInput(ctx context.Context, scope brokerState
 		in = e.server.coreRowInput(ctx, now)
 	}
 	in.Scope = scope
-	if mandateStatus != nil {
-		in.BreachEpisode = mandateStatus.Episode
-	}
 	if in.Contract != nil {
 		in.ReductionStands = slices.ContainsFunc(rows, func(p rpc.TradeProposal) bool {
 			return p.Bucket == rpc.TradeProposalBucketMandateReduction && p.Contract.ConID == in.Contract.ConID
@@ -144,9 +140,6 @@ func (e *proposalEngine) resolveStrategyInputs(ctx context.Context, scope broker
 	for i := range ins {
 		in := &ins[i]
 		in.Scope = scope
-		if mandateStatus != nil {
-			in.BreachEpisode = mandateStatus.Episode
-		}
 		if in.Contract != nil {
 			in.ReductionStands = slices.ContainsFunc(rows, func(p rpc.TradeProposal) bool {
 				return p.Bucket == rpc.TradeProposalBucketMandateReduction && p.Contract.ConID == in.Contract.ConID
@@ -462,17 +455,18 @@ func (e *proposalEngine) coreRebalanceProposals(ctx context.Context, policy prot
 		st.Reasons = append(st.Reasons, "the row is ignored by you ("+p.Key+"); unignore it to see it again")
 		return nil, st
 	}
-	if plan.Kind == core.ActionBuy {
+	if plan.Kind == core.ActionBuy && in.ReductionStands {
+		// A buy beside a reduction of its own line never goes. An open
+		// breach episode no longer blocks it (until 2026-10-19 it did): a
+		// sleeve inside its allocation adds while the forced reduction
+		// cuts the sleeve furthest over its own (owner, 2026-10-18 15:31
+		// CEST), and the decision step judges the buy by its sleeve as the
+		// gate does.
 		what, line := "core buy", "the core's line"
 		if !in.isCore() {
 			what, line = in.Entry.Entry.ID+" buy", in.name()+"'s line"
 		}
-		switch {
-		case in.BreachEpisode != "":
-			proposalBlock(&p, coreBuyDuringBreachCode, "the mandate's breach episode "+in.BreachEpisode+" is open: no "+what+" until a verdict reads within and the episode ends")
-		case in.ReductionStands:
-			proposalBlock(&p, coreBuyBesideReductionCode, "a mandate reduction of "+line+" stands this generation: no "+what+" beside it")
-		}
+		proposalBlock(&p, coreBuyBesideReductionCode, "a mandate reduction of "+line+" stands this generation: no "+what+" beside it")
 	}
 	for _, b := range e.coreWorkingOrderBlockers(ctx, p) {
 		proposalBlock(&p, b.Code, b.Message)
@@ -533,10 +527,14 @@ func coreRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources
 	if !d.TrendOn {
 		trend = "trend off"
 	}
-	head, confirm := "core sleeve", "you confirm this row on your device; nothing is sent without that, and the core is never pre-authorised"
+	head, confirm := "core sleeve", "you confirm this row on your device, or Desk's controller sends it under the standing mandate you confirmed there; nothing else sends it, and it is never pre-authorised"
 	if !in.isCore() {
 		head = fmt.Sprintf("%s strategy (sleeve %s)", in.Entry.Entry.ID, in.Entry.Entry.Sleeve)
-		confirm = "you confirm this row on your device, or Desk's controller sends it under the standing mandate you confirmed there; nothing else sends it, and it is never pre-authorised"
+	}
+	if plan.Hold {
+		// For your review means your review: the standing mandate never
+		// sends a row served while the entry holds (owner, 2026-10-19).
+		confirm = "this row goes to you for review: you confirm it on your device, and the standing mandate never sends it; nothing else sends it, and it is never pre-authorised"
 	}
 	reason := fmt.Sprintf("%s, decision %s (%s, target %s, %s held): %s %s for the %s session, a DAY limit at the live mid; %s",
 		head, d.Decision, trend, pluralNoun(target, "share"), pluralNoun(held, "share"), verb, pluralNoun(plan.Quantity, "share"), plan.Session, plan.Why)
@@ -578,7 +576,7 @@ func coreRow(policy protectionPolicy, status rpc.ProtectionPolicyStatus, sources
 		p.Notional = price * float64(plan.Quantity)
 	}
 	p.Core = &rpc.TradeProposalCore{Decision: d.Decision, TrendOn: d.TrendOn, Kind: plan.Kind, Target: target, Held: held, ScalePct: in.ScalePct,
-		ConID: k.ConID, Currency: k.Currency, DecisionClose: d.LineClose(), Session: plan.Session, Sleeve: risk.CoreStrategyID, Stage: string(in.State), Terms: terms}
+		ConID: k.ConID, Currency: k.Currency, DecisionClose: d.LineClose(), Session: plan.Session, Sleeve: risk.CoreStrategyID, Stage: string(in.State), Terms: terms, OwnerReview: plan.Hold}
 	if !in.isCore() {
 		p.Core.Sleeve, p.Core.Strategy = in.Entry.Entry.Sleeve, in.Entry.Entry.ID
 		if in.Entry.Rule != nil {

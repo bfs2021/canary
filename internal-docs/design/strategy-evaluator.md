@@ -79,7 +79,7 @@ band_pct            = 10
 min_order_base      = 2500
 max_value_pct       = 40
 # con_id, exchange: optional pins, as in [mandate.core]
-# kill_drawdown_k   = …             # optional, section 3; unwritten, the kill rule cannot fire
+# kill_drawdown_k   = …             # section 3, in units of the sleeve invested at its stage; unwritten, a live entry holds (2026-10-19)
 ```
 
 `risk_allocation_pct` stays as the register defines it. `[mandate.core]`
@@ -101,13 +101,24 @@ shares) are the evaluator's, not the signal's: `core-sleeve.md` §1.
 
 The kill rule is the lab spec's; the owner's lever is `stage = "suspended"`.
 What Canary measures is the spec's drawdown test (a): the sleeve's
-peak-to-trough loss in units of K = S / 0.15, marked at each decision. The
-entry may write `kill_drawdown_k`, the bound the lab's design run writes into
-its registry; unwritten, the verdict says the kill rule cannot fire, as the
-spec says. Written, the evaluator marks the paper sleeve (cash and the paper
-position) at each decision close on the shadow record and at the current
-reading, and past the bound holds the strategy before the month can be
-frozen: buys stop, a sale the rule wants goes to the owner, the month is
+peak-to-trough loss in units of K, marked at each decision. K is the
+sleeve's capital at its stage (review, 2026-10-19): S / 0.15 × `scale_pct` /
+100, the notional of the sleeve fully invested at that stage, so the lab's
+"0.35 K is a 35% fall of a fully invested sleeve" holds at every scale.
+Until 2026-10-19 K was S / 0.15 whatever the stage, so at scale 25 a 0.35 K
+bound was a loss of 140% of the invested amount and could not fire in time
+(`stageCapital`; `canary strategy` prints the bound "of the sleeve at scale
+25%"). The entry may write `kill_drawdown_k`, the bound the lab's design run
+writes into its registry; unwritten, the kill rule cannot fire: a shadow
+entry says so and runs, since it sends nothing, and a live entry holds,
+named ("kill_drawdown_k is unwritten in [mandate.strategies.<id>], so the
+kill rule cannot fire: buys stop until the bound is written"), as any
+unwritten key holds (2026-10-19). A live entry's written bound of 1 K or
+more is the whole invested sleeve and refuses the file (`register.Refusals`,
+`KillBoundMax`). Written, the evaluator marks the paper sleeve (cash and the
+paper position) at each decision close on the shadow record and at the
+current reading, and past the bound holds the strategy before the month can
+be frozen: buys stop, a sale the rule wants goes to the owner, the month is
 recorded as a hold naming it, and the owner suspends.
 
 Live (built 2026-10-19, `strategy_kill_live.go`): a live entry keeps no
@@ -117,10 +128,15 @@ never read by an order path): the decision close, the units and the cash
 its own fills (the executions of its rows' orders) left, and S at that
 decision; the sleeve's equity is cash plus units times the close, its peak
 starts at zero as the paper position's does, and the drawdown in K is
-measured from the running peak, this reading included. A hand trade of the
-line is not an own fill, so it moves the measure nothing. The spec's other
-tests are the scorecard's and the cost report's, not this. The core keeps
-its measure on its shadow record (it writes no bound).
+measured from the running peak, this reading included; each mark keeps the
+stage's scale it was sized at (`scale_pct`; a mark kept before 2026-10-19
+reads the entry's current scale). A hand trade of the line is not an own
+fill, so it moves the measure nothing. The spec's other tests are the
+scorecard's and the cost report's, not this. Since 2026-10-19 the live core
+is measured the same way, on its own rows' fills (its `core_rebalance` rows'
+submitted events name its line and sleeve); the shadow record's paper sleeve
+measures an entry in shadow only. The core's bound is the owner's to write
+(`[mandate.core] kill_drawdown_k`); until it is written the live core holds.
 
 ## 4. Parity: how the lab's fixture tests any entry
 

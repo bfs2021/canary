@@ -551,17 +551,11 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 	// allocation (owner, 2026-10-18 15:31 CEST: "yes, it should. unless you
 	// advise differently"): that sleeve keeps adding inside its allocation
 	// while the forced reduction cuts the sleeve furthest over its own. An
-	// unknown verdict adds nothing, ever.
-	overBudget := false
-	switch result.Verdict.Status {
-	case mandate.StatusWithin:
-	case mandate.StatusOver, mandate.StatusReduce:
-		if why := mandateOverBudgetHolds(result.Verdict, sleeve, ccy); why != "" {
-			return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + mandateStatusSentence(result.Verdict, ccy) + "; " + why + "; this order adds risk." + open, Action: action}
-		}
-		overBudget = true
-	default:
-		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + mandateStatusSentence(result.Verdict, ccy) + "; this order adds risk." + open, Action: action}
+	// unknown verdict adds nothing, ever. The same reading sizes a strategy
+	// row's buy (strategy_target.go), so the two never disagree.
+	why, overBudget := mandateVerdictHolds(result.Verdict, sleeve, ccy)
+	if why != "" {
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + why + "; this order adds risk." + open, Action: action}
 	}
 	// The owner sleeve's drawdown stop: while engaged the sleeve is
 	// reduce-only, inside the budget or over it (mandate_sleeve_stop.go).

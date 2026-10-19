@@ -624,8 +624,9 @@ What happens while `[mandate.core]` reads `stage = "live"` with `spec_hash`
   a policy key; London's early closes are skipped). A buy or a sale down is
   served for the window's sessions and then waits for the next decision; a
   sale to zero continues in the next sessions until sold. A row is served
-  blocked, never open, while the mandate's breach episode is open or a
-  `mandate_reduction` row of the line stands (buys), and while any order for
+  blocked, never open, while a `mandate_reduction` row of the line stands
+  (buys; until 2026-10-19 an open breach episode blocked a buy too, against
+  the per-sleeve rule of 2026-10-18), and while any order for
   the contract works on either side, the owner's included, or one Canary
   sent is unacknowledged. The owner's ignore applies.
 - The row: BUY or SELL of the pinned contract by id, routed SMART with the
@@ -812,6 +813,24 @@ after this release.
 
 ## 3. The mandate
 
+#### For your review, the kill rule and the per-sleeve buy (2026-10-19)
+
+A review of the whole system on 2026-10-19 found three defects in this path,
+fixed in v3.25.2. A row served while the entry holds (a data hold, the kill
+rule; the sale to zero its frozen month wants, review S6) now carries
+`core.owner_review` and goes to the owner: `desk.execution.submit` refuses it
+under the standing mandate (`owner_review`, before journaling and again at
+the wire on the revalidated row), the row's details say so, and Desk shows
+it as the owner's to confirm; until then the row said "for your review" while
+the controller took the sale as a candidate and the daemon sent it (owner,
+2026-10-19: for your review means the owner's review). The kill rule's bound
+is measured against the sleeve's capital at its stage, the live core's on
+its own rows' fills, and a live entry without a written bound holds
+(`strategy-evaluator.md` §3); `[mandate.core]` writes no bound yet, so the
+core holds until the owner writes one. The core's buy is judged by its own
+sleeve as the gate judges an order, and an open breach episode no longer
+blocks it (`mandate-risk-budget.md`, "The gate", the decision step).
+
 ### What the gate does today
 
 `mandateBudgetGate` (`mandate_verdict.go`) runs at order preview, strategy
@@ -879,10 +898,12 @@ to the whole-book `within` and headroom above, and to its own allocation with
 the buy added. The mandate gate itself admits a core buy inside the core's
 allocation while another sleeve has the book over budget (owner, 2026-10-18
 15:31 CEST: "yes, it should. unless you advise differently";
-`mandate-risk-budget.md`, "The gate"); the core's rule still buys only on a
-`within` verdict, and whether it should buy inside its allocation while the
-book is over is for phase 2, with its rows. An unknown verdict admits no core
-buy. The core's sales (rebalance down, trend off) always pass.
+`mandate-risk-budget.md`, "The gate"); since 2026-10-19 the core's rule
+buys inside its allocation while the book is over budget, judged by the
+gate's own reading (`mandateVerdictHolds`; `mandate-risk-budget.md`, "The
+gate", the decision step), where until then it bought only on a `within`
+verdict. An unknown verdict admits no core buy. The core's sales (rebalance
+down, trend off) always pass.
 
 A sleeve's Euler use never exceeds its own standalone risk, and every core buy
 is cut to the core's allocation on the mandate's measure (`coreHeadroomFits`),
@@ -904,8 +925,10 @@ coexist:
 - One row per contract and side: a reduction sale of IBCF and a core sale
   merge into one row sized by the larger need (the existing same-contract
   merge; the mandate row takes precedence).
-- No core buy while a breach episode is open, while any reduction row
-  stands, or while a sale of IBCF works.
+- No core buy while any reduction row of IBCF stands, or while a sale of
+  IBCF works (an open breach episode no longer blocks one, 2026-10-19: a
+  core inside its allocation adds while the reduction cuts the sleeve over
+  its own).
 - No buy-back in the month of a forced cut: the core buys again only in
   the next window, after `within`, under the 0.95 headroom.
 - At the maximum loss the room is 0, so S and the target are 0, and the
@@ -1071,8 +1094,8 @@ exception.
    holds the next; after a partial fill the next session buys only the
    remainder; never past Q; the window's end drops the rest.
 8. Merge with a mandate reduction of IBCF (one row, the larger need); no
-   buy during a breach episode, beside a reduction row or a working IBCF
-   sale; no buy-back in the month of a cut.
+   buy beside a reduction row or a working IBCF sale (the breach-episode
+   block retired 2026-10-19); no buy-back in the month of a cut.
 9. Contract guards: a mismatched contract id, ISIN, currency, exchange or
    type, a second line with the ISIN, and a non-EUR base each hold.
 10. Data guards: the price jump, the missing bar, the σ bounds and the

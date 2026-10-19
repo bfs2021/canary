@@ -219,6 +219,11 @@ type KillView struct {
 	// record (the paper position), "own_fills" for a live entry's own
 	// fills marked at each decision close.
 	Source string `json:"source,omitempty"`
+	// ScalePct is the stage's scale the drawdown is measured against: K
+	// at the stage is the fully invested sleeve's notional times the scale
+	// (since 2026-10-19; before, the full allocation a lower stage does not
+	// trade, so a bound could not fire in time).
+	ScalePct float64 `json:"scale_pct,omitempty"`
 }
 
 // KillSourceOwnFills marks a kill test measured on a live entry's own fills.

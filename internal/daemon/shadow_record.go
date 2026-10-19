@@ -237,14 +237,18 @@ func (s *Server) shadowDecide(res *rpc.StrategyTargetResult, r register.Resolved
 	if !isCore {
 		in.Symbol, in.Name = k.Symbol, strategyName(e)
 	}
-	_, kept, _, _ := s.mandateVerdicts.current()
+	result, kept, _, _ := s.mandateVerdicts.current()
+	var verdict *mandate.Verdict
+	if result != nil {
+		verdict = result.Verdict
+	}
+	// The paper buy is judged by the entry's sleeve as the live row's and
+	// the gate's are (mandateVerdictHolds), so the record reads what the
+	// entry would have done live.
+	why, overBudget := mandateVerdictHolds(verdict, e.Sleeve, verdictCurrency(verdict))
 	switch {
-	case res.Mandate == nil || res.Mandate.Status != mandate.StatusWithin:
-		status := "unknown"
-		if res.Mandate != nil {
-			status = res.Mandate.Status
-		}
-		in.BuyBlocked = "the mandate verdict reads " + status
+	case why != "":
+		in.BuyBlocked = why
 	case kept == nil:
 		in.BuyBlocked = "no mandate verdict is kept"
 	default:
@@ -257,7 +261,7 @@ func (s *Server) shadowDecide(res *rpc.StrategyTargetResult, r register.Resolved
 			if !isCore {
 				book = s.withStrategySeries(book, r, k)
 			}
-			in.Holdable = held + core.Headroom(want, func(q int) bool { return strategyHeadroomFits(book, k, e.Sleeve, q, price) })
+			in.Holdable = held + core.Headroom(want, func(q int) bool { return strategyHeadroomFits(book, k, e.Sleeve, q, price, verdict, overBudget) })
 		}
 	}
 	return core.Decide(in)
@@ -407,6 +411,9 @@ type killMark struct {
 	session      string
 	close        float64
 	sleeveBudget float64
+	// scalePct is the stage's scale the reading is sized at: the bound is
+	// measured against what the stage invests (stageCapital).
+	scalePct float64
 }
 
 // strategyKill is the kill rule's drawdown test on the shadow record
@@ -423,12 +430,18 @@ func (s *Server) strategyKill(ctx context.Context, r register.Resolved, mark kil
 	if err != nil {
 		return nil
 	}
-	kill := &rpc.KillView{MaxDrawdownK: r.KillDrawdownK}
+	kill := &rpc.KillView{MaxDrawdownK: r.KillDrawdownK, ScalePct: r.ScalePct}
 	cash, held, peak := 0.0, 0, 0.0
-	at := func(close, sleeveBudget float64) {
+	// The paper position is sized at the stage's scale, so the drawdown is
+	// in units of the stage's capital (stageCapital), as the live measure's.
+	at := func(close, sleeveBudget, scalePct float64) {
+		k := stageCapital(sleeveBudget, nonZero(scalePct, r.ScalePct))
+		if k <= 0 {
+			return
+		}
 		equity := cash + float64(held)*close
 		peak = max(peak, equity)
-		if dd := (peak - equity) / (sleeveBudget / core.VolFloor); dd > kill.DrawdownK {
+		if dd := (peak - equity) / k; dd > kill.DrawdownK {
 			kill.DrawdownK = dd
 		}
 		kill.Measured, kill.Decisions = true, kill.Decisions+1
@@ -440,16 +453,16 @@ func (s *Server) strategyKill(ctx context.Context, r register.Resolved, mark kil
 			cash -= float64(rec.Fill.Quantity) * rec.Fill.Price
 			held += rec.Fill.Quantity
 		case rec.Kind == rpc.ShadowKindDecision && rec.Decision != nil && rec.Decision.Close > 0 && rec.Decision.SleeveBudget > 0:
-			at(rec.Decision.Close, rec.Decision.SleeveBudget)
+			at(rec.Decision.Close, rec.Decision.SleeveBudget, rec.Decision.ScalePct)
 			marked = marked || rec.Session == mark.session
 		}
 	}
 	if !marked && mark.session != "" && mark.close > 0 && mark.sleeveBudget > 0 {
-		at(mark.close, mark.sleeveBudget)
+		at(mark.close, mark.sleeveBudget, mark.scalePct)
 	}
 	switch {
 	case kill.MaxDrawdownK == nil:
-		kill.Note = "kill_drawdown_k unwritten: the kill rule cannot fire until the lab's design run writes its bound"
+		kill.Note = killUnwrittenNote
 	case kill.Measured && kill.DrawdownK > *kill.MaxDrawdownK:
 		kill.Breached = true
 	case !kill.Measured:

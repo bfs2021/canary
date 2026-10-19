@@ -90,6 +90,7 @@ func TestRegisterRefusesContradictions(t *testing.T) {
 		"a short entry isin":                          {entry("s9", full("s9")+"isin = \"ABC\"\n"), "twelve upper-case letters and digits"},
 		"a bad entry band":                            {entry("s9", full("s9")+"band_pct = 100.0\n"), "band_pct must be in (0, 100)"},
 		"a kill bound of zero":                        {entry("s9", full("s9")+"kill_drawdown_k = 0.0\n"), "kill_drawdown_k must be positive"},
+		"a live kill bound that cannot fire":          {entry("s9", strings.Replace(full("s9"), `stage = "shadow"`, `stage = "live"`, 1)+"kill_drawdown_k = 1.0\n"), "cannot fire before the sleeve is gone"},
 		"the core's scale off the ladder once staged": {"stage = \"shadow\"\n", ""},
 	} {
 		t.Run(name, func(t *testing.T) {

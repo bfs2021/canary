@@ -205,8 +205,8 @@ func goldenStrategyLive() rpc.StrategyTargetResult {
 	res.Row = &rpc.CoreRowView{Key: "strategy_rebalance:synthetic03", Revision: "r1", Action: "BUY", Quantity: 159, ReferencePrice: 96.1, Session: "2026-09-04", State: rpc.TradeProposalStateGenerated, Readiness: "opening_window", Terms: terms}
 	res.LastDecision = &rpc.CoreDecisionRecord{Decision: "2026-08-31", DecidedAt: goldenAt.Add(-5 * 24 * time.Hour), Stage: "live", Kind: core.ActionBuy, Quantity: 159, Why: "first buy toward the target",
 		Target: 159, Held: 0, Price: 95.95, Window: terms.Window, RowKey: "strategy_rebalance:synthetic03", Outcome: rpc.CoreDecisionOutcome{Served: true}}
-	bound := 3.0
-	res.Kill = &rpc.KillView{MaxDrawdownK: &bound, DrawdownK: 0.0125, Measured: true, Decisions: 1, Source: rpc.KillSourceOwnFills}
+	bound := 0.35 // a bound of 1 K or more refuses a live entry's file (2026-10-19)
+	res.Kill = &rpc.KillView{MaxDrawdownK: &bound, DrawdownK: 0.0125, Measured: true, Decisions: 1, Source: rpc.KillSourceOwnFills, ScalePct: 25}
 	return res
 }
 

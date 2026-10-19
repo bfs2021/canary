@@ -20,7 +20,8 @@ Target · 159 shares (15,280 EUR) · 4% of 230,000 EUR × room 100% ÷ 15.0%
 Holding · 0 shares (0 EUR) · price 96.10 last close
 Band · 10% of the target (16 shares) · minimum order 2,500 EUR
 Mandate · within · risk 3,267 EUR a year of the budget 34,500 EUR
-Kill rule · drawdown 0.01 K on its own fills at 1 decision · bound 3 K
+Kill rule · drawdown 0.01 K on its own fills at 1 decision · bound 0.35 K of
+  the sleeve at scale 25%
 Next decision · 2026-09-30 after the London SETS close
 
 Month-ends
@@ -61,7 +62,8 @@ Target · 159 shares (15,280 EUR) · 4% of 230,000 EUR × room 100% ÷ 15.0%
 Holding · 0 shares (0 EUR) · price 96.10 last close
 Band · 10% of the target (16 shares) · minimum order 2,500 EUR
 Mandate · within · risk 3,267 EUR a year of the budget 34,500 EUR
-Kill rule · drawdown 0.01 K on its own fills at 1 decision · bound 3 K
+Kill rule · drawdown 0.01 K on its own fills at 1 decision · bound 0.35 K of
+  the sleeve at scale 25%
 Next decision · 2026-09-30 after the London SETS close
 
 \x1b[1mMonth-ends\x1b[0m

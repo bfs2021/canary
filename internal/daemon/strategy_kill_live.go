@@ -20,26 +20,61 @@ import (
 // sleeve's equity is the cash its own fills moved plus the units they left
 // times the decision close, kept once per decision in the daemon's event
 // log (scope strategy/<id>, never read by an order path). The drawdown is
-// the fall from the running peak in units of K = S / 0.15, S the sleeve's
+// the fall from the running peak in units of the stage's capital, K at the
+// stage (stageCapital): S / 0.15 times the stage's scale, S the sleeve's
 // risk allocation in money at that decision, as on the shadow record. Units
 // the owner sells by hand leave the measure alone: it reads the entry's own
-// trading, not the line's holding.
+// trading, not the line's holding. Since 2026-10-19 the core's own fills are
+// measured the same way once the core is live (its rows' fills, never a
+// hand trade of its fund): the lab's bound binds the sleeve that trades.
 
 const (
 	liveMarkType  = "strategy.mark.v1"
 	liveMarkLimit = 10000
 )
 
+// killUnwrittenNote is the verdict's note while no bound is written; a live
+// entry holds on it (strategy_target.go), a shadow entry sends nothing.
+const killUnwrittenNote = "kill_drawdown_k unwritten: the kill rule cannot fire until the lab's design run writes its bound"
+
 // liveMark is one decision's mark of a live entry's own sleeve.
 type liveMark struct {
-	Version      int       `json:"version"`
-	Strategy     string    `json:"strategy"`
-	Session      string    `json:"session"`
-	Close        float64   `json:"close"`
-	Units        float64   `json:"units"`
-	Cash         float64   `json:"cash"`
-	SleeveBudget float64   `json:"sleeve_budget"`
-	RecordedAt   time.Time `json:"recorded_at"`
+	Version      int     `json:"version"`
+	Strategy     string  `json:"strategy"`
+	Session      string  `json:"session"`
+	Close        float64 `json:"close"`
+	Units        float64 `json:"units"`
+	Cash         float64 `json:"cash"`
+	SleeveBudget float64 `json:"sleeve_budget"`
+	// ScalePct is the stage's scale at the decision, the capital the bound
+	// is measured against; a mark written before it was kept (v3.25.1 and
+	// earlier) reads the entry's current scale.
+	ScalePct   float64   `json:"scale_pct,omitempty"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// stageCapital is K at the stage: the sleeve's risk allocation S over the
+// volatility floor (the notional of a fully invested sleeve, core-sleeve.md
+// §1), times the stage's scale, since the stage trades scale_pct of that
+// notional (core.SizeTarget). The lab writes its bound in units of a fully
+// invested sleeve ("0.35 K is a 35% fall of a fully invested sleeve"), so
+// it is measured against what the stage invests: against the full
+// allocation a stage of 25 does not trade, a 0.35 K bound was a loss of
+// 140% of the invested amount and could not fire in time (review,
+// 2026-10-19). Zero while nothing is invested, and the reading is skipped.
+func stageCapital(sleeveBudget, scalePct float64) float64 {
+	if !(sleeveBudget > 0) || !(scalePct > 0) {
+		return 0
+	}
+	return sleeveBudget * scalePct / 100 / core.VolFloor
+}
+
+// nonZero is v, or fallback while v is not positive.
+func nonZero(v, fallback float64) float64 {
+	if v > 0 {
+		return v
+	}
+	return fallback
 }
 
 func liveMarkScope(id string) string { return "strategy/" + id }
@@ -82,7 +117,7 @@ func (s *Server) recordLiveMark(ctx context.Context, res *rpc.StrategyTargetResu
 	if s.liveMarkFillsForTest != nil {
 		own = s.liveMarkFillsForTest()
 	}
-	m := liveMark{Version: 1, Strategy: r.Entry.ID, Session: res.Decision.Decision, Close: res.Decision.LineClose(), Units: own.Units, Cash: own.Cash, SleeveBudget: res.Sizing.Current.SleeveBudget, RecordedAt: now}
+	m := liveMark{Version: 1, Strategy: r.Entry.ID, Session: res.Decision.Decision, Close: res.Decision.LineClose(), Units: own.Units, Cash: own.Cash, SleeveBudget: res.Sizing.Current.SleeveBudget, ScalePct: r.ScalePct, RecordedAt: now}
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return
@@ -104,12 +139,17 @@ func (s *Server) strategyKillLive(ctx context.Context, r register.Resolved, mark
 	if err != nil {
 		return nil
 	}
-	kill := &rpc.KillView{MaxDrawdownK: r.KillDrawdownK, Source: rpc.KillSourceOwnFills}
-	// The sleeve's own P&L starts at zero, as the paper position does.
+	kill := &rpc.KillView{MaxDrawdownK: r.KillDrawdownK, Source: rpc.KillSourceOwnFills, ScalePct: r.ScalePct}
+	// The sleeve's own P&L starts at zero, as the paper position does; the
+	// drawdown is in units of the stage's capital (stageCapital).
 	peak := 0.0
-	at := func(equity, sleeveBudget float64) {
+	at := func(equity, sleeveBudget, scalePct float64) {
+		k := stageCapital(sleeveBudget, nonZero(scalePct, r.ScalePct))
+		if k <= 0 {
+			return
+		}
 		peak = max(peak, equity)
-		if dd := (peak - equity) / (sleeveBudget / core.VolFloor); dd > kill.DrawdownK {
+		if dd := (peak - equity) / k; dd > kill.DrawdownK {
 			kill.DrawdownK = dd
 		}
 		kill.Measured, kill.Decisions = true, kill.Decisions+1
@@ -117,17 +157,17 @@ func (s *Server) strategyKillLive(ctx context.Context, r register.Resolved, mark
 	marked := false
 	for _, m := range marks {
 		if m.Close > 0 && m.SleeveBudget > 0 {
-			at(m.Cash+m.Units*m.Close, m.SleeveBudget)
+			at(m.Cash+m.Units*m.Close, m.SleeveBudget, m.ScalePct)
 			marked = marked || m.Session == mark.session
 		}
 	}
 	if !marked && mark.session != "" && mark.close > 0 && mark.sleeveBudget > 0 {
 		own := s.strategyOwnFills(ctx, r.Entry.ID, conID)
-		at(own.Cash+own.Units*mark.close, mark.sleeveBudget)
+		at(own.Cash+own.Units*mark.close, mark.sleeveBudget, mark.scalePct)
 	}
 	switch {
 	case kill.MaxDrawdownK == nil:
-		kill.Note = "kill_drawdown_k unwritten: the kill rule cannot fire until the lab's design run writes its bound"
+		kill.Note = killUnwrittenNote
 	case kill.Measured && kill.DrawdownK > *kill.MaxDrawdownK:
 		kill.Breached = true
 	case !kill.Measured:

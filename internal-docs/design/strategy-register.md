@@ -184,9 +184,12 @@ Refuses the constitution (the last good policy stays): a value out of range
 or of the wrong shape, an unknown key, `[mandate.strategies.core]`, two
 entries naming one sleeve or one rule, a reserved sleeve name,
 `risk_allocation_pct` on an overlay entry, a scale off the ladder where the
-ladder applies, and machine allocations above the budget's target:
+ladder applies, machine allocations above the budget's target:
 `core_vol_pct + overlay_vol_pct + Σ risk_allocation_pct ≤ vol_target_pct`
-(today's check, widened to every entry).
+(today's check, widened to every entry), and a live entry whose written
+`kill_drawdown_k` is 1 K or more (the whole sleeve invested at its stage: the
+kill rule cannot fire before the sleeve is gone; `register.Refusals`,
+2026-10-19).
 
 Holds that strategy only, named on it, never in the constitution's approval
 list:
@@ -198,6 +201,7 @@ list:
 | The written spec hash is not the compiled rule's | "spec_hash Y is not the spec rule X implements (Z)" |
 | The rule runs in the other form | "rule X runs only as [mandate.core]" or the reverse |
 | An overlay entry while `overlay_vol_pct` is unwritten | `mandate.sleeves.overlay_vol_pct unwritten` |
+| A live entry's `kill_drawdown_k` unwritten (the core's included) | "kill rule: kill_drawdown_k is unwritten in [table], so the kill rule cannot fire: buys stop until the bound is written" (the daemon's hold, `strategy_target.go`, 2026-10-19; a shadow entry runs on the note, since it sends nothing) |
 
 A held strategy serves its hold: no target, no rows, no shadow record. Its
 declared data is still collected while its rule is compiled (section 4).
@@ -329,7 +333,12 @@ is sent only under the register it was armed with: an edit of any key of
 any entry (rule, spec, sleeve, stage, scale, allocation, fund, pins,
 signal, band, minimum, cap, kill bound) withdraws the mandate for strategy
 buys until the owner confirms again (`deskRegisterDigest`, checked before
-journaling and again inside the fenced attempt); sales, reductions and
+journaling and again inside the fenced attempt). A row served while the
+entry holds (the sale to zero its frozen month wants, "for your review")
+carries `core.owner_review` and is the owner's to confirm on the device: the
+standing mandate never sends it (`owner_review`, refused before journaling
+and again at the wire; owner, 2026-10-19: for your review means the owner's
+review). Sales, reductions and
 protection still go, so an edit never stops the mandate's de-risking.
 
 An entry may name a signal series apart from its traded line

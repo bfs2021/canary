@@ -154,6 +154,11 @@ func (e *proposalEngine) deskSubmitBlockers(prop rpc.TradeProposal, grant *deskE
 	if b := e.server.deskRegisterBlocker(grant.RegisterDigest, prop); b != nil {
 		return []rpc.TradingBlocker{*b}
 	}
+	// The owner's review again, on the revalidated row: a row re-served
+	// for review since the admission's snapshot is caught here.
+	if b := deskOwnerReviewBlocker(prop); b != nil {
+		return []rpc.TradingBlocker{*b}
+	}
 	if paused, sections := e.server.configPausesAutomation(); paused {
 		return []rpc.TradingBlocker{{Code: "config_automation_paused", Message: fmt.Sprintf("automatic submission is paused while config.toml [%s] runs on Canary's defaults", strings.Join(sections, "], [")), Action: "Fix config.toml and run `canary restart`, or confirm the row on your device."}}
 	}
@@ -299,6 +304,11 @@ func (s *Server) deskExecutionSubmitItem(ctx context.Context, scope brokerStateS
 	// entry added, promoted or re-sized since withdraws the mandate for
 	// strategy rows until the owner confirms again on the device.
 	if blocker := s.deskExecutionRegisterChanged(authority, item.Intent.Proposal.Key); blocker != nil {
+		return deskExecutionRefusal(item, now, *blocker)
+	}
+	// A row served for the owner's review is the owner's to confirm on the
+	// device: the standing mandate never sends it, and nothing is journaled.
+	if blocker := s.deskExecutionOwnerReview(item.Intent.Proposal.Key); blocker != nil {
 		return deskExecutionRefusal(item, now, *blocker)
 	}
 	// A strategy row is sent in session at the live mid, inside its window.
@@ -484,6 +494,35 @@ func (s *Server) deskExecutionRegisterChanged(authority deskAuthorityRecord, key
 		return nil
 	}
 	return s.deskRegisterBlocker(authority.RegisterDigest, prop)
+}
+
+// deskExecutionOwnerReview is deskOwnerReviewBlocker before journaling, on
+// the served row; nil while the row is not served.
+func (s *Server) deskExecutionOwnerReview(key string) *rpc.TradingBlocker {
+	if s == nil || s.tradeProposals == nil {
+		return nil
+	}
+	prop, ok := servedProposal(s.tradeProposals.snapshotForRead(false, false), key)
+	if !ok {
+		return nil
+	}
+	return deskOwnerReviewBlocker(prop)
+}
+
+// deskOwnerReviewBlocker refuses, under the standing mandate, a row the
+// daemon serves for the owner's review: the entry holds (a data hold, the
+// kill rule) and only the sale to zero its frozen month wants is served,
+// "for your review" (core_rebalance.go, review S6). For your review means
+// the owner's, on the device, never the controller's (owner, 2026-10-19):
+// until then the controller took such a sale as a candidate and the daemon
+// sent it. Nothing is journaled, so the row stays served for the owner.
+func deskOwnerReviewBlocker(prop rpc.TradeProposal) *rpc.TradingBlocker {
+	if !rpc.StrategyRowBucket(prop.Bucket) || prop.Core == nil || !prop.Core.OwnerReview {
+		return nil
+	}
+	return &rpc.TradingBlocker{Code: rpc.DeskBlockerOwnerReview,
+		Message: fmt.Sprintf("the row goes to you for review: %s holds, and only the sale the rule wants is served, for your confirmation on your device; the standing mandate never sends it, and nothing was journaled", nonEmptyString(deskExecutionStrategyName(prop), "the strategy")),
+		Action:  "Review the row and confirm it on your device, or leave it."}
 }
 
 // deskRegisterBlocker refuses a strategy row's buy whose register is not the

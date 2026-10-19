@@ -35,8 +35,9 @@ func testCoreConstitution() *risk.Constitution {
 	c.Mandate.Core = &risk.ConstitutionMandateCore{Rule: core.RuleID, ISIN: core.ISIN, Currency: core.Currency,
 		ScalePct: new(100.0), BandPct: new(10.0), MinOrderBase: new(2500.0), MaxValuePct: new(40.0),
 		// Live in the register, so the core reserves its allocation and
-		// sizes its buys inside it.
-		SpecHash: core.SpecHash, Stage: risk.StageLive}
+		// sizes its buys inside it; a live entry needs its kill bound
+		// written (2026-10-19).
+		SpecHash: core.SpecHash, Stage: risk.StageLive, KillDrawdownK: new(0.35)}
 	c.Mandate.IndexGapShockPct = new(12.0) // the owner's D4
 	c.Capital.BaseCurrency = "EUR"
 	return c
@@ -332,8 +333,10 @@ func TestCoreTargetFrozenMonthDriftAndCeiling(t *testing.T) {
 }
 
 // Trend off with a holding sells every share, the band and the minimum
-// notwithstanding; a mandate verdict over budget blocks buys and leaves
-// sales open; a holding inside the band does nothing.
+// notwithstanding; a mandate verdict over budget leaves the core's buy
+// sized inside its own allocation (owner, 2026-10-18 15:31 CEST; until
+// 2026-10-19 it blocked the buy) and sales open; a holding inside the band
+// does nothing.
 func TestCoreTargetTrendOffSellsAllAndBlockedBuysStillSell(t *testing.T) {
 	c := testCoreConstitution()
 	srv := coreTestServer(t, c, withIBCF(mandateTestPositions(100), 10, 60), -0.6)
@@ -344,8 +347,8 @@ func TestCoreTargetTrendOffSellsAllAndBlockedBuysStillSell(t *testing.T) {
 
 	srv = coreTestServer(t, c, withIBCF(mandateTestPositions(3000), 100, 100), 0.25)
 	res = coreEvaluate(t, srv)
-	if res.Mandate == nil || res.Mandate.Status == mandate.StatusWithin || res.Action.Kind != core.ActionWait || !strings.Contains(res.Action.Why, "mandate verdict reads") {
-		t.Fatalf("over budget: %+v %+v", res.Mandate, res.Action)
+	if res.Mandate == nil || res.Mandate.Status == mandate.StatusWithin || res.Action.Kind != core.ActionBuy || !res.Action.HeadroomCut || res.Sizing.Holdable == nil || strings.Contains(res.Action.Why, "mandate verdict") {
+		t.Fatalf("over budget, the core inside its allocation: %+v %+v %+v", res.Mandate, res.Action, res.Sizing)
 	}
 
 	srv = coreTestServer(t, c, mandateTestPositions(100), 0.25)

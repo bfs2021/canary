@@ -34,6 +34,9 @@ func testLiveTrendConstitution() *risk.Constitution {
 	c := testTrendFundConstitution()
 	e := c.Mandate.Strategies[trendFundID]
 	e.Stage, e.Sleeve, e.RiskAllocationPct = risk.StageLive, trendLiveSleeve, new(4.0)
+	if e.KillDrawdownK == nil {
+		e.KillDrawdownK = new(0.35) // a live entry needs its kill bound written (2026-10-19)
+	}
 	return c
 }
 

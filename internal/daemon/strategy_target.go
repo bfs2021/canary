@@ -451,9 +451,7 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	// entry's kill marks' (strategy_kill_live.go).
 	s.recordStrategyShadow(ctx, res, r, now)
 	s.recordStrategyDecision(ctx, res, r, now)
-	if r.Entry.Form != risk.StrategyFormCore {
-		s.recordLiveMark(ctx, res, r, now)
-	}
+	s.recordLiveMark(ctx, res, r, now)
 }
 
 // coreScope keys a frozen month by account, mode and the core's contract.
@@ -812,15 +810,23 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	// strategy holds before the month can be frozen.
 	killOf := func(mark killMark) {
 		on := "the shadow record"
-		if !isCore && r.State == register.StateLive && contract != nil {
-			// A live entry keeps no shadow record: its own fills are the
-			// measure (strategy_kill_live.go).
+		if r.State == register.StateLive && contract != nil {
+			// A live entry is measured on its own fills, the core's rows'
+			// included (strategy_kill_live.go); the shadow record is the
+			// paper sleeve's.
 			res.Kill, on = s.strategyKillLive(ctx, r, mark, contract.ConID), "its own fills"
 		} else {
 			res.Kill = s.strategyKill(ctx, r, mark)
 		}
-		if res.Kill != nil && res.Kill.Breached {
+		switch {
+		case res.Kill == nil:
+		case res.Kill.Breached:
 			hold(fmt.Sprintf("kill rule: the drawdown on %s is %.2f K, past the bound %g K: buys stop; suspend %s with stage = \"suspended\"", on, res.Kill.DrawdownK, *res.Kill.MaxDrawdownK, name))
+		case res.Kill.MaxDrawdownK == nil && r.State == register.StateLive:
+			// A live entry without a bound has a kill rule that cannot
+			// fire: it holds, as any unwritten key holds, until the owner
+			// writes the bound (strategy-register.md, 2026-10-19).
+			hold(fmt.Sprintf("kill rule: kill_drawdown_k is unwritten in [%s], so the kill rule cannot fire: buys stop until the bound is written", register.Table(r.Entry)))
 		}
 	}
 
@@ -832,7 +838,7 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	if sig.Status == core.StatusOK && verdict != nil && verdict.Capital.Known && sizable && contract != nil {
 		on := core.Sizing{AllocationPct: *e.AllocationPct, ScalePct: *e.ScalePct, MaxValuePct: *e.MaxValuePct, BudgetBase: verdict.Capital.BudgetBase, Room: verdict.Capital.Room}
 		current := core.SizeTarget(sizeSig, on)
-		killOf(killMark{session: sig.Decision, close: sizeSig.Close, sleeveBudget: current.SleeveBudget})
+		killOf(killMark{session: sig.Decision, close: sizeSig.Close, sleeveBudget: current.SleeveBudget, scalePct: on.ScalePct})
 		scope := frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID)
 		frozen := s.coreFrozen(ctx, scope)
 		switch {
@@ -877,22 +883,31 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 	if !isCore {
 		in.Symbol, in.Name = sym, name
 	}
-	if verdict.Status != mandate.StatusWithin {
-		in.BuyBlocked = "the mandate verdict reads " + verdict.Status
-	} else if r.State != register.StateLive {
+	// The buy is judged by the entry's own sleeve as the order gate judges
+	// an order (mandateVerdictHolds): a book over budget holds it only while
+	// its sleeve is over its allocation or at the maximum loss; an unknown
+	// verdict holds it; within the budget it passes (owner, 2026-10-18
+	// 15:31 CEST; until 2026-10-19 any verdict but within blocked it).
+	why, overBudget := mandateVerdictHolds(verdict, e.Sleeve, verdict.BaseCurrency)
+	switch {
+	case why != "":
+		in.BuyBlocked = why
+	case r.State != register.StateLive:
 		// The allocation is reserved only while the strategy is live
 		// (strategy-register.md, section 2); in shadow it sends nothing.
 		in.BuyBlocked = name + " runs in " + string(r.State) + " and sends no orders, so it reserves no allocation"
-	} else if want := res.Sizing.Target - held; want > 0 && price > 0 {
-		book := input
-		if !isCore {
-			// The entry's fund measured on its own closes while the book
-			// keeps none, as the shadow record's hypothetical book is.
-			book = s.withStrategySeries(input, r, contract)
+	default:
+		if want := res.Sizing.Target - held; want > 0 && price > 0 {
+			book := input
+			if !isCore {
+				// The entry's fund measured on its own closes while the book
+				// keeps none, as the shadow record's hypothetical book is.
+				book = s.withStrategySeries(input, r, contract)
+			}
+			add := core.Headroom(want, func(q int) bool { return strategyHeadroomFits(book, contract, e.Sleeve, q, price, verdict, overBudget) })
+			in.Holdable = held + add
+			res.Sizing.Holdable = &in.Holdable
 		}
-		add := core.Headroom(want, func(q int) bool { return strategyHeadroomFits(book, contract, e.Sleeve, q, price) })
-		in.Holdable = held + add
-		res.Sizing.Holdable = &in.Holdable
 	}
 	d := core.Decide(in)
 	res.Action = &d
@@ -928,7 +943,7 @@ func strategyLegID(sleeve string, conID int) string {
 // (allocations, 2026-10-18). The leg is judged in the strategy's sleeve; a
 // non-core strategy's leg is its own, so the owner's real units of the fund
 // are never moved into its sleeve.
-func strategyHeadroomFits(book *mandate.Input, k *coreContract, sleeve string, q int, price float64) bool {
+func strategyHeadroomFits(book *mandate.Input, k *coreContract, sleeve string, q int, price float64, standing *mandate.Verdict, overBudget bool) bool {
 	if book == nil || k == nil {
 		return false
 	}
@@ -959,7 +974,17 @@ func strategyHeadroomFits(book *mandate.Input, k *coreContract, sleeve string, q
 	if with.Status == mandate.StatusUnknown || with.Risk == nil || with.Stresses == nil {
 		return false
 	}
-	if with.Risk.SDAnnualBase > core.HeadroomFactor*with.Capital.BudgetAnnualSD || len(with.Stresses.GapBreaches) > 0 {
+	// The whole-book checks as the gate applies them (mandate_verdict.go),
+	// with the row's margin: the book at most at HeadroomFactor of the
+	// budget, unless it is over the budget already and the sleeve adds
+	// inside its own allocation (owner, 2026-10-18 15:31 CEST); no gap-cap
+	// breach created or deepened, and the strategy's own gap at most at
+	// that share of its cap; the sleeve inside its allocation by use and on
+	// its own risk (mandateSleeveOver), as the gate binds it.
+	if !overBudget && with.Risk.SDAnnualBase > core.HeadroomFactor*with.Capital.BudgetAnnualSD {
+		return false
+	}
+	if _, added := mandateGapBreachAdded(standing, with); added {
 		return false
 	}
 	for _, u := range with.Underlyings {
@@ -967,8 +992,10 @@ func strategyHeadroomFits(book *mandate.Input, k *coreContract, sleeve string, q
 			return false
 		}
 	}
-	if allocation, ok := with.Allocation(sleeve); ok && allocation.Over {
-		return false
+	if allocation, ok := with.Allocation(sleeve); ok {
+		if over, _ := mandateSleeveOver(allocation); over {
+			return false
+		}
 	}
 	return true
 }

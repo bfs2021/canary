@@ -47,7 +47,10 @@ Capacity is shared because both pass the same serialized admission.
   reductions still are.
 - Blocker codes Desk may branch on: `drawdown_brake`, `episode_consumed`,
   `request_conflict`, `authority_changed`, `class_mismatch`,
-  `prior_outcome_unknown`, `proposal_changed`. Any other code is a refusal.
+  `prior_outcome_unknown`, `proposal_changed`, and `owner_review` (the row
+  goes to the owner for review: its entry holds and only the sale the rule
+  wants is served; refused before journaling, so nothing is spent, and again
+  at the wire; 2026-10-19). Any other code is a refusal.
 
 ## Discovery
 
