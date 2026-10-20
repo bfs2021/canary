@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.25.4 — Unreleased
+
+### Fixed
+
+- A stop the daemon placed through TWS can be changed or cancelled after the daemon moves to IB Gateway, and the other way round: the socket an order was placed through no longer counts as part of its identity, only its account, mode and client id do, and the order keeps one journal row across the move (protective-stop-guard.md, 2026-10-20).
+
 ## v3.25.3 — 2026-10-19 23:35 CEST
 
 ### What's new

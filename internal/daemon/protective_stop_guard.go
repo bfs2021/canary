@@ -170,7 +170,8 @@ func protectiveStopGuardCommitted(working []brokerWorkingOrder, stop brokerWorki
 
 // protectiveStopGuardCanaryPlaced reports whether the journal row is an
 // order Canary placed through its own preview path in this account and mode.
-// The write path still checks the endpoint and client pins.
+// The write path still checks the client pin; the socket the order was
+// placed through is logged, not refused (2026-10-20).
 func protectiveStopGuardCanaryPlaced(view *rpc.OrderView, scope brokerStateScope) bool {
 	if view == nil || !view.Open || view.ReservedOrderID <= 0 || strings.TrimSpace(view.OrderRef) == "" || strings.TrimSpace(view.PreviewTokenID) == "" {
 		return false

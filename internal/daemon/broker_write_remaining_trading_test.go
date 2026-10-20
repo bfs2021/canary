@@ -264,6 +264,13 @@ func testOptionExercisePayload(t *testing.T, srv *Server, opp rpc.Opportunity, t
 
 func seedProtectiveTrailJournal(t *testing.T, srv *Server, now time.Time) {
 	t.Helper()
+	seedProtectiveTrailJournalPlacedThrough(t, srv, now, "127.0.0.1:4002")
+}
+
+// seedProtectiveTrailJournalPlacedThrough seeds the stop as placed through
+// endpoint; the test server itself is connected to 127.0.0.1:4002.
+func seedProtectiveTrailJournalPlacedThrough(t *testing.T, srv *Server, now time.Time, endpoint string) {
+	t.Helper()
 	amount := 8.5
 	if err := srv.orderJournal.Append(orderJournalEvent{
 		At:              now.Add(-time.Minute),
@@ -273,7 +280,7 @@ func seedProtectiveTrailJournal(t *testing.T, srv *Server, now time.Time) {
 		ReservedOrderID: 1002,
 		ClientID:        31,
 		Account:         "DU1234567",
-		Endpoint:        "127.0.0.1:4002",
+		Endpoint:        endpoint,
 		Mode:            "paper",
 		Source:          proposalOrderSource,
 		OpenClose:       "C",

@@ -31,6 +31,7 @@ func (s *Server) openOrderViewForWrite(id string, status rpc.TradingStatus) (rpc
 		if !view.Open {
 			return rpc.OrderView{}, errBadRequest("order is not open")
 		}
+		s.logOrderEndpointDifference(view, status)
 		return view, nil
 	}
 	if scopeErr != nil {
@@ -39,6 +40,11 @@ func (s *Server) openOrderViewForWrite(id string, status rpc.TradingStatus) (rpc
 	return rpc.OrderView{}, errBadRequest("order not found")
 }
 
+// validateOrderViewMatchesGate checks what names an order: its mode, account
+// and client id. The socket it was placed through (TWS and IB Gateway listen
+// on different ports of one login) is not a gate (owner, 2026-10-20 08:00
+// CEST): an open order with the current account, mode and client id may be
+// modified or cancelled from either; the difference is logged once.
 func validateOrderViewMatchesGate(view rpc.OrderView, status rpc.TradingStatus) error {
 	if !strings.EqualFold(view.Mode, status.Mode) {
 		return fmt.Errorf("%w: order mode %s does not match current mode %s", ErrTradingDisabled, view.Mode, status.Mode)
@@ -46,13 +52,31 @@ func validateOrderViewMatchesGate(view rpc.OrderView, status rpc.TradingStatus) 
 	if !strings.EqualFold(view.Account, status.Account) {
 		return fmt.Errorf("%w: order account %s does not match current account %s", ErrTradingDisabled, view.Account, status.Account)
 	}
-	if view.Endpoint != status.Endpoint {
-		return fmt.Errorf("%w: order endpoint %s does not match current endpoint %s", ErrTradingDisabled, view.Endpoint, status.Endpoint)
-	}
 	if view.ClientID != status.ClientID {
 		return fmt.Errorf("%w: order client ID %d does not match current client ID %d", ErrTradingDisabled, view.ClientID, status.ClientID)
 	}
 	return nil
+}
+
+// logOrderEndpointDifference says once per order and socket, at INFO, that
+// an order placed through one socket is now managed through another.
+func (s *Server) logOrderEndpointDifference(view rpc.OrderView, status rpc.TradingStatus) {
+	placed, current := strings.TrimSpace(view.Endpoint), strings.TrimSpace(status.Endpoint)
+	if s == nil || placed == current {
+		return
+	}
+	if _, seen := s.orderEndpointLogged.LoadOrStore(view.OrderRef+"\x1f"+current, struct{}{}); seen {
+		return
+	}
+	s.infof("order %s: placed through %s, managed through %s", view.OrderRef, placed, current)
+}
+
+// orderJournalStatusFor keys the journal events of a write to the order's
+// own route, the socket it was placed through: one order, one journal row,
+// whichever socket the daemon manages it through now.
+func orderJournalStatusFor(view rpc.OrderView, status rpc.TradingStatus) rpc.TradingStatus {
+	status.Endpoint = view.Endpoint
+	return status
 }
 
 func validateModifyDraft(view rpc.OrderView, draft rpc.OrderDraft) error {

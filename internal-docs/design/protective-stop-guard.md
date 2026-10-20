@@ -1,6 +1,6 @@
 # Protective stop exemption and guard
 
-Updated: 2026-10-12 20:53 CEST
+Updated: 2026-10-20 08:30 CEST
 Status: implemented
 
 Contract per `.agents/docs/daemon-cli-trading-contract.md` and
@@ -179,7 +179,13 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   shrink to exactly the planned quantity below the remaining quantity).
   Trading mode, gateway, pins, storage and journal health, preview token,
   broker WhatIf and the protective modify rule (`validateProtectiveModifyQuantity`)
-  all still decide.
+  all still decide. Since 2026-10-20 08:00 CEST (owner) the socket an order
+  was placed through is not one of the pins: an open order with the current
+  account, mode and client id is modified or cancelled from TWS or IB
+  Gateway alike (`validateOrderViewMatchesGate`), the difference is logged
+  once at INFO, and the write's journal events stay keyed to the order's own
+  route, so a stop placed through TWS and managed through the Gateway keeps
+  one journal row.
 - **Freeze.** `trading.freeze` blocks every new write including modifies and
   allows cancels (`docs/docs/reference/config.md`). The guard follows that: a
   shrink waits while frozen, a cancel goes through.

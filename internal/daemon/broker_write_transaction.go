@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -33,7 +34,11 @@ type brokerWriteTransactionBinding struct {
 	//lint:ignore U1000 Used by the trading-tagged order submission path.
 	orderID int
 	//lint:ignore U1000 Used by the trading-tagged order submission path.
-	orderEventSeq                 int64
+	orderEventSeq int64
+	// orderEndpoint is the route of the order a modify changes, the socket it
+	// was placed through, which keys its journal row; empty for a place.
+	//lint:ignore U1000 Used by the trading-tagged order submission path.
+	orderEndpoint                 string
 	tradingControlGeneration      uint64
 	riskBound                     bool
 	optionExitExpiresAt           time.Time
@@ -450,7 +455,7 @@ func (s *Server) brokerWireGuard(binding brokerWriteTransactionBinding, status r
 		}
 		if binding.orderID > 0 && binding.orderEventSeq > 0 {
 			latest, err := s.orderJournal.LatestOrderEventSeq(orderJournalEvent{
-				Endpoint: binding.endpoint, ClientID: binding.clientID,
+				Endpoint: cmp.Or(binding.orderEndpoint, binding.endpoint), ClientID: binding.clientID,
 				Account: binding.scope.Account, Mode: binding.scope.Mode,
 				ReservedOrderID: binding.orderID,
 			})

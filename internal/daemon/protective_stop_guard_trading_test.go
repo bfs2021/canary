@@ -29,13 +29,20 @@ type stopGuardRig struct {
 
 func newStopGuardRig(t *testing.T, trading config.Trading) *stopGuardRig {
 	t.Helper()
+	return newStopGuardRigPlacedThrough(t, trading, "127.0.0.1:4002")
+}
+
+// newStopGuardRigPlacedThrough is the rig with Canary's stop journaled as
+// placed through endpoint; the server is connected to 127.0.0.1:4002.
+func newStopGuardRigPlacedThrough(t *testing.T, trading config.Trading, endpoint string) *stopGuardRig {
+	t.Helper()
 	trading.Mode = config.TradingModePaper
 	srv := newOrderPreviewTestServer(t, trading)
 	r := &stopGuardRig{srv: srv, now: time.Date(2026, 10, 5, 15, 40, 0, 0, time.UTC), position: 100, current: true}
 	srv.now = r.clock
 	srv.decisions = newDecisionLog(filepath.Join(t.TempDir(), "daemon.db"))
 	t.Cleanup(func() { _ = srv.decisions.Close() })
-	seedProtectiveTrailJournal(t, srv, r.now)
+	seedProtectiveTrailJournalPlacedThrough(t, srv, r.now, endpoint)
 	scope := brokerStateScope{Account: "DU1234567", Mode: rpc.AccountModePaper}
 	srv.openOrderInventoryForTest = func(context.Context, bool) (ibkrlib.OpenOrderSnapshot, brokerStateScope, error) {
 		r.mu.Lock()
@@ -293,5 +300,64 @@ func TestProtectiveStopGuardOriginNeedsAnExactGrant(t *testing.T) {
 	r.srv.protectiveStopGuardGrant.Store(nil)
 	if _, c := r.writes(); c != 0 {
 		t.Fatalf("cancels = %d, want none", c)
+	}
+}
+
+// stopGuardRows lists the journal's views of Canary's stop.
+func stopGuardRows(t *testing.T, srv *Server) []rpc.OrderView {
+	t.Helper()
+	views, _, err := srv.loadOrderViews()
+	if err != nil {
+		t.Fatalf("loadOrderViews: %v", err)
+	}
+	var rows []rpc.OrderView
+	for _, v := range views {
+		if v.OrderRef == "ord-prot" {
+			rows = append(rows, v)
+		}
+	}
+	return rows
+}
+
+// A stop placed through TWS while the daemon now runs on IB Gateway (the
+// 2026-10-19 move; owner decision 2026-10-20 08:00 CEST): the guard's
+// change and the owner's cancel both go through, each journaled on the
+// order's one row, keyed to the socket it was placed through.
+func TestProtectiveStopGuardFollowsAStopPlacedThroughAnotherApp(t *testing.T) {
+	t.Parallel()
+	r := newStopGuardRigPlacedThrough(t, config.Trading{}, "127.0.0.1:7496")
+	r.set(50, true)
+	r.pass(t)
+	if m, c := r.writes(); m != 1 || c != 0 {
+		t.Fatalf("writes = %d modifies %d cancels, want one shrink of the stop placed through TWS; decisions %+v", m, c, readDecisionLines(t, r.srv.decisions.path))
+	}
+	if sent := r.modified[0]; sent.OrderID != 1002 || sent.TotalQty != 50 {
+		t.Fatalf("modify = %+v, want order 1002 at 50 shares", sent)
+	}
+	modify, ok := stopGuardJournalOrigin(t, r.srv, orderJournalEventModifyRequested)
+	if !ok || modify.Endpoint != "127.0.0.1:7496" || modify.Quantity != 50 {
+		t.Fatalf("journal modify = %+v (found %v), want it keyed to the socket the stop was placed through", modify, ok)
+	}
+	done, ok := stopGuardJournalOrigin(t, r.srv, orderJournalEventSendCompleted)
+	if !ok || done.Endpoint != "127.0.0.1:7496" {
+		t.Fatalf("journal send outcome = %+v (found %v), want it keyed to the same socket", done, ok)
+	}
+	if rows := stopGuardRows(t, r.srv); len(rows) != 1 || rows[0].Endpoint != "127.0.0.1:7496" || rows[0].Quantity != 50 || !rows[0].Open {
+		t.Fatalf("rows = %+v, want one open row at 50 on the socket the stop was placed through", rows)
+	}
+
+	owner := newStopGuardRigPlacedThrough(t, config.Trading{}, "127.0.0.1:7496")
+	if _, err := owner.srv.cancelOrder(t.Context(), rpc.OrderCancelParams{ID: "ord-prot", Origin: rpc.OrderOriginHumanTTY}); err != nil {
+		t.Fatalf("owner cancel of the stop placed through TWS: %v", err)
+	}
+	if _, c := owner.writes(); c != 1 || owner.cancelled[0] != 1002 {
+		t.Fatalf("cancels = %v, want order 1002", owner.cancelled)
+	}
+	cancel, ok := stopGuardJournalOrigin(t, owner.srv, orderJournalEventCancelRequested)
+	if !ok || cancel.Endpoint != "127.0.0.1:7496" {
+		t.Fatalf("journal cancel = %+v (found %v), want it keyed to the socket the stop was placed through", cancel, ok)
+	}
+	if rows := stopGuardRows(t, owner.srv); len(rows) != 1 {
+		t.Fatalf("rows after the cancel = %d, want one", len(rows))
 	}
 }

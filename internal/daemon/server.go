@@ -216,6 +216,10 @@ type Server struct {
 
 	orderLifecycleHandlersMu sync.Mutex
 	orderLifecycleHandlers   map[*ibkrlib.Connector]*orderLifecycleJournalBinding
+	// orderEndpointLogged remembers, per order and socket, that the daemon
+	// has said it manages an order through another socket than the one it
+	// was placed through (logOrderEndpointDifference).
+	orderEndpointLogged sync.Map
 	// orderLifecycleRegisterAfterCapture is a deterministic test seam for a
 	// registration delayed across same-pointer Connector republication.
 	orderLifecycleRegisterAfterCapture func()

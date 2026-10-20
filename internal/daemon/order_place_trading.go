@@ -199,9 +199,14 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 			return nil, err
 		}
 	}
+	// The modify's journal events are keyed to the order's own route, the
+	// socket it was placed through, so the order keeps one journal row
+	// whichever socket the daemon manages it through now.
+	journalStatus := orderJournalStatusFor(view, status)
 	confirm := previewTokenConfirmedEvent(payload, view.ReservedOrderID, now, fmt.Sprintf("preview token confirmed for %s broker modify", auth.Route))
 	confirm.OrderRef = view.OrderRef
-	modify := orderJournalEventForDraft(modifiedDraft, orderJournalEventModifyRequested, status, payload.TokenID, view.ReservedOrderID, now)
+	confirm.Endpoint = view.Endpoint
+	modify := orderJournalEventForDraft(modifiedDraft, orderJournalEventModifyRequested, journalStatus, payload.TokenID, view.ReservedOrderID, now)
 	attachOrderFeeBound(&modify, payload.WhatIf)
 	modify.AttemptID = attemptID
 	modify.ActionKind = corestore.ActionModify
@@ -221,17 +226,18 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	}
 	binding.orderID = view.ReservedOrderID
 	binding.orderEventSeq = stagedOrderEventSeq
+	binding.orderEndpoint = view.Endpoint
 
 	order.OrderID = view.ReservedOrderID
 	order.ClientID = status.ClientID
 	order.Account = status.Account
 	if err := s.submitBoundConfiguredOrder(ctx, binding, status, contract, order); err != nil {
-		if journalErr := s.appendOrderSendError(modifiedDraft, status, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify, err); journalErr != nil {
+		if journalErr := s.appendOrderSendError(modifiedDraft, journalStatus, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify, err); journalErr != nil {
 			err = errors.Join(err, journalErr)
 		}
 		return nil, fmt.Errorf("%s order modify: %w", auth.Route, err)
 	}
-	if err := s.appendOrderSendCompleted(modifiedDraft, status, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify); err != nil {
+	if err := s.appendOrderSendCompleted(modifiedDraft, journalStatus, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify); err != nil {
 		return nil, fmt.Errorf("%s order modify outcome: %w", auth.Route, ibkrlib.WithSendDisposition(err, ibkrlib.SendDispositionMayHaveWritten))
 	}
 
@@ -304,13 +310,16 @@ func (s *Server) cancelOrderForAction(ctx context.Context, p rpc.OrderCancelPara
 	if err := s.orderJournal.StagePreTransmit("", "", 0, view.ReservedOrderID, action, coreOrderOrigin(p.Origin), []orderJournalEvent{cancelEvent}); err != nil {
 		return nil, fmt.Errorf("%w: append cancel journal: %v", ErrTradingDisabled, err)
 	}
+	// The cancel's journal events are keyed to the order's own route (the
+	// cancel event already carries the view's), as the modify's are.
+	journalStatus := orderJournalStatusFor(view, status)
 	if err := s.cancelBoundConfiguredOrder(ctx, binding, status, view.ReservedOrderID); err != nil {
-		if journalErr := s.appendOrderSendError(orderDraftFromView(view), status, view.PreviewTokenID, view.ReservedOrderID, attemptID, action, err); journalErr != nil {
+		if journalErr := s.appendOrderSendError(orderDraftFromView(view), journalStatus, view.PreviewTokenID, view.ReservedOrderID, attemptID, action, err); journalErr != nil {
 			err = errors.Join(err, journalErr)
 		}
 		return nil, fmt.Errorf("%s order cancel: %w", auth.Route, err)
 	}
-	if err := s.appendOrderSendCompleted(orderDraftFromView(view), status, view.PreviewTokenID, view.ReservedOrderID, attemptID, action); err != nil {
+	if err := s.appendOrderSendCompleted(orderDraftFromView(view), journalStatus, view.PreviewTokenID, view.ReservedOrderID, attemptID, action); err != nil {
 		return nil, fmt.Errorf("%s order cancel outcome: %w", auth.Route, ibkrlib.WithSendDisposition(err, ibkrlib.SendDispositionMayHaveWritten))
 	}
 	view.LastEvent = orderJournalEventCancelRequested
