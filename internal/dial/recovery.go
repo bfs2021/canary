@@ -5,12 +5,12 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/osauer/canary/v2/internal/procinfo"
 	"github.com/osauer/canary/v2/internal/productidentity"
 )
 
@@ -62,7 +62,9 @@ func IsProcessAlive(pid int) bool {
 	return false
 }
 
-var lookupProcessStatus = processStatus
+// lookupProcessStatus reads a process's state code: from procfs on Linux
+// (BusyBox ps has no -p), from ps elsewhere.
+var lookupProcessStatus = procinfo.State
 
 func isProcessZombie(pid int) bool {
 	status, err := lookupProcessStatus(pid)
@@ -71,18 +73,6 @@ func isProcessZombie(pid int) bool {
 	}
 	status = strings.TrimSpace(status)
 	return strings.HasPrefix(status, "Z")
-}
-
-func processStatus(pid int) (string, error) {
-	if pid <= 0 {
-		return "", errors.New("invalid PID")
-	}
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 // TailLastLine returns the last non-empty line of the file at path, capped

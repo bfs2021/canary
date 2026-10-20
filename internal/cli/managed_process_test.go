@@ -44,17 +44,10 @@ func TestAppCommandMatchAcceptsInstallPathWithSpaces(t *testing.T) {
 	}
 }
 
-func TestParseMCPPSLineKeepsInstallPathWithSpaces(t *testing.T) {
+func TestMCPServerRecognisedAtInstallPathWithSpaces(t *testing.T) {
 	t.Parallel()
 	executable := installWithSpaces(t)
-	pid, ppid, command, ok := parseMCPPSLine("  4711   901 " + executable + " mcp --profile monitor")
-	if !ok || pid != 4711 || ppid != 901 || command != executable+" mcp --profile monitor" {
-		t.Fatalf("parseMCPPSLine = %d %d %q %v", pid, ppid, command, ok)
-	}
-	if _, _, managed := update.SplitManagedCommand(command, "mcp"); !managed {
-		t.Fatalf("%q was not recognised as a Canary MCP server", command)
-	}
-	if _, _, _, ok := parseMCPPSLine("PID PPID ARGS"); ok {
-		t.Fatal("header row parsed as a process")
+	if _, _, managed := update.SplitManagedCommand(executable+" mcp --profile monitor", "mcp"); !managed {
+		t.Fatalf("%q was not recognised as a Canary MCP server", executable+" mcp --profile monitor")
 	}
 }

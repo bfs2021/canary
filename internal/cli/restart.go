@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -13,13 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/app"
 	"github.com/osauer/canary/v2/internal/dial"
+	"github.com/osauer/canary/v2/internal/procinfo"
 	"github.com/osauer/canary/v2/internal/productidentity"
 	"github.com/osauer/canary/v2/internal/rpc"
 	"github.com/osauer/canary/v2/internal/update"
@@ -1105,41 +1104,27 @@ func waitForAppRespawn(ctx context.Context, find func(context.Context) (appProce
 }
 
 func findAppProcessForExecutables(ctx context.Context, executablePaths map[string]struct{}) (appProcess, error) {
-	cmd := exec.CommandContext(ctx, "ps", "-axo", "pid=,args=")
-	out, err := cmd.Output()
+	procs, err := procinfo.List(ctx)
 	if err != nil {
-		return appProcess{}, err
+		return appProcess{}, fmt.Errorf("list processes to find the Canary app: %w", err)
 	}
 	self := os.Getpid()
 	var exactMatches []appProcess
 	var genericMatches []appProcess
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+	for _, p := range procs {
+		if p.PID == self || !dial.IsProcessAlive(p.PID) {
 			continue
 		}
-		pidText, cmdline, ok := strings.Cut(line, " ")
+		args, exact, ok := appCommandMatch(p.Command, executablePaths)
 		if !ok {
 			continue
 		}
-		pid, err := strconv.Atoi(strings.TrimSpace(pidText))
-		if err != nil || pid == self || !dial.IsProcessAlive(pid) {
-			continue
-		}
-		args, exact, ok := appCommandMatch(cmdline, executablePaths)
-		if !ok {
-			continue
-		}
-		proc := appProcess{PID: pid, Command: strings.TrimSpace(cmdline), Args: args, CurrentExecutable: exact}
+		proc := appProcess{PID: p.PID, Command: p.Command, Args: args, CurrentExecutable: exact}
 		if exact {
 			exactMatches = append(exactMatches, proc)
 		} else {
 			genericMatches = append(genericMatches, proc)
 		}
-	}
-	if err := sc.Err(); err != nil {
-		return appProcess{}, err
 	}
 	matches := genericMatches
 	if len(exactMatches) > 0 {

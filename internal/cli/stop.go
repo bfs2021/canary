@@ -6,14 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/dial"
+	"github.com/osauer/canary/v2/internal/procinfo"
 	"github.com/osauer/canary/v2/internal/productidentity"
 	"github.com/osauer/canary/v2/internal/rpc"
 	"github.com/osauer/canary/v2/internal/update"
@@ -456,27 +455,22 @@ func readDaemonHealth(ctx context.Context, socketPath string) (rpc.HealthResult,
 }
 
 // findMCPProcesses lists local stdio MCP servers with the command name of
-// the AI host that owns each one. Reporting is a courtesy, so a ps failure
-// yields no rows rather than an error: it must never block a stop.
+// the AI host that owns each one. Reporting is a courtesy, so a listing
+// failure yields no rows rather than an error: it must never block a stop.
 func findMCPProcesses(ctx context.Context) []mcpProcess {
-	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,args=").Output()
+	all, err := procinfo.List(ctx)
 	if err != nil {
 		return nil
 	}
 	parents := map[int]int{}
 	var pids []int
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		pid, ppid, command, ok := parseMCPPSLine(sc.Text())
-		if !ok {
-			continue
-		}
-		if _, _, managed := update.SplitManagedCommand(command, "mcp"); managed {
-			parents[pid] = ppid
-			pids = append(pids, pid)
+	for _, p := range all {
+		if _, _, managed := update.SplitManagedCommand(p.Command, "mcp"); managed {
+			parents[p.PID] = p.PPID
+			pids = append(pids, p.PID)
 		}
 	}
-	if err := sc.Err(); err != nil || len(pids) == 0 {
+	if len(pids) == 0 {
 		return nil
 	}
 	slices.Sort(pids)
@@ -488,64 +482,20 @@ func findMCPProcesses(ctx context.Context) []mcpProcess {
 	return procs
 }
 
-// parseMCPPSLine splits a `ps -axo pid=,ppid=,args=` row. The command stays
-// whole because the executable path in it may itself contain spaces.
-func parseMCPPSLine(line string) (pid, ppid int, command string, ok bool) {
-	pidText, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
-	ppidText, command, _ := strings.Cut(strings.TrimSpace(rest), " ")
-	pid, err := strconv.Atoi(pidText)
-	if err != nil {
-		return 0, 0, "", false
-	}
-	ppid, err = strconv.Atoi(ppidText)
-	if err != nil {
-		return 0, 0, "", false
-	}
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return 0, 0, "", false
-	}
-	return pid, ppid, command, true
-}
-
-// processCommandNames maps each parent pid to its executable name. It reads
+// processCommandNames maps each parent pid to its executable name.
 func processCommandNames(ctx context.Context, parents map[int]int) map[int]string {
-	pids := make([]string, 0, len(parents))
+	var pids []int
 	for _, ppid := range parents {
-		if ppid > 1 && !slices.Contains(pids, strconv.Itoa(ppid)) {
-			pids = append(pids, strconv.Itoa(ppid))
+		if ppid > 1 && !slices.Contains(pids, ppid) {
+			pids = append(pids, ppid)
 		}
 	}
 	if len(pids) == 0 {
 		return nil
 	}
-	out, err := exec.CommandContext(ctx, "ps", "-o", "pid=,comm=", "-p", strings.Join(pids, ",")).Output()
-	if err != nil {
-		return nil
-	}
-	names := map[int]string{}
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
-	for sc.Scan() {
-		pid, name, ok := parseCommandNameLine(sc.Text())
-		if ok {
-			names[pid] = name
-		}
+	names := procinfo.Names(ctx, pids)
+	for pid, name := range names {
+		names[pid] = filepath.Base(name)
 	}
 	return names
-}
-
-func parseCommandNameLine(line string) (int, string, bool) {
-	pidText, command, ok := strings.Cut(strings.TrimSpace(line), " ")
-	if !ok {
-		return 0, "", false
-	}
-	pid, err := strconv.Atoi(pidText)
-	if err != nil {
-		return 0, "", false
-	}
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return 0, "", false
-	}
-	return pid, filepath.Base(command), true
 }

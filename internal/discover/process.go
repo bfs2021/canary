@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/osauer/canary/v2/internal/procinfo"
 )
 
 // IBKRApp identifies which Interactive Brokers desktop app — if any — is
@@ -81,11 +83,12 @@ func firstPID(line string) int {
 	return 0
 }
 
-// listProcesses shells out to the platform-native process lister. The
-// command and its expected output shape:
+// listProcesses returns "<pid> <full-command-line>" rows from the
+// platform-native process lister:
 //
-//	darwin/linux/bsd: `ps -A -o pid=,args=`  → "<pid> <full-command-line>"
-//	windows:          `tasklist /FO CSV /NH` → CSV with image name first
+//	linux:       procfs, through procinfo (BusyBox ps has no -A)
+//	darwin/bsd:  `ps -A -o pid=,args=`
+//	windows:     `tasklist /FO CSV /NH` → CSV with image name first
 //
 // Other platforms: returns nil (best-effort, no error to caller). The
 // 2-second guardrail uses ctx so a wedged ps doesn't stall discovery; the
@@ -93,7 +96,17 @@ func firstPID(line string) int {
 func listProcesses(ctx context.Context) []string {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
-	case "darwin", "linux", "freebsd", "openbsd", "netbsd":
+	case "linux":
+		procs, err := procinfo.List(ctx)
+		if err != nil {
+			return nil
+		}
+		lines := make([]string, 0, len(procs))
+		for _, p := range procs {
+			lines = append(lines, strconv.Itoa(p.PID)+" "+p.Command)
+		}
+		return lines
+	case "darwin", "freebsd", "openbsd", "netbsd":
 		cmd = exec.CommandContext(ctx, "ps", "-A", "-o", "pid=,args=")
 	case "windows":
 		cmd = exec.CommandContext(ctx, "tasklist", "/FO", "CSV", "/NH")

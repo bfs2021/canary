@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.26.1 — Unreleased
+
+### What's new
+
+On Linux, `canary stop`, `canary restart` and the restart after `canary
+update` now read which process holds the daemon's lock from `/proc` instead
+of running `ps`, so they work on Alpine and other BusyBox systems and on
+images without `ps`. The identity check is unchanged: Canary still signals
+only a process that runs `canary daemon` and refuses an unrelated or
+unreadable one.
+
+### Fixed
+
+- `canary stop` and `canary restart` failed on Alpine Linux (BusyBox `ps`
+  rejects `-p` and `-axo`) and reported only `exit status 1`; the daemon kept
+  running. Linux now reads `/proc`; macOS still uses `ps`. When a process
+  cannot be inspected, the refusal names the cause, including `ps`'s own
+  error, and says that nothing was signalled. Under qemu-user emulation the
+  daemon is recognised through its interpreter, which the kernel names;
+  other emulators are refused. The v3.25.4 review's finding 5.
+
 ## v3.26.0 — Unreleased
 
 ### What's new
