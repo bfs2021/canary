@@ -326,3 +326,34 @@ func TestCrossEndpointCallbackNeverCrossesTradingMode(t *testing.T) {
 		t.Fatalf("ord-live rows = %+v, want the one live row untouched by a paper callback", rows)
 	}
 }
+
+// The v3.25.4 review's witness, kept as found: the guard resizes a stop
+// journaled through 127.0.0.1:7496 while the daemon is on 127.0.0.1:4002,
+// an orderStatus alone acknowledges it, and the owner's cancel then goes
+// through. On v3.25.4 the status was dropped and the cancel refused "order
+// is not cancel-eligible"; the unchanged-endpoint control passed.
+func TestReviewWitnessStatusAcknowledgesAResizeAcrossTheMove(t *testing.T) {
+	t.Parallel()
+	for _, endpoint := range []string{"127.0.0.1:4002", "127.0.0.1:7496"} {
+		t.Run(endpoint, func(t *testing.T) {
+			t.Parallel()
+			r := newStopGuardRigPlacedThrough(t, config.Trading{}, endpoint)
+			seedStopPermID(t, r)
+			r.set(50, true)
+			r.pass(t)
+			if m, c := r.writes(); m != 1 || c != 0 {
+				t.Fatalf("initial resize: modifies=%d cancels=%d", m, c)
+			}
+			status := stopStatus("Submitted", 0, 50)
+			status.Account, status.OrderRef = "DU1234567", "ord-prot"
+			r.deliver(t, status)
+			row := onlyStopRow(t, r.srv, endpoint)
+			if row.SendState != orderSendStateBrokerAcknowledged || !row.ModifyEligible || !row.CancelEligible {
+				t.Fatalf("after the acknowledged resize: send %s modify %t cancel %t", row.SendState, row.ModifyEligible, row.CancelEligible)
+			}
+			if _, err := r.srv.cancelOrder(t.Context(), rpc.OrderCancelParams{ID: "ord-prot", Origin: rpc.OrderOriginHumanTTY}); err != nil {
+				t.Fatalf("owner cannot cancel the broker-acknowledged resized stop: %v", err)
+			}
+		})
+	}
+}

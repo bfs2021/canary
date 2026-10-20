@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.26.1 — Unreleased
+
+### What's new
+
+The daemon keeps managing its protective stops after it moves between TWS and IB Gateway and after a restart: it can resize a stop, resize it again and cancel it, whichever app or daemon process placed it.
+
+### Fixed
+
+- After the daemon moved between TWS and IB Gateway, a stop it had placed through the other app could be changed once and then no more: the broker's acknowledgement of the change was dropped because it arrived on the other socket, the order stayed "send attempted", and the next resize or the owner's cancel was refused as "order is not cancel-eligible"; a fill reported after the move landed on a second journal row. v3.25.4's note that such stops "can be changed or cancelled after the daemon moves" held only for the first change. Now the broker's acknowledgements, status and fills for that order reach its one journal row, so a stop can be resized, acknowledged, resized again and cancelled after the move, in both directions. They are matched only on exact broker evidence: the same account, trading mode and client ID, and the order's permanent ID (or, before the broker first acknowledged it, its order reference and order ID); hand orders, other clients' orders and anything ambiguous are never adopted (the v3.25.4 review's finding 2).
+- After a daemon restart, changing an open order an earlier daemon process placed, such as the protective stop guard resizing a stop placed the day before, failed with "explicit order ID is behind the consumed request/order frontier". An order the broker reports on the current connection for the daemon's client ID and account may now be changed; the change is refused when the broker names it under another permanent ID or account than its journal row, and nothing changes for a daemon on client ID 0, where hand orders report the same client ID (#120).
+
 ## v3.26.0 — Unreleased
 
 ### What's new
@@ -44,7 +55,6 @@ executions poll is named as such instead of logged as an unknown message.
 
 - When the open-order read is left without its answer, the daemon redials its broker connection at once, at most once an hour and never while an order is being placed or changed, so the order reconcile, the protection alerts and the proposals read open orders again; the log names the first failure and says once when open orders read again, and a redialled connection that loses the read again is reported as the Gateway needing a restart (#119).
 - A late answer to the executions poll is logged with how late it was, at WARN in the logging schedule's duty hours and INFO outside them, instead of "Unhandled message ID 55" (#119).
-- The daemon can change an open order that an earlier daemon process placed, such as the protective stop guard resizing a stop after a restart: an order the broker reports for the daemon's client on the current connection, under the same permanent ID as its journal row, is the daemon's to change, instead of refused as "behind the consumed request/order frontier" (#120).
 
 ## v3.25.4 — 2026-10-20 08:29 CEST
 
