@@ -1,6 +1,6 @@
 # Protective stop exemption and guard
 
-Updated: 2026-10-20 13:55 CEST
+Updated: 2026-10-20 14:36 CEST
 Status: implemented
 
 Contract per `.agents/docs/daemon-cli-trading-contract.md` and
@@ -189,26 +189,40 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   the v3.25.4 review's finding 2): an acknowledgement, status or fill that
   arrives on the current socket for an order placed through the other one
   is keyed to the order's own route and resolves its outstanding change,
-  but only on exact broker evidence (`orderJournalViewAcrossEndpoints`):
-  the callback names its client ID itself and carries the permanent ID;
-  account, mode and client ID equal the row's; a row with a permanent ID
-  pairs only with that permanent ID, and a row the broker never
-  acknowledged only with a callback that carries its order reference and
-  order ID both; exactly one row qualifies and none in the scope
-  contradicts the callback. The callback's own route is always tried first.
-  Error callbacks (no client or permanent ID) never pair across sockets.
-  So the guard can shrink, shrink again and cancel after the move.
+  but only on exact broker evidence (`orderJournalViewForLifecycleEvent`).
+  Only rows of the callback's account, mode and client ID are considered,
+  and one check (`orderJournalPairingContradicted`) runs on every
+  candidate, on either socket: references, order IDs and permanent IDs
+  agree where both carry one; no other row of the scope holds the
+  callback's permanent ID or carries its reference under another permanent
+  ID. A permanent ID pairs with the row that holds it; of several holders
+  only the one Canary placed (a duplicate row born from callbacks under the
+  new socket by earlier builds loses to it), and across sockets only when
+  the callback names its client ID itself. A first acknowledgement enriches
+  only an open row without a permanent ID that is the one candidate in the
+  whole scope: on the callback's socket by reference or by order ID, across
+  sockets by reference and order ID both. Error callbacks (no client or
+  permanent ID) never pair across sockets. So the guard can shrink, shrink
+  again and cancel after the move.
 - **Order IDs after a restart (#120, v3.26.1).** A change needs the order's
   ID to pass the socket's order-ID claim, which refuses an ID below the
   session's frontier unless this process placed it. An order the broker
   reports on the current socket generation for the daemon's client ID and
-  account, transmitted (permanent ID set) and not a what-if, may also be
-  claimed (`observeReportedOwnOrderAtEpoch`); nothing counts on a client-0
+  account, transmitted (permanent ID set) and not a what-if, is recorded
+  with its permanent ID, account and reference
+  (`observeReportedOwnOrderAtEpoch`); nothing counts on a client-0
   connection, where TWS reports hand orders as client 0, and an ID reported
-  twice with different identities never counts. Before a modify the daemon
-  checks the report names the journal row's account and permanent ID and
-  refuses a row without one; a cancel refuses a positive mismatch
-  (`validateReportedOwnOrder`).
+  twice with different identities never counts. The modify names the order
+  it changes on the wire order (`RawOrder.Changes`, never sent), and the
+  claim accepts a reported ID only if the report on the bound socket
+  generation names that permanent ID, account and reference, compared under
+  the claim's lock. Before sending, the daemon checks the same on the
+  write's own socket (`validateReportedOwnOrder`): an order this process
+  placed is refused only on a report naming another order; any other order
+  needs the broker's report naming the row's account, reference and
+  permanent ID, and is refused in plain words until it arrives; a row
+  without a permanent ID can be cancelled on a report carrying its
+  reference, never modified.
 - **Freeze.** `trading.freeze` blocks every new write including modifies and
   allows cancels (`docs/docs/reference/config.md`). The guard follows that: a
   shrink waits while frozen, a cancel goes through.
@@ -306,8 +320,10 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   client 0, another account, another or no permanent ID, the permanent ID
   under another reference or order ID, and another trading mode never
   resolve the change; a never-acknowledged row pairs only with its
-  reference and order ID. `order_lifecycle_cross_endpoint_test.go`:
-  ambiguous and contradicted rows. `pkg/ibkr/order_id_inherited_test.go`
+  reference and order ID; a cancel of a row without a permanent ID needs
+  the broker's report with its reference. `order_lifecycle_cross_endpoint_test.go`:
+  ambiguous and contradicted rows and the whole-scope check
+  (`TestLifecyclePairingRespectsTheWholeScope`). `pkg/ibkr/order_id_inherited_test.go`
   and `order_write_helpers_test.go` (`TestValidateReportedOwnOrderRefusesAnotherOrder`):
   the order-ID claim and its check.
 - `pkg/ibkr/place_order_oca_test.go`: the membership round-trips the proto

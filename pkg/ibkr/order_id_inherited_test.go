@@ -2,6 +2,7 @@ package ibkr
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -28,8 +29,14 @@ func TestInheritedOpenOrderIDIsOwnedForItsSession(t *testing.T) {
 	noAccount.OrderID, noAccount.Account = 44, ""
 	twice, again := startupBurstOrder(12), startupBurstOrder(13)
 	twice.OrderID, again.OrderID = 45, 45
+	refs := func(orders ...testOpenOrderProtoCallback) []testOpenOrderProtoCallback {
+		for i := range orders {
+			orders[i].OrderRef = fmt.Sprintf("ord-%d", orders[i].OrderID)
+		}
+		return orders
+	}
 	conn := startupTestConnection(serveStartup(t, func(s *twsGatewaySession) {
-		for _, o := range []testOpenOrderProtoCallback{startupBurstOrder(0), startupBurstOrder(1), manual, whatIf, unsent, noAccount, twice, again} {
+		for _, o := range refs(startupBurstOrder(0), startupBurstOrder(1), manual, whatIf, unsent, noAccount, twice, again) {
 			s.write(encodeOpenOrderProtoCallbackForTest(o))
 		}
 		s.write(twsGatewayFrame(msgOpenOrderEnd, "1"))
@@ -41,36 +48,91 @@ func TestInheritedOpenOrderIDIsOwnedForItsSession(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Disconnect() })
 
-	if got, ok := conn.ReportedOwnOrder(40); !ok || got != (ReportedOwnOrder{PermID: 700000, Account: "DU1234567"}) {
-		t.Fatalf("reported order 40: %+v ok=%t, want permanent ID 700000 for DU1234567", got, ok)
+	if got, ok := conn.ReportedOwnOrder(40); !ok || got != (ReportedOwnOrder{PermID: 700000, Account: "DU1234567", OrderRef: "ord-40"}) {
+		t.Fatalf("reported order 40: %+v ok=%t, want permanent ID 700000 for DU1234567, ord-40", got, ok)
 	}
 	epoch := conn.BrokerSessionEpoch()
-	if _, err := conn.claimOrderIDForForwardingAtEpoch(40, conn.orderIDOwned(40), &epoch); err != nil {
+	change := func(id, perm int) *OrderChangeIdentity {
+		return &OrderChangeIdentity{PermID: perm, Account: "du1234567", OrderRef: fmt.Sprintf("ord-%d", id)}
+	}
+	if _, err := conn.claimOrderIDForForwardingAtEpoch(40, conn.orderIDOwned(40), &epoch, change(40, 700000)); err != nil {
 		t.Fatalf("claim of the reported own order 40: %v", err)
 	}
 	conn.discardOrderIDReservation(40)
-	if _, err := conn.claimOrderIDCurrentEpoch(41, conn.orderIDOwned(41)); err != nil {
+	if _, err := conn.claimOrderIDForForwardingAtEpoch(41, conn.orderIDOwned(41), &epoch, change(41, 700001)); err != nil {
 		t.Fatalf("claim of the reported own order 41: %v", err)
+	}
+	conn.discardOrderIDReservation(41)
+	// The claim compares the report with the order the caller means to
+	// change, under its lock: a report alone, or one naming another order,
+	// never suffices.
+	for name, wrong := range map[string]*OrderChangeIdentity{
+		"no identity":          nil,
+		"another permanent ID": change(40, 700009),
+		"another account":      {PermID: 700000, Account: "DU7654321", OrderRef: "ord-40"},
+		"another reference":    {PermID: 700000, Account: "DU1234567", OrderRef: "ord-other"},
+		"no permanent ID":      {Account: "DU1234567", OrderRef: "ord-40"},
+	} {
+		if _, err := conn.claimOrderIDForForwardingAtEpoch(40, conn.orderIDOwned(40), &epoch, wrong); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
+			t.Fatalf("claim of order 40 with %s err=%v, want the frontier refusal", name, err)
+		}
 	}
 	// never reported; a manual order; a what-if; unsent; no account
 	for _, id := range []int{39, 7, 42, 43, 44} {
 		if _, ok := conn.ReportedOwnOrder(id); ok {
 			t.Fatalf("order %d recorded as this client's", id)
 		}
-		if _, err := conn.claimOrderIDCurrentEpoch(id, conn.orderIDOwned(id)); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
+		if _, err := conn.claimOrderIDForForwardingAtEpoch(id, conn.orderIDOwned(id), &epoch, change(id, 700099)); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
 			t.Fatalf("claim of order %d err=%v, want the frontier refusal", id, err)
 		}
 	}
 	if got, ok := conn.ReportedOwnOrder(45); !ok || !got.Conflicted {
 		t.Fatalf("order 45 reported twice with different permanent IDs: %+v ok=%t, want conflicted", got, ok)
 	}
-	if _, err := conn.claimOrderIDCurrentEpoch(45, conn.orderIDOwned(45)); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
+	if _, err := conn.claimOrderIDForForwardingAtEpoch(45, conn.orderIDOwned(45), &epoch, change(45, 700013)); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
 		t.Fatalf("claim of the conflicted order 45 err=%v, want the frontier refusal", err)
 	}
 	conn.resetOrderIDReadiness()
 	conn.observeNextValidOrderID(100)
-	if _, err := conn.claimOrderIDCurrentEpoch(40, conn.orderIDOwned(40)); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
+	now := conn.BrokerSessionEpoch()
+	if _, err := conn.claimOrderIDForForwardingAtEpoch(40, conn.orderIDOwned(40), &now, change(40, 700000)); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
 		t.Fatalf("claim of order 40 on a new socket generation err=%v, want refused until reported again", err)
+	}
+	// Reported again on the new generation: a binding of the earlier one
+	// still sees no report, the current one does.
+	reported := startupBurstOrder(0)
+	reported.OrderRef = "ord-40"
+	conn.observeReportedOwnOrderAtEpoch(conn.decodeMessage(encodeOpenOrderProtoCallbackForTest(reported)), now)
+	if _, ok := conn.reportedOwnOrderAtEpoch(40, epoch); ok {
+		t.Fatal("order 40 reported to a binding of the earlier socket generation")
+	}
+	if _, ok := conn.reportedOwnOrderAtEpoch(40, now); !ok {
+		t.Fatal("order 40 not reported to the current generation's binding")
+	}
+}
+
+// A frame of an earlier socket generation never records a report: the
+// observer checks the generation under the ID lock, and the reader drops a
+// stale frame before it. The same frame at the current generation records.
+func TestInheritedOpenOrderIDIgnoresAStaleSocketFrame(t *testing.T) {
+	conn := startupTestConnection(serveStartup(t, func(s *twsGatewaySession) {
+		s.write(twsGatewayFrame(msgManagedAccts, "1", "DU1234567"))
+		s.write(twsGatewayFrame(msgNextValidID, "1", "100"))
+	}), 1)
+	if err := conn.Connect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Disconnect() })
+	frame := encodeOpenOrderProtoCallbackForTest(startupBurstOrder(0))
+	current := conn.BrokerSessionEpoch()
+	conn.processMessageAtEpoch(frame, current-1)
+	conn.observeReportedOwnOrderAtEpoch(conn.decodeMessage(frame), current-1)
+	if got, ok := conn.ReportedOwnOrder(40); ok {
+		t.Fatalf("a stale-generation frame recorded order 40: %+v", got)
+	}
+	conn.observeReportedOwnOrderAtEpoch(conn.decodeMessage(frame), current)
+	if _, ok := conn.ReportedOwnOrder(40); !ok {
+		t.Fatal("the current-generation frame did not record order 40 (control)")
 	}
 }
 
@@ -104,7 +166,8 @@ func TestInheritedOpenOrderIDNeedsTheAccountAndANonZeroClient(t *testing.T) {
 			if got, ok := conn.ReportedOwnOrder(40); ok {
 				t.Fatalf("order 40 recorded as this client's: %+v", got)
 			}
-			if _, err := conn.claimOrderIDCurrentEpoch(40, conn.orderIDOwned(40)); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
+			epoch := conn.BrokerSessionEpoch()
+			if _, err := conn.claimOrderIDForForwardingAtEpoch(40, conn.orderIDOwned(40), &epoch, &OrderChangeIdentity{PermID: 700000, Account: "DU1234567"}); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
 				t.Fatalf("claim of order 40 err=%v, want the frontier refusal", err)
 			}
 		})

@@ -201,8 +201,11 @@ func TestRestartedDaemonManagesAStopItsPredecessorPlacedThroughTheOtherApp(t *te
 	}
 
 	r := newStopGuardRigIn(t, config.Trading{}, dir, "", 4002, false)
-	reported := ibkrlib.ReportedOwnOrder{PermID: crossPermID, Account: "DU1234567"}
-	r.srv.reportedOwnOrderForTest = func(id int) (ibkrlib.ReportedOwnOrder, bool) { return reported, id == 1002 }
+	reported := ibkrlib.ReportedOwnOrder{PermID: crossPermID, Account: "DU1234567", OrderRef: "ord-prot"}
+	r.srv.brokerOrderReportsForTest = &brokerOrderReports{
+		report:     func(id int) (ibkrlib.ReportedOwnOrder, bool) { return reported, id == 1002 },
+		placedHere: func(int) bool { return false },
+	}
 	r.brokerAcknowledges(t, 100) // the connect download
 	wantManageable(t, onlyStopRow(t, r.srv, "127.0.0.1:7497"), 100)
 
@@ -215,6 +218,14 @@ func TestRestartedDaemonManagesAStopItsPredecessorPlacedThroughTheOtherApp(t *te
 	r.brokerAcknowledges(t, 30)
 	if m, c := r.writes(); m != 2 || r.modified[0].TotalQty != 60 || r.modified[1].TotalQty != 30 || c != 0 {
 		t.Fatalf("writes = %d modifies %d cancels, want shrinks to 60 and 30", m, c)
+	}
+	// Each modify names the order it changes, so the order-ID claim can
+	// compare it with the broker's report under its lock.
+	want := ibkrlib.OrderChangeIdentity{PermID: crossPermID, Account: "DU1234567", OrderRef: "ord-prot"}
+	for i, sent := range r.modified {
+		if sent.Changes == nil || *sent.Changes != want {
+			t.Fatalf("modify %d names %+v, want %+v", i, sent.Changes, want)
+		}
 	}
 	wantManageable(t, onlyStopRow(t, r.srv, "127.0.0.1:7497"), 30)
 
@@ -353,6 +364,49 @@ func TestReviewWitnessStatusAcknowledgesAResizeAcrossTheMove(t *testing.T) {
 			}
 			if _, err := r.srv.cancelOrder(t.Context(), rpc.OrderCancelParams{ID: "ord-prot", Origin: rpc.OrderOriginHumanTTY}); err != nil {
 				t.Fatalf("owner cannot cancel the broker-acknowledged resized stop: %v", err)
+			}
+		})
+	}
+}
+
+// A cancel of a row without a permanent ID (an order an earlier process
+// sent and the broker never acknowledged in the journal) needs proof too:
+// with no broker report of its order ID on this connection, or a report
+// under another reference, it is refused in plain words; a report carrying
+// its reference cancels it; an order this process placed needs no report.
+func TestCancelOfAnUnacknowledgedRowNeedsTheBrokersReport(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		report  *ibkrlib.ReportedOwnOrder
+		placed  bool
+		refusal string // "" for a sent cancel
+	}{
+		{"not reported, not placed here", nil, false, "has not reported order ID 1002"},
+		{"reported under another reference", &ibkrlib.ReportedOwnOrder{PermID: 799999, Account: "DU1234567", OrderRef: "ord-other"}, false, "another order reference"},
+		{"reported without a reference", &ibkrlib.ReportedOwnOrder{PermID: 799999, Account: "DU1234567"}, false, "does not carry this order's reference"},
+		{"reported with its reference", &ibkrlib.ReportedOwnOrder{PermID: crossPermID, Account: "DU1234567", OrderRef: "ord-prot"}, false, ""},
+		{"placed by this process", nil, true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newStopGuardRigIn(t, config.Trading{}, t.TempDir(), "127.0.0.1:4002", 7497, true)
+			r.srv.brokerOrderReportsForTest = &brokerOrderReports{
+				report: func(id int) (ibkrlib.ReportedOwnOrder, bool) {
+					if tc.report == nil || id != 1002 {
+						return ibkrlib.ReportedOwnOrder{}, false
+					}
+					return *tc.report, true
+				},
+				placedHere: func(id int) bool { return tc.placed && id == 1002 },
+			}
+			_, err := r.srv.cancelOrder(t.Context(), rpc.OrderCancelParams{ID: "ord-prot", Origin: rpc.OrderOriginHumanTTY})
+			_, c := r.writes()
+			switch {
+			case tc.refusal == "" && (err != nil || c != 1):
+				t.Fatalf("cancel = %v with %d sent, want it sent", err, c)
+			case tc.refusal != "" && (err == nil || !strings.Contains(err.Error(), tc.refusal) || c != 0):
+				t.Fatalf("cancel = %v with %d sent, want refused naming %q", err, c, tc.refusal)
 			}
 		})
 	}

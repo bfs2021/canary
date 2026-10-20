@@ -156,7 +156,7 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	if !view.ModifyEligible {
 		return nil, errBadRequest("order is not modify-eligible")
 	}
-	if err := validateReportedOwnOrder(s.reportedOwnOrderFor(binding), view, true); err != nil {
+	if err := validateReportedOwnOrder(s.brokerOrderReportsFor(binding), view, true); err != nil {
 		return nil, err
 	}
 	payload, err := s.verifyPreviewTokenForModify(p.PreviewToken, view)
@@ -234,6 +234,7 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	order.OrderID = view.ReservedOrderID
 	order.ClientID = status.ClientID
 	order.Account = status.Account
+	order.Changes = orderChangeIdentity(view)
 	if err := s.submitBoundConfiguredOrder(ctx, binding, status, contract, order); err != nil {
 		if journalErr := s.appendOrderSendError(modifiedDraft, journalStatus, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify, err); journalErr != nil {
 			err = errors.Join(err, journalErr)
@@ -284,7 +285,7 @@ func (s *Server) cancelOrderForAction(ctx context.Context, p rpc.OrderCancelPara
 	if !view.CancelEligible {
 		return nil, errBadRequest("order is not cancel-eligible")
 	}
-	if err := validateReportedOwnOrder(s.reportedOwnOrderFor(binding), view, false); err != nil {
+	if err := validateReportedOwnOrder(s.brokerOrderReportsFor(binding), view, false); err != nil {
 		return nil, err
 	}
 	if err := s.protectiveStopGuardGrantCovers(p.Origin, protectiveStopGuardCancel, view, 0); err != nil {
