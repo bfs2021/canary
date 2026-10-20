@@ -351,10 +351,10 @@ func orderJournalViewWithoutPermID(ev orderJournalEvent, scope []rpc.OrderView) 
 
 // orderJournalPairingContradicted is the check every pairing passes: the
 // row's reference, order ID and permanent ID agree with the callback's where
-// both carry one; no other row of the scope holds the callback's permanent ID
-// (unless the row itself holds it too and was chosen as its one placed
-// holder); and no other row of the scope carries the callback's reference
-// under another permanent ID.
+// both carry one, and no other row of the scope carries the callback's
+// reference under another permanent ID. That no other row holds the
+// callback's permanent ID is structural: orderJournalViewForPermID pairs a
+// holder whenever one exists and enriches a row only when none does.
 func orderJournalPairingContradicted(ev orderJournalEvent, view rpc.OrderView, scope []rpc.OrderView) bool {
 	if orderJournalRefsDiffer(ev, view) {
 		return true
@@ -372,9 +372,6 @@ func orderJournalPairingContradicted(ev orderJournalEvent, view rpc.OrderView, s
 	for _, other := range scope {
 		if orderViewKey(other) == key {
 			continue
-		}
-		if other.PermID == ev.PermID && view.PermID != ev.PermID {
-			return true
 		}
 		if ev.OrderRef != "" && other.OrderRef == ev.OrderRef && other.PermID != 0 && other.PermID != ev.PermID {
 			return true
