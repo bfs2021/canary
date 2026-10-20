@@ -5584,6 +5584,13 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 		ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 || ev.PermID <= 0 {
 		return
 	}
+	if c.IsWhatIfOrderID(ev.OrderID) {
+		// A what-if of a change echoes the order's permanent ID under the
+		// preview's own reference: the broker's answer to a question, not a
+		// second identity of the order. The legacy frame carries no what-if
+		// flag, so the in-flight set decides on both paths.
+		return
+	}
 	account := strings.TrimSpace(ev.Account)
 	if account == "" {
 		return
@@ -7546,8 +7553,10 @@ func (c *Connection) claimOrderIDForEpoch(id int, alreadyOwned bool, expectedEpo
 // this process placed (alreadyOwned), or one the broker reported on this
 // generation as an open order of this client whose report names change, the
 // order the caller means to change (#120); without change a report never
-// suffices. fresh, when not nil, reports whether the ID was claimed as a new
-// order's (reserved for it, or at or above the frontier) rather than as an
+// suffices, and a send that names change claims only through ownership or
+// the report, never because the ID lies at or above the frontier. fresh, when
+// not nil, reports whether the ID was claimed as a new order's (no change
+// named; reserved for it, or at or above the frontier) rather than as an
 // order this process placed or the broker reported.
 func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch *uint64, change *OrderChangeIdentity, fresh *bool) (uint64, error) {
 	epoch := c.brokerSessionEpoch.Load()
@@ -7564,11 +7573,14 @@ func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch
 	report, reported := c.reportedOwnOrderIDs[id]
 	reported = reported && report.matches(change)
 	ahead := !c.brokerIDExhausted && id >= max(c.reqIDSeq, c.nextOrderID)
-	if !reserved && !alreadyOwned && !reported && !ahead {
+	switch {
+	case change != nil && !alreadyOwned && !reported:
+		return epoch, fmt.Errorf("%w: the order to change is neither this process's nor reported by the broker for this client on the current connection", ErrBrokerIDNamespaceConflict)
+	case !reserved && !alreadyOwned && !reported && !ahead:
 		return epoch, fmt.Errorf("%w: explicit order ID is behind the consumed request/order frontier", ErrBrokerIDNamespaceConflict)
 	}
 	if fresh != nil {
-		*fresh = reserved || ahead
+		*fresh = change == nil && (reserved || ahead)
 	}
 	delete(c.reservedOrderIDs, id)
 	if id >= maxProtoInt32 {

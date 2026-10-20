@@ -166,3 +166,21 @@ func TestRestartedClientResizesAndCancelsAnInheritedStop(t *testing.T) {
 		t.Fatalf("change of this process's own order %d: %v", placed, err)
 	}
 }
+
+// A modify naming an order the broker never reported and this process never
+// placed is refused before any byte, though its ID lies ahead of the
+// frontier, and the ID is not marked placed here (refuter round 3, R3-2).
+func TestChangeOfAnUnreportedOrderAheadOfTheFrontierIsRefused(t *testing.T) {
+	_, connector, socket, gate := inheritedStopFixture(t)
+	binding, ok := connector.CaptureSession()
+	if !ok {
+		t.Fatal("no session binding")
+	}
+	resetSocket(socket)
+	contract, order := inheritedStopRawOrder(60, &OrderChangeIdentity{PermID: 700150, Account: "DU7654321", OrderRef: "ord-150"})
+	order.OrderID, order.OrderRef = 150, "ord-150"
+	err := connector.SubmitPaperOrderForSession(binding, gate, contract, order)
+	if !errors.Is(err, ErrBrokerIDNamespaceConflict) || socket.Len() != 0 || connector.PlacedOrderID(150) {
+		t.Fatalf("change of unreported order 150: err=%v wrote %d bytes placed=%t, want the claim refusal, nothing sent, not placed here", err, socket.Len(), connector.PlacedOrderID(150))
+	}
+}

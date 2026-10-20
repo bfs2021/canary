@@ -221,3 +221,69 @@ func TestInheritedOpenOrderIDFromALegacyFrame(t *testing.T) {
 		})
 	}
 }
+
+// A what-if in flight for an order ID echoes that order's permanent ID under
+// the preview's own reference; it is not a second identity of the order
+// (refuter round 3, R3-1). While a what-if is in flight for the ID the report
+// observer skips its frames, on the protobuf and the legacy path alike; a
+// genuine second reference still marks the report conflicted.
+func TestInheritedOpenOrderIDIgnoresAWhatIfEcho(t *testing.T) {
+	legacy := func(ref string) []string {
+		return append([]string{strconv.Itoa(msgOpenOrder),
+			"40", "910001", "SYNX", "STK", "", "0", "", "", "SMART", "USD", "SYNX", "NMS",
+			"SELL", "100", "TRAIL", "0", "0", "GTC", "", "DU1234567", "C", "0", ref, "15", "700000"},
+			"0", "0", "0", "", "", "", "")
+	}
+	for _, tc := range []struct {
+		name          string
+		serverVersion int
+		frame         func(*Connection, string) []string
+	}{
+		{"protobuf", minServerVerProtoBufPlaceOrder, func(c *Connection, ref string) []string {
+			o := startupBurstOrder(0)
+			o.OrderRef = ref
+			return c.decodeMessage(encodeOpenOrderProtoCallbackForTest(o))
+		}},
+		{"legacy", 176, func(_ *Connection, ref string) []string { return legacy(ref) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := NewConnection(&ConnectionConfig{Host: "127.0.0.1", Port: 4002, ClientID: 15})
+			t.Cleanup(conn.rateLimiter.Stop)
+			setServerVersionReady(conn, tc.serverVersion)
+			epoch := conn.BrokerSessionEpoch()
+			want := ReportedOwnOrder{PermID: 700000, Account: "DU1234567", OrderRef: "ord-40"}
+			conn.observeReportedOwnOrderAtEpoch(tc.frame(conn, "ord-40"), epoch)
+			if got, ok := conn.ReportedOwnOrder(40); !ok || got != want {
+				t.Fatalf("report = %+v ok=%t, want %+v", got, ok, want)
+			}
+			conn.markWhatIfOrderID(40)
+			conn.observeReportedOwnOrderAtEpoch(tc.frame(conn, "preview-synthetic"), epoch)
+			conn.clearWhatIfOrderID(40)
+			if got, ok := conn.ReportedOwnOrder(40); !ok || got != want {
+				t.Fatalf("after the what-if echo: report = %+v ok=%t, want it unchanged %+v", got, ok, want)
+			}
+			conn.observeReportedOwnOrderAtEpoch(tc.frame(conn, "ord-other"), epoch)
+			if got, ok := conn.ReportedOwnOrder(40); !ok || !got.Conflicted {
+				t.Fatalf("after a genuine second reference: report = %+v ok=%t, want conflicted", got, ok)
+			}
+		})
+	}
+}
+
+// A send that names an order to change claims its ID only through this
+// process's placement or the broker's matching report, never because the ID
+// happens to lie at or above the frontier (refuter round 3, R3-2).
+func TestClaimOfAChangeNeedsOwnershipOrAReport(t *testing.T) {
+	conn := NewConnection(&ConnectionConfig{Host: "127.0.0.1", Port: 4002, ClientID: 15})
+	t.Cleanup(conn.rateLimiter.Stop)
+	setServerVersionReady(conn, minServerVerProtoBufPlaceOrder)
+	conn.observeNextValidOrderID(100)
+	epoch := conn.BrokerSessionEpoch()
+	change := &OrderChangeIdentity{PermID: 700150, Account: "DU1234567", OrderRef: "ord-150"}
+	if _, fresh, err := conn.claimOrderIDForForwardingAtEpochFresh(150, false, &epoch, change); !errors.Is(err, ErrBrokerIDNamespaceConflict) || fresh {
+		t.Fatalf("claim of a change of the unreported, unplaced order 150 ahead of the frontier: fresh=%t err=%v, want the refusal", fresh, err)
+	}
+	if _, fresh, err := conn.claimOrderIDForForwardingAtEpochFresh(150, false, &epoch, nil); err != nil || !fresh {
+		t.Fatalf("claim of a new order at 150: fresh=%t err=%v, want a fresh claim", fresh, err)
+	}
+}
