@@ -624,12 +624,12 @@ func snapshotLines(lines []string) []string {
 }
 
 // The review of 2026-10-20 asked for the whole recovery to be proven. A
-// missing openOrderEnd poisons the session's open-order snapshot; readers
-// fail closed and trigger nothing themselves; the supervisor redials once
-// however many readers and ticks race it; the new session's complete answer
-// restores the inventory proposals read, the protection cache never serves
-// the old session's or another account's snapshot, and the outcome is said
-// once.
+// missing openOrderEnd poisons the session's open-order snapshot. Readers
+// then fail closed, send nothing and trigger nothing. The supervisor redials
+// through the daemon's own reconnect (triggerReconnect) once, however many
+// ticks race it. The new session's complete answer restores the inventory
+// the proposals read; the protection cache never serves the old session's or
+// another account's snapshot; the outcome is said once.
 func TestPoisonedSnapshotRecoversOnTheRedialledSession(t *testing.T) {
 	f := startFakeTWS(t)
 	f.account = "DU1234567"
@@ -653,22 +653,52 @@ func TestPoisonedSnapshotRecoversOnTheRedialledSession(t *testing.T) {
 	if _, cause, poisoned := old.OpenOrderSnapshotPoisoned(); !poisoned || !errors.Is(cause, ibkrlib.ErrOpenOrderSnapshotPoisoned) {
 		t.Fatalf("poisoned=%t cause=%v", poisoned, cause)
 	}
-	requests := f.openOrderRequests.Load()
 
-	mark := len(out.String())
-	now := s.now()
+	// Readers alone: each is refused as poisoned, none sends a request and
+	// none redials.
+	requests, accepted := f.openOrderRequests.Load(), f.accepted.Load()
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Go(func() { _, _, _ = s.brokerOpenOrderInventory(ctx, true) })
-		wg.Go(func() { s.superviseAnswerPaths(now) })
+		wg.Go(func() {
+			if _, _, err := s.brokerOpenOrderInventory(ctx, true); err == nil || !strings.Contains(err.Error(), "poisoned") {
+				t.Errorf("reader of a poisoned session err=%v, want poisoned", err)
+			}
+		})
 	}
 	wg.Wait()
 	if got := f.openOrderRequests.Load(); got != requests {
 		t.Fatalf("readers of a poisoned session sent %d reqAllOpenOrders, want none", got-requests)
 	}
-	waitSessionLost(t, old)
-	accepted := f.accepted.Load()
-	reconnectForTest(t, s)
+	if !old.IsReady() || f.accepted.Load() != accepted {
+		t.Fatal("a reader ended or redialled the session")
+	}
+
+	// Supervisor ticks racing each other redial once, through the daemon's
+	// own reconnect.
+	s.serverCtx = ctx
+	mark := len(out.String())
+	now := s.now()
+	for range 8 {
+		wg.Go(func() { s.superviseAnswerPaths(now) })
+	}
+	wg.Wait()
+	deadline := time.Now().Add(5 * time.Second)
+	var fresh *ibkrlib.Connector
+	for {
+		s.mu.Lock()
+		fresh, inFlight := s.connector, s.connectInFlight
+		s.mu.Unlock()
+		if fresh != nil && fresh != old && fresh.IsReady() && !inFlight {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the redial did not seat a new session")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	waitRegimePrewarm(t, s)
+	fresh = s.gatewayConnectorForTest()
+	time.Sleep(100 * time.Millisecond)
 	if got := f.accepted.Load() - accepted; got != 1 {
 		t.Fatalf("recovery dialled %d sessions, want one", got)
 	}
@@ -676,10 +706,6 @@ func TestPoisonedSnapshotRecoversOnTheRedialledSession(t *testing.T) {
 		t.Fatalf("want one redial line, got:\n%s", strings.Join(redials, "\n"))
 	}
 
-	fresh := s.gatewayConnectorForTest()
-	if fresh == nil || fresh == old {
-		t.Fatal("no new session")
-	}
 	if _, _, poisoned := fresh.OpenOrderSnapshotPoisoned(); poisoned {
 		t.Fatal("the new session reads poisoned")
 	}

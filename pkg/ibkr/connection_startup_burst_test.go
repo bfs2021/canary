@@ -297,3 +297,31 @@ func TestStartupWithoutManagedAccountsWaitsOnlyAGrace(t *testing.T) {
 		t.Fatalf("connect without managedAccounts took %s", elapsed)
 	}
 }
+
+// managedAccounts later than the grace after nextValidId still reaches the
+// connection, through the reader after Connect has returned: the window the
+// one-second startup read before 2026-10-19 gave, kept on purpose. The
+// daemon still waits for the account itself when its configuration names
+// one (tryOneHandshake).
+func TestManagedAccountsAfterTheGraceArriveThroughTheReader(t *testing.T) {
+	conn := startupTestConnection(serveStartup(t, func(s *twsGatewaySession) {
+		s.write(twsGatewayFrame(msgNextValidID, "1", "100"))
+		time.Sleep(1500 * time.Millisecond)
+		s.write(twsGatewayFrame(msgManagedAccts, "1", "DU1234567"))
+	}), 1)
+	began := time.Now()
+	if err := conn.Connect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Disconnect() })
+	if elapsed := time.Since(began); elapsed > 1400*time.Millisecond {
+		t.Fatalf("Connect waited %s, want the grace", elapsed)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for conn.GetAccountCode() != "DU1234567" {
+		if time.Now().After(deadline) {
+			t.Fatal("the late managedAccounts never reached the connection")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

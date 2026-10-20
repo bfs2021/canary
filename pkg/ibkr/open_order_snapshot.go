@@ -222,6 +222,10 @@ func (c *Connector) completeOpenOrderSnapshotFlight(flight *openOrderSnapshotFli
 		c.openOrderSnapshotPoison = flight.binding
 		c.openOrderSnapshotPoisonAt = time.Now()
 		c.openOrderSnapshotPoisonErr = err
+		if sameOpenOrderSnapshotBinding(c.openOrderSnapshotDone, flight.binding) {
+			// A poisoned generation has no current completion to report.
+			c.openOrderSnapshotDone, c.openOrderSnapshotDoneAt = openOrderSnapshotBinding{}, time.Time{}
+		}
 	} else if err == nil && result.Complete {
 		c.openOrderSnapshotDone = flight.binding
 		c.openOrderSnapshotDoneAt = result.AsOf

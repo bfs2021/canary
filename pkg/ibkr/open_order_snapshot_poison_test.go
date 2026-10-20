@@ -227,3 +227,43 @@ func TestExecDetailsEndAfterCancelOrLongAfterStaysDebug(t *testing.T) {
 		t.Fatalf("debug lines %q, want two", lines)
 	}
 }
+
+// A generation poisoned after a complete snapshot has no completion to
+// report: the daemon must not read it as recovered.
+func TestPoisonClearsTheSessionsCompletion(t *testing.T) {
+	c := readyBrokerEvidenceTestConnector(t)
+	conn := c.conn
+	setServerVersionReady(conn, maxClientVersion)
+	c.ensureHandlersRegistered(conn)
+	c.openOrderSnapshotTimeout = 2 * time.Second
+	c.requestAllOpenOrders = func() error { return nil }
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.SnapshotOpenOrders(t.Context())
+		done <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		c.openOrderSnapshotMu.Lock()
+		installed := c.openOrderSnapshot != nil
+		c.openOrderSnapshotMu.Unlock()
+		if installed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the snapshot flight was not installed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	conn.processMessage(conn.encodeMsg(msgOpenOrderEnd, "1"))
+	if err := <-done; err != nil || c.OpenOrderSnapshotCompletedAt().IsZero() {
+		t.Fatalf("first snapshot err=%v completed=%s, want complete", err, c.OpenOrderSnapshotCompletedAt())
+	}
+	c.openOrderSnapshotTimeout = 50 * time.Millisecond
+	if _, err := c.SnapshotOpenOrders(t.Context()); !errors.Is(err, ErrOpenOrderSnapshotPoisoned) {
+		t.Fatalf("second snapshot err=%v, want poisoned", err)
+	}
+	if at := c.OpenOrderSnapshotCompletedAt(); !at.IsZero() {
+		t.Fatalf("a poisoned generation still reports a completion at %s", at)
+	}
+}
