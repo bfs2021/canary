@@ -132,9 +132,10 @@ func orderChangeIdentity(view rpc.OrderView) *ibkrlib.OrderChangeIdentity {
 //     names another order (conflicted, another account, permanent ID or
 //     reference) refuses.
 //   - Any other order needs the broker's report on the bound socket, naming
-//     the row's account and, where both carry one, its reference; and the
-//     row's permanent ID. A row without a permanent ID can be cancelled when
-//     the report carries its reference, never modified.
+//     the row's account and reference (a report without a reference does
+//     not name a row that has one) and the row's permanent ID. A row
+//     without a permanent ID can be cancelled when the report carries its
+//     reference, never modified.
 //
 // Without broker order reports (no connector) there is nothing to compare.
 func validateReportedOwnOrder(reports *brokerOrderReports, view rpc.OrderView, modify bool) error {
@@ -161,6 +162,9 @@ func validateReportedOwnOrder(reports *brokerOrderReports, view rpc.OrderView, m
 		return errBadRequest(fmt.Sprintf("the broker reports order ID %d for another account; refusing to %s it", id, verb))
 	case report.OrderRef != "" && view.OrderRef != "" && report.OrderRef != view.OrderRef:
 		return errBadRequest(fmt.Sprintf("the broker reports order ID %d under another order reference; refusing to %s it", id, verb))
+	case !placed && view.OrderRef != "" && report.OrderRef == "":
+		// A report without a reference does not name an order that has one.
+		return errBadRequest(fmt.Sprintf("the broker's report of order ID %d carries no order reference to prove it is this order; refusing to %s it", id, verb))
 	case view.PermID > 0 && report.PermID != view.PermID:
 		return errBadRequest(fmt.Sprintf("the broker reports order ID %d as permanent ID %d, not this order's %d; refusing to %s it", id, report.PermID, view.PermID, verb))
 	case view.PermID > 0 || placed:

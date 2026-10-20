@@ -29,6 +29,8 @@ func TestInheritedOpenOrderIDIsOwnedForItsSession(t *testing.T) {
 	noAccount.OrderID, noAccount.Account = 44, ""
 	twice, again := startupBurstOrder(12), startupBurstOrder(13)
 	twice.OrderID, again.OrderID = 45, 45
+	noRef := startupBurstOrder(14)
+	noRef.OrderID = 46
 	refs := func(orders ...testOpenOrderProtoCallback) []testOpenOrderProtoCallback {
 		for i := range orders {
 			orders[i].OrderRef = fmt.Sprintf("ord-%d", orders[i].OrderID)
@@ -36,7 +38,7 @@ func TestInheritedOpenOrderIDIsOwnedForItsSession(t *testing.T) {
 		return orders
 	}
 	conn := startupTestConnection(serveStartup(t, func(s *twsGatewaySession) {
-		for _, o := range refs(startupBurstOrder(0), startupBurstOrder(1), manual, whatIf, unsent, noAccount, twice, again) {
+		for _, o := range append(refs(startupBurstOrder(0), startupBurstOrder(1), manual, whatIf, unsent, noAccount, twice, again), noRef) {
 			s.write(encodeOpenOrderProtoCallbackForTest(o))
 		}
 		s.write(twsGatewayFrame(msgOpenOrderEnd, "1"))
@@ -76,6 +78,10 @@ func TestInheritedOpenOrderIDIsOwnedForItsSession(t *testing.T) {
 		if _, err := conn.claimOrderIDForForwardingAtEpoch(40, conn.orderIDOwned(40), &epoch, wrong); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
 			t.Fatalf("claim of order 40 with %s err=%v, want the frontier refusal", name, err)
 		}
+	}
+	// A report without a reference does not name an order that has one.
+	if _, err := conn.claimOrderIDForForwardingAtEpoch(46, conn.orderIDOwned(46), &epoch, change(46, 700014)); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
+		t.Fatalf("claim of order 46 reported without a reference err=%v, want the frontier refusal", err)
 	}
 	// never reported; a manual order; a what-if; unsent; no account
 	for _, id := range []int{39, 7, 42, 43, 44} {

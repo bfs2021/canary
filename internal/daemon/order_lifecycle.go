@@ -238,13 +238,12 @@ func (s *Server) enrichOrderLifecycleEventFromJournal(ev *orderJournalEvent) (ma
 //     from callbacks alone, as builds before v3.26.1 minted under the new
 //     socket, loses to it); otherwise none. A holder on another socket also
 //     needs the callback to name its client ID itself.
-//   - With a permanent ID no row holds yet (the first acknowledgement), an
-//     open row without a permanent ID that the callback names by reference,
-//     or by order ID when the callback names no other reference, is the only
-//     candidate in the whole scope, or none pairs. On the callback's socket
-//     the reference or the order ID (with an explicit client ID) suffices,
-//     as before; across sockets the reference and the order ID both, with an
-//     explicit client ID (the v3.25.4 review's finding 2).
+//   - With a permanent ID no row holds yet (the first acknowledgement), only
+//     an openOrder introduces it, to the one open row without a permanent ID
+//     in the whole scope that it names by reference (and, across sockets, by
+//     order ID with an explicit client ID too); a row it names by order ID
+//     alone, or a second candidate, refuses. An orderStatus or execution
+//     never introduces a permanent ID (the refuter's second round).
 //   - Without a permanent ID only the callback's own socket pairs: by
 //     reference, else by order ID with an explicit client ID, never a row
 //     whose reference differs.
@@ -298,6 +297,15 @@ func orderJournalViewForPermID(ev orderJournalEvent, scope []rpc.OrderView) (rpc
 		}
 		return holder, true
 	}
+	// No row holds the permanent ID yet. Only the broker's openOrder, which
+	// carries the order reference, introduces it, and only to the one open
+	// row without a permanent ID that it names by reference: an orderStatus
+	// or execution without the reference could be another order of the same
+	// client ID behind the same order ID (another app on our client ID, an ID
+	// reset), and its fills and cancels would land on Canary's row.
+	if ev.Type != orderJournalEventBrokerAcknowledged || ev.OrderRef == "" {
+		return rpc.OrderView{}, false
+	}
 	var candidates []rpc.OrderView
 	for _, view := range scope {
 		if view.PermID != 0 || !view.Open || orderJournalRefsDiffer(ev, view) {
@@ -307,15 +315,16 @@ func orderJournalViewForPermID(ev orderJournalEvent, scope []rpc.OrderView) (rpc
 			candidates = append(candidates, view)
 		}
 	}
-	if len(candidates) != 1 {
+	if len(candidates) != 1 || !orderJournalRefNames(ev, candidates[0]) {
 		return rpc.OrderView{}, false
 	}
 	view := candidates[0]
-	byRef, byID := orderJournalRefNames(ev, view), orderJournalOrderIDNames(ev, view) && ev.clientIDPresent
 	if orderJournalEventOnViewSocket(ev, view) {
-		return view, byRef || byID
+		return view, true
 	}
-	return view, byRef && byID
+	// Across sockets the order ID must agree too, named by the callback's
+	// own client ID.
+	return view, ev.clientIDPresent && orderJournalOrderIDNames(ev, view)
 }
 
 func orderJournalViewWithoutPermID(ev orderJournalEvent, scope []rpc.OrderView) (rpc.OrderView, bool) {

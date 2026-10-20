@@ -70,6 +70,8 @@ func TestValidateReportedOwnOrderRefusesAnotherOrder(t *testing.T) {
 		{"no permanent ID, report carries the reference", row(1002, 0, "ord-a"), false, true, false},
 		{"no permanent ID, report without a reference", row(1005, 0, "ord-a"), false, true, true},
 		{"no permanent ID, placed here", row(1002, 0, "ord-a"), true, false, false},
+		{"report without a reference for a row with one", row(1005, 790005, "ord-a"), false, true, true},
+		{"report without a reference, placed here", row(1005, 790005, "ord-a"), true, false, false},
 		{"reported twice with different identities", row(1003, 790003, "ord-a"), false, true, true},
 		{"reported twice, placed here", row(1003, 790003, "ord-a"), true, true, true},
 		{"reported for another account", row(1004, 790004, "ord-a"), false, true, true},

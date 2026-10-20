@@ -384,7 +384,7 @@ func TestCancelOfAnUnacknowledgedRowNeedsTheBrokersReport(t *testing.T) {
 	}{
 		{"not reported, not placed here", nil, false, "has not reported order ID 1002"},
 		{"reported under another reference", &ibkrlib.ReportedOwnOrder{PermID: 799999, Account: "DU1234567", OrderRef: "ord-other"}, false, "another order reference"},
-		{"reported without a reference", &ibkrlib.ReportedOwnOrder{PermID: 799999, Account: "DU1234567"}, false, "does not carry this order's reference"},
+		{"reported without a reference", &ibkrlib.ReportedOwnOrder{PermID: 799999, Account: "DU1234567"}, false, "carries no order reference"},
 		{"reported with its reference", &ibkrlib.ReportedOwnOrder{PermID: crossPermID, Account: "DU1234567", OrderRef: "ord-prot"}, false, ""},
 		{"placed by this process", nil, true, ""},
 	} {

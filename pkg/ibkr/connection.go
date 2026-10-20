@@ -5538,7 +5538,8 @@ type ReportedOwnOrder struct {
 // the order reference. It never reaches the wire. An order ID this process
 // did not place is claimed below the frontier only when the broker reported
 // it on the bound socket generation with this permanent ID and account, and
-// this reference when both carry one (claimOrderIDLocked, under reqIDMu).
+// this reference when the caller names one (claimOrderIDLocked, under
+// reqIDMu).
 type OrderChangeIdentity struct {
 	PermID   int
 	Account  string
@@ -5552,8 +5553,9 @@ func (r ReportedOwnOrder) matches(change *OrderChangeIdentity) bool {
 		!strings.EqualFold(strings.TrimSpace(r.Account), strings.TrimSpace(change.Account)) {
 		return false
 	}
-	ref, want := strings.TrimSpace(r.OrderRef), strings.TrimSpace(change.OrderRef)
-	return ref == "" || want == "" || ref == want
+	// A report without a reference does not name an order that has one.
+	want := strings.TrimSpace(change.OrderRef)
+	return want == "" || strings.TrimSpace(r.OrderRef) == want
 }
 
 // observeReportedOwnOrderAtEpoch records an open order the broker reports for
