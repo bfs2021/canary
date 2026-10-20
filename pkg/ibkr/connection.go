@@ -5577,6 +5577,9 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 		return
 	}
 	ev, ok := ParseOrderLifecycleEvent(fields)
+	if len(fields) > 1 && fields[1] != "protobuf" {
+		ev, ok = legacyOpenOrderReport(fields, c.serverVersion)
+	}
 	if !ok || ev.Type != OrderLifecycleEventOpenOrder || ev.WhatIf || !ev.ClientIDPresent || ev.ClientID != c.config.ClientID ||
 		ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 || ev.PermID <= 0 {
 		return
@@ -5602,6 +5605,53 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 		next.Conflicted = true
 	}
 	c.reportedOwnOrderIDs[ev.OrderID] = next
+}
+
+// Legacy (pre-protobuf) openOrder layout, as IB's EDecoder reads it: a
+// message version field below server version 145, then the order ID, eleven
+// contract fields, action, quantity, type, limit, aux price, TIF, OCA group,
+// account, open/close, origin, order reference, client ID and permanent ID.
+const (
+	minServerVerOrderContainer = 145
+	legacyOpenOrderAccount     = 19
+	legacyOpenOrderRef         = 22
+	legacyOpenOrderClientID    = 23
+	legacyOpenOrderPermID      = 24
+)
+
+// legacyOpenOrderReport reads the identity of a legacy openOrder frame (order
+// ID, account, reference, client ID, permanent ID) for the inherited-order
+// report, by the layout of serverVersion. Servers below protobuf (201) send
+// these; Canary cannot place or change an order there, but it can cancel one,
+// and a cancel of an order an earlier process placed needs the report.
+// What-if responses are not told apart here; one has no permanent ID unless
+// it previews a change of an order the broker already names, whose identity
+// it then repeats.
+func legacyOpenOrderReport(fields []string, serverVersion int) (OrderLifecycleEvent, bool) {
+	if len(fields) == 0 || strings.TrimSpace(fields[0]) != strconv.Itoa(msgOpenOrder) {
+		return OrderLifecycleEvent{}, false
+	}
+	start := 1
+	if serverVersion < minServerVerOrderContainer {
+		start = 2
+	}
+	if len(fields) <= start+legacyOpenOrderPermID {
+		return OrderLifecycleEvent{}, false
+	}
+	clientID, err := strconv.Atoi(strings.TrimSpace(fields[start+legacyOpenOrderClientID]))
+	if err != nil {
+		return OrderLifecycleEvent{}, false
+	}
+	ev := OrderLifecycleEvent{
+		Type:            OrderLifecycleEventOpenOrder,
+		OrderID:         orderEventInt(fields[start]),
+		Account:         strings.TrimSpace(fields[start+legacyOpenOrderAccount]),
+		OrderRef:        strings.TrimSpace(fields[start+legacyOpenOrderRef]),
+		ClientID:        clientID,
+		ClientIDPresent: true,
+		PermID:          orderEventInt(fields[start+legacyOpenOrderPermID]),
+	}
+	return ev, ev.OrderID > 0
 }
 
 // ReportedOwnOrder returns what the broker reported on the current socket

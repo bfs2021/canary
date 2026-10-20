@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -175,6 +176,47 @@ func TestInheritedOpenOrderIDNeedsTheAccountAndANonZeroClient(t *testing.T) {
 			epoch := conn.BrokerSessionEpoch()
 			if _, err := conn.claimOrderIDForForwardingAtEpoch(40, conn.orderIDOwned(40), &epoch, &OrderChangeIdentity{PermID: 700000, Account: "DU1234567"}); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
 				t.Fatalf("claim of order 40 err=%v, want the frontier refusal", err)
+			}
+		})
+	}
+}
+
+// A legacy (pre-protobuf) openOrder frame, as servers below version 201 send
+// it, still reports an order of this client: its client ID, account,
+// reference and permanent ID are read by IB's legacy layout, with the
+// message version field below server version 145 (the refuter's second
+// round, F3). Without them no report was recorded on such servers and a
+// cancel of an order an earlier process placed could never pass.
+func TestInheritedOpenOrderIDFromALegacyFrame(t *testing.T) {
+	legacy := func(withVersion bool, clientID string) []string {
+		fields := []string{strconv.Itoa(msgOpenOrder)}
+		if withVersion {
+			fields = append(fields, "34")
+		}
+		return append(fields,
+			"40", "910001", "SYNX", "STK", "", "0", "", "", "SMART", "USD", "SYNX", "NMS", // order ID, contract
+			"SELL", "100", "TRAIL", "0", "0", "GTC", "", "DU1234567", "C", "0", "ord-40", clientID, "700000", // through permId
+			"0", "0", "0", "", "", "", "") // later order fields
+	}
+	for _, tc := range []struct {
+		name          string
+		serverVersion int
+		fields        []string
+		want          bool
+	}{
+		{"server 176, no version field", 176, legacy(false, "15"), true},
+		{"server 140, version field", 140, legacy(true, "15"), true},
+		{"another client", 176, legacy(false, "16"), false},
+		{"client ID not a number", 176, legacy(false, "x"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn := NewConnection(&ConnectionConfig{Host: "127.0.0.1", Port: 4002, ClientID: 15})
+			t.Cleanup(conn.rateLimiter.Stop)
+			setServerVersionReady(conn, tc.serverVersion)
+			conn.observeReportedOwnOrderAtEpoch(tc.fields, conn.BrokerSessionEpoch())
+			got, ok := conn.ReportedOwnOrder(40)
+			if ok != tc.want || (ok && got != (ReportedOwnOrder{PermID: 700000, Account: "DU1234567", OrderRef: "ord-40"})) {
+				t.Fatalf("report = %+v ok=%t, want %t (permanent ID 700000, DU1234567, ord-40)", got, ok, tc.want)
 			}
 		})
 	}
