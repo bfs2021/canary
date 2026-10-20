@@ -411,3 +411,28 @@ func TestCancelOfAnUnacknowledgedRowNeedsTheBrokersReport(t *testing.T) {
 		})
 	}
 }
+
+// The cancel's identity check runs again at the send, under the write lock,
+// on the bound socket (the refuter's second round, F5): a report that names
+// another order by then refuses the cancel and nothing is sent.
+func TestCancelRechecksTheBrokersReportAtTheSend(t *testing.T) {
+	t.Parallel()
+	r := newStopGuardRigIn(t, config.Trading{}, t.TempDir(), "127.0.0.1:7497", 4002, true)
+	seedStopPermID(t, r)
+	var reads int
+	r.srv.brokerOrderReportsForTest = &brokerOrderReports{
+		report: func(id int) (ibkrlib.ReportedOwnOrder, bool) {
+			reads++
+			perm := crossPermID
+			if reads > 1 {
+				perm = 790009 // the broker now names another order behind ID 1002
+			}
+			return ibkrlib.ReportedOwnOrder{PermID: perm, Account: "DU1234567", OrderRef: "ord-prot"}, id == 1002
+		},
+		placedHere: func(int) bool { return false },
+	}
+	_, err := r.srv.cancelOrder(t.Context(), rpc.OrderCancelParams{ID: "ord-prot", Origin: rpc.OrderOriginHumanTTY})
+	if _, c := r.writes(); err == nil || !strings.Contains(err.Error(), "permanent ID 790009") || c != 0 || reads < 2 {
+		t.Fatalf("cancel = %v with %d sent after %d report reads, want refused at the send naming permanent ID 790009", err, c, reads)
+	}
+}
