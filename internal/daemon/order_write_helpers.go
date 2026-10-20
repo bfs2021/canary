@@ -79,6 +79,24 @@ func orderJournalStatusFor(view rpc.OrderView, status rpc.TradingStatus) rpc.Tra
 	return status
 }
 
+// validateReportedPermID refuses a modify whose broker order ID the broker
+// reported on the current session under a different permanent ID than the
+// journal row's. Since 2026-10-20 an order ID the broker reports for the
+// daemon's client may be claimed though an earlier process placed it, so the
+// journal's ID alone no longer stands behind the frontier check; the
+// permanent ID proves the row and the broker mean the same order. Without a
+// report or a permanent ID on either side there is nothing to compare.
+func validateReportedPermID(reported func(int) (int, bool), view rpc.OrderView) error {
+	if reported == nil || view.ReservedOrderID <= 0 || view.PermID <= 0 {
+		return nil
+	}
+	perm, ok := reported(view.ReservedOrderID)
+	if !ok || perm <= 0 || perm == view.PermID {
+		return nil
+	}
+	return errBadRequest(fmt.Sprintf("the broker reports order ID %d as permanent ID %d, not this order's %d; refusing to modify it", view.ReservedOrderID, perm, view.PermID))
+}
+
 func validateModifyDraft(view rpc.OrderView, draft rpc.OrderDraft) error {
 	if !orderAlgorithmMatches(draft.AdaptivePriority, view.AdaptivePriority, view.AlgoStrategy, view.AlgoKnown) {
 		return errBadRequest("order modify cannot change or discard the broker algorithm")

@@ -299,7 +299,13 @@ type Connection struct {
 	brokerIDExhausted  bool
 	reservedOrderIDs   map[int]struct{}
 	reservedRequestIDs map[int]struct{}
-	brokerSessionEpoch atomic.Uint64
+	// reportedOwnOrderIDs maps the order IDs the broker reported on this
+	// socket generation as open orders of this client ID to their permanent
+	// IDs: an order an earlier session or process placed may be claimed
+	// below the frontier to change it. Guarded by reqIDMu, cleared with the
+	// epoch.
+	reportedOwnOrderIDs map[int]int
+	brokerSessionEpoch  atomic.Uint64
 	// inboundEpochMu keeps late receipts attributable after outbound invalidation.
 	inboundEpochMu sync.RWMutex
 	// account holds the raw msgManagedAccts value, which is a
@@ -788,6 +794,7 @@ func NewConnection(config *ConnectionConfig) *Connection {
 		reqIDSeq:            1,
 		reservedOrderIDs:    make(map[int]struct{}),
 		reservedRequestIDs:  make(map[int]struct{}),
+		reportedOwnOrderIDs: make(map[int]int),
 		openOrders:          make(map[int]*IBKROrder),
 		orderStatus:         make(map[int]string),
 		reqAlias:            make(map[int]reqAliasEntry),
@@ -2209,6 +2216,9 @@ func (c *Connection) processMessageAtEpoch(msgBytes []byte, epoch uint64) {
 	}
 	if orderID, ok := inboundOrderID(msgID, fields); ok {
 		c.observeInboundOrderIDAtEpoch(orderID, epoch)
+	}
+	if msgID == msgOpenOrder {
+		c.observeReportedOwnOrderAtEpoch(fields, epoch)
 	}
 	if msgID == msgOpenOrder || msgID == msgOpenOrderEnd {
 		c.openOrderObserverMu.RLock()
@@ -5392,6 +5402,7 @@ func (c *Connection) resetOrderIDReadiness() {
 	c.haveNextValidID = false
 	clear(c.reservedOrderIDs)
 	clear(c.reservedRequestIDs)
+	clear(c.reportedOwnOrderIDs)
 	c.reqIDMu.Unlock()
 	c.invalidateUnstampedObservationAuthority()
 	c.mktDataTypeMu.Lock()
@@ -5508,6 +5519,40 @@ func (c *Connection) observeInboundOrderIDAtEpoch(id int, expectedEpoch uint64) 
 	}
 	c.advanceBrokerIDPastLocked(id)
 	c.reqIDMu.Unlock()
+}
+
+// observeReportedOwnOrderAtEpoch records an open order the broker reports for
+// this connection's client ID, with its permanent ID, so a change of it may
+// claim its ID below the frontier. With open orders downloaded on connection
+// the broker reports every one a previous process placed; on 2026-10-20 the
+// daemon could not resize its own stops after moving from TWS to IB Gateway
+// because only orders this process placed counted as owned. Other clients'
+// orders, which the Master API client also receives, and what-if orders
+// never count (on the client-0 control connection the manual orders are
+// that client's own).
+func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpoch uint64) {
+	ev, ok := ParseOrderLifecycleEvent(fields)
+	if !ok || ev.Type != OrderLifecycleEventOpenOrder || ev.WhatIf || !ev.ClientIDPresent || ev.ClientID != c.config.ClientID || ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 {
+		return
+	}
+	c.reqIDMu.Lock()
+	if c.brokerSessionEpoch.Load() == expectedEpoch {
+		if c.reportedOwnOrderIDs == nil {
+			c.reportedOwnOrderIDs = make(map[int]int)
+		}
+		c.reportedOwnOrderIDs[ev.OrderID] = ev.PermID
+	}
+	c.reqIDMu.Unlock()
+}
+
+// ReportedOwnOrderPermID returns the permanent ID the broker reported on the
+// current socket generation for this client's open order id, and whether it
+// reported one.
+func (c *Connection) ReportedOwnOrderPermID(id int) (permID int, reported bool) {
+	c.reqIDMu.Lock()
+	defer c.reqIDMu.Unlock()
+	permID, reported = c.reportedOwnOrderIDs[id]
+	return permID, reported
 }
 
 func (c *Connection) advanceBrokerIDPastLocked(id int) {
@@ -7388,7 +7433,8 @@ func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch
 		return epoch, fmt.Errorf("%w: order ID is owned by a reserved read-only request", ErrBrokerIDNamespaceConflict)
 	}
 	_, reserved := c.reservedOrderIDs[id]
-	if !reserved && !alreadyOwned {
+	_, reported := c.reportedOwnOrderIDs[id]
+	if !reserved && !alreadyOwned && !reported {
 		frontier := max(c.reqIDSeq, c.nextOrderID)
 		if c.brokerIDExhausted || id < frontier {
 			return epoch, fmt.Errorf("%w: explicit order ID is behind the consumed request/order frontier", ErrBrokerIDNamespaceConflict)

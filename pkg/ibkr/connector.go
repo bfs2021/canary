@@ -8970,6 +8970,22 @@ func (c *Connector) isWhatIfOrderID(orderID int) bool {
 // connector owns: a journaled/open order or an in-flight WhatIf preview.
 // Used to keep request-scoped notice recovery off order-scoped msg-204
 // errors when the two integer id spaces collide.
+// ReportedOwnOrderPermID returns the permanent ID the broker reported on the
+// current session for this client's open order id, and whether it reported
+// one; a caller changing an order it did not place checks the two agree.
+func (c *Connector) ReportedOwnOrderPermID(id int) (permID int, reported bool) {
+	if c == nil {
+		return 0, false
+	}
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	if conn == nil {
+		return 0, false
+	}
+	return conn.ReportedOwnOrderPermID(id)
+}
+
 func (c *Connector) isKnownBrokerOrderID(id int) bool {
 	if c == nil || id <= 0 {
 		return false
