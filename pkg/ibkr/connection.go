@@ -5538,7 +5538,8 @@ type ReportedOwnOrder struct {
 // the order reference. It never reaches the wire. An order ID this process
 // did not place is claimed below the frontier only when the broker reported
 // it on the bound socket generation with this permanent ID and account, and
-// this reference when both carry one (claimOrderIDLocked, under reqIDMu).
+// this reference when the caller names one (claimOrderIDLocked, under
+// reqIDMu).
 type OrderChangeIdentity struct {
 	PermID   int
 	Account  string
@@ -5552,8 +5553,9 @@ func (r ReportedOwnOrder) matches(change *OrderChangeIdentity) bool {
 		!strings.EqualFold(strings.TrimSpace(r.Account), strings.TrimSpace(change.Account)) {
 		return false
 	}
-	ref, want := strings.TrimSpace(r.OrderRef), strings.TrimSpace(change.OrderRef)
-	return ref == "" || want == "" || ref == want
+	// A report without a reference does not name an order that has one.
+	want := strings.TrimSpace(change.OrderRef)
+	return want == "" || strings.TrimSpace(r.OrderRef) == want
 }
 
 // observeReportedOwnOrderAtEpoch records an open order the broker reports for
@@ -5575,6 +5577,9 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 		return
 	}
 	ev, ok := ParseOrderLifecycleEvent(fields)
+	if len(fields) > 1 && fields[1] != "protobuf" {
+		ev, ok = legacyOpenOrderReport(fields, c.serverVersion)
+	}
 	if !ok || ev.Type != OrderLifecycleEventOpenOrder || ev.WhatIf || !ev.ClientIDPresent || ev.ClientID != c.config.ClientID ||
 		ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 || ev.PermID <= 0 {
 		return
@@ -5600,6 +5605,53 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 		next.Conflicted = true
 	}
 	c.reportedOwnOrderIDs[ev.OrderID] = next
+}
+
+// Legacy (pre-protobuf) openOrder layout, as IB's EDecoder reads it: a
+// message version field below server version 145, then the order ID, eleven
+// contract fields, action, quantity, type, limit, aux price, TIF, OCA group,
+// account, open/close, origin, order reference, client ID and permanent ID.
+const (
+	minServerVerOrderContainer = 145
+	legacyOpenOrderAccount     = 19
+	legacyOpenOrderRef         = 22
+	legacyOpenOrderClientID    = 23
+	legacyOpenOrderPermID      = 24
+)
+
+// legacyOpenOrderReport reads the identity of a legacy openOrder frame (order
+// ID, account, reference, client ID, permanent ID) for the inherited-order
+// report, by the layout of serverVersion. Servers below protobuf (201) send
+// these; Canary cannot place or change an order there, but it can cancel one,
+// and a cancel of an order an earlier process placed needs the report.
+// What-if responses are not told apart here; one has no permanent ID unless
+// it previews a change of an order the broker already names, whose identity
+// it then repeats.
+func legacyOpenOrderReport(fields []string, serverVersion int) (OrderLifecycleEvent, bool) {
+	if len(fields) == 0 || strings.TrimSpace(fields[0]) != strconv.Itoa(msgOpenOrder) {
+		return OrderLifecycleEvent{}, false
+	}
+	start := 1
+	if serverVersion < minServerVerOrderContainer {
+		start = 2
+	}
+	if len(fields) <= start+legacyOpenOrderPermID {
+		return OrderLifecycleEvent{}, false
+	}
+	clientID, err := strconv.Atoi(strings.TrimSpace(fields[start+legacyOpenOrderClientID]))
+	if err != nil {
+		return OrderLifecycleEvent{}, false
+	}
+	ev := OrderLifecycleEvent{
+		Type:            OrderLifecycleEventOpenOrder,
+		OrderID:         orderEventInt(fields[start]),
+		Account:         strings.TrimSpace(fields[start+legacyOpenOrderAccount]),
+		OrderRef:        strings.TrimSpace(fields[start+legacyOpenOrderRef]),
+		ClientID:        clientID,
+		ClientIDPresent: true,
+		PermID:          orderEventInt(fields[start+legacyOpenOrderPermID]),
+	}
+	return ev, ev.OrderID > 0
 }
 
 // ReportedOwnOrder returns what the broker reported on the current socket
@@ -7477,7 +7529,7 @@ func (c *Connection) claimOrderIDCurrentEpoch(id int, alreadyOwned bool) (uint64
 	}
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
-	return c.claimOrderIDLocked(id, alreadyOwned, nil, nil)
+	return c.claimOrderIDLocked(id, alreadyOwned, nil, nil, nil)
 }
 
 func (c *Connection) claimOrderIDForEpoch(id int, alreadyOwned bool, expectedEpoch uint64) (uint64, error) {
@@ -7486,7 +7538,7 @@ func (c *Connection) claimOrderIDForEpoch(id int, alreadyOwned bool, expectedEpo
 	}
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
-	return c.claimOrderIDLocked(id, alreadyOwned, &expectedEpoch, nil)
+	return c.claimOrderIDLocked(id, alreadyOwned, &expectedEpoch, nil, nil)
 }
 
 // claimOrderIDLocked claims an explicit order ID on the current socket
@@ -7494,8 +7546,10 @@ func (c *Connection) claimOrderIDForEpoch(id int, alreadyOwned bool, expectedEpo
 // this process placed (alreadyOwned), or one the broker reported on this
 // generation as an open order of this client whose report names change, the
 // order the caller means to change (#120); without change a report never
-// suffices.
-func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch *uint64, change *OrderChangeIdentity) (uint64, error) {
+// suffices. fresh, when not nil, reports whether the ID was claimed as a new
+// order's (reserved for it, or at or above the frontier) rather than as an
+// order this process placed or the broker reported.
+func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch *uint64, change *OrderChangeIdentity, fresh *bool) (uint64, error) {
 	epoch := c.brokerSessionEpoch.Load()
 	if expectedEpoch != nil && epoch != *expectedEpoch {
 		return epoch, fmt.Errorf("%w: broker socket generation changed before order ID claim", ErrBrokerIDNamespaceConflict)
@@ -7509,11 +7563,12 @@ func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch
 	_, reserved := c.reservedOrderIDs[id]
 	report, reported := c.reportedOwnOrderIDs[id]
 	reported = reported && report.matches(change)
-	if !reserved && !alreadyOwned && !reported {
-		frontier := max(c.reqIDSeq, c.nextOrderID)
-		if c.brokerIDExhausted || id < frontier {
-			return epoch, fmt.Errorf("%w: explicit order ID is behind the consumed request/order frontier", ErrBrokerIDNamespaceConflict)
-		}
+	ahead := !c.brokerIDExhausted && id >= max(c.reqIDSeq, c.nextOrderID)
+	if !reserved && !alreadyOwned && !reported && !ahead {
+		return epoch, fmt.Errorf("%w: explicit order ID is behind the consumed request/order frontier", ErrBrokerIDNamespaceConflict)
+	}
+	if fresh != nil {
+		*fresh = reserved || ahead
 	}
 	delete(c.reservedOrderIDs, id)
 	if id >= maxProtoInt32 {
@@ -7530,24 +7585,29 @@ func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch
 	return epoch, nil
 }
 
-// claimOrderIDForForwarding validates a Connector-level explicit ID and leaves
-// one exact reservation for the subsequent Connection place/WhatIf encoder.
-func (c *Connection) claimOrderIDForForwarding(id int, alreadyOwned bool) (uint64, error) {
-	return c.claimOrderIDForForwardingAtEpoch(id, alreadyOwned, nil, nil)
+// claimOrderIDForForwardingAtEpoch validates a Connector-level explicit ID
+// and leaves one exact reservation for the subsequent Connection place/WhatIf
+// encoder.
+func (c *Connection) claimOrderIDForForwardingAtEpoch(id int, alreadyOwned bool, expectedEpoch *uint64, change *OrderChangeIdentity) (uint64, error) {
+	epoch, _, err := c.claimOrderIDForForwardingAtEpochFresh(id, alreadyOwned, expectedEpoch, change)
+	return epoch, err
 }
 
-func (c *Connection) claimOrderIDForForwardingAtEpoch(id int, alreadyOwned bool, expectedEpoch *uint64, change *OrderChangeIdentity) (uint64, error) {
+// claimOrderIDForForwardingAtEpochFresh is claimOrderIDForForwardingAtEpoch
+// that also reports whether the ID was claimed as a new order's.
+func (c *Connection) claimOrderIDForForwardingAtEpochFresh(id int, alreadyOwned bool, expectedEpoch *uint64, change *OrderChangeIdentity) (uint64, bool, error) {
 	if id <= 0 || id > maxProtoInt32 {
-		return 0, fmt.Errorf("%w: order ID is outside the signed 32-bit broker namespace", ErrBrokerIDNamespaceConflict)
+		return 0, false, fmt.Errorf("%w: order ID is outside the signed 32-bit broker namespace", ErrBrokerIDNamespaceConflict)
 	}
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
-	epoch, err := c.claimOrderIDLocked(id, alreadyOwned, expectedEpoch, change)
+	var fresh bool
+	epoch, err := c.claimOrderIDLocked(id, alreadyOwned, expectedEpoch, change, &fresh)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	c.reservedOrderIDs[id] = struct{}{}
-	return epoch, nil
+	return epoch, fresh, nil
 }
 
 func (c *Connection) reserveRequestID(allowed func(int) bool) (int, error) {

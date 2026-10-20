@@ -320,7 +320,10 @@ func (s *Server) cancelOrderForAction(ctx context.Context, p rpc.OrderCancelPara
 	// The cancel's journal events are keyed to the order's own route (the
 	// cancel event already carries the view's), as the modify's are.
 	journalStatus := orderJournalStatusFor(view, status)
-	if err := s.cancelBoundConfiguredOrder(ctx, binding, status, view.ReservedOrderID); err != nil {
+	// The identity check runs again at the send, under the write lock and on
+	// the bound socket, so a report that changed since names no other order.
+	recheck := func() error { return validateReportedOwnOrder(s.brokerOrderReportsFor(binding), view, false) }
+	if err := s.cancelBoundConfiguredOrder(ctx, binding, status, view.ReservedOrderID, recheck); err != nil {
 		if journalErr := s.appendOrderSendError(orderDraftFromView(view), journalStatus, view.PreviewTokenID, view.ReservedOrderID, attemptID, action, err); journalErr != nil {
 			err = errors.Join(err, journalErr)
 		}
@@ -431,7 +434,7 @@ func (s *Server) submitBoundConfiguredOrder(ctx context.Context, binding brokerW
 	return err
 }
 
-func (s *Server) cancelBoundConfiguredOrder(ctx context.Context, binding brokerWriteTransactionBinding, status rpc.TradingStatus, orderID int) error {
+func (s *Server) cancelBoundConfiguredOrder(ctx context.Context, binding brokerWriteTransactionBinding, status rpc.TradingStatus, orderID int, recheck func() error) error {
 	if ctx == nil {
 		return ibkrlib.WithSendDisposition(fmt.Errorf("broker cancel context is nil"), ibkrlib.SendDispositionDefinitelyUnsent)
 	}
@@ -451,8 +454,17 @@ func (s *Server) cancelBoundConfiguredOrder(ctx context.Context, binding brokerW
 		if !auth.Allowed {
 			return ibkrlib.WithSendDisposition(fmt.Errorf("%w: %s", ErrTradingDisabled, firstTradingBlockerMessage(auth.Blockers)), ibkrlib.SendDispositionDefinitelyUnsent)
 		}
-		wireGuard, releaseWireGuard := s.brokerWireGuard(binding, status, true)
+		brokerGuard, releaseWireGuard := s.brokerWireGuard(binding, status, true)
 		defer releaseWireGuard()
+		wireGuard := func() error {
+			if err := brokerGuard(); err != nil {
+				return err
+			}
+			if recheck != nil {
+				return recheck()
+			}
+			return nil
+		}
 		if s.orderCancelBroker != nil {
 			if err := wireGuard(); err != nil {
 				return ibkrlib.WithSendDisposition(err, ibkrlib.SendDispositionDefinitelyUnsent)

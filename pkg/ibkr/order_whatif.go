@@ -305,12 +305,12 @@ func (c *Connector) previewOrderWhatIf(ctx context.Context, contract *Contract, 
 			c.brokerIDNamespaceMu.Unlock()
 			return OrderWhatIfResult{}, fmt.Errorf("%w: explicit WhatIf order ID is owned by an active read-only request", ErrBrokerIDNamespaceConflict)
 		}
-		owned := c.isKnownBrokerOrderID(ibkrOrder.OrderID)
+		owned := c.PlacedOrderID(ibkrOrder.OrderID) || c.isWhatIfOrderID(ibkrOrder.OrderID)
 		var err error
 		if binding != nil {
-			claimEpoch, err = conn.claimOrderIDForForwardingAtEpoch(ibkrOrder.OrderID, owned, &binding.epoch, nil)
+			claimEpoch, err = conn.claimOrderIDForForwardingAtEpoch(ibkrOrder.OrderID, owned, &binding.epoch, order.Changes)
 		} else {
-			claimEpoch, err = conn.claimOrderIDForForwarding(ibkrOrder.OrderID, owned)
+			claimEpoch, err = conn.claimOrderIDForForwardingAtEpoch(ibkrOrder.OrderID, owned, nil, order.Changes)
 		}
 		if err != nil {
 			c.brokerIDNamespaceMu.Unlock()

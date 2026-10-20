@@ -101,7 +101,8 @@ func TestLifecyclePairingRespectsTheWholeScope(t *testing.T) {
 		{"orderStatus for a terminal never-acknowledged row", status, []rpc.OrderView{row("127.0.0.1:4002", "ord-stale", 40, 0, false)}, "", ""},
 		{"orderStatus, a second never-acknowledged order 40 on another socket", status,
 			[]rpc.OrderView{stale, row("127.0.0.1:7497", "ord-other", 40, 0, true)}, "", ""},
-		{"orderStatus for the one never-acknowledged row (control)", status, []rpc.OrderView{stale}, "ord-stale", "127.0.0.1:4002"},
+		{"orderStatus never introduces a permanent ID", status, []rpc.OrderView{stale}, "", ""},
+		{"openOrder naming the one never-acknowledged row (control)", func() orderJournalEvent { ev := open; ev.OrderRef = "ord-stale"; return ev }(), []rpc.OrderView{stale}, "ord-stale", "127.0.0.1:4002"},
 		{"a callback-born duplicate row loses to the placed row", stopAck, []rpc.OrderView{phantom, placed}, "ord-prot", "127.0.0.1:7497"},
 		{"two placed rows holding one permanent ID", stopAck, []rpc.OrderView{func() rpc.OrderView { v := phantom; v.PreviewTokenID = "tok-x"; return v }(), placed}, "", ""},
 	} {
@@ -111,6 +112,36 @@ func TestLifecyclePairingRespectsTheWholeScope(t *testing.T) {
 			t.Errorf("%s: paired with %s on %s, want no pairing", tc.name, view.OrderRef, view.Endpoint)
 		case tc.wantRef != "" && (!ok || view.OrderRef != tc.wantRef || view.Endpoint != tc.wantSock):
 			t.Errorf("%s: paired=%t with %s on %s, want %s on %s", tc.name, ok, view.OrderRef, view.Endpoint, tc.wantRef, tc.wantSock)
+		}
+	}
+}
+
+// Only an openOrder naming the row's reference introduces a permanent ID to
+// a row that has none (the refuter's second round): an orderStatus carries no
+// reference, so a foreign order 1002 of the daemon's client ID that is not in
+// the journal would otherwise hand its permanent ID to Canary's
+// never-acknowledged order 1002 by order ID alone, and its later fills and
+// cancels would land there too.
+func TestOnlyAnOpenOrderNamingTheReferenceIntroducesAPermanentID(t *testing.T) {
+	t.Parallel()
+	row := rpc.OrderView{Endpoint: "127.0.0.1:4002", ClientID: 31, Account: "DU1234567", Mode: "paper", OrderRef: "ord-prot", ReservedOrderID: 1002, Open: true}
+	base := orderJournalEvent{Endpoint: "127.0.0.1:4002", ClientID: 31, clientIDPresent: true, Account: "DU1234567", Mode: "paper", ReservedOrderID: 1002, PermID: 799999}
+	for _, tc := range []struct {
+		name string
+		typ  string
+		ref  string
+		want bool
+	}{
+		{"orderStatus without a reference", orderJournalEventStatusUpdated, "", false},
+		{"execution without a reference", orderJournalEventStatusUpdated, "", false},
+		{"openOrder without a reference", orderJournalEventBrokerAcknowledged, "", false},
+		{"openOrder under another reference", orderJournalEventBrokerAcknowledged, "ord-other", false},
+		{"openOrder naming the reference", orderJournalEventBrokerAcknowledged, "ord-prot", true},
+	} {
+		ev := base
+		ev.Type, ev.OrderRef = tc.typ, tc.ref
+		if _, ok := orderJournalViewForLifecycleEvent(ev, []rpc.OrderView{row}); ok != tc.want {
+			t.Errorf("%s: paired=%t, want %t", tc.name, ok, tc.want)
 		}
 	}
 }

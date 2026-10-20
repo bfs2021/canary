@@ -85,6 +85,9 @@ type Connector struct {
 	// Order management
 	openOrders       map[string]*trackedOrder
 	brokerOrderIndex map[string]string // IB order ID -> internal order ID
+	// placedOrderIDs are the broker order IDs this Connector placed as new
+	// orders (PlacedOrderID); an ID it only changed is not among them.
+	placedOrderIDs map[int]struct{}
 	// orderIDHighWater is the bounded monotonic broker-ID reservation frontier.
 	orderIDHighWater int
 	orderMu          sync.RWMutex
@@ -5177,6 +5180,7 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 	// Bind the order id under the same coordination boundary used by the exact
 	// stale caller-supplied order is refused before local indexing or wire send.
 	var claimEpoch uint64
+	newOrder := true
 	c.brokerIDNamespaceMu.Lock()
 	if ibkrOrder.OrderID <= 0 {
 		var err error
@@ -5190,9 +5194,12 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 			c.brokerIDNamespaceMu.Unlock()
 			return definitelyUnsent(fmt.Errorf("%w: explicit order ID is owned by an active read-only request", ErrBrokerIDNamespaceConflict))
 		}
-		owned := c.isKnownBrokerOrderID(ibkrOrder.OrderID)
+		// Only an order this process placed is owned here: an ID it merely
+		// changed (an earlier process's or another app's order) proves its
+		// identity on every change (OrderChangeIdentity).
+		owned := c.PlacedOrderID(ibkrOrder.OrderID)
 		var err error
-		claimEpoch, err = conn.claimOrderIDForForwardingAtEpoch(ibkrOrder.OrderID, owned, &binding.epoch, order.Changes)
+		claimEpoch, newOrder, err = conn.claimOrderIDForForwardingAtEpochFresh(ibkrOrder.OrderID, owned, &binding.epoch, order.Changes)
 		if err != nil {
 			c.brokerIDNamespaceMu.Unlock()
 			return definitelyUnsent(err)
@@ -5232,6 +5239,12 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 	previousIndex, hadPreviousIndex := c.brokerOrderIndex[brokerID]
 	c.openOrders[localID] = coreOrder
 	c.brokerOrderIndex[brokerID] = localID
+	if newOrder {
+		if c.placedOrderIDs == nil {
+			c.placedOrderIDs = make(map[int]struct{})
+		}
+		c.placedOrderIDs[ibkrOrder.OrderID] = struct{}{}
+	}
 	c.orderMu.Unlock()
 	c.brokerIDNamespaceMu.Unlock()
 
@@ -8985,19 +8998,17 @@ func (c *Connector) ReportedOwnOrderForSession(binding ConnectorSessionBinding, 
 	return binding.connection.reportedOwnOrderAtEpoch(id, binding.epoch)
 }
 
-// PlacedOrderID reports whether this process placed the broker order id
-// through this Connector (its placement index), as opposed to an order an
-// earlier process or another app placed.
+// PlacedOrderID reports whether this Connector placed the broker order id
+// as a new order, as opposed to an order an earlier process or another app
+// placed and this one only changed. The set lives as long as the Connector.
 func (c *Connector) PlacedOrderID(id int) bool {
 	if c == nil || id <= 0 {
 		return false
 	}
-	brokerID := strconv.Itoa(id)
 	c.orderMu.RLock()
 	defer c.orderMu.RUnlock()
-	_, indexed := c.brokerOrderIndex[brokerID]
-	_, direct := c.openOrders[brokerID]
-	return indexed || direct
+	_, placed := c.placedOrderIDs[id]
+	return placed
 }
 
 // isKnownBrokerOrderID reports whether id names a broker order this
