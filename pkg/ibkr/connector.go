@@ -119,6 +119,7 @@ type Connector struct {
 	openOrderSnapshotMu         sync.Mutex
 	openOrderSnapshot           *openOrderSnapshotFlight
 	openOrderSnapshotPoison     openOrderSnapshotBinding
+	openOrderSnapshotPoisonAt   time.Time
 	openOrderSnapshotTimeout    time.Duration
 	openOrderSnapshotBeforeSend func()
 
@@ -127,6 +128,10 @@ type Connector struct {
 	// live fill, and are routed here instead of to the lifecycle handlers.
 	executionsMu sync.Mutex
 	executions   map[int]*executionsFlight
+	// executionsExpired holds the request IDs whose flight ended without its
+	// execDetailsEnd, with the time it ended, so a late end is told apart
+	// from a message nobody asked for.
+	executionsExpired map[int]time.Time
 
 	// orderStatusLogSig dedupes the high-frequency order-status log line.
 	// IBKR re-sends unchanged orderStatus frames many times per second. Keep one
@@ -6222,6 +6227,11 @@ func (c *Connector) registerHandlers(conn *Connection) {
 	})
 	conn.RegisterHandler(msgOpenOrderEnd, func(fields []string) {
 		// The epoch-aware Connection observer owns snapshot completion.
+	})
+	conn.RegisterHandler(msgExecDetailsEnd, func(fields []string) {
+		// A live flight's own handler completes it; this one names the
+		// ends that arrive after their flight gave up.
+		c.noteLateExecDetailsEnd(fields, time.Now())
 	})
 
 	// Register system notification handler (msgID 204) for farm status changes

@@ -220,12 +220,36 @@ func (c *Connector) completeOpenOrderSnapshotFlight(flight *openOrderSnapshotFli
 	c.openOrderSnapshotMu.Lock()
 	if poison {
 		c.openOrderSnapshotPoison = flight.binding
+		c.openOrderSnapshotPoisonAt = time.Now()
 	}
 	if c.openOrderSnapshot == flight {
 		c.openOrderSnapshot = nil
 	}
 	close(flight.done)
 	c.openOrderSnapshotMu.Unlock()
+}
+
+// OpenOrderSnapshotPoisoned reports whether the current session's open-order
+// snapshot is poisoned, and since when. Only a new socket generation clears
+// it, so its owner redials the session (DropSession) to read open orders
+// again.
+func (c *Connector) OpenOrderSnapshotPoisoned() (since time.Time, poisoned bool) {
+	if c == nil {
+		return time.Time{}, false
+	}
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	if conn == nil {
+		return time.Time{}, false
+	}
+	current := openOrderSnapshotBinding{conn: conn, epoch: conn.BrokerSessionEpoch()}
+	c.openOrderSnapshotMu.Lock()
+	defer c.openOrderSnapshotMu.Unlock()
+	if !sameOpenOrderSnapshotBinding(c.openOrderSnapshotPoison, current) {
+		return time.Time{}, false
+	}
+	return c.openOrderSnapshotPoisonAt, true
 }
 
 func cloneOpenOrderSnapshot(in OpenOrderSnapshot) OpenOrderSnapshot {

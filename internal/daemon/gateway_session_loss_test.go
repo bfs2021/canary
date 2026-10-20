@@ -507,3 +507,78 @@ func TestBreadthFailureStartedOffDutyWarnsWhenDutyBegins(t *testing.T) {
 		t.Fatalf("a new failure after recovery did not warn:\n%s", out.String())
 	}
 }
+
+// A poisoned open-order snapshot stays poisoned until the socket changes, so
+// the supervisor redials the primary session at once: one line, no second
+// incident from the reconnect. Like a history redial it happens at most once
+// an hour (owner decision #22), never under a broker write, and a redialled
+// session poisoned again is said once, as the Gateway needing a restart. The
+// lines follow the logging schedule. On 2026-10-20 the poison from IBKR's
+// nightly reset lasted until a manual restart at 08:25 CEST.
+func TestPoisonedOpenOrderSnapshotRedialsThePrimarySession(t *testing.T) {
+	for _, tc := range []struct {
+		name, at, level string
+	}{
+		{"on duty", "2026-10-07T18:00:00Z", "WARN"},
+		{"off duty", "2026-10-04T22:24:00Z", "INFO"}, // Monday 00:24 CEST
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := startFakeTWS(t)
+			s, out := sessionLossServer(t, f, tc.at)
+			old := s.gatewayConnectorForTest()
+			now := s.now()
+			s.snapshotPoisonedFn = func(*ibkrlib.Connector) (time.Time, bool) { return now.Add(-40 * time.Second), true }
+
+			s.brokerWriteMu.Lock()
+			s.redialPoisonedOpenOrderSnapshot(old, now)
+			s.brokerWriteMu.Unlock()
+			if !old.IsReady() {
+				t.Fatal("the session was dropped under a broker write")
+			}
+
+			mark := len(out.String())
+			s.redialPoisonedOpenOrderSnapshot(old, now)
+			waitSessionLost(t, old)
+			reconnectForTest(t, s)
+			logged := settledLog(out, mark)
+			if warns := logLinesAt(logged, "WARN"); tc.level == "INFO" && len(warns) != 0 {
+				t.Fatalf("off duty, the redial warned:\n%s", strings.Join(warns, "\n"))
+			}
+			lines := snapshotLines(logLinesAt(logged, tc.level))
+			if len(lines) != 1 || !strings.Contains(lines[0], "open-order snapshot poisoned since") || !strings.Contains(lines[0], "it is redialled") {
+				t.Fatalf("want only the supervisor's %s line, got %d:\n%s", tc.level, len(lines), strings.Join(lines, "\n"))
+			}
+
+			fresh := s.gatewayConnectorForTest()
+			if fresh == nil || fresh == old || !fresh.IsReady() {
+				t.Fatal("the primary session was not redialled")
+			}
+			mark = len(out.String())
+			s.redialPoisonedOpenOrderSnapshot(fresh, now.Add(time.Minute))
+			s.redialPoisonedOpenOrderSnapshot(fresh, now.Add(2*time.Minute))
+			time.Sleep(50 * time.Millisecond)
+			if !fresh.IsReady() {
+				t.Fatal("a second redial within the hour")
+			}
+			again := snapshotLines(logLinesAt(settledLog(out, mark), tc.level))
+			if len(again) != 1 || !strings.Contains(again[0], "poisoned again") || !strings.Contains(again[0], "until the Gateway restarts") {
+				t.Fatalf("want one restart line for a redialled session poisoned again, got:\n%s", strings.Join(again, "\n"))
+			}
+			s.snapshotPoisonedFn = func(*ibkrlib.Connector) (time.Time, bool) { return time.Time{}, false }
+			s.redialPoisonedOpenOrderSnapshot(fresh, now.Add(2*time.Hour))
+			if !fresh.IsReady() {
+				t.Fatal("a session whose snapshot is not poisoned was dropped")
+			}
+		})
+	}
+}
+
+func snapshotLines(lines []string) []string {
+	var out []string
+	for _, line := range lines {
+		if strings.Contains(line, "open-order snapshot") {
+			out = append(out, line)
+		}
+	}
+	return out
+}
