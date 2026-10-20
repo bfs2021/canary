@@ -156,10 +156,8 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	if !view.ModifyEligible {
 		return nil, errBadRequest("order is not modify-eligible")
 	}
-	if binding.connector != nil {
-		if err := validateReportedPermID(binding.connector.ReportedOwnOrderPermID, view); err != nil {
-			return nil, err
-		}
+	if err := validateReportedOwnOrder(s.reportedOwnOrderFor(binding), view, true); err != nil {
+		return nil, err
 	}
 	payload, err := s.verifyPreviewTokenForModify(p.PreviewToken, view)
 	if err != nil {
@@ -285,6 +283,9 @@ func (s *Server) cancelOrderForAction(ctx context.Context, p rpc.OrderCancelPara
 	}
 	if !view.CancelEligible {
 		return nil, errBadRequest("order is not cancel-eligible")
+	}
+	if err := validateReportedOwnOrder(s.reportedOwnOrderFor(binding), view, false); err != nil {
+		return nil, err
 	}
 	if err := s.protectiveStopGuardGrantCovers(p.Origin, protectiveStopGuardCancel, view, 0); err != nil {
 		return nil, err

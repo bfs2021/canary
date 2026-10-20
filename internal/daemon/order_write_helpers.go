@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 func (s *Server) openOrderViewForWrite(id string, status rpc.TradingStatus) (rpc.OrderView, error) {
@@ -79,22 +80,55 @@ func orderJournalStatusFor(view rpc.OrderView, status rpc.TradingStatus) rpc.Tra
 	return status
 }
 
-// validateReportedPermID refuses a modify whose broker order ID the broker
-// reported on the current session under a different permanent ID than the
-// journal row's. Since 2026-10-20 an order ID the broker reports for the
-// daemon's client may be claimed though an earlier process placed it, so the
-// journal's ID alone no longer stands behind the frontier check; the
-// permanent ID proves the row and the broker mean the same order. Without a
-// report or a permanent ID on either side there is nothing to compare.
-func validateReportedPermID(reported func(int) (int, bool), view rpc.OrderView) error {
-	if reported == nil || view.ReservedOrderID <= 0 || view.PermID <= 0 {
+// reportedOwnOrderFor is the write binding's connector report of the
+// daemon client's open order IDs on the bound socket, or nil without one.
+func (s *Server) reportedOwnOrderFor(binding brokerWriteTransactionBinding) func(int) (ibkrlib.ReportedOwnOrder, bool) {
+	if s.reportedOwnOrderForTest != nil {
+		return s.reportedOwnOrderForTest
+	}
+	if binding.connector == nil {
 		return nil
 	}
-	perm, ok := reported(view.ReservedOrderID)
-	if !ok || perm <= 0 || perm == view.PermID {
+	return binding.connector.ReportedOwnOrder
+}
+
+// validateReportedOwnOrder checks the broker's own report of a journal row's
+// order ID on the current socket against the row before a change is sent.
+// Since 2026-10-20 an order ID the broker reports for the daemon's client may
+// be claimed below the session's order-ID frontier though an earlier process
+// placed it (#120), so the journal's order ID alone no longer stands behind
+// the claim: order IDs are client-local and repeat after an ID reset, while
+// the permanent ID is the broker's account-wide name of one order. When the
+// broker reported the ID, the report must name the row's account and its
+// permanent ID; a conflicting report (the ID seen twice with different
+// identities) always refuses. requireProof (a modify, the write that relies
+// on the claim) also refuses a row without a permanent ID to compare; a
+// cancel, which claims nothing, refuses only a positive mismatch, so a
+// journal that missed the acknowledgement never blocks a cancel of an order
+// this process placed. Without a report there is nothing to compare: the
+// claim then stands on this process's own placement.
+func validateReportedOwnOrder(reported func(int) (ibkrlib.ReportedOwnOrder, bool), view rpc.OrderView, requireProof bool) error {
+	if reported == nil || view.ReservedOrderID <= 0 {
 		return nil
 	}
-	return errBadRequest(fmt.Sprintf("the broker reports order ID %d as permanent ID %d, not this order's %d; refusing to modify it", view.ReservedOrderID, perm, view.PermID))
+	report, ok := reported(view.ReservedOrderID)
+	if !ok {
+		return nil
+	}
+	switch {
+	case report.Conflicted:
+		return errBadRequest(fmt.Sprintf("the broker reported order ID %d twice with different identities on this session; refusing to change it", view.ReservedOrderID))
+	case !strings.EqualFold(strings.TrimSpace(report.Account), strings.TrimSpace(view.Account)):
+		return errBadRequest(fmt.Sprintf("the broker reports order ID %d for another account; refusing to change it", view.ReservedOrderID))
+	case view.PermID <= 0:
+		if requireProof {
+			return errBadRequest(fmt.Sprintf("the journal has no permanent ID to prove the broker's order ID %d is this order; refusing to change it", view.ReservedOrderID))
+		}
+		return nil
+	case report.PermID != view.PermID:
+		return errBadRequest(fmt.Sprintf("the broker reports order ID %d as permanent ID %d, not this order's %d; refusing to change it", view.ReservedOrderID, report.PermID, view.PermID))
+	}
+	return nil
 }
 
 func validateModifyDraft(view rpc.OrderView, draft rpc.OrderDraft) error {

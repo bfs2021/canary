@@ -8966,26 +8966,28 @@ func (c *Connector) isWhatIfOrderID(orderID int) bool {
 	return conn != nil && conn.IsWhatIfOrderID(orderID)
 }
 
-// isKnownBrokerOrderID reports whether id names a broker order this
-// connector owns: a journaled/open order or an in-flight WhatIf preview.
-// Used to keep request-scoped notice recovery off order-scoped msg-204
-// errors when the two integer id spaces collide.
-// ReportedOwnOrderPermID returns the permanent ID the broker reported on the
-// current session for this client's open order id, and whether it reported
-// one; a caller changing an order it did not place checks the two agree.
-func (c *Connector) ReportedOwnOrderPermID(id int) (permID int, reported bool) {
+// ReportedOwnOrder returns what the broker reported on the current socket
+// generation with this client's open order id (permanent ID and account),
+// and whether it reported it; a caller changing an order it did not place
+// checks the report names the same order (internal/daemon,
+// validateReportedOwnOrder).
+func (c *Connector) ReportedOwnOrder(id int) (ReportedOwnOrder, bool) {
 	if c == nil {
-		return 0, false
+		return ReportedOwnOrder{}, false
 	}
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
 	if conn == nil {
-		return 0, false
+		return ReportedOwnOrder{}, false
 	}
-	return conn.ReportedOwnOrderPermID(id)
+	return conn.ReportedOwnOrder(id)
 }
 
+// isKnownBrokerOrderID reports whether id names a broker order this
+// connector owns: a journaled/open order or an in-flight WhatIf preview.
+// Used to keep request-scoped notice recovery off order-scoped msg-204
+// errors when the two integer id spaces collide.
 func (c *Connector) isKnownBrokerOrderID(id int) bool {
 	if c == nil || id <= 0 {
 		return false

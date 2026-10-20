@@ -222,6 +222,10 @@ type Server struct {
 	// has said it manages an order through another socket than the one it
 	// was placed through (logOrderEndpointDifference).
 	orderEndpointLogged sync.Map
+	// reportedOwnOrderForTest replaces the connector's report of the
+	// daemon client's open order IDs (validateReportedOwnOrder) in tests
+	// whose broker is faked below the connector.
+	reportedOwnOrderForTest func(id int) (ibkrlib.ReportedOwnOrder, bool)
 	// orderLifecycleRegisterAfterCapture is a deterministic test seam for a
 	// registration delayed across same-pointer Connector republication.
 	orderLifecycleRegisterAfterCapture func()
