@@ -1,6 +1,14 @@
 # Canary
 
-Updated: 2026-10-19 10:00 CEST
+Updated: 2026-10-20 13:50 CEST
+
+Version 3.26 says in plain words which TWS or IB Gateway settings differ
+from what Canary needs: `canary status` gains a Gateway setup row, read once
+after each connect, and Canary never changes a setting. When the Gateway
+answers the open-order request late, as during IBKR's nightly reset, the
+daemon now redials its connection instead of reading no open orders until a
+restart. Existing policies load unchanged; standard binaries and MCP remain
+read-only.
 
 Version 3.25 lets every live strategy in the register trade, not only the
 core: each entry written live turns its month's decision into a row of its

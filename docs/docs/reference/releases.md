@@ -1,10 +1,18 @@
 # Releases and support
 
-Updated: 2026-10-19
+Updated: 2026-10-20
 
 Every release publishes two binaries per platform, under two different names. One is read-only. The other can send orders to your broker. That difference is compiled in rather than configured, so the filename you download decides it.
 
 [Updating](../start/updating.md) covers how to install a new version. This page covers what you are installing, how to check it is genuine, and how long it keeps getting fixes.
+
+## Moving to 3.26
+
+Nothing changes on upgrade. `canary status --json` gains a `gateway_setup`
+object (`state`, `notes`, `as_of`); clients that ignore unknown fields need
+no change. When the open-order read loses its answer, the daemon redials its
+broker connection, at most once an hour and never while an order is being
+placed or changed.
 
 ## Moving to 3.25
 
