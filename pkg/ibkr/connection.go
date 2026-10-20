@@ -308,8 +308,13 @@ type Connection struct {
 	// reportedOrderPermIDs retains non-authorizing identity constraints from
 	// this client's status and open-order callbacks. Zero means conflicting
 	// positive permanent IDs were observed in this socket epoch.
-	reportedOrderPermIDs map[int]int
-	brokerSessionEpoch   atomic.Uint64
+	reportedOrderPermIDs    map[int]int
+	modifyPreviewIDs        map[int]bool
+	modifyStatusUncertain   map[int]uint64
+	modifyLocalIdentity     map[int]OrderChangeIdentity
+	modifyStatusSerial      uint64
+	modifyPreviewGeneration uint64
+	brokerSessionEpoch      atomic.Uint64
 	// inboundEpochMu keeps late receipts attributable after outbound invalidation.
 	inboundEpochMu sync.RWMutex
 	// account holds the raw msgManagedAccts value, which is a
@@ -378,6 +383,7 @@ type Connection struct {
 	whatIfOrderIDs      map[int]struct{}
 	openOrderObserverMu sync.RWMutex
 	openOrderObserver   func(msgID int, fields []string, epoch uint64)
+	orderStatusObserver func(fields []string, epoch uint64, disposition previewStatusDisposition)
 	// inboundTaps counts the armed frame taps (handlers under
 	// msgInboundTap); the reader skips the tap dispatch while it is zero.
 	inboundTaps atomic.Int32
@@ -2221,10 +2227,11 @@ func (c *Connection) processMessageAtEpoch(msgBytes []byte, epoch uint64) {
 	if orderID, ok := inboundOrderID(msgID, fields); ok {
 		c.observeInboundOrderIDAtEpoch(orderID, epoch)
 	}
+	statusDisposition := previewStatusOrdinary
 	if msgID == msgOpenOrder {
 		c.observeReportedOwnOrderAtEpoch(fields, epoch)
 	} else if msgID == msgOrderStatus {
-		c.observeReportedOrderStatusAtEpoch(fields, epoch)
+		statusDisposition = c.observeReportedOrderStatusAtEpoch(fields, epoch)
 	}
 	if msgID == msgOpenOrder || msgID == msgOpenOrderEnd {
 		c.openOrderObserverMu.RLock()
@@ -2239,6 +2246,10 @@ func (c *Connection) processMessageAtEpoch(msgBytes []byte, epoch uint64) {
 	// current-session frame before the frame's own handlers run.
 	if c.inboundTaps.Load() > 0 {
 		c.dispatchHandlers(msgInboundTap, fields, epoch)
+	}
+
+	if msgID == msgOrderStatus {
+		c.dispatchOrderStatusObserver(fields, epoch, statusDisposition)
 	}
 
 	// Handle common messages
@@ -2362,6 +2373,9 @@ func (c *Connection) processMessageAtEpoch(msgBytes []byte, epoch uint64) {
 func (c *Connection) dispatchStaleInboundMessage(msgID int, fields []string, epoch uint64) {
 	switch msgID {
 	case msgOpenOrder, msgOrderStatus, msgExecDetails:
+		if msgID == msgOrderStatus {
+			c.dispatchOrderStatusObserver(fields, epoch, previewStatusOrdinary)
+		}
 		c.dispatchEpochHandlers(msgID, fields, epoch)
 	case msgErrMsg:
 		// The Connector-owned handler publishes only an exact stale receipt;
@@ -5410,6 +5424,9 @@ func (c *Connection) resetOrderIDReadiness() {
 	clear(c.reservedRequestIDs)
 	clear(c.reportedOwnOrderIDs)
 	clear(c.reportedOrderPermIDs)
+	clear(c.modifyPreviewIDs)
+	clear(c.modifyStatusUncertain)
+	clear(c.modifyLocalIdentity)
 	c.reqIDMu.Unlock()
 	c.invalidateUnstampedObservationAuthority()
 	c.mktDataTypeMu.Lock()
@@ -5623,28 +5640,43 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 
 // A status cannot grant ownership, but a different positive permanent ID
 // is negative identity evidence even when its matching openOrder is delayed.
-func (c *Connection) observeReportedOrderStatusAtEpoch(fields []string, expectedEpoch uint64) {
-	if c.config == nil || c.config.ClientID == 0 {
-		return
+func (c *Connection) observeReportedOrderStatusAtEpoch(fields []string, expectedEpoch uint64) previewStatusDisposition {
+	if c.config == nil {
+		return previewStatusOrdinary
 	}
 	ev, ok := ParseOrderLifecycleEvent(fields)
-	if !ok || ev.Type != OrderLifecycleEventStatus || !ev.ClientIDPresent || ev.ClientID != c.config.ClientID ||
-		ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 || ev.PermID <= 0 {
-		return
+	if !ok || ev.Type != OrderLifecycleEventStatus || ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 ||
+		(ev.ClientIDPresent && ev.ClientID != c.config.ClientID) {
+		return previewStatusOrdinary
 	}
+	disposition := c.orderPreviewDisposition(ev.OrderID, expectedEpoch)
 	unlockEvidence := c.lockEvidenceChange()
 	defer unlockEvidence()
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
 	if c.brokerSessionEpoch.Load() != expectedEpoch {
-		return
+		return previewStatusOrdinary
 	}
-	if c.observeOrderPermIDLocked(ev.OrderID, ev.PermID) {
+	if c.modifyPreviewIDs[ev.OrderID] {
+		disposition = previewStatusUncertain
+	}
+	// A later terminal/unknown status must win over an older working report
+	// collected by recovery. Matching working statuses are normal snapshot data.
+	if disposition == previewStatusUncertain || (c.modifyStatusUncertain[ev.OrderID] != 0 && ev.Status != "Submitted" && ev.Status != "PreSubmitted") {
+		if c.modifyStatusUncertain == nil {
+			c.modifyStatusUncertain = make(map[int]uint64)
+		}
+		c.modifyStatusSerial++
+		c.modifyStatusUncertain[ev.OrderID] = c.modifyStatusSerial
+	}
+	// Omitted client identity cannot establish a permanent-ID contradiction.
+	if c.config.ClientID != 0 && ev.ClientIDPresent && ev.PermID > 0 && c.observeOrderPermIDLocked(ev.OrderID, ev.PermID) {
 		if report, exists := c.reportedOwnOrderIDs[ev.OrderID]; exists {
 			report.Conflicted = true
 			c.reportedOwnOrderIDs[ev.OrderID] = report
 		}
 	}
+	return disposition
 }
 
 // observeOrderPermIDLocked never creates an ownership report. reqIDMu is
@@ -5722,13 +5754,17 @@ func (c *Connection) ReportedOwnOrder(id int) (ReportedOwnOrder, bool) {
 // Locally placed orders may precede their first report, but a contradictory
 // report never permits a change, including one of this process's own orders.
 func (c *Connection) orderChangeWireGuard(id int, epoch uint64, change *OrderChangeIdentity, locallyPlaced bool, next func() error) func() error {
-	if change == nil {
-		return next
+	var want *OrderChangeIdentity
+	if change != nil {
+		copy := *change
+		want = &copy
 	}
-	want := *change
 	return func() error {
+		if c.modifyStatusIsUncertain(id, epoch) {
+			return fmt.Errorf("%w: order status changed during its preview; refresh open orders and preview again; no order sent", ErrBrokerIDNamespaceConflict)
+		}
 		report, reported := c.reportedOwnOrderAtEpoch(id, epoch)
-		if (!reported && !locallyPlaced) || (reported && !report.matches(&want)) {
+		if want != nil && ((!reported && !locallyPlaced) || (reported && !report.matches(want))) {
 			return fmt.Errorf("%w: broker report no longer identifies the order to change; no order sent", ErrBrokerIDNamespaceConflict)
 		}
 		if next != nil {

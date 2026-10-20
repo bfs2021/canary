@@ -6184,7 +6184,7 @@ func (c *Connector) registerHandlers(conn *Connection) {
 		switch msgID {
 		case msgOpenOrder:
 			ev, ok := ParseOrderLifecycleEvent(fields)
-			if !ok || ev.WhatIf || ev.Type != OrderLifecycleEventOpenOrder || conn.IsWhatIfOrderID(ev.OrderID) {
+			if !ok || ev.WhatIf || ev.Type != OrderLifecycleEventOpenOrder || conn.IsWhatIfOrderID(ev.OrderID) || conn.modifyPreviewActive(ev.OrderID, epoch) {
 				return
 			}
 			c.collectOpenOrderSnapshotFrom(conn, epoch, ev)
@@ -6251,9 +6251,10 @@ func (c *Connector) registerHandlers(conn *Connection) {
 	conn.RegisterHandlerAtEpoch(msgOpenOrder, func(fields []string, epoch uint64) {
 		c.notifyOrderLifecycleFrom(conn, epoch, fields)
 	})
-	conn.RegisterHandlerAtEpoch(msgOrderStatus, func(fields []string, epoch uint64) {
-		c.notifyOrderLifecycleFrom(conn, epoch, fields)
+	conn.setOrderStatusObserver(func(fields []string, epoch uint64, disposition previewStatusDisposition) {
+		c.notifyOrderLifecycleReceiptFrom(conn, epoch, fields, disposition)
 	})
+	conn.RegisterHandler(msgOrderStatus, func([]string) {})
 	conn.RegisterHandlerAtEpoch(msgExecDetails, func(fields []string, epoch uint64) {
 		c.notifyOrderLifecycleFrom(conn, epoch, fields)
 	})
@@ -8951,14 +8952,18 @@ func (c *Connector) forgetOrderStatusLog(orderID string) {
 }
 
 func (c *Connector) notifyOrderLifecycleFrom(conn *Connection, epoch uint64, fields []string) {
+	c.notifyOrderLifecycleReceiptFrom(conn, epoch, fields, previewStatusOrdinary)
+}
+
+func (c *Connector) notifyOrderLifecycleReceiptFrom(conn *Connection, epoch uint64, fields []string, disposition previewStatusDisposition) {
+	if disposition == previewStatusIgnore {
+		return
+	}
 	ev, ok := ParseOrderLifecycleEvent(fields)
 	if !ok {
 		return
 	}
 	if ev.WhatIf {
-		return
-	}
-	if ev.Type == OrderLifecycleEventStatus && c.isWhatIfOrderID(ev.OrderID) {
 		return
 	}
 	if ev.Type == OrderLifecycleEventExecDetails && ev.RequestID > 0 {
@@ -8974,6 +8979,10 @@ func (c *Connector) notifyOrderLifecycleFrom(conn *Connection, epoch uint64, fie
 	c.evidenceBarrier.RLock()
 	defer c.evidenceBarrier.RUnlock()
 	current := c.SessionReceiptCurrent(origin)
+	if disposition == previewStatusUncertain {
+		c.dispatchOrderLifecycleReceiptUnderBarrier(origin, ev, current, true)
+		return
+	}
 	if current && ev.Type == OrderLifecycleEventStatus {
 		c.handleOrderStatus(fields)
 	}
@@ -9075,15 +9084,19 @@ func (c *Connector) dispatchOrderLifecycleFrom(origin ConnectorSessionBinding, e
 }
 
 func (c *Connector) dispatchOrderLifecycleUnderBarrier(origin ConnectorSessionBinding, ev OrderLifecycleEvent, current bool) {
+	c.dispatchOrderLifecycleReceiptUnderBarrier(origin, ev, current, false)
+}
+
+func (c *Connector) dispatchOrderLifecycleReceiptUnderBarrier(origin ConnectorSessionBinding, ev OrderLifecycleEvent, current, uncertain bool) {
 	c.orderLifecycleGeneration.Add(1)
 	c.orderLifecycleMu.RLock()
 	handlers := append([]orderLifecycleHandlerEntry(nil), c.orderLifecycle...)
 	c.orderLifecycleMu.RUnlock()
-	receipt := OrderLifecycleReceipt{Session: origin, Event: ev}
+	receipt := OrderLifecycleReceipt{Session: origin, Event: ev, Uncertain: uncertain}
 	for _, handler := range handlers {
 		if handler.receipt != nil {
 			handler.receipt(receipt)
-		} else if current && handler.legacy != nil {
+		} else if current && !uncertain && handler.legacy != nil {
 			handler.legacy(ev)
 		}
 	}

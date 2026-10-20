@@ -793,6 +793,12 @@ func (s *Server) fetchModifyPreviewWhatIfBound(ctx context.Context, status rpc.T
 	if err != nil {
 		return rpc.OrderWhatIfResult{}, err
 	}
+	if result.WorkingOrderUncertain {
+		// The library has drained pre-preview inventory before its fresh read.
+		// Reconciliation owns absence and clears the daemon uncertainty latch
+		// only after its normal same-session/head/failure-generation checks.
+		s.reconcileOrderJournalWithBroker(ctx)
+	}
 	if authority != nil && !s.orderPreviewBrokerAuthorityCurrent(authority) {
 		return previewWhatIfUnavailableWithMessage("Broker WhatIf unavailable: broker session changed during preview."), nil
 	}

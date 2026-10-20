@@ -221,6 +221,17 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   report without a reference does not name an order that has one), compared
   under the claim's lock and again after transport admission at the first
   byte. The report mutation shares that final wire guard's evidence barrier.
+  A status received during a modify preview has no broker what-if discriminator:
+  its receipt carries uncertainty, invalidates lifecycle evidence, and refuses
+  the preview and later changes. It is never journaled as a cancellation or fill.
+  Recovery drains an older snapshot and requests fresh inventory after the
+  preview ends. Only a complete matching working-order report clears that
+  order's fence; absence leaves it refused and the daemon reconciles the journal
+  to closed/unknown. A newer terminal status or identity conflict wins. Snapshot
+  flights overlapping a modify preview are incomplete, never absence evidence.
+  Client 0 may recover only an ID this process actually placed, using its exact
+  positive permanent ID, account and nonempty reference; this creates no
+  inherited-order ownership and never adopts a manual order.
   A real protobuf report still counts while a preview is in flight; only a
   typed what-if echo is excluded. Ambiguous legacy identities fail closed.
   A report for another account grants no ownership and leaves a conflict

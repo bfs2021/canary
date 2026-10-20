@@ -92,8 +92,11 @@ type OrderLifecycleEvent struct {
 // Connection object and socket epoch that read its wire frame. Session is
 // process-local evidence, not durable order authority.
 type OrderLifecycleReceipt struct {
-	Session ConnectorSessionBinding
-	Event   OrderLifecycleEvent
+	// Uncertain reports a status observed during a modify preview. Event is
+	// ambiguous preview/working-order evidence and must not be journaled as fact.
+	Uncertain bool
+	Session   ConnectorSessionBinding
+	Event     OrderLifecycleEvent
 }
 
 // ParseOrderLifecycleEvent parses openOrder, orderStatus, and execDetails wire

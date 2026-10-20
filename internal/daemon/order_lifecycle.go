@@ -78,7 +78,7 @@ func (s *Server) boundOrderLifecycleHandler(c *ibkrlib.Connector, binding *order
 		s.mu.Lock()
 		publicationCurrent := s.connector == c && binding != nil && s.connectorEpoch == binding.connectorEpoch.Load()
 		s.mu.Unlock()
-		if !sessionCurrent || !publicationCurrent || !s.appendOrderLifecycleEvent(receipt.Event) {
+		if receipt.Uncertain || !sessionCurrent || !publicationCurrent || !s.appendOrderLifecycleEvent(receipt.Event) {
 			s.markOrderLifecyclePersistenceUncertain()
 		}
 	}

@@ -50,11 +50,12 @@ func sameOpenOrderSnapshotBinding(a, b openOrderSnapshotBinding) bool {
 // openOrderSnapshotCollector accumulates openOrder callbacks between one
 // reqAllOpenOrders request and its same-epoch openOrderEnd terminator.
 type openOrderSnapshotCollector struct {
-	mu         sync.Mutex
-	orders     []OrderLifecycleEvent
-	end        chan struct{}
-	closed     bool
-	generation uint64
+	mu             sync.Mutex
+	orders         []OrderLifecycleEvent
+	end            chan struct{}
+	closed         bool
+	generation     uint64
+	previewInvalid bool
 }
 
 func (col *openOrderSnapshotCollector) add(ev OrderLifecycleEvent) {
@@ -84,11 +85,14 @@ func (col *openOrderSnapshotCollector) snapshot() ([]OrderLifecycleEvent, uint64
 }
 
 type openOrderSnapshotFlight struct {
-	binding   openOrderSnapshotBinding
-	collector *openOrderSnapshotCollector
-	done      chan struct{}
-	result    OpenOrderSnapshot
-	err       error
+	binding           openOrderSnapshotBinding
+	collector         *openOrderSnapshotCollector
+	done              chan struct{}
+	result            OpenOrderSnapshot
+	err               error
+	recovery          map[int]uint64
+	previewGeneration uint64
+	previewSafe       bool
 }
 
 // RequestAllOpenOrders sends reqAllOpenOrders to the gateway. Results arrive
@@ -181,6 +185,9 @@ func (c *Connector) runOpenOrderSnapshotFlight(flight *openOrderSnapshotFlight) 
 	if request == nil {
 		request = func() error { return flight.binding.conn.requestAllOpenOrdersForEpoch(flight.binding.epoch) }
 	}
+	flight.collector.mu.Lock()
+	flight.recovery, flight.previewGeneration, flight.previewSafe = flight.binding.conn.modifyStatusRecoveryTokens(flight.binding.epoch)
+	flight.collector.mu.Unlock()
 	if err := request(); err != nil {
 		c.completeOpenOrderSnapshotFlight(flight, OpenOrderSnapshot{AsOf: time.Now().UTC(), Session: ConnectorSessionBinding{connector: c, connection: flight.binding.conn, epoch: flight.binding.epoch}}, err, brokerSendMayHaveBeenWritten(err))
 		return
@@ -194,13 +201,20 @@ func (c *Connector) runOpenOrderSnapshotFlight(flight *openOrderSnapshotFlight) 
 	select {
 	case <-flight.collector.end:
 		orders, generation := flight.collector.snapshot()
+		flight.collector.mu.Lock()
+		invalid := flight.collector.previewInvalid
+		flight.collector.mu.Unlock()
+		var snapshotErr error
+		if invalid {
+			snapshotErr = fmt.Errorf("open-order snapshot overlapped a modify preview; refresh open orders")
+		}
 		c.completeOpenOrderSnapshotFlight(flight, OpenOrderSnapshot{
-			Complete:   true,
+			Complete:   !invalid,
 			Orders:     orders,
 			AsOf:       time.Now().UTC(),
 			Session:    ConnectorSessionBinding{connector: c, connection: flight.binding.conn, epoch: flight.binding.epoch},
 			Generation: generation,
-		}, nil, false)
+		}, snapshotErr, false)
 	case <-timer.C:
 		err := fmt.Errorf("%w: no same-epoch openOrderEnd before protocol deadline", ErrOpenOrderSnapshotPoisoned)
 		orders, generation := flight.collector.snapshot()
@@ -309,5 +323,13 @@ func (c *Connector) finishOpenOrderSnapshotFrom(conn *Connection, epoch uint64) 
 	}
 	collector := flight.collector
 	c.openOrderSnapshotMu.Unlock()
+	collector.mu.Lock()
+	orders := append([]OrderLifecycleEvent(nil), collector.orders...)
+	recovery, generation, safe := flight.recovery, flight.previewGeneration, flight.previewSafe
+	collector.mu.Unlock()
+	valid := safe && conn.recoverModifyStatusFromSnapshot(epoch, recovery, generation, orders)
+	collector.mu.Lock()
+	collector.previewInvalid = !valid
+	collector.mu.Unlock()
 	collector.finish(c.OrderLifecycleGeneration())
 }

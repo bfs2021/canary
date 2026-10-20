@@ -55,6 +55,10 @@ type OrderWhatIfMargin struct {
 // the corresponding estimates were absent. The result is neither submit
 // authority nor an order receipt.
 type OrderWhatIfResult struct {
+	// WorkingOrderUncertain means a status could describe the working order
+	// or its preview. Refresh/reconcile broker inventory before another review.
+	WorkingOrderUncertain bool
+
 	OrderID            int    // OrderID is the request's broker order ID; zero means unavailable before allocation.
 	Status             string // Status is the package-level WhatIf classification.
 	BrokerStatus       string // BrokerStatus is the unnormalized status from the matching callback.
@@ -284,6 +288,17 @@ func (c *Connector) previewOrderWhatIf(ctx context.Context, contract *Contract, 
 	if orderID > 0 {
 		ibkrOrder.OrderID = orderID
 	}
+	conn.rememberLocalPreviewIdentity(ibkrOrder.OrderID, conn.BrokerSessionEpoch(), order.Changes, c.PlacedOrderID(ibkrOrder.OrderID))
+	if ibkrOrder.OrderID > 0 && conn.modifyStatusIsUncertain(ibkrOrder.OrderID, conn.BrokerSessionEpoch()) {
+		recoveryBinding := ConnectorSessionBinding{connector: c, connection: conn, epoch: conn.BrokerSessionEpoch()}
+		if binding != nil {
+			recoveryBinding = *binding
+		}
+		c.refreshAfterAmbiguousPreview(ctx, recoveryBinding)
+		result := orderWhatIfUnavailableResult("order status changed during its preview; refresh open orders and preview again")
+		result.WorkingOrderUncertain = true
+		return result, nil
+	}
 	if c.whatIfBeforeBrokerIDClaim != nil {
 		c.whatIfBeforeBrokerIDClaim()
 	}
@@ -320,13 +335,41 @@ func (c *Connector) previewOrderWhatIf(ctx context.Context, contract *Contract, 
 		guard = conn.orderChangeWireGuard(ibkrOrder.OrderID, claimEpoch, order.Changes, c.PlacedOrderID(ibkrOrder.OrderID), nil)
 	}
 	defer conn.discardOrderIDReservation(ibkrOrder.OrderID)
+	modifyPreview := order.Changes != nil || c.PlacedOrderID(ibkrOrder.OrderID)
+	if modifyPreview {
+		if err := conn.beginModifyPreview(ibkrOrder.OrderID, claimEpoch); err != nil {
+			c.brokerIDNamespaceMu.Unlock()
+			return OrderWhatIfResult{}, err
+		}
+	}
 	c.orderIDHighWater = max(c.orderIDHighWater, ibkrOrder.OrderID)
 	// Mark under the shared boundary so a FEE allocation cannot race the
 	// interval before Connection.PreviewOrderWhatIf installs its handlers.
 	conn.markWhatIfOrderID(ibkrOrder.OrderID)
-	defer conn.clearWhatIfOrderID(ibkrOrder.OrderID)
+	finished := false
+	uncertain := false
+	finish := func() {
+		if finished {
+			return
+		}
+		finished = true
+		if conn.BrokerSessionEpoch() == claimEpoch {
+			conn.clearWhatIfOrderID(ibkrOrder.OrderID)
+		}
+		if modifyPreview {
+			uncertain = conn.finishModifyPreview(ibkrOrder.OrderID, claimEpoch)
+		}
+	}
+	defer finish()
 	c.brokerIDNamespaceMu.Unlock()
 	result, err := conn.previewOrderWhatIfForEpoch(ctx, ibkrOrder, &claimEpoch, guard)
+	finish()
+	if uncertain {
+		c.refreshAfterAmbiguousPreview(ctx, ConnectorSessionBinding{connector: c, connection: conn, epoch: claimEpoch})
+		result := orderWhatIfUnavailableResult("order status changed during its preview; refresh open orders and preview again")
+		result.WorkingOrderUncertain = true
+		return result, nil
+	}
 	if err == nil && binding != nil && !c.SessionCurrent(*binding) {
 		return orderWhatIfUnavailableResult("broker session changed during WhatIf request"), nil
 	}
