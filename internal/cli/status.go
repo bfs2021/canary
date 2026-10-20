@@ -110,7 +110,25 @@ func renderStatusText(env *Env, res *rpc.HealthResult, alerts *rpc.AlertCandidat
 				statusHealthRow(env, out, "Volume in lots", formatDiagnosticBool(settings.VolumeInLots))
 				statusHealthRow(env, out, "Order download", formatDiagnosticBool(settings.DownloadOpenOrders))
 				statusHealthRow(env, out, "Rate rejection", formatDiagnosticBool(settings.RejectAboveRate))
+				statusHealthRow(env, out, "Master client", formatDiagnosticInt(settings.MasterClientID, "not set"))
+				statusHealthRow(env, out, "Localhost only", formatDiagnosticBool(settings.LocalhostOnly)+" · loopback trusted "+formatDiagnosticBool(settings.LoopbackTrusted))
+				statusHealthRow(env, out, "API log", formatAPILogValue(*settings))
 			}
+			if p := api.Precautions; p != nil {
+				statusHealthRow(env, out, "Precautions", formatPrecautionsValue(*p))
+			}
+			if l := api.LockAndExit; l != nil {
+				statusHealthRow(env, out, "Lock and exit", formatLockAndExitValue(*l))
+			}
+		}
+	}
+	if setup := res.GatewaySetup; setup != nil {
+		for i, line := range formatGatewaySetupLines(env, *setup) {
+			label := ""
+			if i == 0 {
+				label = "Gateway setup"
+			}
+			statusHealthRow(env, out, label, line)
 		}
 	}
 	if link := res.BackendLink; link != nil && link.Losses > 0 {
@@ -900,6 +918,75 @@ func formatDiagnosticBool(value *bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+func formatDiagnosticInt(value *int, absent string) string {
+	if value == nil {
+		return absent
+	}
+	return fmt.Sprint(*value)
+}
+
+func formatAPILogValue(s rpc.GatewayAPISettings) string {
+	value := formatDiagnosticBool(s.CreateAPILog)
+	if s.LoggingLevel != nil {
+		value += " · level " + *s.LoggingLevel
+	}
+	if s.MarketDataInAPILog != nil && *s.MarketDataInAPILog {
+		value += " · market data included"
+	}
+	return value
+}
+
+func formatPrecautionsValue(p rpc.GatewayAPIPrecautions) string {
+	if len(p.Bypassed) == 0 {
+		return "none bypassed"
+	}
+	return "bypassed: " + strings.Join(p.Bypassed, ", ")
+}
+
+func formatLockAndExitValue(l rpc.GatewayLockAndExit) string {
+	value := l.Type
+	if value == "" {
+		value = "not reported"
+	}
+	if l.Time != "" {
+		value += " at " + l.Time
+		if l.Period != "" {
+			value += " " + strings.ToUpper(l.Period)
+		}
+		value += " (Gateway clock)"
+	}
+	return value
+}
+
+// formatGatewaySetupLines renders the setup reading as one line when all is
+// as expected and one line per note otherwise, so each difference stands on
+// its own row.
+func formatGatewaySetupLines(env *Env, setup rpc.GatewaySetupHealth) []string {
+	read := ""
+	if !setup.AsOf.IsZero() {
+		read = " · read " + setup.AsOf.Local().Format("15:04")
+	}
+	switch setup.State {
+	case rpc.GatewaySetupAsExpected:
+		return []string{env.green("as expected") + read}
+	case rpc.GatewaySetupAttention:
+		lines := make([]string, 0, len(setup.Notes))
+		for _, note := range setup.Notes {
+			lines = append(lines, env.yellow(note))
+		}
+		if len(lines) == 0 {
+			return []string{env.yellow("needs attention") + read}
+		}
+		lines[0] += read
+		return lines
+	}
+	reason := setup.Reason
+	if reason == "" {
+		reason = "not read"
+	}
+	return []string{env.dim("not read yet · " + strings.ReplaceAll(reason, "_", " "))}
 }
 
 // literalStatusRow preserves copyable credentials without inserting whitespace.

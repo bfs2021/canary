@@ -70,6 +70,56 @@ func TestRenderStatus_PreservesDaemonVerdictWithSeparateDiagnostics(t *testing.T
 	}
 }
 
+func TestRenderStatus_GatewaySetupRowSpeaksPlainly(t *testing.T) {
+	t.Parallel()
+	render := func(res *rpc.HealthResult) string {
+		var stdout bytes.Buffer
+		env := &Env{Stdout: &stdout, Stderr: &bytes.Buffer{}}
+		renderStatusText(env, res, nil)
+		return stdout.String()
+	}
+	base := func() *rpc.HealthResult {
+		return &rpc.HealthResult{Verdict: rpc.HealthVerdict{State: "READY"}, Connected: true, ServerVersion: 203, ClientID: 15}
+	}
+	res := base()
+	res.GatewaySetup = &rpc.GatewaySetupHealth{State: rpc.GatewaySetupAsExpected, AsOf: time.Date(2026, 10, 20, 6, 36, 0, 0, time.UTC)}
+	if got := render(res); !strings.Contains(got, "Gateway setup  as expected · read ") {
+		t.Fatalf("matching setup:\n%s", got)
+	}
+	res = base()
+	res.GatewaySetup = &rpc.GatewaySetupHealth{State: rpc.GatewaySetupAttention, Notes: []string{
+		"Master API client ID is not 15: orders and fills from TWS or other apps stay unseen.",
+		"Open orders are not downloaded at connect: orders placed elsewhere stay unseen.",
+	}}
+	got := render(res)
+	for _, want := range []string{"Gateway setup  Master API client ID is not 15", "\n               Open orders are not downloaded"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("two differences, one row each, missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "Gateway setup") != 1 {
+		t.Fatalf("the label prints once:\n%s", got)
+	}
+	res = base()
+	res.GatewaySetup = &rpc.GatewaySetupHealth{State: rpc.GatewaySetupUnknown, Reason: "not_read_yet"}
+	if got := render(res); !strings.Contains(got, "Gateway setup  not read yet") || strings.Contains(got, "not_read_yet") {
+		t.Fatalf("unknown setup:\n%s", got)
+	}
+	if got := render(base()); strings.Contains(got, "Gateway setup") {
+		t.Fatalf("no row without a reading:\n%s", got)
+	}
+	// With the diagnostics flag the detail rows name the new settings too.
+	res = base()
+	res.GatewayAPI = &rpc.GatewayAPIHealth{ConfigState: "observed", Settings: &rpc.GatewayAPISettings{CreateAPILog: new(true), LoggingLevel: new("warning")},
+		Precautions: &rpc.GatewayAPIPrecautions{Bypassed: []string{"bond warning"}}, LockAndExit: &rpc.GatewayLockAndExit{Type: "restart", Time: "01:45", Period: "am"}}
+	got = render(res)
+	for _, want := range []string{"Master client  not set", "API log        on · level warning", "Precautions    bypassed: bond warning", "Lock and exit  restart at 01:45 AM (Gateway clock)"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("detail rows missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStatusVerdict(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

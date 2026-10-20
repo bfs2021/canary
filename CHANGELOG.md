@@ -2,6 +2,37 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.26.0 — Unreleased
+
+### What's new
+
+`canary status` now says in plain words which TWS or IB Gateway settings
+differ from what Canary needs. A few seconds after each connect the daemon
+reads the application's API settings once, on the same separate short-lived
+connection `--gateway-diagnostics` uses, and prints the result as a
+`Gateway setup` row: `as expected`, or one short sentence per difference,
+each naming the setting as the application labels it and what it costs
+(`Master API client ID is not 15: orders and fills from TWS or other apps
+stay unseen.`). It checks Read-Only API, the master client id, open-order
+download, rate-limit rejection, loopback trust, the API log level and
+market-data logging, and the daily auto restart. Canary never changes a
+setting.
+
+### Added
+
+- The `Gateway setup` status row and its `gateway_setup` JSON field (`state`
+  as_expected, attention or unknown; `notes`; `as_of`), read once per session
+  after the connect. A setting the broker does not report is never a
+  difference.
+- `status --gateway-diagnostics` also reports the master client id,
+  localhost-only mode with whether a loopback address is trusted, the API
+  message log with its level, the order-precaution bypasses that are on, and
+  the Lock and Exit schedule as the application reports it. The trusted-IP
+  list itself is reduced to that one fact and never kept.
+- Troubleshooting documents the row, and that IB Gateway's encrypted logs and
+  settings file have no documented off switch: plain-text copies come from the
+  Gateway's File menu export.
+
 ## v3.25.4 — 2026-10-20 08:29 CEST
 
 ### What's new

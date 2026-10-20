@@ -428,17 +428,20 @@ is no external metrics stack and no tracing.
   daemon lifetime; it is not a durable incident history or a new push alert.
 - Schedule provenance remains `source = "operator"`, `freshness = "unverified"`.
   `config_loaded_at` means Canary loaded its declaration, not that Gateway
-  settings were observed. `as_of` is the diagnostic sampling time. There is
-  no verified API observation timestamp or automatic agreement check yet.
-  The main broker connection negotiates up to protocol 203; restart-monitor
-  discovery still reports `unsupported_client_protocol`. The opt-in
-  `status --gateway-diagnostics` uses a separate bounded protocol-219 socket
-  to read an allowlist of API settings. It does not publish restart evidence
-  or change the main connection.
-  [IBKR's newer read-only configuration request](https://www.interactivebrokers.com/docs/tws-api/doc/setting-management/request-configuration)
+  settings were observed. `as_of` is the diagnostic sampling time. The
+  main broker connection negotiates up to protocol 203; restart-monitor
+  discovery still reports `unsupported_client_protocol`. The daemon reads an
+  allowlist of API settings once per session, a few seconds after each
+  connect, on a separate bounded protocol-219 socket (the same read
+  `status --gateway-diagnostics` makes on demand), and `status` prints the
+  settings that differ from what Canary needs as the `Gateway setup` row.
+  The read does not publish restart evidence or change the main connection.
+  [IBKR's read-only configuration request](https://www.interactivebrokers.com/docs/tws-api/doc/setting-management/request-configuration)
   returns a [LockAndExitConfig](https://ibkrcampus.com/docs/tws-api/protobuf/lock-and-exit-config)
-  containing restart/logoff type, time and AM/PM, but no timezone. Supporting
-  restart observation requires timezone provenance and separate validation. Canary never writes
+  containing restart/logoff type, time and AM/PM, but no timezone; the read
+  keeps it as reported, and the `Gateway setup` row only notes a type other
+  than restart. Verified restart observation still requires timezone
+  provenance and separate validation. Canary never writes
   Gateway settings. Local restart declarations do not replace or extend
   `maintenance_windows`, which only annotates the upstream IBKR reset schedule.
 - `canary app status` calls the local-Mac-only app diagnostic and keeps alert

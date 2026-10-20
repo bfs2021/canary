@@ -8,6 +8,7 @@ Market data    Live
 Daemon         v0.0.0-golden, up 2h0m0s
 TWS            API server 176
 API protocol   176 negotiated · 203 client ceiling
+Gateway setup  as expected · read 12:01
 Subsystems     all 3 ready
 Trading        paper ready
 Executions     all clients (proven 13:35)
@@ -30,6 +31,7 @@ IBKR Gateway  \x1b[32m\x1b[1mREADY\x1b[0m\x1b[0m
 \x1b[2mDaemon        \x1b[0m v0.0.0-golden, up 2h0m0s
 \x1b[2mTWS           \x1b[0m API server 176
 \x1b[2mAPI protocol  \x1b[0m 176 negotiated · 203 client ceiling
+\x1b[2mGateway setup \x1b[0m \x1b[32mas expected\x1b[0m · read 12:01
 \x1b[2mSubsystems    \x1b[0m \x1b[32mall 3 ready\x1b[0m
 \x1b[2mTrading       \x1b[0m \x1b[32mpaper ready\x1b[0m
 \x1b[2mExecutions    \x1b[0m \x1b[32mall clients (proven 13:35)\x1b[0m

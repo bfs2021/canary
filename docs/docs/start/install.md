@@ -86,6 +86,7 @@ Session        DU0000000 via 127.0.0.1:4001 (tls=false, discovered), client 15
 Market data    Live
 Daemon         v1.0.0, up 30m42s
 TWS            API server 178
+Gateway setup  as expected · read 09:02
 Executions     other-client fills not yet observed · check TWS Master API client
                ID is 15
 SPX members    cache:2026-05-22, 503 names

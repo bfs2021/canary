@@ -20,7 +20,8 @@ const TradingProtocolMax = maxClientVersion
 const ConfigReadProtocol = 219
 
 // APISettings contains only allowlisted operational settings. Nil means absent,
-// not false. Trusted IPs, accounts, messages and order defaults are not retained.
+// not false. The trusted-IP list, accounts, messages and order defaults are not
+// retained; the list is reduced to whether a loopback address is on it.
 type APISettings struct {
 	ReadOnly                *bool
 	DownloadOpenOrders      *bool
@@ -28,8 +29,35 @@ type APISettings struct {
 	RetainOrdersOnReconnect *bool
 	RejectAboveRate         *bool
 	LocalhostOnly           *bool
+	LoopbackTrusted         *bool
+	CreateAPILog            *bool
+	MarketDataInAPILog      *bool
+	LoggingLevel            *string
 	SocketPort              *int
 	MasterClientID          *int
+}
+
+// APIPrecautions names the order-precaution bypasses the application has on,
+// in the broker's own order. Empty means every bypass is off.
+type APIPrecautions struct {
+	Bypassed []string
+}
+
+// precautionBypassNames maps ApiPrecautionsConfig field numbers to short names.
+var precautionBypassNames = map[int]string{
+	1: "order precautions", 2: "bond warning", 3: "negative-yield confirmation",
+	4: "called-bond warning", 5: "same-action pair-trade warning", 6: "flagged-accounts warning",
+	7: "price-based volatility warning", 8: "redirect-order warning", 9: "no-overfill protection",
+	10: "route marketable to BBO",
+}
+
+// LockAndExit is the application's daily log-off or restart as it reports it:
+// Type is "restart" or "logoff", Time is 12-hour "HH:MM" and Period "AM" or "PM".
+// The broker reports no time zone for it.
+type LockAndExit struct {
+	Type   string
+	Time   string
+	Period string
 }
 
 // APIConfigDiagnostic is an observation of a separate bounded read-only session.
@@ -41,6 +69,8 @@ type APIConfigDiagnostic struct {
 	ServerVersion int
 	AsOf          time.Time
 	Settings      *APISettings
+	Precautions   *APIPrecautions
+	LockAndExit   *LockAndExit
 }
 
 // ReadAPIConfig reads settings without changing the main connection or TWS.
@@ -151,12 +181,13 @@ func probeAPIConfig(socket net.Conn) (out APIConfigDiagnostic) {
 				out.Reason = "unexpected_config_response"
 				return out
 			}
-			settings, err := parseAPIConfig(body, requestID)
+			parsed, err := parseAPIConfig(body, requestID)
 			if err != nil {
 				out.Reason = "malformed_config"
 				return out
 			}
-			out.State, out.Reason, out.Settings = "observed", "", settings
+			out.State, out.Reason = "observed", ""
+			out.Settings, out.Precautions, out.LockAndExit = parsed.settings, parsed.precautions, parsed.lockAndExit
 			return out
 		}
 	}
@@ -212,8 +243,17 @@ func diagnosticError(body []byte) (id, code int, err error) {
 	return
 }
 
-func parseAPIConfig(body []byte, requestID int) (*APISettings, error) {
-	var settings *APISettings
+type parsedAPIConfig struct {
+	settings    *APISettings
+	precautions *APIPrecautions
+	lockAndExit *LockAndExit
+}
+
+// parseAPIConfig reads ConfigResponse: reqId (1), lockAndExit (2) and api (4),
+// whose precautions (1) and settings (2) are the allowlisted messages. The
+// messages (3) and orders (5) sections are skipped unread.
+func parseAPIConfig(body []byte, requestID int) (parsedAPIConfig, error) {
+	var out parsedAPIConfig
 	id := -1
 	err := diagnosticFields(body, func(field, wire int, value []byte) error {
 		switch field {
@@ -223,31 +263,128 @@ func parseAPIConfig(body []byte, requestID int) (*APISettings, error) {
 				return e
 			}
 			id = int(v)
+		case 2:
+			if wire != protoWireBytes {
+				return fmt.Errorf("invalid lock-and-exit wire type")
+			}
+			var e error
+			out.lockAndExit, e = parseLockAndExit(value)
+			return e
 		case 4:
 			if wire != protoWireBytes {
 				return fmt.Errorf("invalid api config wire type")
 			}
 			return diagnosticFields(value, func(f, w int, v []byte) error {
-				if f != 2 {
+				if f != 1 && f != 2 {
 					return nil
 				}
 				if w != protoWireBytes {
 					return fmt.Errorf("invalid api settings wire type")
 				}
 				var e error
-				settings, e = parseAPISettings(v)
+				if f == 1 {
+					out.precautions, e = parseAPIPrecautions(v)
+				} else {
+					out.settings, e = parseAPISettings(v)
+				}
 				return e
-			}, 2)
+			}, 1, 2)
 		}
 		return nil
-	}, 1, 4)
+	}, 1, 2, 4)
+	if err != nil {
+		return parsedAPIConfig{}, err
+	}
+	if id != requestID || out.settings == nil {
+		return parsedAPIConfig{}, fmt.Errorf("missing or uncorrelated config")
+	}
+	return out, nil
+}
+
+// maxDiagnosticText bounds every retained string: a level name or a clock
+// reading is short, and anything longer is not the field it claims to be.
+const maxDiagnosticText = 32
+
+func diagnosticText(field, wire int, value []byte) (string, error) {
+	if wire != protoWireBytes {
+		return "", fmt.Errorf("invalid wire type for text field %d", field)
+	}
+	if len(value) > maxDiagnosticText {
+		return "", fmt.Errorf("text field %d too long", field)
+	}
+	return strings.TrimSpace(string(value)), nil
+}
+
+func parseLockAndExit(body []byte) (*LockAndExit, error) {
+	out := &LockAndExit{}
+	err := diagnosticFields(body, func(field, wire int, value []byte) error {
+		var target *string
+		switch field {
+		case 1:
+			target = &out.Time
+		case 2:
+			target = &out.Period
+		case 3:
+			target = &out.Type
+		default:
+			return nil
+		}
+		text, err := diagnosticText(field, wire, value)
+		if err != nil {
+			return err
+		}
+		if field != 1 {
+			text = strings.ToLower(text)
+		}
+		*target = text
+		return nil
+	}, 1, 2, 3)
 	if err != nil {
 		return nil, err
 	}
-	if id != requestID || settings == nil {
-		return nil, fmt.Errorf("missing or uncorrelated config")
+	return out, nil
+}
+
+func parseAPIPrecautions(body []byte) (*APIPrecautions, error) {
+	out := &APIPrecautions{}
+	seen := map[int]bool{}
+	err := forEachProtoField(body, func(field, wire int, value []byte) error {
+		name, known := precautionBypassNames[field]
+		if !known {
+			return nil
+		}
+		if seen[field] {
+			return fmt.Errorf("duplicate precaution")
+		}
+		seen[field] = true
+		v, err := protoVarintValue(field, wire, value)
+		if err != nil {
+			return err
+		}
+		if v > 1 {
+			return fmt.Errorf("invalid precaution boolean")
+		}
+		if v == 1 {
+			out.Bypassed = append(out.Bypassed, name)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return settings, nil
+	return out, nil
+}
+
+// loopbackTrusted reports whether the broker's comma- or space-separated
+// trusted-IP list names a loopback address. The list itself is never retained.
+func loopbackTrusted(list string) bool {
+	for entry := range strings.FieldsFuncSeq(list, func(r rune) bool { return r == ',' || r == ';' || r == ' ' || r == '\t' }) {
+		switch strings.Trim(strings.ToLower(entry), "[]") {
+		case "127.0.0.1", "::1", "localhost":
+			return true
+		}
+	}
+	return false
 }
 
 // Repeated ignored fields are permitted; retained singular fields must agree
@@ -278,6 +415,10 @@ func parseAPISettings(body []byte) (*APISettings, error) {
 			target = &out.ReadOnly
 		case 3:
 			target = &out.DownloadOpenOrders
+		case 10:
+			target = &out.CreateAPILog
+		case 11:
+			target = &out.MarketDataInAPILog
 		case 24:
 			target = &out.VolumeInLots
 		case 26:
@@ -286,7 +427,7 @@ func parseAPISettings(body []byte) (*APISettings, error) {
 			target = &out.RetainOrdersOnReconnect
 		case 35:
 			target = &out.LocalhostOnly
-		case 8, 18:
+		case 8, 17, 18, 36:
 		default:
 			return nil
 		}
@@ -294,6 +435,23 @@ func parseAPISettings(body []byte) (*APISettings, error) {
 			return fmt.Errorf("duplicate api setting")
 		}
 		seen[field] = true
+		if field == 17 || field == 36 {
+			// Text fields: the logging level is kept as a lower-case name; the
+			// trusted-IP list is reduced to one fact and dropped.
+			if field == 36 {
+				if wire != protoWireBytes {
+					return fmt.Errorf("invalid wire type for text field %d", field)
+				}
+				out.LoopbackTrusted = new(loopbackTrusted(string(value)))
+				return nil
+			}
+			text, err := diagnosticText(field, wire, value)
+			if err != nil {
+				return err
+			}
+			out.LoggingLevel = new(strings.ToLower(text))
+			return nil
+		}
 		v, err := protoVarintValue(field, wire, value)
 		if err != nil {
 			return err

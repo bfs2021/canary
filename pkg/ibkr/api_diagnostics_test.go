@@ -118,8 +118,80 @@ func TestAPIConfigReadOnlyWireAndCapabilityBoundary(t *testing.T) {
 	if s.ReadOnly == nil || *s.ReadOnly || s.RetainOrdersOnReconnect == nil || !*s.RetainOrdersOnReconnect || s.VolumeInLots == nil || *s.VolumeInLots || s.SocketPort == nil || *s.SocketPort != 7496 || s.DownloadOpenOrders != nil {
 		t.Fatalf("lost presence or value: %+v", s)
 	}
+	if s.LoopbackTrusted == nil || *s.LoopbackTrusted {
+		t.Fatalf("a trusted list without a loopback address must read as not trusted: %+v", s)
+	}
+	if got.Precautions != nil || got.LockAndExit != nil {
+		t.Fatalf("absent sections must stay absent: %+v", got)
+	}
 	if strings.Contains(fmt.Sprintf("%+v", got), "sentinel") {
 		t.Fatal("retained private response")
+	}
+}
+
+// TestAPIConfigReadsSetupSections covers the sections the setup reading uses:
+// the log settings, the trusted-IP reduction, the precaution bypasses and the
+// daily restart, each kept as the broker reported it and nothing more.
+func TestAPIConfigReadsSetupSections(t *testing.T) {
+	got := diagnosticWireTest(t, 219, func(c net.Conn) {
+		settings := protoAppendBool(nil, 1, true)
+		settings = protoAppendBool(settings, 3, true)
+		settings = protoAppendBool(settings, 10, true)
+		settings = protoAppendBool(settings, 11, false)
+		settings = protoAppendString(settings, 17, "Warning")
+		settings = protoAppendInt32(settings, 18, 15)
+		settings = protoAppendBool(settings, 35, false)
+		settings = protoAppendString(settings, 36, "10.0.0.7, private-ip-sentinel, 127.0.0.1")
+		precautions := protoAppendBool(nil, 1, false)
+		precautions = protoAppendBool(precautions, 2, true)
+		precautions = protoAppendBool(precautions, 9, true)
+		lock := protoAppendString(nil, 1, "01:45")
+		lock = protoAppendString(lock, 2, "AM")
+		lock = protoAppendString(lock, 3, "Restart")
+		reply := protoAppendMessage(protoAppendInt32(nil, 1, 1), 2, lock)
+		reply = protoAppendMessage(reply, 4, protoAppendMessage(protoAppendMessage(nil, 1, precautions), 2, settings))
+		if err := writeDiagnosticProto(c, 310, reply); err != nil {
+			t.Error(err)
+		}
+	})
+	if got.State != "observed" || got.Settings == nil || got.Precautions == nil || got.LockAndExit == nil {
+		t.Fatalf("%+v", got)
+	}
+	s := got.Settings
+	if s.CreateAPILog == nil || !*s.CreateAPILog || s.MarketDataInAPILog == nil || *s.MarketDataInAPILog {
+		t.Fatalf("log settings: %+v", s)
+	}
+	if s.LoggingLevel == nil || *s.LoggingLevel != "warning" || s.MasterClientID == nil || *s.MasterClientID != 15 {
+		t.Fatalf("level or master client: %+v", s)
+	}
+	if s.LoopbackTrusted == nil || !*s.LoopbackTrusted || s.LocalhostOnly == nil || *s.LocalhostOnly {
+		t.Fatalf("trust reduction: %+v", s)
+	}
+	if want := []string{"bond warning", "no-overfill protection"}; fmt.Sprint(got.Precautions.Bypassed) != fmt.Sprint(want) {
+		t.Fatalf("bypasses: %v", got.Precautions.Bypassed)
+	}
+	if *got.LockAndExit != (LockAndExit{Type: "restart", Time: "01:45", Period: "am"}) {
+		t.Fatalf("lock and exit: %+v", got.LockAndExit)
+	}
+	if text := fmt.Sprintf("%+v", got); strings.Contains(text, "sentinel") || strings.Contains(text, "10.0.0.7") {
+		t.Fatal("retained the trusted-IP list")
+	}
+	for name, body := range map[string][]byte{
+		"text too long":    configReply(protoAppendString(nil, 17, strings.Repeat("x", maxDiagnosticText+1))),
+		"level wrong wire": configReply(protoAppendInt32(nil, 17, 3)),
+		"bypass not bool":  protoAppendMessage(protoAppendInt32(nil, 1, 1), 4, protoAppendMessage(protoAppendMessage(nil, 1, protoAppendInt32(nil, 2, 2)), 2, nil)),
+		"restart twice":    protoAppendMessage(protoAppendMessage(protoAppendInt32(nil, 1, 1), 2, protoAppendString(nil, 3, "restart")), 2, protoAppendString(nil, 3, "logoff")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := diagnosticWireTest(t, 219, func(c net.Conn) {
+				if err := writeDiagnosticProto(c, 310, body); err != nil {
+					t.Error(err)
+				}
+			})
+			if got.State != "unavailable" || got.Reason != "malformed_config" {
+				t.Fatalf("%+v", got)
+			}
+		})
 	}
 }
 

@@ -215,7 +215,12 @@ func renderGoldenCases() []renderGoldenCase {
 	diagnosticHealth := goldenHealthReady(readyTrading)
 	diagnosticHealth.ServerVersion = 203
 	diagnosticHealth.GatewayAPI = &rpc.GatewayAPIHealth{TradingProtocolMax: 203, ConfigReadProtocol: 219, ConfigState: "observed", DiagnosticProtocol: 219,
-		Settings: &rpc.GatewayAPISettings{ReadOnly: new(false), VolumeInLots: new(false), RetainOrdersOnReconnect: new(true), DownloadOpenOrders: new(true)}}
+		Settings: &rpc.GatewayAPISettings{ReadOnly: new(false), VolumeInLots: new(false), RetainOrdersOnReconnect: new(true), DownloadOpenOrders: new(true),
+			LocalhostOnly: new(true), LoopbackTrusted: new(true), CreateAPILog: new(true), MarketDataInAPILog: new(false), LoggingLevel: new("warning"), SocketPort: new(4002)},
+		Precautions: &rpc.GatewayAPIPrecautions{Bypassed: []string{}},
+		LockAndExit: &rpc.GatewayLockAndExit{Type: "restart", Time: "11:45", Period: "pm"}}
+	diagnosticHealth.GatewaySetup = &rpc.GatewaySetupHealth{State: rpc.GatewaySetupAttention, AsOf: goldenAt.Add(-119 * time.Minute),
+		Notes: []string{"Master API client ID is not 7: orders and fills from TWS or other apps stay unseen."}}
 	return []renderGoldenCase{
 		{name: "update-trading-refusal", argv: []string{"update"}, render: func(env *Env) { renderTradingUpdateRefusal(env.Stdout) }},
 		{name: "help", argv: []string{"help"}, render: renderUsage},
@@ -702,6 +707,7 @@ func goldenHealthReady(trading rpc.TradingStatus) rpc.HealthResult {
 		GatewayPhase:     rpc.GatewayPhaseReady,
 		DataType:         rpc.MarketDataLive,
 		GatewayAPI:       &rpc.GatewayAPIHealth{TradingProtocolMax: 203, ConfigReadProtocol: 219, ConfigState: "not_requested"},
+		GatewaySetup:     &rpc.GatewaySetupHealth{State: rpc.GatewaySetupAsExpected, AsOf: goldenAt.Add(-119 * time.Minute)},
 		ServerVersion:    176,
 		BackgroundTasks:  []rpc.BackgroundTaskStatus{},
 		Subsystems:       []rpc.SubsystemHealth{{Name: "regime", Status: "ready"}, {Name: "breadth", Status: "ready"}, {Name: "rulebook", Status: "ready"}},

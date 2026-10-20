@@ -2456,6 +2456,7 @@ type HealthResult struct {
 	BackendLink *BackendLinkHealth `json:"backend_link,omitempty"`
 	// GatewayRestart is diagnostic context, independent of connectivity and data health.
 	GatewayAPI     *GatewayAPIHealth     `json:"gateway_api,omitempty"`
+	GatewaySetup   *GatewaySetupHealth   `json:"gateway_setup,omitempty"`
 	GatewayRestart *GatewayRestartHealth `json:"gateway_restart,omitempty"`
 	DataType       string                `json:"data_type,omitempty"`
 	ServerVersion  int                   `json:"server_version,omitempty"`

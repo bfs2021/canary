@@ -1,8 +1,44 @@
 # Troubleshooting
 
-Updated: 2026-10-11
+Updated: 2026-10-20
 
 Symptom, cause, fix. Start with `canary status`: it prints one of four verdicts (`READY`, `STARTING`, `ATTENTION`, `OFFLINE`), waits up to 25 seconds for the API handshake to land, and exits 1 while the gateway is not connected.
+
+## The `Gateway setup` row says a setting differs
+
+A few seconds after each connect, the daemon reads the application's API
+settings once, on a separate short-lived connection (the same read as
+`--gateway-diagnostics` below), and `canary status` prints the result as the
+`Gateway setup` row. `as expected` means every setting Canary depends on is as
+it needs it. Otherwise the row carries one short sentence per difference, each
+naming the setting as TWS or IB Gateway labels it and what it costs you:
+
+```text
+Gateway setup  Master API client ID is not 15: orders and fills from TWS or
+               other apps stay unseen. · read 08:36
+               Open orders are not downloaded at connect: orders placed
+               elsewhere stay unseen.
+```
+
+The settings it checks, in Configure → Settings → API → Settings unless noted:
+`Read-Only API` (must be off while `[trading].mode` is paper or live), `Master
+API client ID` (Canary's client id), `Download open orders on connection` (on),
+`Reject messages above maximum allowed message rate` (off: on, three rejections
+cut the session), the trusted-IP list when the daemon dials a loopback address
+(`Allow connections from localhost only` on, or `127.0.0.1` trusted; otherwise
+every reconnect waits for a click), the API log level (`Detail` grows fast) and
+`Include market data in API log file` (off), and under Lock and Exit the daily
+`Auto restart` (a log-off leaves the Gateway signed out). A setting the broker
+did not report is not a difference. `not read yet` means the read has not landed
+or could not be made; the reason follows it. Canary never changes a setting:
+fix it in the application, and the row updates at the next connect or
+`canary status --gateway-diagnostics`.
+
+IB Gateway writes its logs and settings file encrypted (`*.ibgzenc`), and IBKR
+documents no setting that turns that off. Plain-text copies come from the
+Gateway's File menu (`API Logs` or `Gateway Logs` → `Export Today Logs…`).
+The `Automatic Encryption` menu item is not about logs: it concerns the FIX
+CTCI connection and does nothing in API mode.
 
 ## Check API settings after changing TWS or Gateway
 
@@ -19,11 +55,15 @@ setting means **not reported**, not off. The negotiated protocol is not the
 installed application's version number.
 
 The output includes read-only API mode, automatic open-order download,
-reconnect order retention, US-stock volume-in-lots mode, and rate-limit
-rejection. These are observations, not changes or permission to trade.
-Volume values preserve the broker's decimal quantity; Canary does not guess
-shares versus lots from the value's size. Retained broker orders are reconciled
-by identity; an uncertain send is never automatically replayed.
+reconnect order retention, US-stock volume-in-lots mode, rate-limit
+rejection, the master API client id, localhost-only mode with whether a
+loopback address is trusted (the trusted-IP list itself is never kept), the API
+message log with its level, the order-precaution bypasses that are on, and the
+Lock and Exit schedule as the application reports it (its own clock; the
+broker sends no time zone). These are observations, not changes or permission
+to trade. Volume values preserve the broker's decimal quantity; Canary does not
+guess shares versus lots from the value's size. Retained broker orders are
+reconciled by identity; an uncertain send is never automatically replayed.
 
 When switching applications, compare the Session endpoint with the socket port
 in the selected application. An explicit `[gateway].port` pin remains binding:

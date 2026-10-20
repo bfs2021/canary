@@ -59,6 +59,8 @@ var perCandidateConnectBudget = 25 * time.Second
 // Server is the daemon process state.
 type Server struct {
 	gatewayDiagnosticsMu sync.Mutex
+	// gatewaySetup is the session's last settings read, for the status row.
+	gatewaySetup gatewaySetupStore
 	// deskAuthorityMu fences controller changes against the final broker byte.
 	deskAuthorityMu sync.RWMutex
 	// deskExecutionMu serializes the execution journal's check-then-append.
@@ -2188,6 +2190,10 @@ func (s *Server) postConnectSetup(a connectAttempter, ep discover.Endpoint) {
 	if err := a.SetMarketDataType(2); err != nil {
 		s.logger.Warnf("SetMarketDataType(frozen) failed: %v", err)
 	}
+	// One bounded read of the application's settings per session, on its own
+	// socket once the main session has settled, so `canary status` can say
+	// in plain words which settings differ from what Canary needs.
+	go s.observeGatewaySetup(s.serverCtx)
 	// A fresh handshake is the one event after which a previously
 	if s.marketEvents != nil {
 		s.marketEvents.clearShortableAbsence()
