@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // fakeProc is one synthetic /proc/<pid> entry.
@@ -266,6 +267,26 @@ func TestLiveProcessThroughPlatformReader(t *testing.T) {
 		_, _ = child.Process.Wait()
 	})
 	pid := child.Process.Pid
+	if useProcfs() {
+		// Linux can briefly expose an empty cmdline after Start returns.
+		// Wait for the child fixture through procfs directly, so the reader
+		// assertions below still run once and cannot retry away a defect.
+		path := filepath.Join(procRoot, strconv.Itoa(pid), "cmdline")
+		deadline := time.Now().Add(time.Second)
+		for {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("wait for child cmdline: %v", err)
+			}
+			if len(raw) > 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("child cmdline remained empty after one second: %s", path)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
 	// Natively argv0 is "sleep" as given; under qemu-user emulation the
 	// guest argv0 is reported as the file the kernel executed.
 	want := map[string]bool{"sleep 30": true, child.Path + " 30": true}

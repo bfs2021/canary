@@ -170,8 +170,8 @@ func TestInheritedOpenOrderIDNeedsTheAccountAndANonZeroClient(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = conn.Disconnect() })
-			if got, ok := conn.ReportedOwnOrder(40); ok {
-				t.Fatalf("order 40 recorded as this client's: %+v", got)
+			if got, ok := conn.ReportedOwnOrder(40); ok && !got.Conflicted {
+				t.Fatalf("order 40 recorded as usable for this account/client: %+v", got)
 			}
 			epoch := conn.BrokerSessionEpoch()
 			if _, err := conn.claimOrderIDForForwardingAtEpoch(40, conn.orderIDOwned(40), &epoch, &OrderChangeIdentity{PermID: 700000, Account: "DU1234567"}); !errors.Is(err, ErrBrokerIDNamespaceConflict) {
@@ -224,9 +224,8 @@ func TestInheritedOpenOrderIDFromALegacyFrame(t *testing.T) {
 
 // A what-if in flight for an order ID echoes that order's permanent ID under
 // the preview's own reference; it is not a second identity of the order
-// (refuter round 3, R3-1). While a what-if is in flight for the ID the report
-// observer skips its frames, on the protobuf and the legacy path alike; a
-// genuine second reference still marks the report conflicted.
+// (refuter round 3, R3-1). Only a typed what-if echo is excluded. An
+// ambiguous legacy report cannot authorize a change or cancel.
 func TestInheritedOpenOrderIDIgnoresAWhatIfEcho(t *testing.T) {
 	legacy := func(ref string) []string {
 		return append([]string{strconv.Itoa(msgOpenOrder),
@@ -242,6 +241,7 @@ func TestInheritedOpenOrderIDIgnoresAWhatIfEcho(t *testing.T) {
 		{"protobuf", minServerVerProtoBufPlaceOrder, func(c *Connection, ref string) []string {
 			o := startupBurstOrder(0)
 			o.OrderRef = ref
+			o.WhatIf = ref == "preview-synthetic"
 			return c.decodeMessage(encodeOpenOrderProtoCallbackForTest(o))
 		}},
 		{"legacy", 176, func(_ *Connection, ref string) []string { return legacy(ref) }},
@@ -259,8 +259,13 @@ func TestInheritedOpenOrderIDIgnoresAWhatIfEcho(t *testing.T) {
 			conn.markWhatIfOrderID(40)
 			conn.observeReportedOwnOrderAtEpoch(tc.frame(conn, "preview-synthetic"), epoch)
 			conn.clearWhatIfOrderID(40)
-			if got, ok := conn.ReportedOwnOrder(40); !ok || got != want {
-				t.Fatalf("after the what-if echo: report = %+v ok=%t, want it unchanged %+v", got, ok, want)
+			got, ok := conn.ReportedOwnOrder(40)
+			if tc.name == "protobuf" {
+				if !ok || got != want {
+					t.Fatalf("after the typed what-if echo: report = %+v ok=%t, want unchanged %+v", got, ok, want)
+				}
+			} else if !ok || !got.Conflicted {
+				t.Fatalf("ambiguous legacy report = %+v ok=%t, want conflicted", got, ok)
 			}
 			conn.observeReportedOwnOrderAtEpoch(tc.frame(conn, "ord-other"), epoch)
 			if got, ok := conn.ReportedOwnOrder(40); !ok || !got.Conflicted {

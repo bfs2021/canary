@@ -75,10 +75,10 @@ type OrderWhatIfResult struct {
 // result with Status [OrderWhatIfStatusUnavailable] and a nil error. Accepted
 // and rejected results reflect callback classification, not order finality.
 func (c *Connection) PreviewOrderWhatIf(ctx context.Context, order *IBKROrder) (OrderWhatIfResult, error) {
-	return c.previewOrderWhatIfForEpoch(ctx, order, nil)
+	return c.previewOrderWhatIfForEpoch(ctx, order, nil, nil)
 }
 
-func (c *Connection) previewOrderWhatIfForEpoch(ctx context.Context, order *IBKROrder, expectedEpoch *uint64) (OrderWhatIfResult, error) {
+func (c *Connection) previewOrderWhatIfForEpoch(ctx context.Context, order *IBKROrder, expectedEpoch *uint64, guard func() error) (OrderWhatIfResult, error) {
 	if order == nil {
 		return OrderWhatIfResult{}, fmt.Errorf("order is nil")
 	}
@@ -159,7 +159,7 @@ func (c *Connection) previewOrderWhatIfForEpoch(ctx context.Context, order *IBKR
 	})
 	defer releaseTap()
 
-	if err := c.sendPlaceOrderFrameGuarded(ctx, order, epoch, nil); err != nil {
+	if err := c.sendPlaceOrderFrameGuarded(ctx, order, epoch, guard); err != nil {
 		return orderWhatIfUnavailableResult(fmt.Sprintf("send broker WhatIf: %v", err)), nil
 	}
 
@@ -288,6 +288,7 @@ func (c *Connector) previewOrderWhatIf(ctx context.Context, contract *Contract, 
 		c.whatIfBeforeBrokerIDClaim()
 	}
 	var claimEpoch uint64
+	var guard func() error
 	c.brokerIDNamespaceMu.Lock()
 	if ibkrOrder.OrderID <= 0 {
 		var err error
@@ -316,6 +317,7 @@ func (c *Connector) previewOrderWhatIf(ctx context.Context, contract *Contract, 
 			c.brokerIDNamespaceMu.Unlock()
 			return OrderWhatIfResult{}, err
 		}
+		guard = conn.orderChangeWireGuard(ibkrOrder.OrderID, claimEpoch, order.Changes, c.PlacedOrderID(ibkrOrder.OrderID), nil)
 	}
 	defer conn.discardOrderIDReservation(ibkrOrder.OrderID)
 	c.orderIDHighWater = max(c.orderIDHighWater, ibkrOrder.OrderID)
@@ -324,7 +326,7 @@ func (c *Connector) previewOrderWhatIf(ctx context.Context, contract *Contract, 
 	conn.markWhatIfOrderID(ibkrOrder.OrderID)
 	defer conn.clearWhatIfOrderID(ibkrOrder.OrderID)
 	c.brokerIDNamespaceMu.Unlock()
-	result, err := conn.previewOrderWhatIfForEpoch(ctx, ibkrOrder, &claimEpoch)
+	result, err := conn.previewOrderWhatIfForEpoch(ctx, ibkrOrder, &claimEpoch, guard)
 	if err == nil && binding != nil && !c.SessionCurrent(*binding) {
 		return orderWhatIfUnavailableResult("broker session changed during WhatIf request"), nil
 	}

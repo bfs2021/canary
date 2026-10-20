@@ -305,7 +305,11 @@ type Connection struct {
 	// claimed below the frontier to change it. Guarded by reqIDMu, cleared
 	// with the epoch.
 	reportedOwnOrderIDs map[int]ReportedOwnOrder
-	brokerSessionEpoch  atomic.Uint64
+	// reportedOrderPermIDs retains non-authorizing identity constraints from
+	// this client's status and open-order callbacks. Zero means conflicting
+	// positive permanent IDs were observed in this socket epoch.
+	reportedOrderPermIDs map[int]int
+	brokerSessionEpoch   atomic.Uint64
 	// inboundEpochMu keeps late receipts attributable after outbound invalidation.
 	inboundEpochMu sync.RWMutex
 	// account holds the raw msgManagedAccts value, which is a
@@ -2219,6 +2223,8 @@ func (c *Connection) processMessageAtEpoch(msgBytes []byte, epoch uint64) {
 	}
 	if msgID == msgOpenOrder {
 		c.observeReportedOwnOrderAtEpoch(fields, epoch)
+	} else if msgID == msgOrderStatus {
+		c.observeReportedOrderStatusAtEpoch(fields, epoch)
 	}
 	if msgID == msgOpenOrder || msgID == msgOpenOrderEnd {
 		c.openOrderObserverMu.RLock()
@@ -5403,6 +5409,7 @@ func (c *Connection) resetOrderIDReadiness() {
 	clear(c.reservedOrderIDs)
 	clear(c.reservedRequestIDs)
 	clear(c.reportedOwnOrderIDs)
+	clear(c.reportedOrderPermIDs)
 	c.reqIDMu.Unlock()
 	c.invalidateUnstampedObservationAuthority()
 	c.mktDataTypeMu.Lock()
@@ -5584,20 +5591,16 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 		ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 || ev.PermID <= 0 {
 		return
 	}
-	if c.IsWhatIfOrderID(ev.OrderID) {
-		// A what-if of a change echoes the order's permanent ID under the
-		// preview's own reference: the broker's answer to a question, not a
-		// second identity of the order. The legacy frame carries no what-if
-		// flag, so the in-flight set decides on both paths.
-		return
-	}
 	account := strings.TrimSpace(ev.Account)
 	if account == "" {
 		return
 	}
-	if configured := strings.TrimSpace(c.config.Account); configured != "" && !strings.EqualFold(configured, account) {
-		return
-	}
+	configured := strings.TrimSpace(c.config.Account)
+	foreignAccount := configured != "" && !strings.EqualFold(configured, account)
+	// Share the final wire guard's evidence interval. A report either lands
+	// before the identity comparison or after that protected write finishes.
+	unlockEvidence := c.lockEvidenceChange()
+	defer unlockEvidence()
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
 	if c.brokerSessionEpoch.Load() != expectedEpoch {
@@ -5606,12 +5609,56 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 	if c.reportedOwnOrderIDs == nil {
 		c.reportedOwnOrderIDs = make(map[int]ReportedOwnOrder)
 	}
-	next := ReportedOwnOrder{PermID: ev.PermID, Account: account, OrderRef: strings.TrimSpace(ev.OrderRef)}
+	// A foreign-account report is only a non-authorizing tombstone. Keep it
+	// until the socket epoch resets, so reversing two contradictory reports
+	// cannot erase the conflict and accidentally grant ownership.
+	conflicted := c.observeOrderPermIDLocked(ev.OrderID, ev.PermID)
+	next := ReportedOwnOrder{PermID: ev.PermID, Account: account, OrderRef: strings.TrimSpace(ev.OrderRef), Conflicted: foreignAccount || conflicted}
 	if prior, seen := c.reportedOwnOrderIDs[ev.OrderID]; seen && (prior.Conflicted || prior.PermID != next.PermID ||
 		!strings.EqualFold(prior.Account, next.Account) || prior.OrderRef != next.OrderRef) {
 		next.Conflicted = true
 	}
 	c.reportedOwnOrderIDs[ev.OrderID] = next
+}
+
+// A status cannot grant ownership, but a different positive permanent ID
+// is negative identity evidence even when its matching openOrder is delayed.
+func (c *Connection) observeReportedOrderStatusAtEpoch(fields []string, expectedEpoch uint64) {
+	if c.config == nil || c.config.ClientID == 0 {
+		return
+	}
+	ev, ok := ParseOrderLifecycleEvent(fields)
+	if !ok || ev.Type != OrderLifecycleEventStatus || !ev.ClientIDPresent || ev.ClientID != c.config.ClientID ||
+		ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 || ev.PermID <= 0 {
+		return
+	}
+	unlockEvidence := c.lockEvidenceChange()
+	defer unlockEvidence()
+	c.reqIDMu.Lock()
+	defer c.reqIDMu.Unlock()
+	if c.brokerSessionEpoch.Load() != expectedEpoch {
+		return
+	}
+	if c.observeOrderPermIDLocked(ev.OrderID, ev.PermID) {
+		if report, exists := c.reportedOwnOrderIDs[ev.OrderID]; exists {
+			report.Conflicted = true
+			c.reportedOwnOrderIDs[ev.OrderID] = report
+		}
+	}
+}
+
+// observeOrderPermIDLocked never creates an ownership report. reqIDMu is
+// held by the caller, and resetOrderIDReadiness clears the constraints.
+func (c *Connection) observeOrderPermIDLocked(id, permID int) bool {
+	if c.reportedOrderPermIDs == nil {
+		c.reportedOrderPermIDs = make(map[int]int)
+	}
+	if prior, seen := c.reportedOrderPermIDs[id]; seen && prior != permID {
+		c.reportedOrderPermIDs[id] = 0
+		return true
+	}
+	c.reportedOrderPermIDs[id] = permID
+	return false
 }
 
 // Legacy (pre-protobuf) openOrder layout, as IB's EDecoder reads it: a
@@ -5668,6 +5715,27 @@ func (c *Connection) ReportedOwnOrder(id int) (ReportedOwnOrder, bool) {
 	defer c.reqIDMu.Unlock()
 	reported, ok := c.reportedOwnOrderIDs[id]
 	return reported, ok
+}
+
+// orderChangeWireGuard freezes the caller's intended identity and checks it
+// after transport admission, while sendMessage holds the evidence barrier.
+// Locally placed orders may precede their first report, but a contradictory
+// report never permits a change, including one of this process's own orders.
+func (c *Connection) orderChangeWireGuard(id int, epoch uint64, change *OrderChangeIdentity, locallyPlaced bool, next func() error) func() error {
+	if change == nil {
+		return next
+	}
+	want := *change
+	return func() error {
+		report, reported := c.reportedOwnOrderAtEpoch(id, epoch)
+		if (!reported && !locallyPlaced) || (reported && !report.matches(&want)) {
+			return fmt.Errorf("%w: broker report no longer identifies the order to change; no order sent", ErrBrokerIDNamespaceConflict)
+		}
+		if next != nil {
+			return next()
+		}
+		return nil
+	}
 }
 
 // reportedOwnOrderAtEpoch is ReportedOwnOrder for one socket generation: a

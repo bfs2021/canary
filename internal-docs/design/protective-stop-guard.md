@@ -219,9 +219,16 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   never sent), and the claim accepts a reported ID only if the report on the
   bound socket generation names that permanent ID, account and reference (a
   report without a reference does not name an order that has one), compared
-  under the claim's lock. "This process placed it" means placed as a new
-  order through this Connector (`PlacedOrderID`); an ID it only changed
-  proves its identity on every change. Before sending, the daemon checks
+  under the claim's lock and again after transport admission at the first
+  byte. The report mutation shares that final wire guard's evidence barrier.
+  A real protobuf report still counts while a preview is in flight; only a
+  typed what-if echo is excluded. Ambiguous legacy identities fail closed.
+  A report for another account grants no ownership and leaves a conflict
+  tombstone until the socket epoch resets, independent of callback order.
+  "This process placed it" means a new order through this Connector whose
+  write succeeded or may have reached the broker (`PlacedOrderID`); local
+  callback indexing and definite non-sends grant no placement authority.
+  An ID it only changed proves its identity on every change. Before sending, the daemon checks
   the same on the write's own socket (`validateReportedOwnOrder`), and a
   cancel checks again inside its wire guard at the send: an order this
   process placed is refused only on a report naming another order; any

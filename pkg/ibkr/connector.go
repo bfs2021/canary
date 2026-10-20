@@ -5198,6 +5198,7 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 		// changed (an earlier process's or another app's order) proves its
 		// identity on every change (OrderChangeIdentity).
 		owned := c.PlacedOrderID(ibkrOrder.OrderID)
+		guard = conn.orderChangeWireGuard(ibkrOrder.OrderID, binding.epoch, order.Changes, owned, guard)
 		var err error
 		claimEpoch, newOrder, err = conn.claimOrderIDForForwardingAtEpochFresh(ibkrOrder.OrderID, owned, &binding.epoch, order.Changes)
 		if err != nil {
@@ -5239,12 +5240,6 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 	previousIndex, hadPreviousIndex := c.brokerOrderIndex[brokerID]
 	c.openOrders[localID] = coreOrder
 	c.brokerOrderIndex[brokerID] = localID
-	if newOrder {
-		if c.placedOrderIDs == nil {
-			c.placedOrderIDs = make(map[int]struct{})
-		}
-		c.placedOrderIDs[ibkrOrder.OrderID] = struct{}{}
-	}
 	c.orderMu.Unlock()
 	c.brokerIDNamespaceMu.Unlock()
 
@@ -5255,6 +5250,16 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 		err = conn.placePaperOrderForEpochGuarded(ctx, *paperGate, ibkrOrder, claimEpoch, guard)
 	} else {
 		err = conn.placeOrderForEpochGuarded(ctx, ibkrOrder, claimEpoch, guard)
+	}
+	// Indexing a queued instruction is not placement authority. Retain it
+	// only after a successful or uncertain write, never a definite non-send.
+	if newOrder && (err == nil || SendDispositionOf(err) != SendDispositionDefinitelyUnsent) {
+		c.orderMu.Lock()
+		if c.placedOrderIDs == nil {
+			c.placedOrderIDs = make(map[int]struct{})
+		}
+		c.placedOrderIDs[ibkrOrder.OrderID] = struct{}{}
+		c.orderMu.Unlock()
 	}
 	if err != nil {
 		if SendDispositionOf(err) == SendDispositionDefinitelyUnsent {
