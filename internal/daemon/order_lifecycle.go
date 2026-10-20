@@ -229,51 +229,99 @@ func (s *Server) enrichOrderLifecycleEventFromJournal(ev *orderJournalEvent) (ma
 }
 
 // orderJournalViewForLifecycleEvent pairs a broker callback with its journal
-// row: on the callback's own route first (orderJournalViewOnRoute), then, for
-// an order placed through another socket of the same login, only on exact
-// broker evidence (orderJournalViewAcrossEndpoints).
+// row. Rows outside the callback's scope (client ID, account, mode) never
+// pair. Within the scope every candidate passes one shared check
+// (orderJournalPairingContradicted) before it is accepted, on the callback's
+// own socket as across sockets:
+//   - With a permanent ID, the row that holds it is the order. More than one
+//     holder pairs only with the single one Canary placed (a duplicate born
+//     from callbacks alone, as builds before v3.26.1 minted under the new
+//     socket, loses to it); otherwise none. A holder on another socket also
+//     needs the callback to name its client ID itself.
+//   - With a permanent ID no row holds yet (the first acknowledgement), an
+//     open row without a permanent ID that the callback names by reference,
+//     or by order ID when the callback names no other reference, is the only
+//     candidate in the whole scope, or none pairs. On the callback's socket
+//     the reference or the order ID (with an explicit client ID) suffices,
+//     as before; across sockets the reference and the order ID both, with an
+//     explicit client ID (the v3.25.4 review's finding 2).
+//   - Without a permanent ID only the callback's own socket pairs: by
+//     reference, else by order ID with an explicit client ID, never a row
+//     whose reference differs.
+//
+// Error callbacks carry no client ID or permanent ID and never pair across
+// sockets; hand orders and other clients' orders are not in the journal.
 func orderJournalViewForLifecycleEvent(ev orderJournalEvent, views []rpc.OrderView) (rpc.OrderView, bool) {
-	if view, ok := orderJournalViewOnRoute(ev, views); ok {
-		return view, true
+	scope := make([]rpc.OrderView, 0, len(views))
+	for _, view := range views {
+		if orderJournalEventScopeMatchesView(ev, view) {
+			scope = append(scope, view)
+		}
 	}
-	return orderJournalViewAcrossEndpoints(ev, views)
-}
-
-func orderJournalViewOnRoute(ev orderJournalEvent, views []rpc.OrderView) (rpc.OrderView, bool) {
-	if ev.PermID != 0 {
-		for _, view := range views {
-			if view.PermID == ev.PermID && orderJournalEventRouteMatchesView(ev, view) {
-				return view, true
-			}
-		}
-		// The first broker acknowledgement can introduce the PermID to a
-		// pre-transmit row that already has an exact local reference. Permit
-		// that one-way enrichment only while the journal row has no PermID;
-		// a different known PermID is a hard identity conflict.
-		matches := make([]rpc.OrderView, 0, 1)
-		for _, view := range views {
-			if view.PermID != 0 || !orderJournalEventRouteMatchesView(ev, view) {
-				continue
-			}
-			if ev.OrderRef != "" && view.OrderRef == ev.OrderRef {
-				matches = append(matches, view)
-				continue
-			}
-			if ev.ReservedOrderID != 0 && ev.clientIDPresent && view.ReservedOrderID == ev.ReservedOrderID {
-				matches = append(matches, view)
-			}
-		}
-		if len(matches) == 1 {
-			return matches[0], true
-		}
-		// A known account-wide PermID is authoritative. Falling through to a
-		// colliding client-local order ID would project another order's fields
-		// into this journal row.
+	var view rpc.OrderView
+	var ok bool
+	switch {
+	case ev.PermID != 0:
+		view, ok = orderJournalViewForPermID(ev, scope)
+	default:
+		view, ok = orderJournalViewWithoutPermID(ev, scope)
+	}
+	if !ok || orderJournalPairingContradicted(ev, view, scope) {
 		return rpc.OrderView{}, false
 	}
+	return view, true
+}
+
+func orderJournalViewForPermID(ev orderJournalEvent, scope []rpc.OrderView) (rpc.OrderView, bool) {
+	var holders, placed []rpc.OrderView
+	for _, view := range scope {
+		if view.PermID != ev.PermID {
+			continue
+		}
+		holders = append(holders, view)
+		if orderViewPlacedByCanary(view) {
+			placed = append(placed, view)
+		}
+	}
+	if len(holders) > 0 {
+		var holder rpc.OrderView
+		switch {
+		case len(holders) == 1:
+			holder = holders[0]
+		case len(placed) == 1:
+			holder = placed[0]
+		default:
+			return rpc.OrderView{}, false
+		}
+		if !orderJournalEventOnViewSocket(ev, holder) && !ev.clientIDPresent {
+			return rpc.OrderView{}, false
+		}
+		return holder, true
+	}
+	var candidates []rpc.OrderView
+	for _, view := range scope {
+		if view.PermID != 0 || !view.Open || orderJournalRefsDiffer(ev, view) {
+			continue
+		}
+		if orderJournalRefNames(ev, view) || orderJournalOrderIDNames(ev, view) {
+			candidates = append(candidates, view)
+		}
+	}
+	if len(candidates) != 1 {
+		return rpc.OrderView{}, false
+	}
+	view := candidates[0]
+	byRef, byID := orderJournalRefNames(ev, view), orderJournalOrderIDNames(ev, view) && ev.clientIDPresent
+	if orderJournalEventOnViewSocket(ev, view) {
+		return view, byRef || byID
+	}
+	return view, byRef && byID
+}
+
+func orderJournalViewWithoutPermID(ev orderJournalEvent, scope []rpc.OrderView) (rpc.OrderView, bool) {
 	if ev.OrderRef != "" {
-		for _, view := range views {
-			if view.OrderRef == ev.OrderRef && orderJournalEventRouteMatchesView(ev, view) {
+		for _, view := range scope {
+			if view.OrderRef == ev.OrderRef && orderJournalEventOnViewSocket(ev, view) {
 				return view, true
 			}
 		}
@@ -283,8 +331,8 @@ func orderJournalViewOnRoute(ev orderJournalEvent, views []rpc.OrderView) (rpc.O
 	}
 	matches := make([]rpc.OrderView, 0, 1)
 	openMatches := make([]rpc.OrderView, 0, 1)
-	for _, view := range views {
-		if view.ReservedOrderID != ev.ReservedOrderID || !orderJournalEventRouteMatchesView(ev, view) {
+	for _, view := range scope {
+		if view.ReservedOrderID != ev.ReservedOrderID || !orderJournalEventOnViewSocket(ev, view) || orderJournalRefsDiffer(ev, view) {
 			continue
 		}
 		matches = append(matches, view)
@@ -301,9 +349,61 @@ func orderJournalViewOnRoute(ev orderJournalEvent, views []rpc.OrderView) (rpc.O
 	return rpc.OrderView{}, false
 }
 
-func orderJournalEventRouteMatchesView(ev orderJournalEvent, view rpc.OrderView) bool {
-	return strings.TrimSpace(ev.Endpoint) == strings.TrimSpace(view.Endpoint) &&
-		orderJournalEventScopeMatchesView(ev, view)
+// orderJournalPairingContradicted is the check every pairing passes: the
+// row's reference, order ID and permanent ID agree with the callback's where
+// both carry one; no other row of the scope holds the callback's permanent ID
+// (unless the row itself holds it too and was chosen as its one placed
+// holder); and no other row of the scope carries the callback's reference
+// under another permanent ID.
+func orderJournalPairingContradicted(ev orderJournalEvent, view rpc.OrderView, scope []rpc.OrderView) bool {
+	if orderJournalRefsDiffer(ev, view) {
+		return true
+	}
+	if ev.PermID != 0 && view.PermID != 0 && ev.PermID != view.PermID {
+		return true
+	}
+	if ev.PermID != 0 && view.PermID == ev.PermID && ev.ReservedOrderID != 0 && view.ReservedOrderID != 0 && ev.ReservedOrderID != view.ReservedOrderID {
+		return true
+	}
+	if ev.PermID == 0 {
+		return false
+	}
+	key := orderViewKey(view)
+	for _, other := range scope {
+		if orderViewKey(other) == key {
+			continue
+		}
+		if other.PermID == ev.PermID && view.PermID != ev.PermID {
+			return true
+		}
+		if ev.OrderRef != "" && other.OrderRef == ev.OrderRef && other.PermID != 0 && other.PermID != ev.PermID {
+			return true
+		}
+	}
+	return false
+}
+
+func orderJournalEventOnViewSocket(ev orderJournalEvent, view rpc.OrderView) bool {
+	return strings.TrimSpace(ev.Endpoint) == strings.TrimSpace(view.Endpoint)
+}
+
+func orderJournalRefsDiffer(ev orderJournalEvent, view rpc.OrderView) bool {
+	return ev.OrderRef != "" && view.OrderRef != "" && ev.OrderRef != view.OrderRef
+}
+
+func orderJournalRefNames(ev orderJournalEvent, view rpc.OrderView) bool {
+	return ev.OrderRef != "" && view.OrderRef == ev.OrderRef
+}
+
+func orderJournalOrderIDNames(ev orderJournalEvent, view rpc.OrderView) bool {
+	return ev.ReservedOrderID > 0 && view.ReservedOrderID == ev.ReservedOrderID
+}
+
+// orderViewPlacedByCanary reports whether the row carries Canary's own
+// placement record (a preview token or a bypass-preview flow), not only
+// broker callbacks.
+func orderViewPlacedByCanary(view rpc.OrderView) bool {
+	return strings.TrimSpace(view.PreviewTokenID) != "" || view.BypassPreview
 }
 
 // orderJournalEventScopeMatchesView is the order's identity without the
@@ -314,68 +414,6 @@ func orderJournalEventScopeMatchesView(ev orderJournalEvent, view rpc.OrderView)
 	return ev.ClientID == view.ClientID &&
 		strings.EqualFold(strings.TrimSpace(ev.Account), strings.TrimSpace(view.Account)) &&
 		strings.EqualFold(strings.TrimSpace(ev.Mode), strings.TrimSpace(view.Mode))
-}
-
-// orderJournalViewAcrossEndpoints pairs a callback with the row of an order
-// placed through another socket (TWS or IB Gateway) of the same account, mode
-// and client ID, so its acknowledgements, status and fills reach the order's
-// one row after the daemon moved (the v3.25.4 review's finding 2). Only exact
-// broker evidence pairs, never a guess:
-//   - the callback names its client ID itself (an omitted legacy field is
-//     filled from the current route and proves nothing) and carries the
-//     broker's permanent ID;
-//   - a row with a permanent ID pairs only with that permanent ID, and an
-//     order reference or order ID the callback carries must agree;
-//   - a row the broker never acknowledged pairs only with a callback that
-//     carries the row's order reference and order ID both (openOrder and
-//     execDetails do; orderStatus carries neither and waits for them);
-//   - exactly one row qualifies, and no row of the scope contradicts the
-//     callback (the same permanent ID under another reference or order ID,
-//     or the same reference under another permanent ID).
-//
-// Error callbacks carry no client ID or permanent ID and never pair across
-// sockets; hand and other clients' orders are not in the journal to pair.
-func orderJournalViewAcrossEndpoints(ev orderJournalEvent, views []rpc.OrderView) (rpc.OrderView, bool) {
-	if ev.PermID <= 0 || !ev.clientIDPresent {
-		return rpc.OrderView{}, false
-	}
-	var match rpc.OrderView
-	matches := 0
-	for _, view := range views {
-		if !orderJournalEventScopeMatchesView(ev, view) {
-			continue
-		}
-		if orderJournalEventContradictsView(ev, view) {
-			return rpc.OrderView{}, false
-		}
-		if strings.TrimSpace(ev.Endpoint) == strings.TrimSpace(view.Endpoint) || !orderJournalEventProvesView(ev, view) {
-			continue
-		}
-		match = view
-		matches++
-	}
-	if matches != 1 {
-		return rpc.OrderView{}, false
-	}
-	return match, true
-}
-
-func orderJournalEventProvesView(ev orderJournalEvent, view rpc.OrderView) bool {
-	if view.PermID != 0 {
-		return view.PermID == ev.PermID &&
-			(ev.OrderRef == "" || ev.OrderRef == view.OrderRef) &&
-			(ev.ReservedOrderID == 0 || ev.ReservedOrderID == view.ReservedOrderID)
-	}
-	return ev.OrderRef != "" && ev.OrderRef == view.OrderRef &&
-		ev.ReservedOrderID > 0 && ev.ReservedOrderID == view.ReservedOrderID
-}
-
-func orderJournalEventContradictsView(ev orderJournalEvent, view rpc.OrderView) bool {
-	if view.PermID != 0 && view.PermID == ev.PermID {
-		return (ev.OrderRef != "" && view.OrderRef != "" && ev.OrderRef != view.OrderRef) ||
-			(ev.ReservedOrderID != 0 && view.ReservedOrderID != 0 && ev.ReservedOrderID != view.ReservedOrderID)
-	}
-	return ev.OrderRef != "" && view.OrderRef == ev.OrderRef && view.PermID != 0
 }
 
 func copyOrderJournalIdentityFromView(ev *orderJournalEvent, view rpc.OrderView) {
