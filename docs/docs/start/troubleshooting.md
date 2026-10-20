@@ -110,7 +110,7 @@ A command failed and the CLI appended this:
 
 The CLI adds those three lines whenever the daemon's error contains `gateway_unavailable`. It means the daemon is up and answering, and the broker connection behind it is not.
 
-`canary status` separates the two cases. `STARTING` means the daemon has not published a connect error yet, so the handshake is still in flight; wait a few seconds and re-run. `OFFLINE` means it gave up and published a reason, which is printed in the status output.
+`canary status` separates the two cases. `STARTING` means the daemon has not published a connect error yet, so the handshake is still in flight; wait a few seconds and re-run. `OFFLINE` means it gave up and published a reason, which the `Last attempt` row prints as written.
 
 ## `no IBKR listener found on 127.0.0.1 ports [4001 4002 7496 7497]`
 

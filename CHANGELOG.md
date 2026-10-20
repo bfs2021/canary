@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.26.1 — Unreleased
+
+### What's new
+
+`canary status` on a gateway that is not connected now prints the daemon's
+own verdict on its last connect attempt as a `Last attempt` row: no IBKR app
+running, a refused port with the setting to check or the port to pin, a
+handshake that did not finish, or a port that drops connections, each with
+the next step.
+
+### Fixed
+
+- `canary status` no longer hides the known repair instruction on a first
+  run: the OFFLINE view showed only `Broker data connection unavailable`
+  although the daemon had already named the missing IBKR app or the refused
+  pinned port and what to do (the v3.25.4 review's finding 3). The
+  `Last attempt` row prints that verdict as written for every disconnected
+  phase, not only a rejecting port; a handshake still in flight shows it in
+  place of the generic checklist, so the advice appears once. Exit codes and
+  `status --json` are unchanged. The no-app hint now says Canary will
+  reconnect, as the troubleshooting guide already quoted it, instead of the
+  retired executable name.
+
 ## v3.26.0 — Unreleased
 
 ### What's new

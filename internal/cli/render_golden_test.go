@@ -93,6 +93,9 @@ type renderGoldenCase struct {
 // fails the gate instead of shipping. Every value is synthetic.
 func TestRenderGolden(t *testing.T) {
 	t.Setenv("COLUMNS", "80")
+	// The offline status prints the daemon log path; pin it so the render
+	// does not depend on the machine's home or state directory.
+	t.Setenv("CANARY_LOG", "/synthetic/state/ibkr/ibkr-daemon.log")
 	cases := renderGoldenCases()
 	files := map[string]bool{}
 	for _, tc := range cases {
@@ -290,6 +293,9 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "core_inactive", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: rpc.CoreTargetResult{AsOf: goldenAt, Status: rpc.CoreStatusInactive, ReadOnly: true, Message: "the risk constitution carries no [mandate.core] table; the core sleeve is inactive"}}},
 		{name: "status", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: goldenHealthReady(readyTrading), rpc.MethodAlertCandidates: goldenAlerts(3)}},
 		{name: "status_attention", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: goldenHealthAttention(), rpc.MethodAlertCandidates: goldenAlerts(2)}},
+		{name: "status_offline_no_gateway", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: statusOfflineCases()[0].res}, exit: 1},
+		{name: "status_offline_refused_pinned", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: statusOfflineCases()[1].res}, exit: 1},
+		{name: "status_offline_rejecting", argv: []string{"status"}, conn: goldenConn{rpc.MethodStatusHealth: statusOfflineCases()[4].res}, exit: 1},
 		{name: "trading_status", argv: []string{"trading", "status"}, conn: goldenConn{rpc.MethodTradingStatus: readyTrading}},
 		{name: "trading_status_blocked", argv: []string{"trading", "status"}, conn: goldenConn{rpc.MethodTradingStatus: blockedTrading}, exit: 1},
 		{name: "settings_show", argv: []string{"settings", "show"}, conn: goldenConn{rpc.MethodSettingsGet: goldenSettings()}},

@@ -244,7 +244,7 @@ func noListenerError(ctx context.Context, host string, ports []int, timeout time
 
 // NoAppRunningHint is the verdict for a local IBKR API port nobody listens
 // on when the process list shows no TWS, IB Gateway or IBKR Desktop.
-const NoAppRunningHint = "no TWS / IB Gateway / IBKR Desktop process found — start one and ibkr will reconnect automatically"
+const NoAppRunningHint = "no TWS / IB Gateway / IBKR Desktop process found — start one and Canary will reconnect automatically"
 
 // ClosedPortHint names the next step for a local IBKR API port nobody
 // listens on, given the IBKR app DetectIBKRApp found there (zero: none).
