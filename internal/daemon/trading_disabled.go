@@ -12,16 +12,21 @@ import (
 
 const orderWritesAvailable = false
 
+// errStandardBuildWrite is the refusal of every direct order write in the
+// standard build. Preview stays available; the token it mints cannot be
+// submitted from this build.
+var errStandardBuildWrite = fmt.Errorf("%w: order writes are unavailable in this standard build; previews work, and placing, changing or cancelling an order needs the trading build", ErrTradingDisabled)
+
 func (s *Server) handleOrderPlace(_ context.Context, _ *rpc.Request) (any, error) {
-	return nil, ErrTradingDisabled
+	return nil, errStandardBuildWrite
 }
 
 func (s *Server) handleOrderModify(_ context.Context, _ *rpc.Request) (any, error) {
-	return nil, ErrTradingDisabled
+	return nil, errStandardBuildWrite
 }
 
 func (s *Server) handleOrderCancel(_ context.Context, _ *rpc.Request) (any, error) {
-	return nil, ErrTradingDisabled
+	return nil, errStandardBuildWrite
 }
 
 //lint:ignore U1000 Keeps the non-trading build API aligned with trading builds.

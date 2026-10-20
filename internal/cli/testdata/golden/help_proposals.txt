@@ -21,6 +21,9 @@ Actions
   veto              Stop a pending pre-authorised submission; human only
   queue             Prepare, arm, cancel or read an owner-approved order queue
 
+submit, submit-bundle and reduce --submit need the trading build; the standard
+build refuses them before anything is sent.
+
 Run canary proposals <action> --help for syntax and flags.
 
 # canary proposals --help · COLUMNS=80 · colour on, ESC written as \x1b
@@ -45,6 +48,9 @@ Usage: \x1b[36mcanary proposals <action> [flags]\x1b[0m
   \x1b[36mignore            \x1b[0mRecord that a proposal should be ignored
   \x1b[36mveto              \x1b[0mStop a pending pre-authorised submission; human only
   \x1b[36mqueue             \x1b[0mPrepare, arm, cancel or read an owner-approved order queue
+
+submit, submit-bundle and reduce --submit need the trading build; the standard
+build refuses them before anything is sent.
 
 Run canary proposals <action> --help for syntax and flags.
 

@@ -1,6 +1,6 @@
 # Install and first run
 
-Updated: 2026-10-18 21:55 CEST
+Updated: 2026-10-20 13:53 CEST
 
 `canary` is one Go binary. It carries the terminal CLI, a local stdio MCP server, and the background daemon that holds the connection to your own IB Gateway or TWS session. Nothing is hosted, and no Python or Java runtime is involved.
 
@@ -13,6 +13,8 @@ Updated: 2026-10-18 21:55 CEST
 - **The same machine as the gateway**, unless you pin `[gateway].host`. Discovery only probes loopback.
 
 There is no Windows build. The daemon uses `setsid`, `flock`, and AF_UNIX sockets, so the code does not compile for Windows at all, and the installer stops with a message when it sees an MSYS, MinGW, or Cygwin shell. WSL is the Windows path: inside WSL, `uname` reports Linux and the ordinary Linux install applies.
+
+On Linux, `canary stop`, `canary restart` and the restart after `canary update` read process identity from `/proc`, so they need no `ps` and work the same on BusyBox systems such as Alpine. Before Canary signals a process, it checks that the PID in the daemon's lock file runs `canary daemon`, and it refuses an unrelated or unreadable process without sending a signal. An amd64 binary run on an arm64 host through qemu-user emulation is recognised by its interpreter. Other emulators, such as Rosetta for Linux, FEX or box64, are not: `stop` names the command it saw and leaves the daemon running, so stop it yourself with `kill`.
 
 ## Pick an install path
 

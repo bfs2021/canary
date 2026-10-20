@@ -8,7 +8,7 @@ Add `--json` to a data command for machine-readable output instead of a table. C
 
 The flag tables below come from the shared command catalog. Run `canary <command> --help` for the flags a command parses today, with their help text. That output is the authority if the two ever disagree.
 
-The guard column says what a command does: `read-only` reads and prints, `local` writes local setup or configuration state, and `confirm` reaches something a human has to decide first. Where subcommands carry different guards, the summary shows the strictest one and the command's own section lists the split. The guard is documentation of behavior, not the mechanism that enforces it. The real gates live in the CLI. Standard builds have no broker-write path compiled in at all. The separate trading build adds one, and it still requires a verified gateway session, a submit-eligible preview token where one applies, a local journal entry, daemon authorization, and `trading.freeze` set to false. Nothing on this page grants any of that.
+The guard column says what a command does: `read-only` reads and prints, `local` writes local setup or configuration state, and `confirm` reaches something a human has to decide first. Where subcommands carry different guards, the summary shows the strictest one and the command's own section lists the split. The guard is documentation of behavior, not the mechanism that enforces it. The real gates live in the CLI. Standard builds have no broker-write path compiled in at all; they still preview orders, which creates no order. The separate trading build adds that path, and it still requires a verified gateway session, a submit-eligible preview token where one applies, a local journal entry, daemon authorization, and `trading.freeze` set to false. Nothing on this page grants any of that.
 
 The group column is the heading a command appears under in `canary --help`: Desk is the account, its positions, orders and risk; Markets is broad-market regime and named-symbol technical evidence; System is running Canary itself. It is a reading aid for a long command list and says nothing about what a command may do — that is the guard.
 
@@ -738,7 +738,7 @@ Subcommands: `status`, `performance`, `fx`, `costs`.
 
 Review proposals to close or reduce positions.
 
-Proposals are advisory. Only `submit`, `submit-bundle` and `reduce` reach the broker; each needs an explicit human instruction for that exact order.
+Proposals are advisory. Only `submit`, `submit-bundle` and `reduce` reach the broker; each needs an explicit human instruction for that exact order, and the standard build refuses them.
 
 Guard `confirm`. Also available as an MCP tool.
 
@@ -795,7 +795,7 @@ canary proposals status|refresh|list|preview|prepare|prepared-status|prepare-bun
 
 Review option exercise opportunities.
 
-Opportunity detection is advisory. Only `exercise` reaches the broker, and it needs an explicit human instruction for that exact action.
+Opportunity detection is advisory. Only `exercise` reaches the broker; it needs an explicit human instruction for that exact action, and the standard build refuses it.
 
 Guard `confirm`. Also available as an MCP tool.
 
@@ -897,7 +897,7 @@ Subcommands: `open`, `history`.
 
 Preview, place, change, cancel or check orders.
 
-`status` reads one journaled order and `preview` mints a tokenized draft: it runs the broker WhatIf and never transmits, and a minted token is not submit eligibility. `place`, `modify`, and `cancel` are broker writes: each requires an explicit human instruction for that exact order, and place/modify additionally consume a submit-eligible preview token through the daemon's ordinary admission gates (mode and account pins, caps, freeze, origin, journal). The constrained proposal and opportunity surfaces remain the daemon-authored candidate paths; this family is the operator's direct gated path.
+`status` reads one journaled order and `preview` mints a tokenized draft: it runs the broker WhatIf and never transmits, and a minted token is not submit eligibility. `place`, `modify`, and `cancel` are broker writes: each requires an explicit human instruction for that exact order, and place/modify additionally consume a submit-eligible preview token through the daemon's ordinary admission gates (mode and account pins, caps, freeze, origin, journal). The constrained proposal and opportunity surfaces remain the daemon-authored candidate paths; this family is the operator's direct gated path. Every build serves `preview`; the standard build refuses `place`, `modify`, `cancel`, `tws-cancel` and `tws-modify` with `trading_disabled` before anything is sent.
 
 Guard `read-only`, with `confirm` subcommands. Also available as an MCP tool.
 

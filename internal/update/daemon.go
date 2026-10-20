@@ -5,14 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/dial"
+	"github.com/osauer/canary/v2/internal/procinfo"
 	"github.com/osauer/canary/v2/internal/productidentity"
 )
 
@@ -61,8 +60,11 @@ func FindDaemonProcess(ctx context.Context, socketPath string) (DaemonProcess, e
 	}
 
 	cmdline, err := lookupProcessCommandLine(ctx, pid)
+	if errors.Is(err, procinfo.ErrNoProcess) {
+		return proc, fmt.Errorf("%w: pid %d exited while it was being verified; run the command again", ErrDaemonUnverified, pid)
+	}
 	if err != nil {
-		return proc, fmt.Errorf("%w: pid %d: %v", ErrDaemonUnverified, pid, err)
+		return proc, fmt.Errorf("%w: pid %d: %v; no signal was sent — check that pid %d is the Canary daemon and stop it yourself (kill %d)", ErrDaemonUnverified, pid, err, pid, pid)
 	}
 	if !looksLikeProductDaemon(cmdline) {
 		return proc, fmt.Errorf("%w: pid %d command %q is not a Canary daemon", ErrDaemonUnverified, pid, cmdline)
@@ -74,30 +76,17 @@ func FindDaemonProcess(ctx context.Context, socketPath string) (DaemonProcess, e
 	return proc, nil
 }
 
-var lookupProcessCommandLine = processCommandLine
-
-func processCommandLine(ctx context.Context, pid int) (string, error) {
-	if pid <= 0 {
-		return "", errors.New("invalid PID")
-	}
-	cmd := exec.CommandContext(ctx, "ps", "-p", strconv.Itoa(pid), "-o", "args=")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	cmdline := strings.TrimSpace(string(out))
-	if cmdline == "" {
-		return "", errors.New("empty command line")
-	}
-	return cmdline, nil
-}
+// lookupProcessCommandLine reads the pidfile holder's command line: from
+// procfs on Linux (BusyBox ps has no -p), from ps elsewhere.
+var lookupProcessCommandLine = procinfo.CommandLine
 
 func looksLikeProductDaemon(cmdline string) bool {
 	_, _, ok := SplitManagedCommand(cmdline, "daemon")
 	return ok
 }
 
-// SplitManagedCommand splits a command line printed by `ps -o args=` into a
+// SplitManagedCommand splits a command line printed by `ps -o args=` (or read
+// from procfs in the same shape, see package procinfo) into a
 // managed Canary executable and its arguments, which start with subcommand.
 // ok is false unless subcommand directly follows an executable whose base
 // name is a managed product executable.

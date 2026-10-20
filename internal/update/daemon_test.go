@@ -8,10 +8,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/osauer/canary/v2/internal/dial"
+	"github.com/osauer/canary/v2/internal/procinfo"
 	"github.com/osauer/canary/v2/internal/productidentity"
 )
 
@@ -115,6 +117,55 @@ func TestFindDaemonProcessAcceptsInstallPathWithSpaces(t *testing.T) {
 		if err != nil || proc.PID != pid || proc.Foreground != tc.foreground {
 			t.Fatalf("FindDaemonProcess(%q) = pid %d foreground %v err %v; want pid %d foreground %v",
 				tc.cmdline, proc.PID, proc.Foreground, err, pid, tc.foreground)
+		}
+	}
+}
+
+// TestFindDaemonProcessRefusesWhatItCannotVerify covers the v3.25.4 review's
+// finding 5: when the pidfile holder cannot be inspected (BusyBox ps had no
+// -p) the refusal must name the cause and say nothing was signalled, and an
+// emulator or wrapper command must still be refused rather than matched as a
+// substring.
+func TestFindDaemonProcessRefusesWhatItCannotVerify(t *testing.T) {
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, productidentity.DaemonSocketName)
+	holder := exec.Command("sleep", "30")
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = holder.Process.Signal(syscall.SIGKILL)
+		_, _ = holder.Process.Wait()
+	})
+	pid := holder.Process.Pid
+	if err := os.WriteFile(dial.LockPath(socketPath), []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	savedLookup := lookupProcessCommandLine
+	t.Cleanup(func() { lookupProcessCommandLine = savedLookup })
+
+	const bin = "/tmp/h/.local/bin/canary"
+	for _, tc := range []struct {
+		name     string
+		cmdline  string
+		lookup   error
+		wantText string
+	}{
+		{name: "inspection failed", lookup: errors.New("ps -p 1 -o args=: exit status 1: ps: unrecognized option: p"), wantText: "ps: unrecognized option: p; no signal was sent"},
+		{name: "procfs missing", lookup: errors.New("process inspection on Linux needs procfs mounted at /proc"), wantText: "needs procfs mounted"},
+		{name: "exited during check", lookup: fmt.Errorf("/proc/1: %w", procinfo.ErrNoProcess), wantText: "exited while it was being verified"},
+		{name: "unrelated process", cmdline: "sleep 600", wantText: "is not a Canary daemon"},
+		{name: "unstripped emulator", cmdline: "/usr/bin/qemu-x86_64 " + bin + " daemon", wantText: "is not a Canary daemon"},
+		{name: "unstripped emulator with argv0", cmdline: "/usr/bin/qemu-x86_64 " + bin + " canary daemon", wantText: "is not a Canary daemon"},
+		{name: "shell wrapper", cmdline: "/bin/sh -c " + bin + " daemon", wantText: "is not a Canary daemon"},
+		{name: "substring only", cmdline: "tail -f " + bin + " daemon.log", wantText: "is not a Canary daemon"},
+	} {
+		lookupProcessCommandLine = func(context.Context, int) (string, error) {
+			return tc.cmdline, tc.lookup
+		}
+		proc, err := FindDaemonProcess(t.Context(), socketPath)
+		if !errors.Is(err, ErrDaemonUnverified) || !strings.Contains(err.Error(), tc.wantText) || proc.PID != 0 {
+			t.Fatalf("%s: FindDaemonProcess = pid %d err %v; want ErrDaemonUnverified containing %q", tc.name, proc.PID, err, tc.wantText)
 		}
 	}
 }

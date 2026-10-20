@@ -31,13 +31,14 @@ var commandNotes = map[string]string{
 	"stress": "The default view separates findings from coverage gaps. `--details` includes quiet evidence and diagnostics. Required-input failures remain nonzero exits, with full error detail available explicitly.",
 	"order": "`status` reads one journaled order and `preview` mints a tokenized draft: it runs the broker WhatIf and never transmits, and a minted token is not submit eligibility. " +
 		"`place`, `modify`, and `cancel` are broker writes: each requires an explicit human instruction for that exact order, and place/modify additionally consume a submit-eligible preview token through the daemon's ordinary admission gates (mode and account pins, caps, freeze, origin, journal). " +
-		"The constrained proposal and opportunity surfaces remain the daemon-authored candidate paths; this family is the operator's direct gated path.",
+		"The constrained proposal and opportunity surfaces remain the daemon-authored candidate paths; this family is the operator's direct gated path. " +
+		"Every build serves `preview`; the standard build refuses `place`, `modify`, `cancel`, `tws-cancel` and `tws-modify` with `trading_disabled` before anything is sent.",
 	"purge": "`canary purge SYMBOL`, `canary purge --all`, and `purge execute` close live positions through the broker. " +
 		"They carry the same gate as `canary order`: an explicit human instruction for that exact action, in that moment. " +
 		"`dry-run`, `status`, and `monitor` only read.",
 	"proposals": "Proposals are advisory. Only `submit`, `submit-bundle` and `reduce` reach the broker; " +
-		"each needs an explicit human instruction for that exact order.",
-	"opportunities": "Opportunity detection is advisory. Only `exercise` reaches the broker, and it needs an explicit human instruction for that exact action.",
+		"each needs an explicit human instruction for that exact order, and the standard build refuses them.",
+	"opportunities": "Opportunity detection is advisory. Only `exercise` reaches the broker; it needs an explicit human instruction for that exact action, and the standard build refuses it.",
 	"trading":       "`status` reads the local trading gate and its blockers.",
 	"stop": "Stopping is local process management: it signals the daemon and the app on this machine and reaches no broker. Orders already working stay at the broker, but nothing local watches them until the daemon runs again — no fills or cancels in the journal, no protection proposals, no phone alerts. " +
 		"So `stop` asks before it stops a daemon that still has work in flight, the same work its own idle shutdown defers on, and `--yes` is how a script answers. " +
@@ -88,7 +89,7 @@ func render(specs []cli.CommandSpec) string {
 	out.WriteString("The guard column says what a command does: `read-only` reads and prints, `local` writes local setup or configuration state, and `confirm` reaches something a human has to decide first. ")
 	out.WriteString("Where subcommands carry different guards, the summary shows the strictest one and the command's own section lists the split. ")
 	out.WriteString("The guard is documentation of behavior, not the mechanism that enforces it. The real gates live in the CLI. ")
-	out.WriteString("Standard builds have no broker-write path compiled in at all. The separate trading build adds one, and it still requires a verified gateway session, a submit-eligible preview token where one applies, a local journal entry, daemon authorization, and `trading.freeze` set to false. ")
+	out.WriteString("Standard builds have no broker-write path compiled in at all; they still preview orders, which creates no order. The separate trading build adds that path, and it still requires a verified gateway session, a submit-eligible preview token where one applies, a local journal entry, daemon authorization, and `trading.freeze` set to false. ")
 	out.WriteString("Nothing on this page grants any of that.\n\n")
 
 	out.WriteString("The group column is the heading a command appears under in `canary --help`: Desk is the account, its positions, orders and risk; Markets is broad-market regime and named-symbol technical evidence; System is running Canary itself. ")

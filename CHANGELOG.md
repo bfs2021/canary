@@ -24,6 +24,15 @@ the next step. `canary strategies list` and the `canary_strategies` MCP tool
 now say when the account's positions could not be read, and why, instead of
 reporting that no strategies exist.
 
+On Linux, `canary stop`, `canary restart` and the restart after `canary
+update` now read which process holds the daemon's lock from `/proc` instead
+of running `ps`, so they work on Alpine and other BusyBox systems and on
+images without `ps`. The identity check is unchanged: Canary still signals
+only a process that runs `canary daemon` and refuses an unrelated or
+unreadable one. The security policy and help now say plainly what the
+standard build does: it previews orders and refuses to place, change or
+cancel them.
+
 ### Fixed
 
 - After the daemon moved between TWS and IB Gateway, a stop it had placed through the other app could be changed once and then no more: the broker's acknowledgement of the change was dropped because it arrived on the other socket, the order stayed "send attempted", and the next resize or the owner's cancel was refused as "order is not cancel-eligible"; a fill reported after the move landed on a second journal row. v3.25.4's note that such stops "can be changed or cancelled after the daemon moves" held only for the first change. Now the broker's acknowledgements, status and fills for that order reach its one journal row, so a stop can be resized, acknowledged, resized again and cancelled after the move, in both directions. They are matched only on exact broker evidence: the same account, trading mode and client ID, and the order's permanent ID (or, before the broker first acknowledged it, its order reference and order ID); hand orders, other clients' orders and anything ambiguous are never adopted (the v3.25.4 review's finding 2).
@@ -62,6 +71,23 @@ reporting that no strategies exist.
   retained under that note, and names the account. Like `canary positions`,
   an unavailable read exits 0: the read worked and says what it could not
   establish.
+- `canary stop` and `canary restart` failed on Alpine Linux (BusyBox `ps`
+  rejects `-p` and `-axo`) and reported only `exit status 1`; the daemon kept
+  running. Linux now reads `/proc`; macOS still uses `ps`. When a process
+  cannot be inspected, the refusal names the cause, including `ps`'s own
+  error, and says that nothing was signalled. Under qemu-user emulation the
+  daemon is recognised through its interpreter, which the kernel names;
+  other emulators are refused. The v3.25.4 review's finding 5.
+- SECURITY.md, the README and the order guides said the standard build has
+  no order preview. It has: `canary order preview` asks the gateway for a
+  what-if check, which creates no order, and it and the proposal and
+  opportunity previews mint tokens only a trading build can submit. The owner kept
+  preview in the standard build (2026-10-20); the docs now say so, and so do
+  `canary --help`, `canary order --help` and `canary proposals --help`. In
+  the standard build `order place`, `modify` and `cancel` now refuse with
+  "order writes are unavailable in this standard build" instead of a bare
+  "trading disabled". MCP still has no preview or execution tool, now
+  checked by the methods each tool can call. The v3.25.4 review's finding 6.
 
 ## v3.26.0 — 2026-10-20 13:50 CEST
 
