@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.26.1 — Unreleased
+
+### What's new
+
+A live strategy's kill rule now measures only its own account's evidence.
+Each decision's mark is kept for one account, its paper or live mode, the
+strategy and the traded line, so a mark another account, the other mode or
+another line left for the same month no longer counts as this one's. Marks
+kept by earlier releases name no account; they stay in the daemon's event
+log for audit and are not counted, so after the upgrade each live entry's
+drawdown is measured afresh from its current account's own fills.
+
+### Fixed
+
+- A live strategy's kill rule could read 0.00 K, not breached, past its
+  bound: its marks were kept by strategy and month alone in a state database
+  that outlives an account change, so account A's mark of a month marked
+  account B's month and B's own drawdown was never measured (the v3.25.4
+  review's finding 1). Marks and their lookup now bind to the account, its
+  paper or live mode, the strategy and the line's contract id; a month is
+  still marked once within its scope, and marks read back after a restart
+  under their own scope only. While the account or its mode is not resolved
+  nothing is measured or kept and a live entry holds, naming the account.
+  Unscoped marks from earlier releases are kept as written and never count
+  for any account. A mark is no longer kept while its entry's order journal
+  cannot be read.
+
 ## v3.26.0 — 2026-10-20 13:50 CEST
 
 ### What's new

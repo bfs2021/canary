@@ -221,7 +221,7 @@ func TestStrategyRowOnTheDecisionDayBesideTheCore(t *testing.T) {
 	if len(health) != 2 || health[0].ID != risk.CoreStrategyID || health[1].ID != trendFundID || health[1].Row == nil || health[1].Row.Key != p.Key || health[1].Row.Session != "2026-10-01" || health[1].State != "live" {
 		t.Fatalf("status lines %+v", health)
 	}
-	marks, err := srv.liveMarks(t.Context(), trendFundID)
+	marks, err := testLiveMarks(t, srv, trendFundID, trendFundConID)
 	if err != nil || len(marks) != 1 || marks[0].Session != "2026-09-30" || marks[0].Units != 0 || marks[0].Cash != 0 || !(marks[0].SleeveBudget > 0) {
 		t.Fatalf("kill marks %+v %v", marks, err)
 	}
@@ -474,7 +474,7 @@ func appendTestLiveMark(t *testing.T, srv *Server, m liveMark) {
 	// carries the units and cash under test.
 	srv.liveMarkFillsForTest = func() strategyFills { return strategyFills{Units: m.Units, Cash: m.Cash, Execs: 1} }
 	defer func() { srv.liveMarkFillsForTest = nil }()
-	srv.recordLiveMark(t.Context(), res, r, m.RecordedAt)
+	srv.recordLiveMark(t.Context(), res, r, srv.currentBrokerStateScope(), m.RecordedAt)
 }
 
 // A held line on Xetra's second segment (IBIS2, the trend fund's EUR line)

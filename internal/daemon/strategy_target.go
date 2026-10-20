@@ -429,7 +429,8 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	if why != "" {
 		return
 	}
-	scope := frozenScopeFor(r, s.currentBrokerStateScope(), contract.ConID)
+	brokerScope := s.currentBrokerStateScope()
+	scope := frozenScopeFor(r, brokerScope, contract.ConID)
 	f := s.coreFrozen(ctx, scope)
 	decided := f != nil && f.Decision == latest
 	switch {
@@ -451,7 +452,7 @@ func (s *Server) refreshStrategyTarget(ctx context.Context, r register.Resolved)
 	// entry's kill marks' (strategy_kill_live.go).
 	s.recordStrategyShadow(ctx, res, r, now)
 	s.recordStrategyDecision(ctx, res, r, now)
-	s.recordLiveMark(ctx, res, r, now)
+	s.recordLiveMark(ctx, res, r, brokerScope, now)
 }
 
 // coreScope keys a frozen month by account, mode and the core's contract.
@@ -817,7 +818,14 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 			// measure, and the core's sleeve is its line's holding marked
 			// at each decision (strategy_kill_live.go).
 			kill, err := s.strategyKillLive(ctx, r, mark, contract.ConID)
-			if err != nil {
+			switch {
+			case errors.Is(err, errLiveMarkScopeUnresolved):
+				// Marks belong to one account and mode: without them
+				// resolved nothing is measured, and the entry holds.
+				killUnreadable = true
+				hold(fmt.Sprintf("kill rule: %s, so the drawdown of %s cannot be measured: buys stop until the account resolves", errLiveMarkScopeUnresolved, name))
+				return
+			case err != nil:
 				// A kill rule that cannot be measured is no kill rule:
 				// the entry holds until the marks read (refuter round 3).
 				killUnreadable = true

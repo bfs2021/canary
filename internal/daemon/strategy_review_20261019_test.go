@@ -40,7 +40,7 @@ func TestStrategyKillIsMeasuredAgainstTheStagesCapital(t *testing.T) {
 	// scale; the second the refresh keeps now, with it.
 	appendRawLiveMark(t, srv, liveMark{Version: 1, Strategy: trendFundID, Session: "2026-07-31", Close: 100, Units: 100, Cash: -10000, SleeveBudget: 9200, RecordedAt: coreDecisionNow})
 	appendTestLiveMark(t, srv, liveMark{Session: "2026-08-31", Close: 80, Units: 100, Cash: -10000, SleeveBudget: 9200, RecordedAt: coreDecisionNow})
-	marks, err := srv.liveMarks(t.Context(), trendFundID)
+	marks, err := testLiveMarks(t, srv, trendFundID, trendFundConID)
 	if err != nil || len(marks) != 2 || marks[0].ScalePct != 0 || marks[1].ScalePct != 25 {
 		t.Fatalf("marks %+v %v, want the kept mark to carry the stage's scale", marks, err)
 	}
@@ -85,7 +85,7 @@ func appendRawLiveMark(t *testing.T, srv *Server, m liveMark) {
 	r.ScalePct = m.ScalePct // the writer keeps the entry's scale; an older one kept none
 	srv.liveMarkFillsForTest = func() strategyFills { return strategyFills{Units: m.Units, Cash: m.Cash, Execs: 1} }
 	defer func() { srv.liveMarkFillsForTest = nil }()
-	srv.recordLiveMark(t.Context(), res, r, m.RecordedAt)
+	srv.recordLiveMark(t.Context(), res, r, srv.currentBrokerStateScope(), m.RecordedAt)
 }
 
 // A live entry without a written kill bound holds, naming the key: its kill
@@ -314,10 +314,12 @@ func TestCoreKillIsMeasuredOnItsHoldingMarkedAtDecisions(t *testing.T) {
 	c := testCoreConstitution()
 	c.Mandate.Core.KillDrawdownK = new(0.03)
 	srv := coreTestServer(t, c, pos, 0.25)
+	b := testMarkBinding(t, srv, risk.CoreStrategyID, coreTestConID)
 	for _, m := range []liveMark{{Session: "2026-07-31", Close: 100, Units: 100, Cash: -10000}, {Session: "2026-08-31", Close: 80, Units: 100, Cash: -10000}} {
-		m.Version, m.Strategy, m.SleeveBudget, m.ScalePct, m.RecordedAt = 1, risk.CoreStrategyID, 9200, 100, coreDecisionNow
+		m.Version, m.Strategy, m.SleeveBudget, m.ScalePct, m.RecordedAt = 2, risk.CoreStrategyID, 9200, 100, coreDecisionNow
+		m.Account, m.Mode, m.ConID = b.account, b.mode, b.conID
 		raw, _ := json.Marshal(m)
-		if _, err := srv.coreStore.AppendEvents(t.Context(), []corestore.EventInput{{ScopeKey: liveMarkScope(m.Strategy), EventKey: liveMarkKey(m.Strategy, m.Session), Type: liveMarkType, Action: "mark", Origin: coreEventOriginDaemon, OccurredAt: m.RecordedAt, PayloadJSON: raw}}); err != nil {
+		if _, err := srv.coreStore.AppendEvents(t.Context(), []corestore.EventInput{{ScopeKey: b.scopeKey(), EventKey: liveMarkKey(m.Strategy, m.Session), Type: liveMarkType, Action: "mark", Origin: coreEventOriginDaemon, OccurredAt: m.RecordedAt, PayloadJSON: raw}}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -337,7 +339,7 @@ func TestCoreKillIsMeasuredOnItsHoldingMarkedAtDecisions(t *testing.T) {
 		t.Fatalf("status %s %v", res.Status, res.Reasons)
 	}
 	kept.refreshCoreTarget(t.Context())
-	marks, err := kept.liveMarks(t.Context(), risk.CoreStrategyID)
+	marks, err := testLiveMarks(t, kept, risk.CoreStrategyID, coreTestConID)
 	if err != nil || len(marks) != 1 || marks[0].Session != res.Decision.Decision || marks[0].Units != 100 || marks[0].Cash != -100*res.Decision.LineClose() || marks[0].ScalePct != 100 || marks[0].SleeveBudget != res.Sizing.Current.SleeveBudget {
 		t.Fatalf("the core's mark %+v %v, want its holding adopted at the decision close", marks, err)
 	}
@@ -349,7 +351,7 @@ func TestCoreKillIsMeasuredOnItsHoldingMarkedAtDecisions(t *testing.T) {
 func TestUnreadableKillMarksHoldTheEntry(t *testing.T) {
 	pos := withIBCF(mandateTestPositions(100), 100, 100)
 	srv := coreTestServer(t, testCoreConstitution(), pos, 0.25)
-	if _, err := srv.coreStore.AppendEvents(t.Context(), []corestore.EventInput{{ScopeKey: liveMarkScope(risk.CoreStrategyID), EventKey: liveMarkKey(risk.CoreStrategyID, "2026-08-31"), Type: liveMarkType, Action: "mark", Origin: coreEventOriginDaemon, OccurredAt: coreDecisionNow, PayloadJSON: []byte(`"x"`)}}); err != nil {
+	if _, err := srv.coreStore.AppendEvents(t.Context(), []corestore.EventInput{{ScopeKey: testMarkBinding(t, srv, risk.CoreStrategyID, coreTestConID).scopeKey(), EventKey: liveMarkKey(risk.CoreStrategyID, "2026-08-31"), Type: liveMarkType, Action: "mark", Origin: coreEventOriginDaemon, OccurredAt: coreDecisionNow, PayloadJSON: []byte(`"x"`)}}); err != nil {
 		t.Fatal(err)
 	}
 	res := coreEvaluate(t, srv)
