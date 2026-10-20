@@ -31,48 +31,58 @@ func TestValidateOrderViewMatchesGateNamesTheOrderByModeAccountAndClient(t *test
 
 // An order ID the broker reports for the daemon's client may be claimed
 // though an earlier process placed it (#120), so a change proves the journal
-// row and the broker's report mean the same order: the report must name the
-// row's account and permanent ID, and an ID reported twice with different
-// identities is never changed. A modify, which relies on the claim, also
-// needs a permanent ID in the journal; a cancel refuses only a positive
-// mismatch. Without a report there is nothing to compare.
+// row and the broker's report on the bound socket mean the same order. An
+// order this process placed is refused only on a report naming another
+// order; any other order needs the report, with the row's account, reference
+// and permanent ID; a row without a permanent ID can be cancelled on a report
+// carrying its reference, never modified.
 func TestValidateReportedOwnOrderRefusesAnotherOrder(t *testing.T) {
 	t.Parallel()
-	reported := func(id int) (ibkrlib.ReportedOwnOrder, bool) {
-		switch id {
-		case 1002:
-			return ibkrlib.ReportedOwnOrder{PermID: 790001, Account: "DU1234567"}, true
-		case 1003:
-			return ibkrlib.ReportedOwnOrder{PermID: 790003, Account: "DU1234567", Conflicted: true}, true
-		case 1004:
-			return ibkrlib.ReportedOwnOrder{PermID: 790004, Account: "DU7654321"}, true
-		}
-		return ibkrlib.ReportedOwnOrder{}, false
+	reports := map[int]ibkrlib.ReportedOwnOrder{
+		1002: {PermID: 790001, Account: "DU1234567", OrderRef: "ord-a"},
+		1003: {PermID: 790003, Account: "DU1234567", OrderRef: "ord-a", Conflicted: true},
+		1004: {PermID: 790004, Account: "DU7654321", OrderRef: "ord-a"},
+		1005: {PermID: 790005, Account: "DU1234567"},
 	}
-	row := func(id, perm int) rpc.OrderView {
-		return rpc.OrderView{ReservedOrderID: id, PermID: perm, Account: "du1234567"}
+	broker := func(placed bool) *brokerOrderReports {
+		return &brokerOrderReports{
+			report: func(id int) (ibkrlib.ReportedOwnOrder, bool) {
+				r, ok := reports[id]
+				return r, ok
+			},
+			placedHere: func(int) bool { return placed },
+		}
+	}
+	row := func(id, perm int, ref string) rpc.OrderView {
+		return rpc.OrderView{ReservedOrderID: id, PermID: perm, Account: "du1234567", OrderRef: ref}
 	}
 	for _, tc := range []struct {
 		name                         string
 		view                         rpc.OrderView
+		placed                       bool
 		modifyRefused, cancelRefused bool
 	}{
-		{"same order", row(1002, 790001), false, false},
-		{"another order behind the ID", row(1002, 790009), true, true},
-		{"not reported", row(1001, 790009), false, false},
-		{"journal without a permanent ID", row(1002, 0), true, false},
-		{"reported twice with different identities", row(1003, 790003), true, true},
-		{"reported for another account", row(1004, 790004), true, true},
-		{"no broker order ID", row(0, 790001), false, false},
+		{"same order", row(1002, 790001, "ord-a"), false, false, false},
+		{"another order behind the ID", row(1002, 790009, "ord-a"), false, true, true},
+		{"another reference behind the ID", row(1002, 790001, "ord-b"), false, true, true},
+		{"not reported", row(1001, 790009, "ord-a"), false, true, true},
+		{"not reported, placed here", row(1001, 790009, "ord-a"), true, false, false},
+		{"no permanent ID, report carries the reference", row(1002, 0, "ord-a"), false, true, false},
+		{"no permanent ID, report without a reference", row(1005, 0, "ord-a"), false, true, true},
+		{"no permanent ID, placed here", row(1002, 0, "ord-a"), true, false, false},
+		{"reported twice with different identities", row(1003, 790003, "ord-a"), false, true, true},
+		{"reported twice, placed here", row(1003, 790003, "ord-a"), true, true, true},
+		{"reported for another account", row(1004, 790004, "ord-a"), false, true, true},
+		{"no broker order ID", row(0, 790001, "ord-a"), false, false, false},
 	} {
-		if err := validateReportedOwnOrder(reported, tc.view, true); (err != nil) != tc.modifyRefused {
+		if err := validateReportedOwnOrder(broker(tc.placed), tc.view, true); (err != nil) != tc.modifyRefused {
 			t.Errorf("%s: modify err=%v, refused want %t", tc.name, err, tc.modifyRefused)
 		}
-		if err := validateReportedOwnOrder(reported, tc.view, false); (err != nil) != tc.cancelRefused {
+		if err := validateReportedOwnOrder(broker(tc.placed), tc.view, false); (err != nil) != tc.cancelRefused {
 			t.Errorf("%s: cancel err=%v, refused want %t", tc.name, err, tc.cancelRefused)
 		}
 	}
-	if err := validateReportedOwnOrder(nil, row(1002, 790009), true); err != nil {
-		t.Errorf("no connector report: err=%v, want nothing to compare", err)
+	if err := validateReportedOwnOrder(nil, row(1002, 790009, "ord-a"), true); err != nil {
+		t.Errorf("no connector: err=%v, want nothing to compare", err)
 	}
 }

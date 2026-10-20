@@ -5522,13 +5522,38 @@ func (c *Connection) observeInboundOrderIDAtEpoch(id int, expectedEpoch uint64) 
 }
 
 // ReportedOwnOrder is what the broker reported with an open order of this
-// connection's client ID on the current socket generation: its permanent ID
-// and account. Conflicted means the broker reported the same order ID twice
-// with a different permanent ID or account; such an ID is never claimed.
+// connection's client ID on the current socket generation: its permanent ID,
+// account and order reference. Conflicted means the broker reported the same
+// order ID twice with a different permanent ID, account or reference; such an
+// ID is never claimed.
 type ReportedOwnOrder struct {
 	PermID     int
 	Account    string
+	OrderRef   string
 	Conflicted bool
+}
+
+// OrderChangeIdentity names the open order an explicit-ID send changes, as
+// the caller's records hold it: the broker's permanent ID, the account and
+// the order reference. It never reaches the wire. An order ID this process
+// did not place is claimed below the frontier only when the broker reported
+// it on the bound socket generation with this permanent ID and account, and
+// this reference when both carry one (claimOrderIDLocked, under reqIDMu).
+type OrderChangeIdentity struct {
+	PermID   int
+	Account  string
+	OrderRef string
+}
+
+// matches reports whether the broker's report names the order the caller
+// means to change.
+func (r ReportedOwnOrder) matches(change *OrderChangeIdentity) bool {
+	if change == nil || r.Conflicted || change.PermID <= 0 || r.PermID != change.PermID ||
+		!strings.EqualFold(strings.TrimSpace(r.Account), strings.TrimSpace(change.Account)) {
+		return false
+	}
+	ref, want := strings.TrimSpace(r.OrderRef), strings.TrimSpace(change.OrderRef)
+	return ref == "" || want == "" || ref == want
 }
 
 // observeReportedOwnOrderAtEpoch records an open order the broker reports for
@@ -5569,8 +5594,9 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 	if c.reportedOwnOrderIDs == nil {
 		c.reportedOwnOrderIDs = make(map[int]ReportedOwnOrder)
 	}
-	next := ReportedOwnOrder{PermID: ev.PermID, Account: account}
-	if prior, seen := c.reportedOwnOrderIDs[ev.OrderID]; seen && (prior.Conflicted || prior.PermID != next.PermID || !strings.EqualFold(prior.Account, next.Account)) {
+	next := ReportedOwnOrder{PermID: ev.PermID, Account: account, OrderRef: strings.TrimSpace(ev.OrderRef)}
+	if prior, seen := c.reportedOwnOrderIDs[ev.OrderID]; seen && (prior.Conflicted || prior.PermID != next.PermID ||
+		!strings.EqualFold(prior.Account, next.Account) || prior.OrderRef != next.OrderRef) {
 		next.Conflicted = true
 	}
 	c.reportedOwnOrderIDs[ev.OrderID] = next
@@ -5581,6 +5607,18 @@ func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpo
 func (c *Connection) ReportedOwnOrder(id int) (ReportedOwnOrder, bool) {
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
+	reported, ok := c.reportedOwnOrderIDs[id]
+	return reported, ok
+}
+
+// reportedOwnOrderAtEpoch is ReportedOwnOrder for one socket generation: a
+// caller bound to an earlier generation sees no report.
+func (c *Connection) reportedOwnOrderAtEpoch(id int, epoch uint64) (ReportedOwnOrder, bool) {
+	c.reqIDMu.Lock()
+	defer c.reqIDMu.Unlock()
+	if c.brokerSessionEpoch.Load() != epoch {
+		return ReportedOwnOrder{}, false
+	}
 	reported, ok := c.reportedOwnOrderIDs[id]
 	return reported, ok
 }
@@ -7439,7 +7477,7 @@ func (c *Connection) claimOrderIDCurrentEpoch(id int, alreadyOwned bool) (uint64
 	}
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
-	return c.claimOrderIDLocked(id, alreadyOwned, nil)
+	return c.claimOrderIDLocked(id, alreadyOwned, nil, nil)
 }
 
 func (c *Connection) claimOrderIDForEpoch(id int, alreadyOwned bool, expectedEpoch uint64) (uint64, error) {
@@ -7448,10 +7486,16 @@ func (c *Connection) claimOrderIDForEpoch(id int, alreadyOwned bool, expectedEpo
 	}
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
-	return c.claimOrderIDLocked(id, alreadyOwned, &expectedEpoch)
+	return c.claimOrderIDLocked(id, alreadyOwned, &expectedEpoch, nil)
 }
 
-func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch *uint64) (uint64, error) {
+// claimOrderIDLocked claims an explicit order ID on the current socket
+// generation. Below the frontier it accepts an ID reserved for this send, one
+// this process placed (alreadyOwned), or one the broker reported on this
+// generation as an open order of this client whose report names change, the
+// order the caller means to change (#120); without change a report never
+// suffices.
+func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch *uint64, change *OrderChangeIdentity) (uint64, error) {
 	epoch := c.brokerSessionEpoch.Load()
 	if expectedEpoch != nil && epoch != *expectedEpoch {
 		return epoch, fmt.Errorf("%w: broker socket generation changed before order ID claim", ErrBrokerIDNamespaceConflict)
@@ -7464,7 +7508,7 @@ func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch
 	}
 	_, reserved := c.reservedOrderIDs[id]
 	report, reported := c.reportedOwnOrderIDs[id]
-	reported = reported && !report.Conflicted
+	reported = reported && report.matches(change)
 	if !reserved && !alreadyOwned && !reported {
 		frontier := max(c.reqIDSeq, c.nextOrderID)
 		if c.brokerIDExhausted || id < frontier {
@@ -7489,16 +7533,16 @@ func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch
 // claimOrderIDForForwarding validates a Connector-level explicit ID and leaves
 // one exact reservation for the subsequent Connection place/WhatIf encoder.
 func (c *Connection) claimOrderIDForForwarding(id int, alreadyOwned bool) (uint64, error) {
-	return c.claimOrderIDForForwardingAtEpoch(id, alreadyOwned, nil)
+	return c.claimOrderIDForForwardingAtEpoch(id, alreadyOwned, nil, nil)
 }
 
-func (c *Connection) claimOrderIDForForwardingAtEpoch(id int, alreadyOwned bool, expectedEpoch *uint64) (uint64, error) {
+func (c *Connection) claimOrderIDForForwardingAtEpoch(id int, alreadyOwned bool, expectedEpoch *uint64, change *OrderChangeIdentity) (uint64, error) {
 	if id <= 0 || id > maxProtoInt32 {
 		return 0, fmt.Errorf("%w: order ID is outside the signed 32-bit broker namespace", ErrBrokerIDNamespaceConflict)
 	}
 	c.reqIDMu.Lock()
 	defer c.reqIDMu.Unlock()
-	epoch, err := c.claimOrderIDLocked(id, alreadyOwned, expectedEpoch)
+	epoch, err := c.claimOrderIDLocked(id, alreadyOwned, expectedEpoch, change)
 	if err != nil {
 		return 0, err
 	}

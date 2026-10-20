@@ -80,53 +80,95 @@ func orderJournalStatusFor(view rpc.OrderView, status rpc.TradingStatus) rpc.Tra
 	return status
 }
 
-// reportedOwnOrderFor is the write binding's connector report of the
-// daemon client's open order IDs on the bound socket, or nil without one.
-func (s *Server) reportedOwnOrderFor(binding brokerWriteTransactionBinding) func(int) (ibkrlib.ReportedOwnOrder, bool) {
-	if s.reportedOwnOrderForTest != nil {
-		return s.reportedOwnOrderForTest
+// brokerOrderReports is what the write binding's socket knows of an order ID:
+// the broker's report of it as an open order of the daemon's client on that
+// socket generation, and whether this process placed it.
+type brokerOrderReports struct {
+	report     func(id int) (ibkrlib.ReportedOwnOrder, bool)
+	placedHere func(id int) bool
+}
+
+// brokerOrderReportsFor is the write binding's broker order reports, read on
+// the binding's own socket generation, or nil without a connector (a test
+// broker faked below the connector, unless the test installs its own).
+func (s *Server) brokerOrderReportsFor(binding brokerWriteTransactionBinding) *brokerOrderReports {
+	if s.brokerOrderReportsForTest != nil {
+		return s.brokerOrderReportsForTest
 	}
 	if binding.connector == nil {
 		return nil
 	}
-	return binding.connector.ReportedOwnOrder
+	connector, session := binding.connector, binding.session
+	return &brokerOrderReports{
+		report: func(id int) (ibkrlib.ReportedOwnOrder, bool) {
+			return connector.ReportedOwnOrderForSession(session, id)
+		},
+		placedHere: connector.PlacedOrderID,
+	}
 }
 
-// validateReportedOwnOrder checks the broker's own report of a journal row's
-// order ID on the current socket against the row before a change is sent.
-// Since 2026-10-20 an order ID the broker reports for the daemon's client may
-// be claimed below the session's order-ID frontier though an earlier process
-// placed it (#120), so the journal's order ID alone no longer stands behind
-// the claim: order IDs are client-local and repeat after an ID reset, while
-// the permanent ID is the broker's account-wide name of one order. When the
-// broker reported the ID, the report must name the row's account and its
-// permanent ID; a conflicting report (the ID seen twice with different
-// identities) always refuses. requireProof (a modify, the write that relies
-// on the claim) also refuses a row without a permanent ID to compare; a
-// cancel, which claims nothing, refuses only a positive mismatch, so a
-// journal that missed the acknowledgement never blocks a cancel of an order
-// this process placed. Without a report there is nothing to compare: the
-// claim then stands on this process's own placement.
-func validateReportedOwnOrder(reported func(int) (ibkrlib.ReportedOwnOrder, bool), view rpc.OrderView, requireProof bool) error {
-	if reported == nil || view.ReservedOrderID <= 0 {
+// orderChangeIdentity is the identity a modify asks the order-ID claim to
+// find in the broker's report (ibkrlib.OrderChangeIdentity), or nil for a
+// row without a permanent ID, which only this process's own placement claims.
+func orderChangeIdentity(view rpc.OrderView) *ibkrlib.OrderChangeIdentity {
+	if view.PermID <= 0 {
 		return nil
 	}
-	report, ok := reported(view.ReservedOrderID)
-	if !ok {
+	return &ibkrlib.OrderChangeIdentity{PermID: view.PermID, Account: view.Account, OrderRef: view.OrderRef}
+}
+
+// validateReportedOwnOrder checks, before a change is sent, that the order
+// ID of a journal row names that row's order on the bound socket. Since
+// 2026-10-20 an order ID the broker reports for the daemon's client may be
+// claimed below the session's order-ID frontier though an earlier process
+// placed it (#120), so the journal's order ID alone no longer stands behind a
+// change: order IDs are client-local and repeat after an ID reset or across
+// apps, while the permanent ID is the broker's account-wide name of one
+// order. The order-ID claim checks the modify again under its lock
+// (ibkrlib.OrderChangeIdentity); a cancel claims nothing, so this is its only
+// check.
+//
+//   - An order this process placed is its own: only a report that positively
+//     names another order (conflicted, another account, permanent ID or
+//     reference) refuses.
+//   - Any other order needs the broker's report on the bound socket, naming
+//     the row's account and, where both carry one, its reference; and the
+//     row's permanent ID. A row without a permanent ID can be cancelled when
+//     the report carries its reference, never modified.
+//
+// Without broker order reports (no connector) there is nothing to compare.
+func validateReportedOwnOrder(reports *brokerOrderReports, view rpc.OrderView, modify bool) error {
+	if reports == nil || reports.report == nil || view.ReservedOrderID <= 0 {
 		return nil
+	}
+	id := view.ReservedOrderID
+	verb := "cancel"
+	if modify {
+		verb = "change"
+	}
+	placed := reports.placedHere != nil && reports.placedHere(id)
+	report, ok := reports.report(id)
+	if !ok {
+		if placed {
+			return nil
+		}
+		return errBadRequest(fmt.Sprintf("the broker has not reported order ID %d as this client's open order on the current connection, and this daemon process did not place it; refusing to %s it until the broker's open-order report arrives", id, verb))
 	}
 	switch {
 	case report.Conflicted:
-		return errBadRequest(fmt.Sprintf("the broker reported order ID %d twice with different identities on this session; refusing to change it", view.ReservedOrderID))
+		return errBadRequest(fmt.Sprintf("the broker reported order ID %d twice with different identities on this connection; refusing to %s it", id, verb))
 	case !strings.EqualFold(strings.TrimSpace(report.Account), strings.TrimSpace(view.Account)):
-		return errBadRequest(fmt.Sprintf("the broker reports order ID %d for another account; refusing to change it", view.ReservedOrderID))
-	case view.PermID <= 0:
-		if requireProof {
-			return errBadRequest(fmt.Sprintf("the journal has no permanent ID to prove the broker's order ID %d is this order; refusing to change it", view.ReservedOrderID))
-		}
+		return errBadRequest(fmt.Sprintf("the broker reports order ID %d for another account; refusing to %s it", id, verb))
+	case report.OrderRef != "" && view.OrderRef != "" && report.OrderRef != view.OrderRef:
+		return errBadRequest(fmt.Sprintf("the broker reports order ID %d under another order reference; refusing to %s it", id, verb))
+	case view.PermID > 0 && report.PermID != view.PermID:
+		return errBadRequest(fmt.Sprintf("the broker reports order ID %d as permanent ID %d, not this order's %d; refusing to %s it", id, report.PermID, view.PermID, verb))
+	case view.PermID > 0 || placed:
 		return nil
-	case report.PermID != view.PermID:
-		return errBadRequest(fmt.Sprintf("the broker reports order ID %d as permanent ID %d, not this order's %d; refusing to change it", view.ReservedOrderID, report.PermID, view.PermID))
+	case modify:
+		return errBadRequest(fmt.Sprintf("the journal has no permanent ID to prove the broker's order ID %d is this order; refusing to change it", id))
+	case report.OrderRef == "" || report.OrderRef != view.OrderRef:
+		return errBadRequest(fmt.Sprintf("the journal has no permanent ID and the broker's report of order ID %d does not carry this order's reference; refusing to cancel it", id))
 	}
 	return nil
 }

@@ -308,7 +308,7 @@ func (c *Connector) previewOrderWhatIf(ctx context.Context, contract *Contract, 
 		owned := c.isKnownBrokerOrderID(ibkrOrder.OrderID)
 		var err error
 		if binding != nil {
-			claimEpoch, err = conn.claimOrderIDForForwardingAtEpoch(ibkrOrder.OrderID, owned, &binding.epoch)
+			claimEpoch, err = conn.claimOrderIDForForwardingAtEpoch(ibkrOrder.OrderID, owned, &binding.epoch, nil)
 		} else {
 			claimEpoch, err = conn.claimOrderIDForForwarding(ibkrOrder.OrderID, owned)
 		}

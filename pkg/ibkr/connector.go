@@ -5042,6 +5042,12 @@ type RawOrder struct {
 	// without block); a group needs a type and a type needs a group.
 	OcaGroup string
 	OcaType  int
+	// Changes names the open order an explicit-ID send changes (its
+	// permanent ID, account and reference); never sent on the wire. An ID
+	// this process did not place is claimed below the session's order-ID
+	// frontier only when the broker reported it on the bound socket
+	// generation under this identity.
+	Changes *OrderChangeIdentity
 }
 
 // SubmitOrder sends an unrestricted order through the active broker
@@ -5186,7 +5192,7 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 		}
 		owned := c.isKnownBrokerOrderID(ibkrOrder.OrderID)
 		var err error
-		claimEpoch, err = conn.claimOrderIDForForwardingAtEpoch(ibkrOrder.OrderID, owned, &binding.epoch)
+		claimEpoch, err = conn.claimOrderIDForForwardingAtEpoch(ibkrOrder.OrderID, owned, &binding.epoch, order.Changes)
 		if err != nil {
 			c.brokerIDNamespaceMu.Unlock()
 			return definitelyUnsent(err)
@@ -8966,22 +8972,32 @@ func (c *Connector) isWhatIfOrderID(orderID int) bool {
 	return conn != nil && conn.IsWhatIfOrderID(orderID)
 }
 
-// ReportedOwnOrder returns what the broker reported on the current socket
-// generation with this client's open order id (permanent ID and account),
-// and whether it reported it; a caller changing an order it did not place
-// checks the report names the same order (internal/daemon,
-// validateReportedOwnOrder).
-func (c *Connector) ReportedOwnOrder(id int) (ReportedOwnOrder, bool) {
-	if c == nil {
+// ReportedOwnOrderForSession returns what the broker reported with this
+// client's open order id on binding's socket generation (permanent ID,
+// account, reference), and whether it reported it there; a binding to an
+// earlier generation or another Connector sees no report. A caller changing
+// an order it did not place checks the report names that order (the claim
+// checks again under its lock, OrderChangeIdentity).
+func (c *Connector) ReportedOwnOrderForSession(binding ConnectorSessionBinding, id int) (ReportedOwnOrder, bool) {
+	if c == nil || binding.connector != c || binding.connection == nil {
 		return ReportedOwnOrder{}, false
 	}
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
-	if conn == nil {
-		return ReportedOwnOrder{}, false
+	return binding.connection.reportedOwnOrderAtEpoch(id, binding.epoch)
+}
+
+// PlacedOrderID reports whether this process placed the broker order id
+// through this Connector (its placement index), as opposed to an order an
+// earlier process or another app placed.
+func (c *Connector) PlacedOrderID(id int) bool {
+	if c == nil || id <= 0 {
+		return false
 	}
-	return conn.ReportedOwnOrder(id)
+	brokerID := strconv.Itoa(id)
+	c.orderMu.RLock()
+	defer c.orderMu.RUnlock()
+	_, indexed := c.brokerOrderIndex[brokerID]
+	_, direct := c.openOrders[brokerID]
+	return indexed || direct
 }
 
 // isKnownBrokerOrderID reports whether id names a broker order this
