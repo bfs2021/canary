@@ -179,6 +179,15 @@ func (c *Connector) SetBackendLogRequired(required func(time.Time, time.Time) bo
 	c.backendConnMu.Unlock()
 }
 
+// logRequiredAt reports whether the daemon's logging schedule wants attention
+// at t. A standalone connector, without a schedule, always does.
+func (c *Connector) logRequiredAt(t time.Time) bool {
+	c.backendConnMu.Lock()
+	required := c.backendLogRequired
+	c.backendConnMu.Unlock()
+	return required == nil || required(t, t)
+}
+
 // finalizeBackendEpisode closes the running flap episode after
 // backendEpisodeGap of quiet and logs its one-line summary. Single-blip
 // episodes are skipped: their loss and restore lines already told the whole

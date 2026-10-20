@@ -396,6 +396,9 @@ type Server struct {
 	strategyLineageMu     sync.Mutex
 	strategyLineageLoaded bool
 	strategyLineage       map[string]rpc.StrategyOrderDraft
+	// snapshotPoisonedFn replaces Connector.OpenOrderSnapshotPoisoned in
+	// tests: a real poisoning waits out the 15 s protocol deadline.
+	snapshotPoisonedFn func(*ibkrlib.Connector) (time.Time, bool)
 	// orderSnapshotFn is the open-order snapshot seam for the reconcile
 	orderSnapshotFn func(context.Context) (ibkrlib.OpenOrderSnapshot, error)
 	// cashPolicyCache keeps the cash settings facts' live inputs briefly;

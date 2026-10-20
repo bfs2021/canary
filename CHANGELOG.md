@@ -18,6 +18,13 @@ download, rate-limit rejection, loopback trust, the API log level and
 market-data logging, and the daily auto restart. Canary never changes a
 setting.
 
+It also carries a recovery fix. When IB Gateway answered the daemon's request for the open
+orders after its deadline, as it did during IBKR's nightly reset on 20
+October, the daemon could not read open orders on that connection again: the
+order reconcile and the protection alerts read nothing until a restart. The
+daemon now redials its connection when that happens. A late answer to the
+executions poll is named as such instead of logged as an unknown message.
+
 ### Added
 
 - The `Gateway setup` status row and its `gateway_setup` JSON field (`state`
@@ -32,6 +39,11 @@ setting.
 - Troubleshooting documents the row, and that IB Gateway's encrypted logs and
   settings file have no documented off switch: plain-text copies come from the
   Gateway's File menu export.
+
+### Fixed
+
+- When the open-order read is left without its answer, the daemon redials its broker connection at once, at most once an hour and never while an order is being placed or changed, so the order reconcile and the protection alerts read open orders again; a redialled connection that loses the read again is reported as the Gateway needing a restart (#119).
+- A late answer to the executions poll is logged with how late it was, at WARN in the logging schedule's duty hours and INFO outside them, instead of "Unhandled message ID 55" (#119).
 
 ## v3.25.4 — 2026-10-20 08:29 CEST
 

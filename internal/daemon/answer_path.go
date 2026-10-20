@@ -28,6 +28,10 @@ type answerPathLane struct {
 	redialedAt time.Time
 	// quietWarned records that a stall outlasting a recent redial was logged.
 	quietWarned bool
+	// snapshotRedialedAt is the last redial for a poisoned open-order
+	// snapshot; snapshotQuietWarned that a poison outlasting it was logged.
+	snapshotRedialedAt  time.Time
+	snapshotQuietWarned bool
 }
 
 type answerPathSupervisor struct {
@@ -145,8 +149,65 @@ func (s *Server) superviseAnswerPaths(now time.Time) {
 		}
 		if redial {
 			s.redialStalledLane(lane.name, lane.c, since, now)
+			continue
+		}
+		if lane.name == rpc.AnswerPathLanePrimary {
+			s.redialPoisonedOpenOrderSnapshot(lane.c, now)
 		}
 	}
+}
+
+// redialPoisonedOpenOrderSnapshot drops the primary session whose open-order
+// snapshot is poisoned, so open orders are read again on a new socket.
+// reqAllOpenOrders has no request ID, so a snapshot that missed its
+// openOrderEnd, or whose send may have been written, poisons its socket
+// generation and nothing on that socket clears it. On 2026-10-20 a late
+// answer during IBKR's nightly reset left the order reconcile and the
+// protection alerts without open orders from before 06:56 CEST until a manual
+// restart at 08:25 CEST. The poison never clears by itself, so the redial
+// does not wait; like a history redial (owner decision #22) it happens at
+// most once per answerPathRedialQuiet, says once when a redialled session is
+// poisoned again, never drops the session under brokerWriteMu, and logs
+// through the logging schedule.
+func (s *Server) redialPoisonedOpenOrderSnapshot(c *ibkrlib.Connector, now time.Time) {
+	poisonedFn := (*ibkrlib.Connector).OpenOrderSnapshotPoisoned
+	if s.snapshotPoisonedFn != nil {
+		poisonedFn = s.snapshotPoisonedFn
+	}
+	since, poisoned := poisonedFn(c)
+	if !poisoned {
+		return
+	}
+	logf := s.infof
+	if s.gatewayLogRequired(since, now) {
+		logf = s.warnf
+	}
+	s.answerPath.mu.Lock()
+	lane := s.answerPath.lane(rpc.AnswerPathLanePrimary)
+	if !lane.snapshotRedialedAt.IsZero() && now.Sub(lane.snapshotRedialedAt) < answerPathRedialQuiet {
+		warn := !lane.snapshotQuietWarned
+		lane.snapshotQuietWarned = true
+		redialedAt := lane.snapshotRedialedAt
+		s.answerPath.mu.Unlock()
+		if warn {
+			logf("IBKR Gateway's open-order snapshot is poisoned again on the connection redialled at %s; open orders cannot be read until the Gateway restarts", redialedAt.Format(time.TimeOnly))
+		}
+		return
+	}
+	s.answerPath.mu.Unlock()
+	if !s.brokerWriteMu.TryLock() {
+		return // a broker write is in progress; the next check tries again
+	}
+	dropped := c.DropSession(fmt.Errorf("%w: open-order snapshot poisoned since %s", errAnswerPathRedial, since.Format(time.TimeOnly)))
+	s.brokerWriteMu.Unlock()
+	if !dropped {
+		return
+	}
+	s.answerPath.mu.Lock()
+	lane.snapshotRedialedAt, lane.snapshotQuietWarned = now, false
+	s.answerPath.mu.Unlock()
+	logf("IBKR open-order snapshot poisoned since %s (no openOrderEnd by its deadline, or a send that may have been written); open orders cannot be read on this connection, so it is redialled", since.Format(time.TimeOnly))
+	s.triggerReconnect()
 }
 
 // errAnswerPathRedial marks a session the supervisor ended on purpose. The

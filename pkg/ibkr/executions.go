@@ -2,6 +2,7 @@ package ibkr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -111,12 +112,17 @@ func (c *Connector) FetchExecutions(ctx context.Context, account string, timeout
 			flight.finish()
 		}
 	})
-	cleanup := func() {
+	cleanupExpiring := func(expired bool) {
 		conn.UnregisterHandler(msgExecDetailsEnd, endHandlerID)
+		now := time.Now()
 		c.executionsMu.Lock()
 		delete(c.executions, reqID)
+		if expired {
+			c.expireExecutionsRequestLocked(reqID, now)
+		}
 		c.executionsMu.Unlock()
 	}
+	cleanup := func() { cleanupExpiring(false) }
 
 	// REQ_EXECUTIONS version 3: request ID, then the ExecutionFilter in wire
 	// order (clientId, acctCode, time, symbol, secType, exchange, side). A zero
@@ -152,8 +158,62 @@ func (c *Connector) FetchExecutions(ctx context.Context, account string, timeout
 	case <-ctx.Done():
 		waitErr = ctx.Err()
 	}
-	cleanup()
+	// A deadline, not a caller's cancellation, leaves an end the broker may
+	// still send: remember it so a late one is named.
+	expired := !complete && (waitErr == nil || errors.Is(waitErr, context.DeadlineExceeded))
+	cleanupExpiring(expired)
 	return ExecutionsSnapshot{Complete: complete, Executions: flight.snapshot(), AsOf: time.Now().UTC(), RequestID: reqID}, waitErr
+}
+
+// executionsExpiredKeep bounds how long an expired request ID is remembered:
+// a stalled Gateway has answered within minutes, and an end later than that
+// is reported as unknown.
+const executionsExpiredKeep = 10 * time.Minute
+
+// expireExecutionsRequestLocked remembers a request whose flight reached its
+// deadline without its execDetailsEnd and forgets those older than
+// executionsExpiredKeep. The caller holds executionsMu.
+func (c *Connector) expireExecutionsRequestLocked(reqID int, at time.Time) {
+	if c.executionsExpired == nil {
+		c.executionsExpired = make(map[int]time.Time)
+	}
+	for id, ended := range c.executionsExpired {
+		if at.Sub(ended) > executionsExpiredKeep {
+			delete(c.executionsExpired, id)
+		}
+	}
+	c.executionsExpired[reqID] = at
+}
+
+// noteLateExecDetailsEnd reports an execDetailsEnd that arrived after its
+// flight's deadline. The rows were dropped and the next poll reads the day's
+// executions again, so the line is evidence of a slow answer, not a lost
+// fill. It warns while the logging schedule wants attention and is INFO
+// otherwise; an end later than executionsExpiredKeep, or one no request
+// waited for, stays in the debug log. On 2026-10-20 such an end, during
+// IBKR's nightly reset, logged "Unhandled message ID 55" at WARN as if the
+// message were unknown.
+func (c *Connector) noteLateExecDetailsEnd(fields []string, now time.Time) {
+	reqID := execDetailsEndRequestID(fields)
+	c.executionsMu.Lock()
+	_, live := c.executions[reqID]
+	ended, late := c.executionsExpired[reqID]
+	if late {
+		delete(c.executionsExpired, reqID)
+		late = now.Sub(ended) <= executionsExpiredKeep
+	}
+	c.executionsMu.Unlock()
+	switch {
+	case live:
+	case late:
+		log := connectorLogger.Infof
+		if c.logRequiredAt(now) {
+			log = connectorLogger.Warnf
+		}
+		log("%s: IBKR answered executions request %d %s after its deadline; its rows were dropped and the next poll reads the day again", c.name, reqID, now.Sub(ended).Round(time.Millisecond))
+	default:
+		connectorLogger.Debugf("%s: execDetailsEnd for request %d, which no request is waiting for", c.name, reqID)
+	}
 }
 
 // deliverRequestedExecution hands an execDetails that answers reqExecutions
