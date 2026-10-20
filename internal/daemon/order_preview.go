@@ -782,12 +782,13 @@ func (s *Server) fetchModifyPreviewWhatIfBound(ctx context.Context, status rpc.T
 	if c == nil {
 		return previewWhatIfUnavailableWithMessage("Broker WhatIf unavailable: gateway connector is not ready."), nil
 	}
+	order := modifyPreviewWhatIfOrder(view, draft, status)
 	var result ibkrlib.OrderWhatIfResult
 	var err error
 	if authority != nil {
-		result, err = c.PreviewOrderWhatIfWithOrderIDForSession(whatIfCtx, authority.session, previewIBKRStrategyContract(draft), previewIBKROrderForStatus(draft, status), view.ReservedOrderID)
+		result, err = c.PreviewOrderWhatIfWithOrderIDForSession(whatIfCtx, authority.session, previewIBKRStrategyContract(draft), order, view.ReservedOrderID)
 	} else {
-		result, err = c.PreviewOrderWhatIfWithOrderID(whatIfCtx, previewIBKRStrategyContract(draft), previewIBKROrderForStatus(draft, status), view.ReservedOrderID)
+		result, err = c.PreviewOrderWhatIfWithOrderID(whatIfCtx, previewIBKRStrategyContract(draft), order, view.ReservedOrderID)
 	}
 	if err != nil {
 		return rpc.OrderWhatIfResult{}, err
@@ -796,6 +797,16 @@ func (s *Server) fetchModifyPreviewWhatIfBound(ctx context.Context, status rpc.T
 		return previewWhatIfUnavailableWithMessage("Broker WhatIf unavailable: broker session changed during preview."), nil
 	}
 	return rpcWhatIfResultFromBroker(result), nil
+}
+
+// modifyPreviewWhatIfOrder is the what-if order of a change of view. The
+// what-if claims the order's own ID, so it names the order it changes as the
+// modify does (#120, ibkrlib.OrderChangeIdentity); without that an order an
+// earlier process placed cannot be previewed, and so not changed.
+func modifyPreviewWhatIfOrder(view rpc.OrderView, draft rpc.OrderDraft, status rpc.TradingStatus) *ibkrlib.RawOrder {
+	order := previewIBKROrderForStatus(draft, status)
+	order.Changes = orderChangeIdentity(view)
+	return order
 }
 
 func previewIBKRContract(contract rpc.ContractParams) *ibkrlib.Contract {
