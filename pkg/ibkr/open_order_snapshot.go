@@ -221,6 +221,14 @@ func (c *Connector) completeOpenOrderSnapshotFlight(flight *openOrderSnapshotFli
 	if poison {
 		c.openOrderSnapshotPoison = flight.binding
 		c.openOrderSnapshotPoisonAt = time.Now()
+		c.openOrderSnapshotPoisonErr = err
+		if sameOpenOrderSnapshotBinding(c.openOrderSnapshotDone, flight.binding) {
+			// A poisoned generation has no current completion to report.
+			c.openOrderSnapshotDone, c.openOrderSnapshotDoneAt = openOrderSnapshotBinding{}, time.Time{}
+		}
+	} else if err == nil && result.Complete {
+		c.openOrderSnapshotDone = flight.binding
+		c.openOrderSnapshotDoneAt = result.AsOf
 	}
 	if c.openOrderSnapshot == flight {
 		c.openOrderSnapshot = nil
@@ -230,26 +238,48 @@ func (c *Connector) completeOpenOrderSnapshotFlight(flight *openOrderSnapshotFli
 }
 
 // OpenOrderSnapshotPoisoned reports whether the current session's open-order
-// snapshot is poisoned, and since when. Only a new socket generation clears
-// it, so its owner redials the session (DropSession) to read open orders
-// again.
-func (c *Connector) OpenOrderSnapshotPoisoned() (since time.Time, poisoned bool) {
+// snapshot is poisoned, since when and why. Only a new socket generation
+// clears it, so its owner redials the session (DropSession) to read open
+// orders again.
+func (c *Connector) OpenOrderSnapshotPoisoned() (since time.Time, cause error, poisoned bool) {
+	current, ok := c.currentOpenOrderSnapshotBinding()
+	if !ok {
+		return time.Time{}, nil, false
+	}
+	c.openOrderSnapshotMu.Lock()
+	defer c.openOrderSnapshotMu.Unlock()
+	if !sameOpenOrderSnapshotBinding(c.openOrderSnapshotPoison, current) {
+		return time.Time{}, nil, false
+	}
+	return c.openOrderSnapshotPoisonAt, c.openOrderSnapshotPoisonErr, true
+}
+
+// OpenOrderSnapshotCompletedAt returns when the current session last
+// completed an open-order snapshot; zero when it has not.
+func (c *Connector) OpenOrderSnapshotCompletedAt() time.Time {
+	current, ok := c.currentOpenOrderSnapshotBinding()
+	if !ok {
+		return time.Time{}
+	}
+	c.openOrderSnapshotMu.Lock()
+	defer c.openOrderSnapshotMu.Unlock()
+	if !sameOpenOrderSnapshotBinding(c.openOrderSnapshotDone, current) {
+		return time.Time{}
+	}
+	return c.openOrderSnapshotDoneAt
+}
+
+func (c *Connector) currentOpenOrderSnapshotBinding() (openOrderSnapshotBinding, bool) {
 	if c == nil {
-		return time.Time{}, false
+		return openOrderSnapshotBinding{}, false
 	}
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
 	if conn == nil {
-		return time.Time{}, false
+		return openOrderSnapshotBinding{}, false
 	}
-	current := openOrderSnapshotBinding{conn: conn, epoch: conn.BrokerSessionEpoch()}
-	c.openOrderSnapshotMu.Lock()
-	defer c.openOrderSnapshotMu.Unlock()
-	if !sameOpenOrderSnapshotBinding(c.openOrderSnapshotPoison, current) {
-		return time.Time{}, false
-	}
-	return c.openOrderSnapshotPoisonAt, true
+	return openOrderSnapshotBinding{conn: conn, epoch: conn.BrokerSessionEpoch()}, true
 }
 
 func cloneOpenOrderSnapshot(in OpenOrderSnapshot) OpenOrderSnapshot {

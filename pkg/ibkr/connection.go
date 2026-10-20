@@ -50,6 +50,12 @@ const (
 	// a large account's open orders included; the budget leaves room for a
 	// slow machine and stays inside the daemon's 12 s handshake watchdog.
 	defaultStartupReadBudget = 5 * time.Second
+	// startupAccountsGrace bounds the wait for managedAccounts once
+	// nextValidId is in. IB Gateway sends the accounts first; the grace keeps
+	// the one-second window the startup read had before 2026-10-19 for one
+	// that sends them after, without spending the whole budget on a Gateway
+	// that never does.
+	startupAccountsGrace = time.Second
 	// startupMessageCap bounds the startup read for a Gateway that streams
 	// without ever sending nextValidId: two messages per open order leaves
 	// room for thousands of open orders.
@@ -1960,7 +1966,11 @@ func (c *Connection) startAPI() error {
 	var stopped string
 	epoch := c.BrokerSessionEpoch()
 
+	graced := false
 	for read < startupMessageCap && clientIDError == nil && !(c.BrokerIDNamespaceReady() && c.accountsEpoch.Load() == epoch) {
+		if !graced && c.BrokerIDNamespaceReady() {
+			remaining, graced = min(remaining, startupAccountsGrace), true
+		}
 		c.conn.SetReadDeadline(time.Now().Add(remaining))
 		began := time.Now()
 		msgBytes, err := c.readMessage()

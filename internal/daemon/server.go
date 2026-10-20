@@ -397,8 +397,10 @@ type Server struct {
 	strategyLineageLoaded bool
 	strategyLineage       map[string]rpc.StrategyOrderDraft
 	// snapshotPoisonedFn replaces Connector.OpenOrderSnapshotPoisoned in
-	// tests: a real poisoning waits out the 15 s protocol deadline.
-	snapshotPoisonedFn func(*ibkrlib.Connector) (time.Time, bool)
+	// tests; openOrderSnapshotProtocolTimeout shortens a real poisoning's
+	// 15 s protocol deadline for the connectors this daemon builds.
+	snapshotPoisonedFn               func(*ibkrlib.Connector) (time.Time, error, bool)
+	openOrderSnapshotProtocolTimeout time.Duration
 	// orderSnapshotFn is the open-order snapshot seam for the reconcile
 	orderSnapshotFn func(context.Context) (ibkrlib.OpenOrderSnapshot, error)
 	// cashPolicyCache keeps the cash settings facts' live inputs briefly;
@@ -1775,8 +1777,9 @@ func (s *Server) newConnector(ep discover.Endpoint) *ibkrlib.Connector {
 	conn.ManagedConnectionLogging = true
 
 	cc := &ibkrlib.ConnectorConfig{
-		PreferredClientID: ep.ClientID,
-		BaseConfig:        conn,
+		PreferredClientID:        ep.ClientID,
+		BaseConfig:               conn,
+		OpenOrderSnapshotTimeout: s.openOrderSnapshotProtocolTimeout,
 	}
 	connector := ibkrlib.NewConnector(cc)
 	connector.SetBackendMaintenanceWindows(s.maintenanceWindows)
