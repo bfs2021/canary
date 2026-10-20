@@ -299,7 +299,13 @@ type Connection struct {
 	brokerIDExhausted  bool
 	reservedOrderIDs   map[int]struct{}
 	reservedRequestIDs map[int]struct{}
-	brokerSessionEpoch atomic.Uint64
+	// reportedOwnOrderIDs maps the order IDs the broker reported on this
+	// socket generation as open orders of this client ID to what it reported
+	// with them: an order an earlier session or process placed may be
+	// claimed below the frontier to change it. Guarded by reqIDMu, cleared
+	// with the epoch.
+	reportedOwnOrderIDs map[int]ReportedOwnOrder
+	brokerSessionEpoch  atomic.Uint64
 	// inboundEpochMu keeps late receipts attributable after outbound invalidation.
 	inboundEpochMu sync.RWMutex
 	// account holds the raw msgManagedAccts value, which is a
@@ -788,6 +794,7 @@ func NewConnection(config *ConnectionConfig) *Connection {
 		reqIDSeq:            1,
 		reservedOrderIDs:    make(map[int]struct{}),
 		reservedRequestIDs:  make(map[int]struct{}),
+		reportedOwnOrderIDs: make(map[int]ReportedOwnOrder),
 		openOrders:          make(map[int]*IBKROrder),
 		orderStatus:         make(map[int]string),
 		reqAlias:            make(map[int]reqAliasEntry),
@@ -2209,6 +2216,9 @@ func (c *Connection) processMessageAtEpoch(msgBytes []byte, epoch uint64) {
 	}
 	if orderID, ok := inboundOrderID(msgID, fields); ok {
 		c.observeInboundOrderIDAtEpoch(orderID, epoch)
+	}
+	if msgID == msgOpenOrder {
+		c.observeReportedOwnOrderAtEpoch(fields, epoch)
 	}
 	if msgID == msgOpenOrder || msgID == msgOpenOrderEnd {
 		c.openOrderObserverMu.RLock()
@@ -5392,6 +5402,7 @@ func (c *Connection) resetOrderIDReadiness() {
 	c.haveNextValidID = false
 	clear(c.reservedOrderIDs)
 	clear(c.reservedRequestIDs)
+	clear(c.reportedOwnOrderIDs)
 	c.reqIDMu.Unlock()
 	c.invalidateUnstampedObservationAuthority()
 	c.mktDataTypeMu.Lock()
@@ -5508,6 +5519,70 @@ func (c *Connection) observeInboundOrderIDAtEpoch(id int, expectedEpoch uint64) 
 	}
 	c.advanceBrokerIDPastLocked(id)
 	c.reqIDMu.Unlock()
+}
+
+// ReportedOwnOrder is what the broker reported with an open order of this
+// connection's client ID on the current socket generation: its permanent ID
+// and account. Conflicted means the broker reported the same order ID twice
+// with a different permanent ID or account; such an ID is never claimed.
+type ReportedOwnOrder struct {
+	PermID     int
+	Account    string
+	Conflicted bool
+}
+
+// observeReportedOwnOrderAtEpoch records an open order the broker reports for
+// this connection's client ID, with its permanent ID and account, so a change
+// of it may claim its ID below the frontier. With open orders downloaded on
+// connection the broker reports every one a previous process placed; on
+// 2026-10-20 the daemon could not resize its own stops after moving from TWS
+// to IB Gateway because only orders this process placed counted as owned.
+//
+// Only exact reports count: a transmitted order (permanent ID set) of this
+// client ID, not a what-if, naming an account, and the configured account
+// when one is configured. Other clients' orders, which the Master API client
+// also receives, never count. Nothing counts on a client-0 connection: TWS
+// reports hand orders as client 0, so there a report cannot tell an order
+// this client placed from one entered by hand. A second report of the same
+// ID with another permanent ID or account marks it conflicted.
+func (c *Connection) observeReportedOwnOrderAtEpoch(fields []string, expectedEpoch uint64) {
+	if c.config == nil || c.config.ClientID == 0 {
+		return
+	}
+	ev, ok := ParseOrderLifecycleEvent(fields)
+	if !ok || ev.Type != OrderLifecycleEventOpenOrder || ev.WhatIf || !ev.ClientIDPresent || ev.ClientID != c.config.ClientID ||
+		ev.OrderID <= 0 || ev.OrderID > maxProtoInt32 || ev.PermID <= 0 {
+		return
+	}
+	account := strings.TrimSpace(ev.Account)
+	if account == "" {
+		return
+	}
+	if configured := strings.TrimSpace(c.config.Account); configured != "" && !strings.EqualFold(configured, account) {
+		return
+	}
+	c.reqIDMu.Lock()
+	defer c.reqIDMu.Unlock()
+	if c.brokerSessionEpoch.Load() != expectedEpoch {
+		return
+	}
+	if c.reportedOwnOrderIDs == nil {
+		c.reportedOwnOrderIDs = make(map[int]ReportedOwnOrder)
+	}
+	next := ReportedOwnOrder{PermID: ev.PermID, Account: account}
+	if prior, seen := c.reportedOwnOrderIDs[ev.OrderID]; seen && (prior.Conflicted || prior.PermID != next.PermID || !strings.EqualFold(prior.Account, next.Account)) {
+		next.Conflicted = true
+	}
+	c.reportedOwnOrderIDs[ev.OrderID] = next
+}
+
+// ReportedOwnOrder returns what the broker reported on the current socket
+// generation with this client's open order id, and whether it reported it.
+func (c *Connection) ReportedOwnOrder(id int) (ReportedOwnOrder, bool) {
+	c.reqIDMu.Lock()
+	defer c.reqIDMu.Unlock()
+	reported, ok := c.reportedOwnOrderIDs[id]
+	return reported, ok
 }
 
 func (c *Connection) advanceBrokerIDPastLocked(id int) {
@@ -7388,7 +7463,9 @@ func (c *Connection) claimOrderIDLocked(id int, alreadyOwned bool, expectedEpoch
 		return epoch, fmt.Errorf("%w: order ID is owned by a reserved read-only request", ErrBrokerIDNamespaceConflict)
 	}
 	_, reserved := c.reservedOrderIDs[id]
-	if !reserved && !alreadyOwned {
+	report, reported := c.reportedOwnOrderIDs[id]
+	reported = reported && !report.Conflicted
+	if !reserved && !alreadyOwned && !reported {
 		frontier := max(c.reqIDSeq, c.nextOrderID)
 		if c.brokerIDExhausted || id < frontier {
 			return epoch, fmt.Errorf("%w: explicit order ID is behind the consumed request/order frontier", ErrBrokerIDNamespaceConflict)

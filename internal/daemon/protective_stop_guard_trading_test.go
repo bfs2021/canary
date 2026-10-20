@@ -25,6 +25,13 @@ type stopGuardRig struct {
 	hand      []ibkrlib.OrderLifecycleEvent
 	modified  []*ibkrlib.RawOrder
 	cancelled []int
+	// broker is what the fake broker's open-order inventory shows of
+	// Canary's stop: its quantity, permanent ID and whether it still works.
+	broker struct {
+		quantity float64
+		permID   int
+		gone     bool
+	}
 }
 
 func newStopGuardRig(t *testing.T, trading config.Trading) *stopGuardRig {
@@ -36,22 +43,40 @@ func newStopGuardRig(t *testing.T, trading config.Trading) *stopGuardRig {
 // placed through endpoint; the server is connected to 127.0.0.1:4002.
 func newStopGuardRigPlacedThrough(t *testing.T, trading config.Trading, endpoint string) *stopGuardRig {
 	t.Helper()
+	return newStopGuardRigIn(t, trading, t.TempDir(), endpoint, 4002, true)
+}
+
+// newStopGuardRigIn is the rig on the order authority in dir, connected to
+// 127.0.0.1:port. With seed it journals Canary's stop as placed through
+// placed; without, it reads the journal an earlier server wrote in dir, the
+// way a restarted daemon does.
+func newStopGuardRigIn(t *testing.T, trading config.Trading, dir, placed string, port int, seed bool) *stopGuardRig {
+	t.Helper()
 	trading.Mode = config.TradingModePaper
-	srv := newOrderPreviewTestServer(t, trading)
+	srv := newOrderPreviewTestServerIn(t, trading, dir)
+	srv.endpoint.Port = port
+	srv.cfg.Gateway.Port = new(port)
 	r := &stopGuardRig{srv: srv, now: time.Date(2026, 10, 5, 15, 40, 0, 0, time.UTC), position: 100, current: true}
+	r.broker.quantity = 100
 	srv.now = r.clock
 	srv.decisions = newDecisionLog(filepath.Join(t.TempDir(), "daemon.db"))
 	t.Cleanup(func() { _ = srv.decisions.Close() })
-	seedProtectiveTrailJournalPlacedThrough(t, srv, r.now, endpoint)
+	if seed {
+		seedProtectiveTrailJournalPlacedThrough(t, srv, r.now, placed)
+	}
 	scope := brokerStateScope{Account: "DU1234567", Mode: rpc.AccountModePaper}
 	srv.openOrderInventoryForTest = func(context.Context, bool) (ibkrlib.OpenOrderSnapshot, brokerStateScope, error) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		orders := append([]ibkrlib.OrderLifecycleEvent{{
-			Type: ibkrlib.OrderLifecycleEventOpenOrder, OrderID: 1002, ClientID: 31, ClientIDPresent: true, Account: "DU1234567",
-			Symbol: "SYW", SecType: "STK", ConID: 910001, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
-			TIF: rpc.OrderTIFGTC, TotalQuantity: 100, Remaining: 100, Status: "Submitted",
-		}}, r.hand...)
+		var orders []ibkrlib.OrderLifecycleEvent
+		if !r.broker.gone {
+			orders = append(orders, ibkrlib.OrderLifecycleEvent{
+				Type: ibkrlib.OrderLifecycleEventOpenOrder, OrderID: 1002, PermID: r.broker.permID, ClientID: 31, ClientIDPresent: true, Account: "DU1234567",
+				Symbol: "SYW", SecType: "STK", ConID: 910001, Currency: "USD", Action: rpc.OrderActionSell, OrderType: rpc.OrderTypeTRAIL,
+				TIF: rpc.OrderTIFGTC, TotalQuantity: r.broker.quantity, Remaining: r.broker.quantity, Status: "Submitted",
+			})
+		}
+		orders = append(orders, r.hand...)
 		return ibkrlib.OpenOrderSnapshot{Complete: true, AsOf: r.now, Orders: orders}, scope, nil
 	}
 	srv.protectiveStopGuardPositionsForTest = func(context.Context, brokerStateScope) ([]*ibkrlib.RawPosition, bool) {

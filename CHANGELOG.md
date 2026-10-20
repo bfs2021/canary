@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The project adheres to 
 
 ### What's new
 
+The daemon keeps managing its protective stops after it moves between TWS and IB Gateway and after a restart: it can resize a stop, resize it again and cancel it, whichever app or daemon process placed it.
+
 A live strategy's kill rule now measures only its own account's evidence.
 Each decision's mark is kept for one account, its paper or live mode, the
 strategy and the traded line, so a mark another account, the other mode or
@@ -24,6 +26,8 @@ reporting that no strategies exist.
 
 ### Fixed
 
+- After the daemon moved between TWS and IB Gateway, a stop it had placed through the other app could be changed once and then no more: the broker's acknowledgement of the change was dropped because it arrived on the other socket, the order stayed "send attempted", and the next resize or the owner's cancel was refused as "order is not cancel-eligible"; a fill reported after the move landed on a second journal row. v3.25.4's note that such stops "can be changed or cancelled after the daemon moves" held only for the first change. Now the broker's acknowledgements, status and fills for that order reach its one journal row, so a stop can be resized, acknowledged, resized again and cancelled after the move, in both directions. They are matched only on exact broker evidence: the same account, trading mode and client ID, and the order's permanent ID (or, before the broker first acknowledged it, its order reference and order ID); hand orders, other clients' orders and anything ambiguous are never adopted (the v3.25.4 review's finding 2).
+- After a daemon restart, changing an open order an earlier daemon process placed, such as the protective stop guard resizing a stop placed the day before, failed with "explicit order ID is behind the consumed request/order frontier". An order the broker reports on the current connection for the daemon's client ID and account may now be changed; the change is refused when the broker names it under another permanent ID or account than its journal row, and nothing changes for a daemon on client ID 0, where hand orders report the same client ID (#120).
 - A live strategy's kill rule could read 0.00 K, not breached, past its
   bound: its marks were kept by strategy and month alone in a state database
   that outlives an account change, so account A's mark of a month marked

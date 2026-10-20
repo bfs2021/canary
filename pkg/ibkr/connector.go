@@ -8966,6 +8966,24 @@ func (c *Connector) isWhatIfOrderID(orderID int) bool {
 	return conn != nil && conn.IsWhatIfOrderID(orderID)
 }
 
+// ReportedOwnOrder returns what the broker reported on the current socket
+// generation with this client's open order id (permanent ID and account),
+// and whether it reported it; a caller changing an order it did not place
+// checks the report names the same order (internal/daemon,
+// validateReportedOwnOrder).
+func (c *Connector) ReportedOwnOrder(id int) (ReportedOwnOrder, bool) {
+	if c == nil {
+		return ReportedOwnOrder{}, false
+	}
+	c.mu.RLock()
+	conn := c.conn
+	c.mu.RUnlock()
+	if conn == nil {
+		return ReportedOwnOrder{}, false
+	}
+	return conn.ReportedOwnOrder(id)
+}
+
 // isKnownBrokerOrderID reports whether id names a broker order this
 // connector owns: a journaled/open order or an in-flight WhatIf preview.
 // Used to keep request-scoped notice recovery off order-scoped msg-204
