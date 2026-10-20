@@ -4,7 +4,7 @@ canary order — Preview, place, change, cancel or check orders
 Usage: canary order <action> [flags]
 
 Actions
-  preview           Check an order without submitting it
+  preview           Check an order at IB Gateway without placing it
   status            Read one order from the local journal
   place             Submit an eligible preview through the trading gates
   modify            Replace an order using an eligible preview
@@ -14,6 +14,9 @@ Actions
   tws-modify        Change the quantity or limit of a DAY limit order placed by
                     hand in TWS over a client-0 connection
 
+Every build previews. place, modify, cancel, tws-cancel and tws-modify need the
+trading build; the standard build refuses them before anything is sent.
+
 Run canary order <action> --help for syntax and flags.
 
 # canary order --help · COLUMNS=80 · colour on, ESC written as \x1b
@@ -22,7 +25,7 @@ Run canary order <action> --help for syntax and flags.
 Usage: \x1b[36mcanary order <action> [flags]\x1b[0m
 
 \x1b[1mActions\x1b[0m
-  \x1b[36mpreview           \x1b[0mCheck an order without submitting it
+  \x1b[36mpreview           \x1b[0mCheck an order at IB Gateway without placing it
   \x1b[36mstatus            \x1b[0mRead one order from the local journal
   \x1b[36mplace             \x1b[0mSubmit an eligible preview through the trading gates
   \x1b[36mmodify            \x1b[0mReplace an order using an eligible preview
@@ -31,6 +34,9 @@ Usage: \x1b[36mcanary order <action> [flags]\x1b[0m
                     connection (it becomes an API order)
   \x1b[36mtws-modify        \x1b[0mChange the quantity or limit of a DAY limit order placed by
                     hand in TWS over a client-0 connection
+
+Every build previews. place, modify, cancel, tws-cancel and tws-modify need the
+trading build; the standard build refuses them before anything is sent.
 
 Run canary order <action> --help for syntax and flags.
 

@@ -1,6 +1,7 @@
 # canary help · COLUMNS=80 · colour off
 Canary — portfolio, risk and order tools for Interactive Brokers
-Runs locally. Sending or changing orders requires approval and safety checks.
+Runs locally. Every build previews orders; sending or changing one needs the
+trading build, approval and safety checks.
 
 Usage: canary <subcommand> [flags] [args]
 Start: canary status — check the broker connection
@@ -74,7 +75,8 @@ Add --json to data commands for output that scripts can read.
 Colour: NO_COLOR=1 disables it; CANARY_COLOR=always|never overrides.
 # canary help · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mCanary — portfolio, risk and order tools for Interactive Brokers\x1b[0m
-Runs locally. Sending or changing orders requires approval and safety checks.
+Runs locally. Every build previews orders; sending or changing one needs the
+trading build, approval and safety checks.
 
 Usage: \x1b[36mcanary <subcommand> [flags] [args]\x1b[0m
 Start: canary status — check the broker connection

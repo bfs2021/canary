@@ -1,6 +1,6 @@
 # Releases and support
 
-Updated: 2026-10-19
+Updated: 2026-10-20
 
 Every release publishes two binaries per platform, under two different names. One is read-only. The other can send orders to your broker. That difference is compiled in rather than configured, so the filename you download decides it.
 
@@ -251,8 +251,9 @@ A release that publishes an MCP Bundle also carries MCP Registry metadata record
 The standard read-only artifact uses the canonical `canary` filename. Getting the broker-write-capable variant takes a deliberate `canary-trading` download.
 
 **Standard build.** Broker-write handlers are not compiled in. The retained
-order, proposal, and opportunity reads remain available, while broker actions
-fail closed before a wire write. The bundled MCP surface has no preview or
+order, proposal, and opportunity reads remain available, and so do previews:
+a preview runs the broker WhatIf, which creates no order, and mints a token
+this build cannot submit. Broker actions fail closed before a wire write. The bundled MCP surface has no preview or
 order-entry tools in either build.
 
 **Trading build.** This binary can place, modify, cancel, or exercise only the

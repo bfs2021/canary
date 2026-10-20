@@ -1,14 +1,18 @@
 # Gated orders and the trading build
 
-Updated: 2026-10-06 21:34 CEST
+Updated: 2026-10-20 13:53 CEST
 
 The standard `canary` binary is read-only and compiles in no broker-write path.
-The separate opt-in trading binary exposes these actions:
+It does preview: once `[trading].mode` is paper or live, `canary order preview`
+runs the broker WhatIf and mints a token, as do the proposal and opportunity
+previews, and the standard build refuses every place, modify, cancel, exercise
+or submit before anything is sent. The separate opt-in trading binary exposes
+these actions:
 
-- preview, place, or modify a single-leg stock/ETF or option order through the
+- place or modify a single-leg stock/ETF or option order through the
   tokenized draft path (`canary order preview` → `place`/`modify`);
-- preview and place a buy or sale of one government or investment-grade bill
-  or bond named by ISIN or CUSIP ([Bond orders](#bond-orders));
+- place a buy or sale of one government or investment-grade bill or bond
+  named by ISIN or CUSIP ([Bond orders](#bond-orders));
 - submit or reduce a daemon-owned close/reduce protection proposal;
 - submit a cash sweep proposal, which buys a same-currency bill with idle cash
   or sells one ([Cash sweep](cash.md#cash-sweep));

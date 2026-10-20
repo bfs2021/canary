@@ -11,7 +11,9 @@ update` now read which process holds the daemon's lock from `/proc` instead
 of running `ps`, so they work on Alpine and other BusyBox systems and on
 images without `ps`. The identity check is unchanged: Canary still signals
 only a process that runs `canary daemon` and refuses an unrelated or
-unreadable one.
+unreadable one. The security policy and help now say plainly what the
+standard build does: it previews orders and refuses to place, change or
+cancel them.
 
 ### Fixed
 
@@ -22,6 +24,16 @@ unreadable one.
   error, and says that nothing was signalled. Under qemu-user emulation the
   daemon is recognised through its interpreter, which the kernel names;
   other emulators are refused. The v3.25.4 review's finding 5.
+- SECURITY.md, the README and the order guides said the standard build has
+  no order preview. It has: `canary order preview` asks the gateway for a
+  what-if check, which creates no order, and it and the proposal and
+  opportunity previews mint tokens only a trading build can submit. The owner kept
+  preview in the standard build (2026-10-20); the docs now say so, and so do
+  `canary --help`, `canary order --help` and `canary proposals --help`. In
+  the standard build `order place`, `modify` and `cancel` now refuse with
+  "order writes are unavailable in this standard build" instead of a bare
+  "trading disabled". MCP still has no preview or execution tool, now
+  checked by the methods each tool can call. The v3.25.4 review's finding 6.
 
 ## v3.26.0 — Unreleased
 

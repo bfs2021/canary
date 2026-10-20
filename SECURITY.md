@@ -40,12 +40,16 @@ migration, rollback, and explicit-decision evidence documented in the
 
 ## Threat model
 
-`canary` standard builds are structurally no-broker-write: preview and action
-handlers are not compiled in, and the local order surface is limited to status
-and journal reads. The daemon cannot preview, place, modify, cancel, exercise,
-or transmit a broker action unless built with the separate trading capability;
-MCP has no preview or execution tools in either build (see
-[README §Safety](README.md#safety-and-privacy)). The daemon listens only on a Unix-domain
+`canary` standard builds cannot write to the broker. The order write path is
+compiled only into the separate trading build; in a standard build the daemon
+refuses every place, modify, cancel, exercise or submit request before anything
+is sent. The standard build does serve previews: `canary order preview`, once
+`[trading].mode` is paper or live, asks the gateway for a what-if evaluation,
+which IBKR answers without creating an order, and journals the preview
+locally; it and the proposal and opportunity previews mint tokens that only a
+trading build can submit (preview kept in the standard build by owner
+decision, 2026-10-20 13:30 CEST). MCP has no preview or execution
+tools in either build (see [README §Safety](README.md#safety-and-privacy)). The daemon listens only on a Unix-domain
 socket in the user's runtime directory, never on a TCP port. It speaks to a
 locally-running IB Gateway or TWS over loopback. The project sends no telemetry
 or account data to the maintainer, but configured features do make outbound

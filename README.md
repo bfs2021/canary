@@ -12,8 +12,9 @@ broker layer in its own Go package, `pkg/ibkr`, so other brokers can follow.
 Canary turns one local IB Gateway or TWS session into a daily brief, current
 portfolio and market evidence, and a broker-confirmed review of what past
 position changes delivered. Use the same daemon from an MCP host, the shell,
-or a paired phone. The standard binary and every MCP tool are structurally
-read-only: they contain no broker-order preview or execution surface.
+or a paired phone. The standard binary cannot place, change or cancel an
+order; it can preview one, which asks the gateway for a what-if check and
+creates no order. No MCP tool can preview or execute an order in any build.
 
 Canary is for an IBKR Pro user who runs Gateway or TWS locally and wants stale,
 missing, or held evidence to remain visible. It is not a hosted brokerage
@@ -293,7 +294,9 @@ the retained `ibkr` XDG paths used for upgrade continuity.
 ## Safety and privacy
 
 - **Read-only is the normal product.** The installer, updater, and MCP Bundle
-  select the standard binary, whose broker-write handlers are not compiled in.
+  select the standard binary, which has no broker-write path compiled in. Its
+  CLI can still preview an order; the preview creates no order, and this build
+  refuses to place it.
 - **MCP has no preview or execution tools in any build.** It cannot place,
   modify, cancel, submit, or exercise an order.
 - **Trading is a separate decision.** The experimental trading artifact keeps

@@ -84,6 +84,34 @@ func TestNoTradingTools(t *testing.T) {
 	}
 }
 
+// TestNoToolReachesPreviewOrExecution holds MCP's side of the boundary in
+// SECURITY.md (the v3.25.4 review's finding 6): the daemon serves order
+// preview in every build, but no MCP tool may declare or call a preview,
+// preparation, submission or order-control method, whatever its name.
+func TestNoToolReachesPreviewOrExecution(t *testing.T) {
+	forbidden := map[string]bool{}
+	for _, method := range []string{
+		rpc.MethodOrderPreview, rpc.MethodOrderPlace, rpc.MethodOrderModify, rpc.MethodOrderCancel,
+		rpc.MethodOrderTWSCancel, rpc.MethodOrderTWSModify, rpc.MethodStrategyPreview, rpc.MethodAddPreview,
+		rpc.MethodOpportunitiesPreviewExercise, rpc.MethodOpportunitiesSubmitExercise,
+		rpc.MethodTradeProposalsPreview, rpc.MethodTradeProposalsSubmit, rpc.MethodTradeProposalsVeto,
+		rpc.MethodTradeProposalsReducePreview, rpc.MethodTradeProposalsReduceSubmit,
+		rpc.MethodTradeProposalsReducePortfolioPreview, rpc.MethodTradeProposalsReducePortfolioSubmit,
+		rpc.MethodTradeProposalsPrepare, rpc.MethodTradeProposalsPrepareBundle, rpc.MethodTradeProposalsSubmitBundle,
+		rpc.MethodTradeProposalsQueuePrepare, rpc.MethodTradeProposalsQueueArm, rpc.MethodTradeProposalsQueueCancel,
+		rpc.MethodDeskExecutionPrepareBatch, rpc.MethodDeskExecutionSubmit,
+	} {
+		forbidden[method] = true
+	}
+	for _, tool := range Tools {
+		for _, method := range append(slices.Clone(tool.RPCMethods), mcpToolMethodsForCall(tool.Name, nil)...) {
+			if forbidden[method] {
+				t.Errorf("%s reaches %s", tool.Name, method)
+			}
+		}
+	}
+}
+
 // The cash policy methods write the owner's protection policy file; only
 // Desk's console reaches them, after the owner's device confirms a save. No
 // tool may declare or call them.

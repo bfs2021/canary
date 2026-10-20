@@ -16,7 +16,7 @@ func commandActions(name string) []actionHelp {
 	switch name {
 	case "order":
 		return []actionHelp{
-			{"preview", "Check an order without submitting it", "canary order preview buy|sell SYMBOL QTY [flags]\ncanary order preview buy|sell SYMBOL YYYYMMDD C|P STRIKE QTY [flags]\ncanary order preview buy|sell ISIN|CUSIP FACE --type BOND|BILL --currency CCY [flags]"},
+			{"preview", "Check an order at IB Gateway without placing it", "canary order preview buy|sell SYMBOL QTY [flags]\ncanary order preview buy|sell SYMBOL YYYYMMDD C|P STRIKE QTY [flags]\ncanary order preview buy|sell ISIN|CUSIP FACE --type BOND|BILL --currency CCY [flags]"},
 			{"status", "Read one order from the local journal", "canary order status ID [--json]"},
 			{"place", "Submit an eligible preview through the trading gates", "canary order place --preview-token TOKEN [--json]"},
 			{"modify", "Replace an order using an eligible preview", "canary order modify ID --preview-token TOKEN [--json]"},
@@ -59,6 +59,18 @@ func commandActions(name string) []actionHelp {
 	return nil
 }
 
+// commandBuildNote says which of a command's actions only the trading build
+// carries. Help is the same in both builds, so the note is true in both.
+func commandBuildNote(name string) string {
+	switch name {
+	case "order":
+		return "Every build previews. place, modify, cancel, tws-cancel and tws-modify need the trading build; the standard build refuses them before anything is sent."
+	case "proposals":
+		return "submit, submit-bundle and reduce --submit need the trading build; the standard build refuses them before anything is sent."
+	}
+	return ""
+}
+
 func helpDescription(name string) (summary, usage string) {
 	if cmd, ok := lookupCommand(name); ok {
 		return cmd.Summary, cmd.Usage
@@ -91,7 +103,7 @@ func helpDescription(name string) (summary, usage string) {
 func renderUsage(env *Env) {
 	w := env.Stdout
 	helpLine(env, "", productidentity.ProductName+" — portfolio, risk and order tools for Interactive Brokers", env.bold)
-	helpLine(env, "", "Runs locally. Sending or changing orders requires approval and safety checks.", nil)
+	helpLine(env, "", "Runs locally. Every build previews orders; sending or changing one needs the trading build, approval and safety checks.", nil)
 	fmt.Fprintln(w)
 	helpLine(env, "Usage: ", productidentity.Executable+" <subcommand> [flags] [args]", env.cyan)
 	helpLine(env, "Start: ", productidentity.Executable+" status — check the broker connection", nil)
@@ -153,6 +165,10 @@ func renderCommandHelp(env *Env, fs *flag.FlagSet, name, summary, usage string) 
 			helpRow(env, a.name, a.summary, 20)
 		}
 		fmt.Fprintln(w)
+		if note := commandBuildNote(name); note != "" {
+			helpLine(env, "", note, nil)
+			fmt.Fprintln(w)
+		}
 		helpLine(env, "", "Run "+productidentity.Executable+" "+name+" <action> --help for syntax and flags.", nil)
 	} else if usage != "" {
 		// Only separators between complete commands split usage; buy|sell and

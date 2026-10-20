@@ -1,5 +1,5 @@
 # canary order preview --help · COLUMNS=80 · colour off
-canary order preview — Check an order without submitting it
+canary order preview — Check an order at IB Gateway without placing it
 
 Usage: canary order preview buy|sell SYMBOL QTY [flags]
        canary order preview buy|sell SYMBOL YYYYMMDD C|P STRIKE QTY [flags]
@@ -39,7 +39,7 @@ Flags
                             its face amount instead of a quantity
 
 # canary order preview --help · COLUMNS=80 · colour on, ESC written as \x1b
-\x1b[1mcanary order preview — Check an order without submitting it\x1b[0m
+\x1b[1mcanary order preview — Check an order at IB Gateway without placing it\x1b[0m
 
 Usage: \x1b[36mcanary order preview buy|sell SYMBOL QTY [flags]\x1b[0m
        \x1b[36mcanary order preview buy|sell SYMBOL YYYYMMDD C|P STRIKE QTY [flags]\x1b[0m
