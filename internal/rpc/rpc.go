@@ -1887,6 +1887,40 @@ type StrategyGroupingIssue struct {
 	Reason     string `json:"reason"`
 }
 
+// PositionStrategiesView is the read-only option-strategy projection that
+// `canary strategies list --json` and the canary_strategies MCP tool serve
+// from one positions read. Authority is that read's account scope and
+// portfolio-stream receipt, carried unchanged: the strategies stand as account
+// truth only while it is available, and an unavailable read's empty list is
+// not an empty book. Strategies is never null.
+type PositionStrategiesView struct {
+	Strategies []PositionStrategy      `json:"strategies"`
+	Issues     []StrategyGroupingIssue `json:"issues,omitempty"`
+	AsOf       time.Time               `json:"as_of"`
+	Authority  *AccountDataAuthority   `json:"authority,omitempty"`
+}
+
+// NewPositionStrategiesView projects a positions read onto its strategies,
+// keeping the read's authority so no adapter drops the reason a book could
+// not be read.
+func NewPositionStrategiesView(res *PositionsResult) PositionStrategiesView {
+	if res == nil {
+		return PositionStrategiesView{Strategies: []PositionStrategy{}}
+	}
+	view := PositionStrategiesView{Strategies: res.Strategies, Issues: res.StrategyIssues, AsOf: res.AsOf, Authority: res.Authority}
+	if view.Strategies == nil {
+		view.Strategies = []PositionStrategy{}
+	}
+	return view
+}
+
+// Unavailable reports whether the read behind the view cannot stand as
+// account truth. A view without authority comes from a daemon that predates
+// the contract and is read as before.
+func (v PositionStrategiesView) Unavailable() bool {
+	return v.Authority != nil && v.Authority.Availability != AccountDataAvailable
+}
+
 // PositionsPortfolio is the daemon-side aggregator across all open legs.
 // it with the AccountResult.CurrencyExposure FX rate.
 // DailyTheta is Σ (theta × signed contract qty × multiplier). IBKR

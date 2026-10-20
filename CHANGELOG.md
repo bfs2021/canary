@@ -10,7 +10,9 @@ All notable changes to this project are documented here. The project adheres to 
 own verdict on its last connect attempt as a `Last attempt` row: no IBKR app
 running, a refused port with the setting to check or the port to pin, a
 handshake that did not finish, or a port that drops connections, each with
-the next step.
+the next step. `canary strategies list` and the `canary_strategies` MCP tool
+now say when the account's positions could not be read, and why, instead of
+reporting that no strategies exist.
 
 ### Fixed
 
@@ -24,6 +26,18 @@ the next step.
   `status --json` are unchanged. The no-app hint now says Canary will
   reconnect, as the troubleshooting guide already quoted it, instead of the
   retired executable name.
+- `canary strategies list` and `canary_strategies` no longer read an
+  unavailable positions read as an empty book (the v3.25.4 review's
+  finding 4). With no account selected, a mismatched or conflicting account,
+  an unfinished portfolio download or a stale receipt, the list printed "No
+  option strategies can be grouped safely." and the JSON and MCP result held
+  `null` strategies and a zero time with no reason. Both now carry the
+  positions read's `authority` block (scope, availability, freshness,
+  reason) and a `strategies` list that is never `null`; the text view prints
+  the data note and `Option strategies unavailable.`, keeps rows a stale read
+  retained under that note, and names the account. Like `canary positions`,
+  an unavailable read exits 0: the read worked and says what it could not
+  establish.
 
 ## v3.26.0 — Unreleased
 

@@ -56,14 +56,14 @@ func runStrategiesList(ctx context.Context, env *Env, args []string) int {
 	if err := env.Conn.Call(ctx, rpc.MethodPositionsList, rpc.PositionsListParams{}, &res); err != nil {
 		return fail(env, "strategies list: %v", err)
 	}
+	// An unavailable read exits 0 with its authority and reason, as
+	// `canary positions` does: the read succeeded and says what it could not
+	// establish.
+	view := rpc.NewPositionStrategiesView(&res)
 	if *jsonOut {
-		return printJSON(env, struct {
-			Strategies []rpc.PositionStrategy      `json:"strategies"`
-			Issues     []rpc.StrategyGroupingIssue `json:"issues,omitempty"`
-			AsOf       time.Time                   `json:"as_of"`
-		}{res.Strategies, res.StrategyIssues, res.AsOf})
+		return printJSON(env, view)
 	}
-	renderStrategies(env, res.Strategies, res.StrategyIssues)
+	renderStrategies(env, view)
 	return 0
 }
 
@@ -136,13 +136,29 @@ func runStrategyOperation(ctx context.Context, env *Env, operation string, args 
 	return 0
 }
 
-func renderStrategies(env *Env, groups []rpc.PositionStrategy, issues []rpc.StrategyGroupingIssue) {
+// renderStrategies prints the daemon's grouping with the account it belongs
+// to. When the positions read cannot stand as account truth, the data note
+// says why and an empty list reads as unavailable, never as no strategies;
+// rows a stale read retained stay visible under that note as context.
+func renderStrategies(env *Env, view rpc.PositionStrategiesView) {
 	fmt.Fprintln(env.Stdout)
-	fmt.Fprintln(env.Stdout, "Option strategies")
-	if len(groups) == 0 {
-		fmt.Fprintln(env.Stdout, "  No option strategies can be grouped safely.")
+	header := "Option strategies"
+	if a := view.Authority; a != nil && (a.Scope.AccountID != "" || a.Scope.AccountMode != "") {
+		header += "  " + nonEmpty(a.Scope.AccountID, "—")
+		if a.Scope.AccountMode != "" {
+			header += " · " + a.Scope.AccountMode
+		}
 	}
-	for _, group := range groups {
+	fmt.Fprintln(env.Stdout, header)
+	writeAccountAuthorityNotice(env, env.Stdout, view.Authority)
+	if len(view.Strategies) == 0 {
+		if view.Unavailable() {
+			fmt.Fprintln(env.Stdout, "  Option strategies unavailable.")
+		} else {
+			fmt.Fprintln(env.Stdout, "  No option strategies can be grouped safely.")
+		}
+	}
+	for _, group := range view.Strategies {
 		fmt.Fprintf(env.Stdout, "  %s  %s  %d unit(s)  %s  revision %d\n", group.ID, group.Underlying, group.Units, strings.ReplaceAll(group.Kind, "_", " "), group.Revision)
 		for _, leg := range group.Legs {
 			direction := "long"
@@ -152,7 +168,7 @@ func renderStrategies(env *Env, groups []rpc.PositionStrategy, issues []rpc.Stra
 			fmt.Fprintf(env.Stdout, "    %s %d × %s %s %.2f %s  conID %d\n", direction, absCLIInt(leg.Ratio), leg.Contract.Expiry, leg.Contract.Right, leg.Contract.Strike, leg.Contract.TradingClass, leg.Contract.ConID)
 		}
 	}
-	for _, issue := range issues {
+	for _, issue := range view.Issues {
 		fmt.Fprintf(env.Stdout, "  %s remains ungrouped: %s.\n", issue.Underlying, issue.Reason)
 	}
 	fmt.Fprintln(env.Stdout)
