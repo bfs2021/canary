@@ -115,11 +115,15 @@ type Connector struct {
 
 	// Open-order snapshot plumbing is an epoch-bound single-flight because
 	// reqAllOpenOrders has no request ID, so timed-out flights remain poisoned.
-	requestAllOpenOrders        func() error // test seam; nil uses the bound Connection
-	openOrderSnapshotMu         sync.Mutex
-	openOrderSnapshot           *openOrderSnapshotFlight
-	openOrderSnapshotPoison     openOrderSnapshotBinding
-	openOrderSnapshotPoisonAt   time.Time
+	requestAllOpenOrders       func() error // test seam; nil uses the bound Connection
+	openOrderSnapshotMu        sync.Mutex
+	openOrderSnapshot          *openOrderSnapshotFlight
+	openOrderSnapshotPoison    openOrderSnapshotBinding
+	openOrderSnapshotPoisonAt  time.Time
+	openOrderSnapshotPoisonErr error
+	// openOrderSnapshotDone is the session of the last complete snapshot.
+	openOrderSnapshotDone       openOrderSnapshotBinding
+	openOrderSnapshotDoneAt     time.Time
 	openOrderSnapshotTimeout    time.Duration
 	openOrderSnapshotBeforeSend func()
 
@@ -322,6 +326,9 @@ type ConnectorConfig struct {
 	ServiceName       string
 	PreferredClientID int
 	BaseConfig        *ConnectionConfig
+	// OpenOrderSnapshotTimeout bounds the wait for an open-order snapshot's
+	// openOrderEnd before the socket generation is poisoned; zero uses 15 s.
+	OpenOrderSnapshotTimeout time.Duration
 }
 
 // Subscription holds the latest values for one streaming market-data request.
@@ -1183,6 +1190,7 @@ func NewConnector(config *ConnectorConfig) *Connector {
 		historicalRouteReqs:    make(map[int]chan error),
 		pnl:                    newPnLCache(),
 	}
+	c.openOrderSnapshotTimeout = config.OpenOrderSnapshotTimeout
 	c.conn.evidenceBarrier = &c.evidenceBarrier
 	c.conn.publicationBarrier = &c.publicationBarrier
 	c.conn.displayChanged = c.display.notify

@@ -11,11 +11,12 @@ import (
 )
 
 // A snapshot whose openOrderEnd misses its deadline poisons its socket
-// generation; OpenOrderSnapshotPoisoned says so, with the time, for that
-// generation only, so the daemon can redial and read open orders again.
+// generation; OpenOrderSnapshotPoisoned says so, with the time and the
+// cause, for that generation only, so the daemon can redial and read open
+// orders again.
 func TestOpenOrderSnapshotPoisonedReportsTheCurrentSession(t *testing.T) {
 	c := readyBrokerEvidenceTestConnector(t)
-	if _, poisoned := c.OpenOrderSnapshotPoisoned(); poisoned {
+	if _, _, poisoned := c.OpenOrderSnapshotPoisoned(); poisoned {
 		t.Fatal("a fresh session reads poisoned")
 	}
 	c.openOrderSnapshotTimeout = 50 * time.Millisecond
@@ -24,13 +25,121 @@ func TestOpenOrderSnapshotPoisonedReportsTheCurrentSession(t *testing.T) {
 	if _, err := c.SnapshotOpenOrders(t.Context()); !errors.Is(err, ErrOpenOrderSnapshotPoisoned) {
 		t.Fatalf("unanswered snapshot err=%v, want poisoned", err)
 	}
-	since, poisoned := c.OpenOrderSnapshotPoisoned()
-	if !poisoned || since.Before(before) || since.After(time.Now()) {
-		t.Fatalf("poisoned=%t since=%s, want poisoned at the deadline", poisoned, since)
+	since, cause, poisoned := c.OpenOrderSnapshotPoisoned()
+	if !poisoned || since.Before(before) || since.After(time.Now()) || !errors.Is(cause, ErrOpenOrderSnapshotPoisoned) {
+		t.Fatalf("poisoned=%t since=%s cause=%v, want poisoned at the deadline with its cause", poisoned, since, cause)
 	}
 	c.conn.resetOrderIDReadiness() // a new socket generation, as a redial makes
-	if _, poisoned := c.OpenOrderSnapshotPoisoned(); poisoned {
+	if _, _, poisoned := c.OpenOrderSnapshotPoisoned(); poisoned {
 		t.Fatal("the poison outlived its socket generation")
+	}
+}
+
+// A send that may have been written poisons the generation like a missing
+// openOrderEnd, so it takes the same recovery path.
+func TestUncertainSnapshotSendPoisonsLikeAMissingEnd(t *testing.T) {
+	c := readyBrokerEvidenceTestConnector(t)
+	setServerVersionReady(c.conn, maxClientVersion)
+	c.conn.observeNextValidOrderID(100)
+	c.conn.writer = bufio.NewWriterSize(&partialOrderWriteError{}, 64*1024)
+	if _, err := c.SnapshotOpenOrders(t.Context()); err == nil || !brokerSendMayHaveBeenWritten(err) {
+		t.Fatalf("partial reqAllOpenOrders err=%v, want an uncertain send", err)
+	}
+	if _, cause, poisoned := c.OpenOrderSnapshotPoisoned(); !poisoned || !brokerSendMayHaveBeenWritten(cause) {
+		t.Fatalf("poisoned=%t cause=%v, want poisoned by the uncertain send", poisoned, cause)
+	}
+}
+
+// After a poisoning the old generation's late callbacks, whether decoded at
+// the old epoch or arriving from another Connection, can neither complete a
+// new snapshot nor add orders to it: only the new generation's own
+// openOrderEnd completes it, with only its own orders.
+func TestLateOldSessionCallbacksCannotCompleteANewSnapshot(t *testing.T) {
+	c := readyBrokerEvidenceTestConnector(t)
+	conn := c.conn
+	setServerVersionReady(conn, maxClientVersion)
+	c.ensureHandlersRegistered(conn)
+	c.openOrderSnapshotTimeout = 50 * time.Millisecond
+	c.requestAllOpenOrders = func() error { return nil }
+	oldEpoch := conn.BrokerSessionEpoch()
+	if _, err := c.SnapshotOpenOrders(t.Context()); !errors.Is(err, ErrOpenOrderSnapshotPoisoned) {
+		t.Fatalf("first snapshot err=%v, want poisoned", err)
+	}
+	conn.resetOrderIDReadiness()
+	c.openOrderSnapshotTimeout = 2 * time.Second
+
+	type result struct {
+		snap OpenOrderSnapshot
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		snap, err := c.SnapshotOpenOrders(t.Context())
+		done <- result{snap, err}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for {
+		c.openOrderSnapshotMu.Lock()
+		installed := c.openOrderSnapshot != nil
+		c.openOrderSnapshotMu.Unlock()
+		if installed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the new snapshot flight was not installed")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	stale := startupBurstOrder(0)
+	conn.processMessageAtEpoch(encodeOpenOrderProtoCallbackForTest(stale), oldEpoch)
+	conn.processMessageAtEpoch(conn.encodeMsg(msgOpenOrderEnd, "1"), oldEpoch)
+	other := NewConnection(DefaultConfig())
+	t.Cleanup(other.rateLimiter.Stop)
+	c.finishOpenOrderSnapshotFrom(other, conn.BrokerSessionEpoch())
+	select {
+	case r := <-done:
+		t.Fatalf("a late callback completed the new snapshot: %+v err=%v", r.snap, r.err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	fresh := startupBurstOrder(1)
+	conn.processMessage(encodeOpenOrderProtoCallbackForTest(fresh))
+	conn.processMessage(conn.encodeMsg(msgOpenOrderEnd, "1"))
+	r := <-done
+	if r.err != nil || !r.snap.Complete || len(r.snap.Orders) != 1 || r.snap.Orders[0].PermID != fresh.PermID {
+		t.Fatalf("new snapshot=%+v err=%v, want complete with only the new generation's order", r.snap, r.err)
+	}
+	if _, _, poisoned := c.OpenOrderSnapshotPoisoned(); poisoned {
+		t.Fatal("the new generation reads poisoned")
+	}
+}
+
+// A caller that stops waiting does not end the shared flight: its
+// openOrderEnd still completes it, nothing is poisoned and nothing asks for a
+// reconnect.
+func TestCallerCancellationDoesNotPoisonTheSnapshot(t *testing.T) {
+	c := readyBrokerEvidenceTestConnector(t)
+	conn := c.conn
+	setServerVersionReady(conn, maxClientVersion)
+	c.ensureHandlersRegistered(conn)
+	c.openOrderSnapshotTimeout = 2 * time.Second
+	c.requestAllOpenOrders = func() error { return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	if _, err := c.SnapshotOpenOrders(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v, want the caller's cancellation", err)
+	}
+	conn.processMessage(conn.encodeMsg(msgOpenOrderEnd, "1"))
+	deadline := time.Now().Add(time.Second)
+	for c.OpenOrderSnapshotCompletedAt().IsZero() {
+		if time.Now().After(deadline) {
+			t.Fatal("the flight did not complete after its caller left")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, _, poisoned := c.OpenOrderSnapshotPoisoned(); poisoned {
+		t.Fatal("a caller's cancellation poisoned the generation")
 	}
 }
 

@@ -278,3 +278,22 @@ func TestStartupEndsAtClientIDInUse(t *testing.T) {
 		t.Fatalf("326 took %s to end startup", elapsed)
 	}
 }
+
+// A Gateway that sends nextValidId but no managedAccounts still connects at
+// once: after nextValidId the wait for the accounts is a short grace, as the
+// one-second startup read before 2026-10-19 was, not the whole budget. The
+// whole budget made every connect against such a Gateway (the daemon's test
+// fakes) wait five seconds.
+func TestStartupWithoutManagedAccountsWaitsOnlyAGrace(t *testing.T) {
+	conn := startupTestConnection(serveStartup(t, func(s *twsGatewaySession) {
+		s.write(twsGatewayFrame(msgNextValidID, "1", "100"))
+	}), 1)
+	began := time.Now()
+	if err := conn.Connect(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Disconnect() })
+	if elapsed := time.Since(began); elapsed > 2*time.Second {
+		t.Fatalf("connect without managedAccounts took %s", elapsed)
+	}
+}

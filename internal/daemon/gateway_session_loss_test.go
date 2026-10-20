@@ -31,6 +31,15 @@ type fakeTWS struct {
 	requests  atomic.Int64 // frames received after startAPI
 	mu        sync.Mutex
 	sessions  []net.Conn
+	// accepted counts the sessions served; openOrderRequests the
+	// reqAllOpenOrders frames. answerOpenOrders, when set, decides whether
+	// the nth request of the session'th session gets its openOrderEnd
+	// (both from 1); unset, nothing is answered.
+	accepted          atomic.Int32
+	openOrderRequests atomic.Int32
+	answerOpenOrders  func(session, nth int) bool
+	// account, when set, is sent as managedAccounts after nextValidId.
+	account string
 }
 
 func startFakeTWS(t *testing.T) *fakeTWS {
@@ -63,11 +72,12 @@ func (f *fakeTWS) accept() {
 		f.mu.Lock()
 		f.sessions = append(f.sessions, c)
 		f.mu.Unlock()
-		go f.serve(c)
+		session := int(f.accepted.Add(1))
+		go f.serve(c, session)
 	}
 }
 
-func (f *fakeTWS) serve(c net.Conn) {
+func (f *fakeTWS) serve(c net.Conn, session int) {
 	defer c.Close()
 	r := bufio.NewReader(c)
 	prefix := make([]byte, 4) // "API\0"
@@ -87,11 +97,29 @@ func (f *fakeTWS) serve(c net.Conn) {
 	if err := writeTWSFrame(c, append(nextValidID, "1\x001\x00"...)); err != nil {
 		return
 	}
+	if f.account != "" {
+		accounts := binary.BigEndian.AppendUint32(nil, 15)
+		if err := writeTWSFrame(c, append(accounts, "1\x00"+f.account+"\x00"...)); err != nil {
+			return
+		}
+	}
+	nth := 0
 	for {
-		if _, err := readTWSFrame(r); err != nil {
+		frame, err := readTWSFrame(r)
+		if err != nil {
 			return
 		}
 		f.requests.Add(1)
+		if len(frame) >= 4 && binary.BigEndian.Uint32(frame[:4]) == 16 { // reqAllOpenOrders
+			f.openOrderRequests.Add(1)
+			nth++
+			if f.answerOpenOrders != nil && f.answerOpenOrders(session, nth) {
+				end := binary.BigEndian.AppendUint32(nil, 53) // openOrderEnd
+				if err := writeTWSFrame(c, append(end, "1\x00"...)); err != nil {
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -129,6 +157,13 @@ func writeTWSFrame(w io.Writer, body []byte) error {
 // min after; the daemon adds us_options) published for a fixed clock.
 func sessionLossServer(t *testing.T, f *fakeTWS, at string) (*Server, *lockedBuffer) {
 	t.Helper()
+	return sessionLossServerWith(t, f, at, nil)
+}
+
+// sessionLossServerWith is sessionLossServer with configure applied before
+// the first connect.
+func sessionLossServerWith(t *testing.T, f *fakeTWS, at string, configure func(*Server)) (*Server, *lockedBuffer) {
+	t.Helper()
 	now := scheduleTime(t, at)
 	out := &lockedBuffer{}
 	s := newTestServer(t)
@@ -138,6 +173,9 @@ func sessionLossServer(t *testing.T, f *fakeTWS, at string) (*Server, *lockedBuf
 	s.logger = NewLogger(out, "debug")
 	s.now = func() time.Time { return now }
 	s.gatewaySchedule.view.Store(compileGatewaySchedule(now, []marketcal.Market{marketcal.MarketUSEquity, marketcal.MarketUSOptions}, 2*time.Hour, 90*time.Minute, false))
+	if configure != nil {
+		configure(s)
+	}
 	ep, err := discover.Resolve(t.Context(), partialFromConfig(s.cfg.Gateway))
 	if err != nil {
 		t.Fatal(err)
@@ -527,7 +565,9 @@ func TestPoisonedOpenOrderSnapshotRedialsThePrimarySession(t *testing.T) {
 			s, out := sessionLossServer(t, f, tc.at)
 			old := s.gatewayConnectorForTest()
 			now := s.now()
-			s.snapshotPoisonedFn = func(*ibkrlib.Connector) (time.Time, bool) { return now.Add(-40 * time.Second), true }
+			s.snapshotPoisonedFn = func(*ibkrlib.Connector) (time.Time, error, bool) {
+				return now.Add(-40 * time.Second), errors.New("synthetic: no openOrderEnd"), true
+			}
 
 			s.brokerWriteMu.Lock()
 			s.redialPoisonedOpenOrderSnapshot(old, now)
@@ -545,7 +585,7 @@ func TestPoisonedOpenOrderSnapshotRedialsThePrimarySession(t *testing.T) {
 				t.Fatalf("off duty, the redial warned:\n%s", strings.Join(warns, "\n"))
 			}
 			lines := snapshotLines(logLinesAt(logged, tc.level))
-			if len(lines) != 1 || !strings.Contains(lines[0], "open-order snapshot poisoned since") || !strings.Contains(lines[0], "it is redialled") {
+			if len(lines) != 1 || !strings.Contains(lines[0], "open-order snapshot poisoned at") || !strings.Contains(lines[0], "it is redialled") {
 				t.Fatalf("want only the supervisor's %s line, got %d:\n%s", tc.level, len(lines), strings.Join(lines, "\n"))
 			}
 
@@ -564,7 +604,7 @@ func TestPoisonedOpenOrderSnapshotRedialsThePrimarySession(t *testing.T) {
 			if len(again) != 1 || !strings.Contains(again[0], "poisoned again") || !strings.Contains(again[0], "until the Gateway restarts") {
 				t.Fatalf("want one restart line for a redialled session poisoned again, got:\n%s", strings.Join(again, "\n"))
 			}
-			s.snapshotPoisonedFn = func(*ibkrlib.Connector) (time.Time, bool) { return time.Time{}, false }
+			s.snapshotPoisonedFn = func(*ibkrlib.Connector) (time.Time, error, bool) { return time.Time{}, nil, false }
 			s.redialPoisonedOpenOrderSnapshot(fresh, now.Add(2*time.Hour))
 			if !fresh.IsReady() {
 				t.Fatal("a session whose snapshot is not poisoned was dropped")
@@ -581,4 +621,92 @@ func snapshotLines(lines []string) []string {
 		}
 	}
 	return out
+}
+
+// The review of 2026-10-20 asked for the whole recovery to be proven. A
+// missing openOrderEnd poisons the session's open-order snapshot; readers
+// fail closed and trigger nothing themselves; the supervisor redials once
+// however many readers and ticks race it; the new session's complete answer
+// restores the inventory proposals read, the protection cache never serves
+// the old session's or another account's snapshot, and the outcome is said
+// once.
+func TestPoisonedSnapshotRecoversOnTheRedialledSession(t *testing.T) {
+	f := startFakeTWS(t)
+	f.account = "DU1234567"
+	// Session 1 answers its first request only; session 2 answers all.
+	f.answerOpenOrders = func(session, nth int) bool { return session > 1 || nth == 1 }
+	s, out := sessionLossServerWith(t, f, "2026-10-07T18:00:00Z", func(s *Server) {
+		s.cfg.Gateway.Account = "DU1234567"
+		s.openOrderSnapshotProtocolTimeout = 200 * time.Millisecond
+		s.now = time.Now // snapshot receipts carry real times
+	})
+	old := s.gatewayConnectorForTest()
+	ctx := t.Context()
+
+	cached, _, err := s.brokerOpenOrderInventory(ctx, false)
+	if err != nil || !cached.Complete {
+		t.Fatalf("first inventory=%+v err=%v, want complete", cached, err)
+	}
+	if _, _, err := s.brokerOpenOrderInventory(ctx, true); err == nil || !strings.Contains(err.Error(), "poisoned") {
+		t.Fatalf("unanswered inventory err=%v, want poisoned", err)
+	}
+	if _, cause, poisoned := old.OpenOrderSnapshotPoisoned(); !poisoned || !errors.Is(cause, ibkrlib.ErrOpenOrderSnapshotPoisoned) {
+		t.Fatalf("poisoned=%t cause=%v", poisoned, cause)
+	}
+	requests := f.openOrderRequests.Load()
+
+	mark := len(out.String())
+	now := s.now()
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() { _, _, _ = s.brokerOpenOrderInventory(ctx, true) })
+		wg.Go(func() { s.superviseAnswerPaths(now) })
+	}
+	wg.Wait()
+	if got := f.openOrderRequests.Load(); got != requests {
+		t.Fatalf("readers of a poisoned session sent %d reqAllOpenOrders, want none", got-requests)
+	}
+	waitSessionLost(t, old)
+	accepted := f.accepted.Load()
+	reconnectForTest(t, s)
+	if got := f.accepted.Load() - accepted; got != 1 {
+		t.Fatalf("recovery dialled %d sessions, want one", got)
+	}
+	if redials := snapshotLines(attentionLines(settledLog(out, mark))); len(redials) != 1 || !strings.Contains(redials[0], "so it is redialled") {
+		t.Fatalf("want one redial line, got:\n%s", strings.Join(redials, "\n"))
+	}
+
+	fresh := s.gatewayConnectorForTest()
+	if fresh == nil || fresh == old {
+		t.Fatal("no new session")
+	}
+	if _, _, poisoned := fresh.OpenOrderSnapshotPoisoned(); poisoned {
+		t.Fatal("the new session reads poisoned")
+	}
+	restored, _, err := s.brokerOpenOrderInventory(ctx, false)
+	if err != nil || !restored.Complete || restored.Session == cached.Session {
+		t.Fatalf("restored inventory=%+v err=%v, want complete on the new session", restored, err)
+	}
+	if _, _, err := s.brokerOpenOrderInventory(ctx, true); err != nil {
+		t.Fatalf("fresh inventory on the new session: %v", err)
+	}
+	other := s.currentProtectionOrderSnapshotBinding()
+	other.scope.Account = "DU7654321"
+	if _, ok := s.cachedProtectionOrderSnapshot(other, s.orderNow()); ok {
+		t.Fatal("another account's binding reused the cached inventory")
+	}
+
+	mark = len(out.String())
+	s.superviseAnswerPaths(now.Add(time.Minute))
+	s.superviseAnswerPaths(now.Add(2 * time.Minute))
+	outcome := snapshotLines(attentionLines(settledLog(out, mark)))
+	if len(outcome) != 1 || !strings.Contains(outcome[0], "complete again") {
+		t.Fatalf("want the recovery said once, got:\n%s", strings.Join(outcome, "\n"))
+	}
+}
+
+// attentionLines are the WARN and INFO lines: which one the logging schedule
+// picks depends on the hour a real-clock test runs.
+func attentionLines(logged string) []string {
+	return append(logLinesAt(logged, "WARN"), logLinesAt(logged, "INFO")...)
 }

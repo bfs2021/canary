@@ -29,9 +29,12 @@ type answerPathLane struct {
 	// quietWarned records that a stall outlasting a recent redial was logged.
 	quietWarned bool
 	// snapshotRedialedAt is the last redial for a poisoned open-order
-	// snapshot; snapshotQuietWarned that a poison outlasting it was logged.
+	// snapshot; snapshotQuietWarned that a poison outlasting it was logged;
+	// snapshotPoisonedAt the poisoning that redial answered, while the
+	// recovery's outcome is still to be said.
 	snapshotRedialedAt  time.Time
 	snapshotQuietWarned bool
+	snapshotPoisonedAt  time.Time
 }
 
 type answerPathSupervisor struct {
@@ -153,6 +156,7 @@ func (s *Server) superviseAnswerPaths(now time.Time) {
 		}
 		if lane.name == rpc.AnswerPathLanePrimary {
 			s.redialPoisonedOpenOrderSnapshot(lane.c, now)
+			s.noteOpenOrderSnapshotRecovered(lane.c, now)
 		}
 	}
 }
@@ -174,7 +178,7 @@ func (s *Server) redialPoisonedOpenOrderSnapshot(c *ibkrlib.Connector, now time.
 	if s.snapshotPoisonedFn != nil {
 		poisonedFn = s.snapshotPoisonedFn
 	}
-	since, poisoned := poisonedFn(c)
+	since, cause, poisoned := poisonedFn(c)
 	if !poisoned {
 		return
 	}
@@ -204,10 +208,34 @@ func (s *Server) redialPoisonedOpenOrderSnapshot(c *ibkrlib.Connector, now time.
 		return
 	}
 	s.answerPath.mu.Lock()
-	lane.snapshotRedialedAt, lane.snapshotQuietWarned = now, false
+	lane.snapshotRedialedAt, lane.snapshotQuietWarned, lane.snapshotPoisonedAt = now, false, since
 	s.answerPath.mu.Unlock()
-	logf("IBKR open-order snapshot poisoned since %s (no openOrderEnd by its deadline, or a send that may have been written); open orders cannot be read on this connection, so it is redialled", since.Format(time.TimeOnly))
+	logf("IBKR open-order snapshot poisoned at %s (%v); open orders cannot be read on this connection, so it is redialled", since.Format(time.TimeOnly), cause)
 	s.triggerReconnect()
+}
+
+// noteOpenOrderSnapshotRecovered says once that a snapshot completed on the
+// session a poison redial created, closing the record the redial opened.
+func (s *Server) noteOpenOrderSnapshotRecovered(c *ibkrlib.Connector, now time.Time) {
+	s.answerPath.mu.Lock()
+	lane := s.answerPath.lane(rpc.AnswerPathLanePrimary)
+	poisonedAt, redialedAt := lane.snapshotPoisonedAt, lane.snapshotRedialedAt
+	s.answerPath.mu.Unlock()
+	if poisonedAt.IsZero() {
+		return
+	}
+	completed := c.OpenOrderSnapshotCompletedAt()
+	if completed.IsZero() || completed.Before(redialedAt) {
+		return
+	}
+	s.answerPath.mu.Lock()
+	lane.snapshotPoisonedAt = time.Time{}
+	s.answerPath.mu.Unlock()
+	logf := s.infof
+	if s.gatewayLogRequired(poisonedAt, now) {
+		logf = s.warnf
+	}
+	logf("IBKR open-order snapshot complete again at %s on the connection redialled at %s (poisoned at %s)", completed.Format(time.TimeOnly), redialedAt.Format(time.TimeOnly), poisonedAt.Format(time.TimeOnly))
 }
 
 // errAnswerPathRedial marks a session the supervisor ended on purpose. The
