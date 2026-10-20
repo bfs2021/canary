@@ -123,8 +123,9 @@ recorded as a hold naming it, and the owner suspends.
 
 Live (built 2026-10-19, `strategy_kill_live.go`): a live entry keeps no
 shadow record, so the drawdown is measured on its own fills. At each frozen
-decision the background refresh keeps one mark (scope `strategy/<id>`,
-never read by an order path): the decision close, the units and the cash
+decision the background refresh keeps one mark (scope
+`strategy/<id>/<account>|<mode>|<conid>`, never read by an order path): the
+decision close, the units and the cash
 its own fills (the executions of its rows' orders) left, and S at that
 decision; the sleeve's equity is cash plus units times the close, its peak
 starts at zero as the paper position's does, and the drawdown in K is
@@ -145,7 +146,28 @@ the holding times the move of the close, s0's test (a) on the sleeve, and
 `canary core` reads the drawdown "on its holding". A hand trade between
 decisions is measured as if done at the previous decision close. Marks that
 cannot be read hold the entry ("kill rule: the marks of … cannot be read"),
-the core and every live entry alike. The core's bound is the owner's to
+the core and every live entry alike.
+
+A mark belongs to one account, its paper or live mode, the strategy and the
+line its own fills trade (the contract id), the scope its month is frozen
+under, and the kill test reads only the marks of the scope it measures (the
+v3.25.4 review's finding 1, 2026-10-20). Until v3.26.1 marks were kept by
+strategy and month alone in a state database that outlives an account
+change, so account A's mark of a month marked account B's month and B's own
+drawdown past its bound read 0.00 K, not breached. Another account's, the
+other mode's or another line's mark therefore never marks a month; the
+month is measured on the current scope's own fills, and its mark is kept
+once under that scope (a second write of the month keeps the first). A mark
+whose payload names another scope than the one it is kept under holds the
+entry as an unreadable mark does. While the account or its mode is not
+resolved (no single concrete account, or an unknown mode), nothing is
+measured and nothing is kept: a live entry holds ("kill rule: the account
+and its paper or live mode are not resolved"), never "measured, not
+breached". Marks kept by v3.25.4 and earlier (`strategy.mark.v1` under
+scope `strategy/<id>`) name no account, mode or line; they stay in the event
+log as written, for audit, and never count for any scope: their evidence is
+not guessed into the active account, and the first decision after the
+upgrade starts the scope's measure afresh from its own fills. The core's bound is the owner's to
 write (`[mandate.core] kill_drawdown_k`); until it is written the live core
 holds.
 

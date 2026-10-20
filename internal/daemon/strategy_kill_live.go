@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/core"
@@ -19,8 +20,9 @@ import (
 // that sends"; built 2026-10-19). A live entry keeps no shadow record, so
 // its drawdown is measured on its own fills: at each decision close the
 // sleeve's equity is the cash its own fills moved plus the units they left
-// times the decision close, kept once per decision in the daemon's event
-// log (scope strategy/<id>, never read by an order path). The drawdown is
+// times the decision close, kept once per decision and scope in the
+// daemon's event log (scope strategy/<id>/<account>|<mode>|<conid>, never
+// read by an order path; liveMarkBinding). The drawdown is
 // the fall from the running peak in units of the stage's capital, K at the
 // stage (stageCapital): S / 0.15 times the stage's scale, S the sleeve's
 // risk allocation in money at that decision, as on the shadow record. Units
@@ -37,9 +39,18 @@ import (
 // that cannot be measured is no kill rule (refuter round 3).
 
 const (
-	liveMarkType  = "strategy.mark.v1"
+	liveMarkType  = "strategy.mark.v2"
 	liveMarkLimit = 10000
+	// legacyLiveMarkType is the mark v3.25.4 and earlier kept under scope
+	// strategy/<id>, naming no account, mode or line. Those rows stay in the
+	// event log for audit and are never read as a measure (liveMarkBinding).
+	legacyLiveMarkType = "strategy.mark.v1"
 )
+
+// errLiveMarkScopeUnresolved is the kill test's answer while the account or
+// its paper/live mode is not resolved: a measure without its account is no
+// measure, so the entry holds (fail closed).
+var errLiveMarkScopeUnresolved = errors.New("the account and its paper or live mode are not resolved")
 
 // killUnwrittenNote is the verdict's note while no bound is written; a live
 // entry holds on it (strategy_target.go), a shadow entry sends nothing.
@@ -47,8 +58,13 @@ const killUnwrittenNote = "kill_drawdown_k unwritten: the kill rule cannot fire 
 
 // liveMark is one decision's mark of a live entry's own sleeve.
 type liveMark struct {
-	Version      int     `json:"version"`
-	Strategy     string  `json:"strategy"`
+	Version  int    `json:"version"`
+	Strategy string `json:"strategy"`
+	// Account, Mode and ConID are the scope the mark's evidence belongs to
+	// (liveMarkBinding); a mark is read only under its own.
+	Account      string  `json:"account"`
+	Mode         string  `json:"mode"`
+	ConID        int     `json:"con_id"`
 	Session      string  `json:"session"`
 	Close        float64 `json:"close"`
 	Units        float64 `json:"units"`
@@ -109,16 +125,55 @@ func nonZero(v, fallback float64) float64 {
 	return fallback
 }
 
-func liveMarkScope(id string) string { return "strategy/" + id }
+// liveMarkBinding is the identity a live entry's marks belong to: the
+// strategy, the account with its paper or live mode, and the line (the
+// contract id) its own fills trade. The kill test reads only the marks of
+// the scope it measures, so another account's, the other mode's or another
+// line's mark of the same month never counts as this one's (the v3.25.4
+// review's finding 1: a mark keyed by strategy and month alone let account
+// A's month suppress account B's drawdown). The binding is the frozen
+// month's (coreScope): one account, one mode, one contract.
+type liveMarkBinding struct {
+	strategy string
+	account  string
+	mode     string
+	conID    int
+}
+
+// liveMarkBindingFor binds a strategy's marks to scope and its line, or
+// fails while the account, its mode or the line is not resolved.
+func liveMarkBindingFor(id string, scope brokerStateScope, conID int) (liveMarkBinding, error) {
+	if !brokerScopeConcrete(scope) {
+		return liveMarkBinding{}, errLiveMarkScopeUnresolved
+	}
+	if id == "" || conID <= 0 {
+		return liveMarkBinding{}, errors.New("the strategy's line is not resolved")
+	}
+	return liveMarkBinding{strategy: id, account: strings.ToUpper(strings.TrimSpace(scope.Account)), mode: scope.Mode, conID: conID}, nil
+}
+
+// scopeKey is the event-log scope the binding's marks are kept under.
+func (b liveMarkBinding) scopeKey() string {
+	return "strategy/" + b.strategy + "/" + coreScope(brokerStateScope{Account: b.account, Mode: b.mode}, b.conID)
+}
+
+// holds reports whether a decoded mark names this binding.
+func (b liveMarkBinding) holds(m liveMark) bool {
+	return m.Strategy == b.strategy && strings.EqualFold(strings.TrimSpace(m.Account), b.account) && m.Mode == b.mode && m.ConID == b.conID
+}
+
+// legacyLiveMarkScope is where v3.25.4 and earlier kept a strategy's
+// marks, for every account alike. Nothing reads it as a measure.
+func legacyLiveMarkScope(id string) string { return "strategy/" + id }
 
 func liveMarkKey(id, session string) string { return "strategy:" + id + ":" + session + ":mark" }
 
-// liveMarks reads a live entry's marks in the order they were written.
-func (s *Server) liveMarks(ctx context.Context, id string) ([]liveMark, error) {
+// liveMarks reads the binding's marks in the order they were written.
+func (s *Server) liveMarks(ctx context.Context, b liveMarkBinding) ([]liveMark, error) {
 	if s.coreStore == nil {
 		return nil, errors.New("no daemon store")
 	}
-	events, err := s.coreStore.LoadEvents(ctx, corestore.EventQuery{ScopeKey: liveMarkScope(id), Type: liveMarkType, Limit: liveMarkLimit})
+	events, err := s.coreStore.LoadEvents(ctx, corestore.EventQuery{ScopeKey: b.scopeKey(), Type: liveMarkType, Limit: liveMarkLimit})
 	if err != nil {
 		return nil, err
 	}
@@ -130,21 +185,30 @@ func (s *Server) liveMarks(ctx context.Context, id string) ([]liveMark, error) {
 			// words name Go types and stay out of the hold.
 			return nil, fmt.Errorf("the mark %s is not a mark", ev.EventKey)
 		}
+		if !b.holds(m) {
+			// Kept under this scope but naming another: never counted.
+			return nil, fmt.Errorf("the mark %s names another account, mode or line than the one it is kept under", ev.EventKey)
+		}
 		out = append(out, m)
 	}
 	return out, nil
 }
 
 // recordLiveMark keeps a live entry's mark of its frozen month's decision,
-// once: the background refresh is its only writer, and the event log's key
-// keeps it unique under retries.
-func (s *Server) recordLiveMark(ctx context.Context, res *rpc.StrategyTargetResult, r register.Resolved, now time.Time) {
+// once per scope: the background refresh is its only writer, and the event
+// log's key keeps it unique under retries. scope is the account the result
+// was evaluated under; a mark is not kept once the account has changed.
+func (s *Server) recordLiveMark(ctx context.Context, res *rpc.StrategyTargetResult, r register.Resolved, scope brokerStateScope, now time.Time) {
 	if s.coreStore == nil || res == nil || r.State != register.StateLive || r.Entry.ID == "" || res.Decision == nil || res.Decision.FrozenAt.IsZero() || res.Decision.Drift ||
 		res.Sizing == nil || !(res.Decision.LineClose() > 0) || !(res.Sizing.Current.SleeveBudget > 0) || res.Instrument == nil || res.Instrument.ConID <= 0 {
 		return
 	}
+	b, err := liveMarkBindingFor(r.Entry.ID, scope, res.Instrument.ConID)
+	if err != nil || !sameBrokerScope(scope, s.currentBrokerStateScope()) {
+		return
+	}
 	key := liveMarkKey(r.Entry.ID, res.Decision.Decision)
-	if _, ok, err := s.coreStore.GetEvent(ctx, liveMarkScope(r.Entry.ID), key); err != nil || ok {
+	if _, ok, err := s.coreStore.GetEvent(ctx, b.scopeKey(), key); err != nil || ok {
 		return
 	}
 	var own strategyFills
@@ -156,20 +220,27 @@ func (s *Server) recordLiveMark(ctx context.Context, res *rpc.StrategyTargetResu
 		if res.Holding == nil {
 			return
 		}
-		marks, err := s.liveMarks(ctx, r.Entry.ID)
+		marks, err := s.liveMarks(ctx, b)
 		if err != nil {
 			return
 		}
 		own = coreSleeveFills(lastLiveMark(marks), float64(res.Holding.Shares), res.Decision.LineClose())
 	default:
 		own = s.strategyOwnFills(ctx, r.Entry.ID, res.Instrument.ConID)
+		if own.Unread {
+			return
+		}
 	}
-	m := liveMark{Version: 1, Strategy: r.Entry.ID, Session: res.Decision.Decision, Close: res.Decision.LineClose(), Units: own.Units, Cash: own.Cash, SleeveBudget: res.Sizing.Current.SleeveBudget, ScalePct: r.ScalePct, RecordedAt: now}
+	if !sameBrokerScope(scope, s.currentBrokerStateScope()) {
+		return // the fills were read under another account
+	}
+	m := liveMark{Version: 2, Strategy: r.Entry.ID, Account: b.account, Mode: b.mode, ConID: b.conID, Session: res.Decision.Decision, Close: res.Decision.LineClose(), Units: own.Units, Cash: own.Cash,
+		SleeveBudget: res.Sizing.Current.SleeveBudget, ScalePct: r.ScalePct, RecordedAt: now}
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return
 	}
-	if _, err := s.coreStore.AppendEvents(ctx, []corestore.EventInput{{ScopeKey: liveMarkScope(r.Entry.ID), EventKey: key, Type: liveMarkType, Action: "mark",
+	if _, err := s.coreStore.AppendEvents(ctx, []corestore.EventInput{{ScopeKey: b.scopeKey(), EventKey: key, Type: liveMarkType, Action: "mark",
 		Origin: coreEventOriginDaemon, OccurredAt: now, PayloadJSON: raw}}); err != nil {
 		s.warnf("strategy %s mark %s: %v; the next refresh tries again under the same key", r.Entry.ID, m.Session, err)
 	}
@@ -182,7 +253,14 @@ func (s *Server) strategyKillLive(ctx context.Context, r register.Resolved, mark
 	if s.coreStore == nil {
 		return nil, nil
 	}
-	marks, err := s.liveMarks(ctx, r.Entry.ID)
+	// The marks and the fills are the current account's, on this line; an
+	// unresolved account measures nothing and holds (fail closed).
+	scope := s.currentBrokerStateScope()
+	b, err := liveMarkBindingFor(r.Entry.ID, scope, conID)
+	if err != nil {
+		return nil, err
+	}
+	marks, err := s.liveMarks(ctx, b)
 	if err != nil {
 		return nil, err
 	}
