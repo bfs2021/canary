@@ -218,13 +218,28 @@ func (s *Server) enrichOrderLifecycleEventFromJournal(ev *orderJournalEvent) (ma
 		return false, false
 	}
 	if view, ok := orderJournalViewForLifecycleEvent(*ev, views); ok {
+		// A callback arrives keyed to the current socket. Key it to the
+		// order's own route, the socket it was placed through, as a write's
+		// events are (orderJournalStatusFor): one order, one journal row.
+		ev.Endpoint = view.Endpoint
 		copyOrderJournalIdentityFromView(ev, view)
 		return true, true
 	}
 	return false, true
 }
 
+// orderJournalViewForLifecycleEvent pairs a broker callback with its journal
+// row: on the callback's own route first (orderJournalViewOnRoute), then, for
+// an order placed through another socket of the same login, only on exact
+// broker evidence (orderJournalViewAcrossEndpoints).
 func orderJournalViewForLifecycleEvent(ev orderJournalEvent, views []rpc.OrderView) (rpc.OrderView, bool) {
+	if view, ok := orderJournalViewOnRoute(ev, views); ok {
+		return view, true
+	}
+	return orderJournalViewAcrossEndpoints(ev, views)
+}
+
+func orderJournalViewOnRoute(ev orderJournalEvent, views []rpc.OrderView) (rpc.OrderView, bool) {
 	if ev.PermID != 0 {
 		for _, view := range views {
 			if view.PermID == ev.PermID && orderJournalEventRouteMatchesView(ev, view) {
@@ -288,9 +303,79 @@ func orderJournalViewForLifecycleEvent(ev orderJournalEvent, views []rpc.OrderVi
 
 func orderJournalEventRouteMatchesView(ev orderJournalEvent, view rpc.OrderView) bool {
 	return strings.TrimSpace(ev.Endpoint) == strings.TrimSpace(view.Endpoint) &&
-		ev.ClientID == view.ClientID &&
+		orderJournalEventScopeMatchesView(ev, view)
+}
+
+// orderJournalEventScopeMatchesView is the order's identity without the
+// socket: client ID, account and mode. Since 2026-10-20 08:00 CEST (owner)
+// the socket an order was placed through is not part of its identity for a
+// write (validateOrderViewMatchesGate); these three are.
+func orderJournalEventScopeMatchesView(ev orderJournalEvent, view rpc.OrderView) bool {
+	return ev.ClientID == view.ClientID &&
 		strings.EqualFold(strings.TrimSpace(ev.Account), strings.TrimSpace(view.Account)) &&
 		strings.EqualFold(strings.TrimSpace(ev.Mode), strings.TrimSpace(view.Mode))
+}
+
+// orderJournalViewAcrossEndpoints pairs a callback with the row of an order
+// placed through another socket (TWS or IB Gateway) of the same account, mode
+// and client ID, so its acknowledgements, status and fills reach the order's
+// one row after the daemon moved (the v3.25.4 review's finding 2). Only exact
+// broker evidence pairs, never a guess:
+//   - the callback names its client ID itself (an omitted legacy field is
+//     filled from the current route and proves nothing) and carries the
+//     broker's permanent ID;
+//   - a row with a permanent ID pairs only with that permanent ID, and an
+//     order reference or order ID the callback carries must agree;
+//   - a row the broker never acknowledged pairs only with a callback that
+//     carries the row's order reference and order ID both (openOrder and
+//     execDetails do; orderStatus carries neither and waits for them);
+//   - exactly one row qualifies, and no row of the scope contradicts the
+//     callback (the same permanent ID under another reference or order ID,
+//     or the same reference under another permanent ID).
+//
+// Error callbacks carry no client ID or permanent ID and never pair across
+// sockets; hand and other clients' orders are not in the journal to pair.
+func orderJournalViewAcrossEndpoints(ev orderJournalEvent, views []rpc.OrderView) (rpc.OrderView, bool) {
+	if ev.PermID <= 0 || !ev.clientIDPresent {
+		return rpc.OrderView{}, false
+	}
+	var match rpc.OrderView
+	matches := 0
+	for _, view := range views {
+		if !orderJournalEventScopeMatchesView(ev, view) {
+			continue
+		}
+		if orderJournalEventContradictsView(ev, view) {
+			return rpc.OrderView{}, false
+		}
+		if strings.TrimSpace(ev.Endpoint) == strings.TrimSpace(view.Endpoint) || !orderJournalEventProvesView(ev, view) {
+			continue
+		}
+		match = view
+		matches++
+	}
+	if matches != 1 {
+		return rpc.OrderView{}, false
+	}
+	return match, true
+}
+
+func orderJournalEventProvesView(ev orderJournalEvent, view rpc.OrderView) bool {
+	if view.PermID != 0 {
+		return view.PermID == ev.PermID &&
+			(ev.OrderRef == "" || ev.OrderRef == view.OrderRef) &&
+			(ev.ReservedOrderID == 0 || ev.ReservedOrderID == view.ReservedOrderID)
+	}
+	return ev.OrderRef != "" && ev.OrderRef == view.OrderRef &&
+		ev.ReservedOrderID > 0 && ev.ReservedOrderID == view.ReservedOrderID
+}
+
+func orderJournalEventContradictsView(ev orderJournalEvent, view rpc.OrderView) bool {
+	if view.PermID != 0 && view.PermID == ev.PermID {
+		return (ev.OrderRef != "" && view.OrderRef != "" && ev.OrderRef != view.OrderRef) ||
+			(ev.ReservedOrderID != 0 && view.ReservedOrderID != 0 && ev.ReservedOrderID != view.ReservedOrderID)
+	}
+	return ev.OrderRef != "" && view.OrderRef == ev.OrderRef && view.PermID != 0
 }
 
 func copyOrderJournalIdentityFromView(ev *orderJournalEvent, view rpc.OrderView) {

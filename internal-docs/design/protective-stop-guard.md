@@ -1,6 +1,6 @@
 # Protective stop exemption and guard
 
-Updated: 2026-10-20 08:30 CEST
+Updated: 2026-10-20 13:55 CEST
 Status: implemented
 
 Contract per `.agents/docs/daemon-cli-trading-contract.md` and
@@ -185,7 +185,30 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   Gateway alike (`validateOrderViewMatchesGate`), the difference is logged
   once at INFO, and the write's journal events stay keyed to the order's own
   route, so a stop placed through TWS and managed through the Gateway keeps
-  one journal row.
+  one journal row. The broker's callbacks follow the same rule (v3.26.1,
+  the v3.25.4 review's finding 2): an acknowledgement, status or fill that
+  arrives on the current socket for an order placed through the other one
+  is keyed to the order's own route and resolves its outstanding change,
+  but only on exact broker evidence (`orderJournalViewAcrossEndpoints`):
+  the callback names its client ID itself and carries the permanent ID;
+  account, mode and client ID equal the row's; a row with a permanent ID
+  pairs only with that permanent ID, and a row the broker never
+  acknowledged only with a callback that carries its order reference and
+  order ID both; exactly one row qualifies and none in the scope
+  contradicts the callback. The callback's own route is always tried first.
+  Error callbacks (no client or permanent ID) never pair across sockets.
+  So the guard can shrink, shrink again and cancel after the move.
+- **Order IDs after a restart (#120, v3.26.1).** A change needs the order's
+  ID to pass the socket's order-ID claim, which refuses an ID below the
+  session's frontier unless this process placed it. An order the broker
+  reports on the current socket generation for the daemon's client ID and
+  account, transmitted (permanent ID set) and not a what-if, may also be
+  claimed (`observeReportedOwnOrderAtEpoch`); nothing counts on a client-0
+  connection, where TWS reports hand orders as client 0, and an ID reported
+  twice with different identities never counts. Before a modify the daemon
+  checks the report names the journal row's account and permanent ID and
+  refuses a row without one; a cancel refuses a positive mismatch
+  (`validateReportedOwnOrder`).
 - **Freeze.** `trading.freeze` blocks every new write including modifies and
   allows cancels (`docs/docs/reference/config.md`). The guard follows that: a
   shrink waits while frozen, a cancel goes through.
@@ -273,5 +296,19 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   profit trail; a new stop is born in its own group; the guard shrinks a
   stop for an unlinked Canary sale and leaves it for a linked one; the guard
   shrinks and cancels an option trail.
+- `internal/daemon/order_lifecycle_cross_endpoint_trading_test.go` (trading
+  build): TWS to IB Gateway, the reverse and the same socket, each a shrink,
+  an acknowledgement (every callback twice), a second shrink and
+  acknowledgement and the owner's cancel on one row; a fill through the
+  other app lands once on that row; a restarted daemon manages a stop its
+  predecessor placed through the other app and refuses a broker report
+  naming another permanent ID; callbacks with another or omitted client ID,
+  client 0, another account, another or no permanent ID, the permanent ID
+  under another reference or order ID, and another trading mode never
+  resolve the change; a never-acknowledged row pairs only with its
+  reference and order ID. `order_lifecycle_cross_endpoint_test.go`:
+  ambiguous and contradicted rows. `pkg/ibkr/order_id_inherited_test.go`
+  and `order_write_helpers_test.go` (`TestValidateReportedOwnOrderRefusesAnotherOrder`):
+  the order-ID claim and its check.
 - `pkg/ibkr/place_order_oca_test.go`: the membership round-trips the proto
   wire (fields 27 and 30) and half a membership is refused.
