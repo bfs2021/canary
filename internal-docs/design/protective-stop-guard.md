@@ -1,6 +1,6 @@
 # Protective stop exemption and guard
 
-Updated: 2026-10-20 14:36 CEST
+Updated: 2026-10-20 15:15 CEST
 Status: implemented
 
 Contract per `.agents/docs/daemon-cli-trading-contract.md` and
@@ -198,10 +198,11 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   ID. A permanent ID pairs with the row that holds it; of several holders
   only the one Canary placed (a duplicate row born from callbacks under the
   new socket by earlier builds loses to it), and across sockets only when
-  the callback names its client ID itself. A first acknowledgement enriches
-  only an open row without a permanent ID that is the one candidate in the
-  whole scope: on the callback's socket by reference or by order ID, across
-  sockets by reference and order ID both. Error callbacks (no client or
+  the callback names its client ID itself. Only the broker's openOrder
+  introduces a permanent ID to a row without one, and only to the one open
+  row in the whole scope it names by reference (across sockets also by
+  order ID); an orderStatus or execution, which may belong to another order
+  behind the same order ID, never does. Error callbacks (no client or
   permanent ID) never pair across sockets. So the guard can shrink, shrink
   again and cancel after the move.
 - **Order IDs after a restart (#120, v3.26.1).** A change needs the order's
@@ -210,19 +211,24 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   reports on the current socket generation for the daemon's client ID and
   account, transmitted (permanent ID set) and not a what-if, is recorded
   with its permanent ID, account and reference
-  (`observeReportedOwnOrderAtEpoch`); nothing counts on a client-0
+  (`observeReportedOwnOrderAtEpoch`; a legacy pre-protobuf frame is read by
+  IB's legacy layout, `legacyOpenOrderReport`); nothing counts on a client-0
   connection, where TWS reports hand orders as client 0, and an ID reported
-  twice with different identities never counts. The modify names the order
-  it changes on the wire order (`RawOrder.Changes`, never sent), and the
-  claim accepts a reported ID only if the report on the bound socket
-  generation names that permanent ID, account and reference, compared under
-  the claim's lock. Before sending, the daemon checks the same on the
-  write's own socket (`validateReportedOwnOrder`): an order this process
-  placed is refused only on a report naming another order; any other order
-  needs the broker's report naming the row's account, reference and
-  permanent ID, and is refused in plain words until it arrives; a row
-  without a permanent ID can be cancelled on a report carrying its
-  reference, never modified.
+  twice with different identities never counts. The modify and its preview's
+  what-if name the order they change on the wire order (`RawOrder.Changes`,
+  never sent), and the claim accepts a reported ID only if the report on the
+  bound socket generation names that permanent ID, account and reference (a
+  report without a reference does not name an order that has one), compared
+  under the claim's lock. "This process placed it" means placed as a new
+  order through this Connector (`PlacedOrderID`); an ID it only changed
+  proves its identity on every change. Before sending, the daemon checks
+  the same on the write's own socket (`validateReportedOwnOrder`), and a
+  cancel checks again inside its wire guard at the send: an order this
+  process placed is refused only on a report naming another order; any
+  other order needs the broker's report naming the row's account,
+  reference and permanent ID, and is refused in plain words until it
+  arrives; a row without a permanent ID can be cancelled on a report
+  carrying its reference, never modified.
 - **Freeze.** `trading.freeze` blocks every new write including modifies and
   allows cancels (`docs/docs/reference/config.md`). The guard follows that: a
   shrink waits while frozen, a cancel goes through.
@@ -325,6 +331,10 @@ Contract per `.agents/docs/daemon-cli-trading-contract.md` and
   ambiguous and contradicted rows and the whole-scope check
   (`TestLifecyclePairingRespectsTheWholeScope`). `pkg/ibkr/order_id_inherited_test.go`
   and `order_write_helpers_test.go` (`TestValidateReportedOwnOrderRefusesAnotherOrder`):
-  the order-ID claim and its check.
+  the order-ID claim and its check. `pkg/ibkr/order_id_inherited_trading_test.go`
+  (`TestRestartedClientResizesAndCancelsAnInheritedStop`, no daemon seams):
+  on the Connector, an inherited stop's modify preview and modify, twice,
+  and its cancel; a change naming another permanent ID refused before any
+  byte; an ID only modified never counts as placed here.
 - `pkg/ibkr/place_order_oca_test.go`: the membership round-trips the proto
   wire (fields 27 and 30) and half a membership is refused.
