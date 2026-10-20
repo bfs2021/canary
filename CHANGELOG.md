@@ -17,6 +17,7 @@ executions poll is named as such instead of logged as an unknown message.
 
 - When the open-order read is left without its answer, the daemon redials its broker connection at once, at most once an hour and never while an order is being placed or changed, so the order reconcile and the protection alerts read open orders again; a redialled connection that loses the read again is reported as the Gateway needing a restart (#119).
 - A late answer to the executions poll is logged with how late it was, at WARN in the logging schedule's duty hours and INFO outside them, instead of "Unhandled message ID 55" (#119).
+- The daemon can change an open order that an earlier daemon process placed, such as the protective stop guard resizing a stop after a restart: an order the broker reports for the daemon's client on the current connection, under the same permanent ID as its journal row, is the daemon's to change, instead of refused as "behind the consumed request/order frontier" (#120).
 
 ## v3.25.4 — 2026-10-20 08:29 CEST
 
