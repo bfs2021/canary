@@ -1,0 +1,16 @@
+# canary strategies list · COLUMNS=80 · colour off
+
+Option strategies  U1234567 · live
+  Data note: the last complete portfolio receipt is stale
+  strat-aaa-1  AAA  2 unit(s)  vertical spread  revision 3
+    long 1 × 20261218 C 100.00 AAA  conID 900001
+    short 1 × 20261218 C 110.00 AAA  conID 900002
+
+# canary strategies list · COLUMNS=80 · colour on, ESC written as \x1b
+
+Option strategies  U1234567 · live
+  \x1b[33mData note: the last complete portfolio receipt is stale\x1b[0m
+  strat-aaa-1  AAA  2 unit(s)  vertical spread  revision 3
+    long 1 × 20261218 C 100.00 AAA  conID 900001
+    short 1 × 20261218 C 110.00 AAA  conID 900002
+

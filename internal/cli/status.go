@@ -93,6 +93,11 @@ func renderStatusText(env *Env, res *rpc.HealthResult, alerts *rpc.AlertCandidat
 	default:
 		statusHealthRow(env, out, "TWS", env.red("not connected"))
 	}
+	if attempt := statusLastAttempt(*res); attempt != "" {
+		// The daemon's verdict on its last connect attempt: the cause it
+		// found and the next step for the app it found, printed as written.
+		statusHealthRow(env, out, "Last attempt", attempt)
+	}
 	if api := res.GatewayAPI; api != nil {
 		statusHealthRow(env, out, "API protocol", fmt.Sprintf("%d negotiated · %d client ceiling", res.ServerVersion, api.TradingProtocolMax))
 		if api.ConfigState != "not_requested" {
@@ -200,24 +205,36 @@ func renderStatusText(env *Env, res *rpc.HealthResult, alerts *rpc.AlertCandidat
 
 	if isHandshakeInFlight(*res) {
 		fmt.Fprintln(out)
-		fmt.Fprintf(out, "  Handshake did not complete within %s. Check the daemon log for\n", handshakeWaitBudget)
-		fmt.Fprintln(out, "  the underlying error, then verify in IB Gateway:")
-		fmt.Fprintln(out, "    Configure → Settings → API → Settings → 'Enable ActiveX and Socket Clients'")
-		fmt.Fprintln(out, "    Trusted IPs include 127.0.0.1 (or empty)")
-		fmt.Fprintln(out, "    Login fully completed (not paused at 2FA)")
+		if statusLastAttempt(*res) != "" {
+			// The Last attempt row already carries the daemon's verdict and
+			// what to check; the generic checklist would repeat it.
+			fmt.Fprintf(out, "  Handshake did not complete within %s.\n", handshakeWaitBudget)
+		} else {
+			fmt.Fprintf(out, "  Handshake did not complete within %s. Check the daemon log for\n", handshakeWaitBudget)
+			fmt.Fprintln(out, "  the underlying error, then verify in IB Gateway:")
+			fmt.Fprintln(out, "    Configure → Settings → API → Settings → 'Enable ActiveX and Socket Clients'")
+			fmt.Fprintln(out, "    Trusted IPs include 127.0.0.1 (or empty)")
+			fmt.Fprintln(out, "    Login fully completed (not paused at 2FA)")
+		}
 		fmt.Fprintln(out, env.dim("  Daemon log: "+dial.DisplayPath(dial.DefaultLogPath())))
 	} else if !res.Connected {
 		fmt.Fprintln(out)
-		if res.GatewayPhase == rpc.GatewayPhasePortRejecting && res.LastError != "" {
-			// The daemon's verdict names the app that owns the port and what
-			// to verify in it; the generic checklist above would send the
-			// user to a TWS checkbox IB Gateway does not have.
-			fmt.Fprintln(out, "  "+res.LastError)
-		}
 		fmt.Fprintln(out, env.dim("  Daemon log: "+dial.DisplayPath(dial.DefaultLogPath())))
 	}
 	statusHealthRow(env, out, "Colors", env.dim("Amber = row needs attention; Gateway verdict is separate."))
 	fmt.Fprintln(out)
+}
+
+// statusLastAttempt is the daemon's published verdict on its last connect
+// attempt while the gateway is not connected: no IBKR app running, a refused
+// pinned port, a handshake that did not finish, or a port that drops
+// connections, each with the next step the daemon wrote for it. The CLI
+// prints it and draws no verdict of its own from it.
+func statusLastAttempt(res rpc.HealthResult) string {
+	if res.Connected {
+		return ""
+	}
+	return strings.TrimSpace(sanitizeRunText(res.LastError))
 }
 
 // formatExecutionVisibilityValue says which of the account's fills reach

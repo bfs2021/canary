@@ -1,0 +1,10 @@
+# canary strategies list · COLUMNS=80 · colour off
+
+Option strategies  U1234567 · live
+  No option strategies can be grouped safely.
+
+# canary strategies list · COLUMNS=80 · colour on, ESC written as \x1b
+
+Option strategies  U1234567 · live
+  No option strategies can be grouped safely.
+

@@ -104,7 +104,26 @@ Market access  SPX not subscribed (IBKR 354, seen 14:03, retry 14:33)
 
 It lists what the gateway refused, when, and when Canary will ask again — IBKR code 354 means the account is not subscribed to that data. Nothing is switched off because of it: a listed symbol only means a fresh fetch would be refused right now, and features holding a cached result keep serving it. The row is an observation with a 30-minute window, not a record of your entitlements, so a symbol nothing asked for during the window never appears, and a farm outage can put a symbol there that your account does hold. Subscriptions are managed in IBKR Client Portal, not in Canary.
 
-When the daemon has no verdict from the gateway yet, `status` polls every 500 ms for up to 25 seconds before giving up, then prints the API checklist and the daemon log path. When the gateway is not connected, the command exits 1 and the `Next concern` row carries the underlying error, which makes it usable in a script.
+On a first run with no IBKR app open, the badge is `OFFLINE` and the `Last attempt` row says what the daemon found and what to do next. The values below are synthetic:
+
+```text
+IBKR Gateway  OFFLINE
+
+Session        auto-detect via 127.0.0.1 (tls=false), client 15
+Market data    unavailable until connected
+Daemon         v1.0.0, just started
+TWS            not connected
+Last attempt   no IBKR listener found on 127.0.0.1 ports [4001 4002 7496 7497]
+               (probe timeout 200ms); no TWS / IB Gateway / IBKR Desktop process
+               found — start one and Canary will reconnect automatically
+Next concern   Broker data connection unavailable
+
+  Daemon log: ~/.local/state/ibkr/ibkr-daemon.log
+```
+
+The `Last attempt` row is the daemon's own verdict on its last connect attempt, printed as written: no IBKR app running, a port that refuses the connection while an app runs (with the setting to check, or the `[gateway]` port to pin in `config.toml`), a handshake that did not finish, or a port that accepts connections and drops them. [Troubleshooting](troubleshooting.md) explains each message. The `Next concern` row keeps the daemon's overall verdict.
+
+When the daemon has no verdict from the gateway yet, `status` polls every 500 ms for up to 25 seconds before giving up, then prints the daemon log path, and the API checklist when the daemon has not yet said why the handshake stalls. When the gateway is not connected, the command exits 1; `canary status --json` carries the same verdict under `verdict` and the connect error under `last_error`, which makes it usable in a script.
 
 No config file is needed for this. The daemon probes `4001` (Gateway live), `4002` (Gateway paper), `7496` (TWS live), and `7497` (TWS paper) in parallel with a 200 ms timeout each, takes the first responder in that order, lists any others as alternates, auto-detects the account from `managedAccounts`, and uses client ID `15`. Create `~/.config/ibkr/config.toml` only when you want to pin something; every key in the [configuration reference](../reference/config.md) is optional.
 

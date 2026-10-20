@@ -1,0 +1,12 @@
+# canary strategies list · COLUMNS=80 · colour off
+
+Option strategies
+  Data note: one account has not been selected
+  Option strategies unavailable.
+
+# canary strategies list · COLUMNS=80 · colour on, ESC written as \x1b
+
+Option strategies
+  \x1b[33mData note: one account has not been selected\x1b[0m
+  Option strategies unavailable.
+

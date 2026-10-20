@@ -14,6 +14,14 @@ kept by earlier releases name no account; they stay in the daemon's event
 log for audit and are not counted, so after the upgrade each live entry's
 drawdown is measured afresh from its current account's own fills.
 
+`canary status` on a gateway that is not connected now prints the daemon's
+own verdict on its last connect attempt as a `Last attempt` row: no IBKR app
+running, a refused port with the setting to check or the port to pin, a
+handshake that did not finish, or a port that drops connections, each with
+the next step. `canary strategies list` and the `canary_strategies` MCP tool
+now say when the account's positions could not be read, and why, instead of
+reporting that no strategies exist.
+
 ### Fixed
 
 - A live strategy's kill rule could read 0.00 K, not breached, past its
@@ -28,6 +36,28 @@ drawdown is measured afresh from its current account's own fills.
   Unscoped marks from earlier releases are kept as written and never count
   for any account. A mark is no longer kept while its entry's order journal
   cannot be read.
+- `canary status` no longer hides the known repair instruction on a first
+  run: the OFFLINE view showed only `Broker data connection unavailable`
+  although the daemon had already named the missing IBKR app or the refused
+  pinned port and what to do (the v3.25.4 review's finding 3). The
+  `Last attempt` row prints that verdict as written for every disconnected
+  phase, not only a rejecting port; a handshake still in flight shows it in
+  place of the generic checklist, so the advice appears once. Exit codes and
+  `status --json` are unchanged. The no-app hint now says Canary will
+  reconnect, as the troubleshooting guide already quoted it, instead of the
+  retired executable name.
+- `canary strategies list` and `canary_strategies` no longer read an
+  unavailable positions read as an empty book (the v3.25.4 review's
+  finding 4). With no account selected, a mismatched or conflicting account,
+  an unfinished portfolio download or a stale receipt, the list printed "No
+  option strategies can be grouped safely." and the JSON and MCP result held
+  `null` strategies and a zero time with no reason. Both now carry the
+  positions read's `authority` block (scope, availability, freshness,
+  reason) and a `strategies` list that is never `null`; the text view prints
+  the data note and `Option strategies unavailable.`, keeps rows a stale read
+  retained under that note, and names the account. Like `canary positions`,
+  an unavailable read exits 0: the read worked and says what it could not
+  establish.
 
 ## v3.26.0 — 2026-10-20 13:50 CEST
 

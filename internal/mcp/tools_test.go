@@ -358,7 +358,7 @@ func TestEdgeWireShapeCannotExposeBrokerIdentifiers(t *testing.T) {
 }
 
 func TestAccountAndPositionsDescribeAuthority(t *testing.T) {
-	for _, name := range []string{"canary_account", "canary_positions"} {
+	for _, name := range []string{"canary_account", "canary_positions", "canary_strategies"} {
 		tool, ok := lookupTool(name)
 		if !ok {
 			t.Fatalf("missing %s", name)

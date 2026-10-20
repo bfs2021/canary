@@ -176,7 +176,7 @@ Read held positions and exposure. The `authority` block identifies one concrete 
 
 ## `canary_strategies`
 
-Read how Canary groups currently held option legs into proportional strategies and which legs still need review. Use canary_positions for the full book. This tool cannot preview, submit, place, modify, cancel, or transmit an order.
+Read how Canary groups currently held option legs into proportional strategies and which legs still need review. The `authority` block is the positions read's: one concrete account and mode with availability, freshness, and typed reason. When availability is unavailable, an empty `strategies` list does not mean no strategies are held; report the reason, and treat strategies a stale read still lists as context, not current holdings. Use canary_positions for the full book. This tool cannot preview, submit, place, modify, cancel, or transmit an order.
 
 *No parameters.*
 
