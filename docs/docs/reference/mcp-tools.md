@@ -192,7 +192,7 @@ Analyze explicitly named stock or ETF symbols using daily trend, relative streng
 | `currency` | string | no | optional ISO currency override for symbols, e.g. USD or EUR |
 | `exchange` | string | no | optional IBKR exchange override for symbols, e.g. SMART or IBIS |
 | `lookback_days` | integer | no | calendar-day history lookback; default 420, enough for 200-DMA and 126 trading-bar returns |
-| `market` | string | no | optional route for symbols, not the benchmark; omit/use us for SMART/USD, use de for Xetra/IBIS EUR equities |
+| `market` | string | no | optional route for symbols, not the benchmark; omit/use us for SMART/USD, use de for Xetra/IBIS EUR equities, or uk for London equities (SMART, LSE, GBP by default) |
 | `primary_exchange` | string | no | optional primary-exchange hint for symbols, e.g. ARCA for ETFs or IBIS for Xetra |
 | `symbols` | array | **yes** | ticker symbols, e.g. ["AAPL","MSFT","NVDA"] |
 
