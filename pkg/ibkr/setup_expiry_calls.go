@@ -26,7 +26,10 @@ func (c *Connector) FetchSetupExpiryCalls(ctx context.Context, binding Connector
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	request := Contract{Symbol: underlying.Symbol, SecType: "OPT", Exchange: "SMART", PrimaryExch: underlying.PrimaryExch, Currency: "USD", Expiry: expiry, Right: "C", Multiplier: 100, TradingClass: underlying.Symbol}
+	// The stock's primary listing venue does not identify the option venue.
+	// Use the same SMART route as exact call resolution; validate the returned
+	// option's UnderConID rather than sending the stock's primary exchange.
+	request := Contract{Symbol: underlying.Symbol, SecType: "OPT", Exchange: "SMART", Currency: "USD", Expiry: expiry, Right: "C", Multiplier: 100, TradingClass: underlying.Symbol}
 	conn := binding.connection
 	serverVersion := conn.serverVersion
 	id, err := conn.reserveRequestID(nil)

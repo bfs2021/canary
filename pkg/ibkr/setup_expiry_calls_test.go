@@ -22,6 +22,68 @@ func setupExpiryUnderlying() Contract {
 	return Contract{ConID: 17, Symbol: "SYNTH", SecType: "STK", Exchange: "SMART", PrimaryExch: "ARCA", Currency: "USD"}
 }
 
+// A stock's listing venue is not an option discovery constraint. The live
+// gateway rejected all four SMART+stock-primary inventories with message 204,
+// code 200, without any contract data. Replay that route-sensitive outcome
+// through the real inbound decoder; retain exact expiry/underlying validation.
+func TestSetupExpiryCallsUsesOptionRouteWithGatewayFrames(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(strconv.FormatBool(reject), func(t *testing.T) {
+			c, conn, out, _ := newMissTestConnector(t)
+			c.ready = true
+			c.registerHandlers(conn)
+			binding, _ := c.CaptureSession()
+			type result struct {
+				rows []ResolvedOrderContract
+				err  error
+			}
+			done := make(chan result, 1)
+			go func() {
+				rows, err := c.FetchSetupExpiryCalls(t.Context(), binding, setupExpiryUnderlying(), "20270219", time.Second)
+				done <- result{rows, err}
+			}()
+			id := waitForPendingContractDetails(t, c)
+			var wire []string
+			for deadline := time.Now().Add(time.Second); time.Now().Before(deadline) && wire == nil; {
+				for _, f := range decodeOutboundFrames(t, conn, out.Bytes()) {
+					if f[0] == strconv.Itoa(reqContractData) && f[2] == strconv.Itoa(id) {
+						wire = f
+					}
+				}
+				if wire == nil {
+					time.Sleep(time.Millisecond)
+				}
+			}
+			if len(wire) < 15 || wire[10] != "SMART" {
+				t.Fatalf("missing SMART option inventory request: %v", wire)
+			}
+			if reject || wire[11] != "" {
+				conn.processMessageAtEpoch(inboundNotice(id, 200, "No security definition has been found for the request"), binding.epoch)
+			} else {
+				for _, k := range []int{770, 775} {
+					conn.processMessageAtEpoch(inboundWireFrame(setupExpiryCallFrame(id, 10000+k, float64(k))...), binding.epoch)
+				}
+				conn.processMessageAtEpoch(inboundWireFrame(strconv.Itoa(msgContractDataEnd), "1", strconv.Itoa(id)), binding.epoch)
+			}
+			got := <-done
+			if reject {
+				if !errors.Is(got.err, ErrContractNoDefinition) || got.rows != nil {
+					t.Fatalf("gateway rejection lost its definition verdict: %+v", got)
+				}
+				return
+			}
+			if got.err != nil || len(got.rows) != 2 {
+				t.Fatalf("stock listing venue leaked into option discovery: primary=%q rows=%d err=%v", wire[11], len(got.rows), got.err)
+			}
+			for _, row := range got.rows {
+				if ValidateSetupCallResolution(row, setupExpiryUnderlying(), "20270219", row.Contract.Strike) != nil || row.ValidExchanges != "SMART,CBOE" || row.MarketRuleIDs != "27,28" {
+					t.Fatalf("gateway frame lost exact identity or price rules: %+v", row)
+				}
+			}
+		})
+	}
+}
+
 func TestSetupExpiryCallsKeepsEarlyCompleteInventoryAndPriceMetadata(t *testing.T) {
 	c, conn, _, _ := newMissTestConnector(t)
 	c.ready = true
@@ -76,7 +138,7 @@ func TestSetupExpiryCallsFailsClosedOnIncompleteOrInvalidInventory(t *testing.T)
 					time.Sleep(time.Millisecond)
 				}
 			}
-			if len(wire) < 15 || wire[4] != "SYNTH" || wire[5] != "OPT" || wire[6] != "20270219" || wire[7] != "" || wire[8] != "C" || wire[9] != "100" || wire[10] != "SMART" || wire[11] != "ARCA" || wire[12] != "USD" || wire[14] != "SYNTH" {
+			if len(wire) < 15 || wire[4] != "SYNTH" || wire[5] != "OPT" || wire[6] != "20270219" || wire[7] != "" || wire[8] != "C" || wire[9] != "100" || wire[10] != "SMART" || wire[11] != "" || wire[12] != "USD" || wire[14] != "SYNTH" {
 				t.Fatalf("request did not constrain one standard call expiry: %v", wire)
 			}
 			f := setupExpiryCallFrame(id, 10770, 770)
