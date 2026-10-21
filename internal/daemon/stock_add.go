@@ -36,7 +36,7 @@ type stockAddProblem struct{ kind, message string }
 func (p *stockAddProblem) Error() string { return p.message }
 
 func (s *Server) addHeld(p rpc.AddParams, code, message string) *rpc.AddPlanResult {
-	return &rpc.AddPlanResult{AsOf: s.orderNow(), Contract: p.Contract, LimitPrice: p.LimitPrice, Currency: p.Contract.Currency, Blockers: []risk.StockAddBlocker{{Kind: "evidence", Code: code, Message: message}}}
+	return &rpc.AddPlanResult{StopPrice: p.StopPrice, AsOf: s.orderNow(), Contract: p.Contract, LimitPrice: p.LimitPrice, Currency: p.Contract.Currency, Blockers: []risk.StockAddBlocker{{Kind: "evidence", Code: code, Message: message}}}
 }
 
 func (s *Server) handleAddPlan(ctx context.Context, req *rpc.Request) (*rpc.AddPlanResult, error) {
@@ -69,7 +69,11 @@ func (s *Server) handleAddPreview(ctx context.Context, req *rpc.Request) (*rpc.O
 	if len(plan.Blockers) > 0 || plan.Quantity <= 0 {
 		return nil, errBadRequest("Add held: " + addBlockerText(plan.StockAddPlan))
 	}
-	return s.previewOrder(ctx, rpc.OrderPreviewParams{AdaptivePriority: requested.AdaptivePriority, Action: rpc.OrderActionBuy, Contract: plan.Contract, Quantity: plan.Quantity, OrderType: "LMT", LimitPrice: new(plan.LimitPrice), Strategy: "explicit-limit", TIF: "DAY", Add: true})
+	var stop *rpc.AttachedStockStop
+	if requested.StopPrice > 0 {
+		stop = &rpc.AttachedStockStop{Price: requested.StopPrice}
+	}
+	return s.previewOrder(ctx, rpc.OrderPreviewParams{AttachedStop: stop, AdaptivePriority: requested.AdaptivePriority, Action: rpc.OrderActionBuy, Contract: plan.Contract, Quantity: plan.Quantity, OrderType: "LMT", LimitPrice: new(plan.LimitPrice), Strategy: "explicit-limit", TIF: "DAY", Add: true})
 }
 
 func addBlockerText(p risk.StockAddPlan) string {
@@ -108,7 +112,7 @@ func (s *Server) planStockAdd(ctx context.Context, p rpc.AddParams) (*rpc.AddPla
 		capacity.Sizing = "max"
 	}
 	capacity.RequestedQuantity = p.Quantity
-	out := &rpc.AddPlanResult{StockAddPlan: capacity, Contract: ev.contract, LimitPrice: p.LimitPrice, Currency: ev.contract.Currency, BaseCurrency: ev.input.Rules.BaseCurrency, AsOf: s.orderNow()}
+	out := &rpc.AddPlanResult{StopPrice: p.StopPrice, StockAddPlan: capacity, Contract: ev.contract, LimitPrice: p.LimitPrice, Currency: ev.contract.Currency, BaseCurrency: ev.input.Rules.BaseCurrency, AsOf: s.orderNow()}
 	held := func(kind, code, message string) (*rpc.AddPlanResult, error) {
 		out.Quantity = 0
 		out.Review = nil

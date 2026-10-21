@@ -20,6 +20,7 @@ const (
 // AddParams requires an explicit maximum or exact additional quantity.
 // Current size is daemon-owned.
 type AddParams struct {
+	StopPrice        float64        `json:"stop_price,omitempty"`
 	AdaptivePriority string         `json:"adaptive_priority,omitempty"`
 	Max              bool           `json:"max,omitempty"`
 	Contract         ContractParams `json:"contract"`
@@ -46,6 +47,9 @@ func NormalizeAddParams(p AddParams) (AddParams, error) {
 	if math.IsNaN(p.LimitPrice) || math.IsInf(p.LimitPrice, 0) || p.LimitPrice <= 0 || p.Quantity < 0 || p.Quantity > 1000000 {
 		return p, fmt.Errorf("stock addition needs a positive finite limit and a quantity from 0 to 1000000 (maximum requires max=true)")
 	}
+	if p.StopPrice != 0 && (math.IsNaN(p.StopPrice) || math.IsInf(p.StopPrice, 0) || p.StopPrice <= 0 || p.StopPrice >= p.LimitPrice) {
+		return p, fmt.Errorf("fixed stock stop must be positive and below the entry limit")
+	}
 	if p.Max == (p.Quantity > 0) {
 		return p, fmt.Errorf("choose exactly one sizing intent: max or a positive additional quantity")
 	}
@@ -66,6 +70,7 @@ type AddReview struct {
 
 // AddPlanResult exposes daemon-owned planning evidence without a preview token.
 type AddPlanResult struct {
+	StopPrice float64 `json:"stop_price,omitempty"`
 	risk.StockAddPlan
 	Contract      ContractParams `json:"contract"`
 	LimitPrice    float64        `json:"limit_price"`
@@ -99,4 +104,19 @@ func CloneAddReview(in *AddReview) *AddReview {
 		}
 	}
 	return &out
+}
+
+// AttachedStockStop is signed with its entry, never an independent instruction.
+// Scope is added shares only, SELL STP GTC, regular session, LAST trigger.
+type AttachedStockStop struct {
+	Price float64 `json:"price"`
+}
+
+// StockEntryLink preserves the exact pair identity through replay. ParentFill
+// and activation are derived from broker events, never this local intent.
+type StockEntryLink struct {
+	PairRef       string `json:"pair_ref"`
+	ParentRef     string `json:"parent_ref"`
+	ParentID      int    `json:"parent_id"`
+	EntryQuantity int    `json:"entry_quantity"`
 }

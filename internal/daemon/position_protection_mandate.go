@@ -54,6 +54,15 @@ func (s *Server) validateModifyDraft(view rpc.OrderView, draft rpc.OrderDraft) e
 }
 
 func (s *Server) validateProtectiveModifyQuantity(view rpc.OrderView, draft rpc.OrderDraft, current float64) error {
+	// The guard has just replanned this exact shared-capacity allocation under
+	// brokerWriteMu. Preserve that bound rather than expanding to the whole
+	// holding. Normal position/inventory authority still reaches the wire guard.
+	if view.EntryLink != nil {
+		g := s.protectiveStopGuardGrant.Load()
+		if g != nil && g.Kind == protectiveStopGuardShrink && g.OrderRef == view.OrderRef && g.ReservedOrderID == view.ReservedOrderID && g.Quantity == draft.Quantity && g.Filled == view.Filled && g.Position == current && draft.Quantity > 0 && float64(draft.Quantity) <= current {
+			return validateModifyDraft(view, draft)
+		}
+	}
 	if s.fullPositionResizeGranted(view, draft.Quantity) {
 		if current <= 0 || float64(draft.Quantity) != current {
 			return errBadRequest("full-position coverage must equal the current position")

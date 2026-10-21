@@ -2,13 +2,22 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
 func runAdd(ctx context.Context, env *Env, args []string) int {
+	if len(args) > 0 && args[0] == "call-plan" {
+		return runAddCallPlan(ctx, env, args[1:])
+	}
+	if len(args) > 0 && args[0] == "market" {
+		return runAddMarket(ctx, env, args[1:])
+	}
 	fs := flagSet(env, "add")
+	stop := fs.Float64("stop-price", 0, "fixed attached stop below entry; added shares only, GTC regular session")
 	price := fs.Float64("limit", 0, "maximum price per share in the stock currency")
 	quantity := fs.Int("quantity", 0, "exact additional whole shares; choose this or --max")
 	maximum := fs.Bool("max", false, "find the maximum supported addition for one order")
@@ -23,7 +32,7 @@ func runAdd(ctx context.Context, env *Env, args []string) int {
 	if fs.NArg() != 2 || (fs.Arg(0) != "plan" && fs.Arg(0) != "preview") {
 		return fail(env, "usage: canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity N | --max) [--con-id ID] [--json]")
 	}
-	p, err := rpc.NormalizeAddParams(rpc.AddParams{AdaptivePriority: *adaptive, Contract: rpc.ContractParams{Symbol: fs.Arg(1), SecType: "STK", Currency: *currency, ConID: *conID, Exchange: *exchange}, LimitPrice: *price, Quantity: *quantity, Max: *maximum})
+	p, err := rpc.NormalizeAddParams(rpc.AddParams{StopPrice: *stop, AdaptivePriority: *adaptive, Contract: rpc.ContractParams{Symbol: fs.Arg(1), SecType: "STK", Currency: *currency, ConID: *conID, Exchange: *exchange}, LimitPrice: *price, Quantity: *quantity, Max: *maximum})
 	if err != nil {
 		return fail(env, "add: %v", err)
 	}
@@ -36,7 +45,7 @@ func runAdd(ctx context.Context, env *Env, args []string) int {
 			return printJSON(env, out)
 		}
 		if out.Draft.Add != nil {
-			renderAddPlan(env, rpc.AddPlanResult{StockAddPlan: out.Draft.Add.Plan, Contract: out.Draft.Contract, Currency: out.Draft.Contract.Currency, LimitPrice: out.Draft.LimitPrice})
+			renderAddPlan(env, rpc.AddPlanResult{StockAddPlan: out.Draft.Add.Plan, Contract: out.Draft.Contract, Currency: out.Draft.Contract.Currency, LimitPrice: out.Draft.LimitPrice, StopPrice: *stop})
 		}
 		renderOrderPreviewText(env, &out)
 		return 0
@@ -53,6 +62,9 @@ func runAdd(ctx context.Context, env *Env, args []string) int {
 }
 
 func renderAddPlan(env *Env, p rpc.AddPlanResult) {
+	if p.StopPrice > 0 {
+		riskReadLine(env, "Attached fixed stop", fmt.Sprintf("%.4f %s; added shares only; GTC regular session; held until full entry fill", p.StopPrice, p.Currency))
+	}
 	riskReadLine(env, "Add", p.Contract.Symbol, p.Currency)
 	riskReadLine(env, "Limit", fmt.Sprintf("%.4f %s per share", p.LimitPrice, p.Currency))
 	for _, w := range p.Warnings {
@@ -133,4 +145,49 @@ func addBlockerKindLabel(kind string) string {
 	default:
 		return "More evidence needed"
 	}
+}
+
+// runAddMarket adapts one bounded read-only request; stdin carries no authority.
+func runAddMarket(ctx context.Context, env *Env, args []string) int {
+	fs := flagSet(env, "add market")
+	_ = fs.Bool("json", false, "emit typed market evidence")
+	if err := fs.Parse(args); err != nil {
+		return parseExit(err)
+	}
+	if fs.NArg() != 0 || env.Stdin == nil {
+		return fail(env, "add market reads one JSON request from stdin")
+	}
+	d := json.NewDecoder(io.LimitReader(env.Stdin, 8193))
+	d.DisallowUnknownFields()
+	var p rpc.AddMarketParams
+	if d.Decode(&p) != nil || d.Decode(new(any)) != io.EOF {
+		return fail(env, "invalid Add market request")
+	}
+	var out rpc.AddMarketResult
+	if err := env.Conn.Call(ctx, rpc.MethodAddMarket, p, &out); err != nil {
+		return fail(env, "add market: %v", err)
+	}
+	return printJSON(env, out)
+}
+
+func runAddCallPlan(ctx context.Context, env *Env, args []string) int {
+	fs := flagSet(env, "add call-plan")
+	_ = fs.Bool("json", false, "emit checked call size")
+	if err := fs.Parse(args); err != nil {
+		return parseExit(err)
+	}
+	if fs.NArg() != 0 || env.Stdin == nil {
+		return fail(env, "add call-plan reads one JSON request from stdin")
+	}
+	d := json.NewDecoder(io.LimitReader(env.Stdin, 8193))
+	d.DisallowUnknownFields()
+	var p rpc.AddCallPlanParams
+	if d.Decode(&p) != nil || d.Decode(new(any)) != io.EOF {
+		return fail(env, "invalid call sizing request")
+	}
+	var out rpc.AddCallPlanResult
+	if err := env.Conn.Call(ctx, rpc.MethodAddCallPlan, p, &out); err != nil {
+		return fail(env, "add call-plan: %v", err)
+	}
+	return printJSON(env, out)
 }

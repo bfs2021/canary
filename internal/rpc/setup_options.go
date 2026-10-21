@@ -71,23 +71,36 @@ const (
 // prices, so a zero never reads as a premium. It is display evidence for
 // choosing a limit, never an order preview or order authority.
 type SetupOptionQuote struct {
-	Bid      *float64  `json:"bid,omitempty"`
-	Ask      *float64  `json:"ask,omitempty"`
-	AsOf     time.Time `json:"as_of,omitzero"`
-	DataType string    `json:"data_type,omitempty"`
-	Status   string    `json:"status"`
+	Bid           *float64  `json:"bid,omitempty"`
+	BidSize       *int      `json:"bid_size,omitempty"`
+	AskSize       *int      `json:"ask_size,omitempty"`
+	IV            *float64  `json:"iv,omitempty"`
+	Delta         *float64  `json:"delta,omitempty"`
+	ModelAsOf     time.Time `json:"model_as_of,omitzero"`
+	ModelDataType string    `json:"model_data_type,omitempty"`
+	Ask           *float64  `json:"ask,omitempty"`
+	AsOf          time.Time `json:"as_of,omitzero"`
+	DataType      string    `json:"data_type,omitempty"`
+	Status        string    `json:"status"`
+}
+
+// SetupOptionPriceIncrement is one broker price band for the resolved route.
+type SetupOptionPriceIncrement struct {
+	LowEdge   float64 `json:"low_edge"`
+	Increment float64 `json:"increment"`
 }
 
 // SetupOptionsResult is bounded discovery evidence, never order authority.
 // Quote is present only with Contract, at the exact-call stage.
 type SetupOptionsResult struct {
-	Version    int                 `json:"version"`
-	Underlying ContractParams      `json:"underlying"`
-	AsOf       time.Time           `json:"as_of"`
-	Expiries   []SetupOptionExpiry `json:"expiries"`
-	Expiry     string              `json:"expiry,omitempty"`
-	Calls      []SetupOptionCall   `json:"calls"`
-	Contract   *ContractParams     `json:"contract,omitempty"`
-	Quote      *SetupOptionQuote   `json:"quote,omitempty"`
-	Truncated  bool                `json:"truncated,omitempty"`
+	PriceIncrements []SetupOptionPriceIncrement `json:"price_increments,omitempty"`
+	Version         int                         `json:"version"`
+	Underlying      ContractParams              `json:"underlying"`
+	AsOf            time.Time                   `json:"as_of"`
+	Expiries        []SetupOptionExpiry         `json:"expiries"`
+	Expiry          string                      `json:"expiry,omitempty"`
+	Calls           []SetupOptionCall           `json:"calls"`
+	Contract        *ContractParams             `json:"contract,omitempty"`
+	Quote           *SetupOptionQuote           `json:"quote,omitempty"`
+	Truncated       bool                        `json:"truncated,omitempty"`
 }

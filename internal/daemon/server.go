@@ -2940,6 +2940,10 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleChainsRecordedRows(ctx, req) })
 	case rpc.MethodTechnical:
 		s.unary(req, enc, func() (any, error) { return s.handleTechnical(ctx, req) })
+	case rpc.MethodAddCallPlan:
+		s.unary(req, enc, func() (any, error) { return s.handleAddCallPlan(ctx, req) })
+	case rpc.MethodAddMarket:
+		s.unary(req, enc, func() (any, error) { return s.handleAddMarket(ctx, req) })
 	case rpc.MethodAddPlan:
 		s.unary(req, enc, func() (any, error) { return s.handleAddPlan(ctx, req) })
 	case rpc.MethodAddPreview:

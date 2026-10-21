@@ -57,6 +57,10 @@ type orderJournalStore struct {
 }
 
 type orderJournalEvent struct {
+	AttachedStop        *rpc.AttachedStockStop   `json:"attached_stop,omitempty"`
+	EntryLink           *rpc.StockEntryLink      `json:"entry_link,omitempty"`
+	FixedStopPrice      float64                  `json:"fixed_stop_price,omitempty"`
+	BrokerParentID      *int                     `json:"broker_parent_id,omitempty"`
 	Deactivated         *bool                    `json:"deactivated,omitempty"`
 	AlgoStrategy        string                   `json:"algo_strategy,omitempty"`
 	AlgoKnown           bool                     `json:"algo_known,omitempty"`

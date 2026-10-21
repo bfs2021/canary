@@ -63,6 +63,8 @@ type orderPreviewTokenPayload struct {
 }
 
 type orderPreviewReplaceTarget struct {
+	EntryLink       *rpc.StockEntryLink `json:"entry_link,omitempty"`
+	FixedStopPrice  float64             `json:"fixed_stop_price,omitempty"`
 	OrderRef        string              `json:"order_ref,omitempty"`
 	ReservedOrderID int                 `json:"reserved_order_id,omitempty"`
 	PermID          int                 `json:"perm_id,omitempty"`
@@ -200,7 +202,7 @@ func (s *orderTokenSigner) mint(payload orderPreviewTokenPayload) (token string,
 		payload.Scope = rpc.OrderTokenScopePlace
 	}
 	switch payload.Scope {
-	case rpc.OrderTokenScopePlace, rpc.OrderTokenScopeModify, rpc.OrderTokenScopeExercise, rpc.OrderTokenScopeStrategy:
+	case rpc.OrderTokenScopePlace, rpc.OrderTokenScopeModify, rpc.OrderTokenScopeExercise, rpc.OrderTokenScopeStrategy, rpc.OrderTokenScopeProtectedAdd:
 	default:
 		return "", "", time.Time{}, fmt.Errorf("unsupported order preview token scope %q", payload.Scope)
 	}
@@ -255,7 +257,7 @@ func (s *orderTokenSigner) verify(token string) (orderPreviewTokenPayload, error
 		return orderPreviewTokenPayload{}, fmt.Errorf("order preview token belongs to signer generation %d in a different authority epoch", payload.SignerGeneration)
 	}
 	switch payload.Scope {
-	case rpc.OrderTokenScopePlace, rpc.OrderTokenScopeModify, rpc.OrderTokenScopeExercise, rpc.OrderTokenScopeStrategy:
+	case rpc.OrderTokenScopePlace, rpc.OrderTokenScopeModify, rpc.OrderTokenScopeExercise, rpc.OrderTokenScopeStrategy, rpc.OrderTokenScopeProtectedAdd:
 	default:
 		return orderPreviewTokenPayload{}, fmt.Errorf("unsupported order preview token scope %q", payload.Scope)
 	}
@@ -430,7 +432,8 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	if orderType == "" {
 		orderType = rpc.OrderTypeLMT
 	}
-	if !previewSupportedOrderType(orderType) {
+	fixedChild := scope == rpc.OrderTokenScopeModify && orderType == "STP" && replaceView.EntryLink != nil && replaceView.EntryState == "active"
+	if !previewSupportedOrderType(orderType) && !fixedChild {
 		return nil, errBadRequest("order preview supports LMT, TRAIL, and TRAIL LIMIT orders only")
 	}
 	if p.AdaptivePriority != "" && (orderType != rpc.OrderTypeLMT || !slices.Contains([]string{"STK", "OPT"}, contract.SecType) || !slices.Contains([]string{"Normal", "Patient", "Urgent"}, p.AdaptivePriority)) {
@@ -444,7 +447,7 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	if tif == "" {
 		tif = rpc.OrderTIFDay
 	}
-	if tif != rpc.OrderTIFDay && !(tif == rpc.OrderTIFGTC && isTrailOrderType(orderType)) {
+	if tif != rpc.OrderTIFDay && !(tif == rpc.OrderTIFGTC && (isTrailOrderType(orderType) || fixedChild)) {
 		return nil, errBadRequest("order preview supports DAY time-in-force, or GTC for TRAIL and TRAIL LIMIT orders")
 	}
 	triggerMethod, err := previewOrderTriggerMethod(orderType, contract, p.TriggerMethod)
@@ -469,6 +472,12 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	var trail *rpc.OrderTrailSpec
 	var fxTerms *rpc.OrderFXTerms
 	switch {
+	case fixedChild:
+		if p.LimitPrice != nil || p.Trail != nil || p.Bounded != nil {
+			return nil, errBadRequest("attached stop replacement changes quantity only")
+		}
+		strategy = rpc.OrderStrategyBrokerTrail
+		notionalPrice, err = trailQuoteReferencePrice(action, quote)
 	case isFX:
 		strategy = rpc.OrderStrategyBoundedLimit
 		limit, err = fxBoundedLimitPrice(action, contract.MinTick, quote, p.FX.MaxSlippageBP)
@@ -514,6 +523,7 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 		now = s.now().UTC()
 	}
 	draft := rpc.OrderDraft{
+		AttachedStop:     p.AttachedStop,
 		AdaptivePriority: p.AdaptivePriority,
 		Action:           action,
 		Contract:         contract,
@@ -531,6 +541,11 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 		RegisterEntry:    p.RegisterEntry,
 		Bond:             bondTerms,
 		FX:               fxTerms,
+	}
+	if fixedChild {
+		draft.EntryLink = replaceView.EntryLink
+		draft.FixedStopPrice = replaceView.FixedStopPrice
+		draft.OpenClose = "C"
 	}
 	if scope == rpc.OrderTokenScopeModify {
 		if err := s.validateModifyDraft(replaceView, draft); err != nil {
@@ -593,6 +608,15 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 			return nil, refusePreviewCode("stock_add_changed", fmt.Errorf("position changed while preparing Add"))
 		}
 		draft.Add = &evidence.review
+	}
+	if p.AttachedStop != nil {
+		if scope != rpc.OrderTokenScopePlace || draft.Add == nil {
+			return nil, errBadRequest("attached stop requires a new stock Add review")
+		}
+		if err := s.validateProtectedStockAdd(ctx, previewAuthority, draft); err != nil {
+			return nil, err
+		}
+		scope = rpc.OrderTokenScopeProtectedAdd
 	}
 	if previewAuthority != nil && !s.orderPreviewBrokerAuthorityCurrent(previewAuthority) {
 		return nil, refusePreviewCode(previewBrokerSessionChangedCode, fmt.Errorf("%w: broker session changed before preview token mint", ErrTradingDisabled))
@@ -783,8 +807,14 @@ func (s *Server) fetchModifyPreviewWhatIfBound(ctx context.Context, status rpc.T
 		return previewWhatIfUnavailableWithMessage("Broker WhatIf unavailable: gateway connector is not ready."), nil
 	}
 	order := modifyPreviewWhatIfOrder(view, draft, status)
-	var result ibkrlib.OrderWhatIfResult
 	var err error
+	if draft.EntryLink != nil {
+		order, err = attachedStockStopModifyOrder(view, draft, status)
+		if err != nil {
+			return rpc.OrderWhatIfResult{}, err
+		}
+	}
+	var result ibkrlib.OrderWhatIfResult
 	if authority != nil {
 		result, err = c.PreviewOrderWhatIfWithOrderIDForSession(whatIfCtx, authority.session, previewIBKRStrategyContract(draft), order, view.ReservedOrderID)
 	} else {
@@ -914,6 +944,10 @@ func previewIBKROrder(draft rpc.OrderDraft) *ibkrlib.RawOrder {
 		OpenClose:        strings.ToUpper(strings.TrimSpace(draft.OpenClose)),
 		OcaGroup:         draft.OCAGroup,
 		OcaType:          draft.OCAType,
+	}
+	if draft.EntryLink != nil {
+		order.ParentID = draft.EntryLink.ParentID
+		order.AuxPrice = draft.FixedStopPrice
 	}
 	if draft.Trail != nil {
 		order.TrailStopPrice = draft.Trail.InitialStopPrice
@@ -1096,7 +1130,7 @@ func previewSupportedOrderType(orderType string) bool {
 
 func previewOrderTriggerMethod(orderType string, contract rpc.ContractParams, requested int) (int, error) {
 	if requested != rpc.OrderTriggerMethodDefault {
-		if !isTrailOrderType(orderType) {
+		if !isTrailOrderType(orderType) && orderType != "STP" {
 			return 0, errBadRequest("trigger_method is supported for TRAIL and TRAIL LIMIT orders only")
 		}
 		if !validOrderTriggerMethod(requested) {
@@ -1368,8 +1402,9 @@ func (s *Server) previewExactSessionContractQuote(ctx context.Context, authority
 // exactQuoteSizes are the displayed bid/ask sizes observed on the same
 // request-owned subscription as the snapshot's sides, in shares or contracts.
 type exactQuoteSizes struct {
-	Bid *int
-	Ask *int
+	Bid   *int
+	Ask   *int
+	Model *ibkrlib.OptionRiskMeasurement
 }
 
 // exactSessionContractQuote is the exact-contract read behind preview and
@@ -1377,6 +1412,10 @@ type exactQuoteSizes struct {
 // for displayed sizes; when the budget ends with both sides but no sizes the
 // snapshot is still returned and the sizes stay nil.
 func (s *Server) exactSessionContractQuote(ctx context.Context, authority *orderPreviewBrokerAuthority, contract rpc.ContractParams, timeout time.Duration, requireBidAsk, waitSizes bool) (rpc.OrderQuoteSnapshot, exactQuoteSizes, error) {
+	return s.exactSessionContractQuoteModel(ctx, authority, contract, timeout, requireBidAsk, waitSizes, false)
+}
+
+func (s *Server) exactSessionContractQuoteModel(ctx context.Context, authority *orderPreviewBrokerAuthority, contract rpc.ContractParams, timeout time.Duration, requireBidAsk, waitSizes, waitModel bool) (rpc.OrderQuoteSnapshot, exactQuoteSizes, error) {
 	quoteCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	started := time.Now()
@@ -1392,6 +1431,7 @@ func (s *Server) exactSessionContractQuote(ctx context.Context, authority *order
 	q := &rpc.Quote{Symbol: contract.Symbol, Contract: contract, IVStatus: "unavailable", AsOf: s.orderNow()}
 	var priceTickAt, bidAt, askAt time.Time
 	sidesReady := false
+	var model *ibkrlib.OptionRiskMeasurement
 	if err := pollMarketData(quoteCtx, authority.connector, key, started.Add(timeout), func(data *ibkrlib.MarketData) bool {
 		fillQuoteMarketData(q, data)
 		if data != nil && data.LastPriceTickAt.After(priceTickAt) {
@@ -1403,15 +1443,18 @@ func (s *Server) exactSessionContractQuote(ctx context.Context, authority *order
 			bidAt, askAt = data.BidAt, data.AskAt
 		}
 		sidesReady = exactQuoteReady(q, requireBidAsk)
-		return sidesReady && (!waitSizes || q.BidSize != nil && q.AskSize != nil)
-	}); err != nil && (!waitSizes || !sidesReady || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil) {
+		if waitModel {
+			model = authority.connector.OptionRiskForSession(authority.session, key)
+		}
+		return sidesReady && (!waitSizes || q.BidSize != nil && q.AskSize != nil) && (!waitModel || model != nil && model.IV != nil && model.Delta != nil)
+	}); err != nil && (!(waitSizes || waitModel) || !sidesReady || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil) {
 		return rpc.OrderQuoteSnapshot{}, exactQuoteSizes{}, fmt.Errorf("%w: exact contract quote unavailable: %v", ErrTradingDisabled, err)
 	}
 	if !s.orderPreviewBrokerAuthorityCurrent(authority) {
 		return rpc.OrderQuoteSnapshot{}, exactQuoteSizes{}, fmt.Errorf("%w: broker session changed during exact quote", ErrTradingDisabled)
 	}
 	q.AsOf = s.orderNow()
-	sizes := exactQuoteSizes{Bid: q.BidSize, Ask: q.AskSize}
+	sizes := exactQuoteSizes{Bid: q.BidSize, Ask: q.AskSize, Model: model}
 	if requireBidAsk {
 		return s.exactBidAskQuoteSnapshot(q, contract, started, bidAt, askAt), sizes, nil
 	}
@@ -1820,6 +1863,7 @@ func replaceTargetFromView(view rpc.OrderView) orderPreviewReplaceTarget {
 		return orderPreviewReplaceTarget{}
 	}
 	return orderPreviewReplaceTarget{
+		EntryLink: view.EntryLink, FixedStopPrice: view.FixedStopPrice,
 		OrderRef:        view.OrderRef,
 		ReservedOrderID: view.ReservedOrderID,
 		PermID:          view.PermID,

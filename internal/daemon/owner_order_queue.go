@@ -156,6 +156,9 @@ func (e *proposalEngine) prepareOwnerQueue(ctx context.Context, p rpc.TradePropo
 			p.WorstPrice = *prop.LimitPrice
 		}
 	}
+	if order.AttachedStop != nil {
+		return block("protected_add_queue_unsupported", "Entry and attached stop require an immediate exact review; this pair cannot be queued.")
+	}
 	order.Action = strings.ToUpper(strings.TrimSpace(order.Action))
 	order.OrderType = strings.ToUpper(strings.TrimSpace(order.OrderType))
 	if order.OrderType == "" {
@@ -204,6 +207,9 @@ func (e *proposalEngine) prepareOwnerQueue(ctx context.Context, p rpc.TradePropo
 	}
 	var terms rpc.QueuedAuthTerms
 	if p.FullPosition {
+		if s.hasAttachedStockStop(contract) {
+			return block("attached_stop_overlap", "An added-lot stop already exists; review its protection before creating a full-position mandate.")
+		}
 		if order.Action != "SELL" || contract.SecType != "STK" || !isTrailOrderType(order.OrderType) || position.Impact.Before < 1 || math.Trunc(position.Impact.Before) != position.Impact.Before {
 			return block("queue_protection_invalid", "Full-position trailing protection requires whole long stock shares.")
 		}
@@ -286,6 +292,9 @@ func (e *proposalEngine) resolveOwnerQueue(ctx context.Context, rec queuedAuthRe
 	}
 	current := position.Impact.Before
 	if ownerQueueProtection(t) {
+		if e.server.hasAttachedStockStop(t.Contract) {
+			return p, preparedBlocker("attached_stop_overlap", "An added-lot stop overlaps this full-position mandate; review protection first."), "", ""
+		}
 		if current <= 0 {
 			return p, nil, queuedReasonPositionChanged, "the position closed; its protection queue is cancelled"
 		}
@@ -306,6 +315,9 @@ func (e *proposalEngine) resolveOwnerQueue(ctx context.Context, rec queuedAuthRe
 // submitOwnerQueue runs through the existing preview and place gates. The
 // queue's shared beforePlace callback journals its intent before any frame.
 func (e *proposalEngine) submitOwnerQueue(ctx context.Context, rec queuedAuthRecord, prop rpc.TradeProposal, opts proposalSubmitOptions) (out rpc.TradeProposalSubmitResult, err error) {
+	if ownerQueueProtection(rec.Terms) && e.server.hasAttachedStockStop(rec.Terms.Contract) {
+		return out, errBadRequest("attached stop overlaps full-position protection")
+	}
 	if rec.Terms.Action == "BUY" && rec.Terms.Contract.SecType == "STK" {
 		ctx = context.WithValue(ctx, ownerQueueAdmissionKey{}, &ownerQueueAdmission{QueueID: rec.Terms.QueueID, ConID: rec.Terms.Contract.ConID, Quantity: rec.Terms.MaxQuantity, Cap: rec.Terms.WorstPrice})
 	}

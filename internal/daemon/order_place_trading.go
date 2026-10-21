@@ -67,6 +67,9 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 	if err := s.bindPreviewOrderRiskAuthority(ctx, &binding, status, payload, payload.Draft); err != nil {
 		return nil, err
 	}
+	if payload.Scope == rpc.OrderTokenScopeProtectedAdd {
+		return s.placeProtectedStockAdd(ctx, p, payload, binding, status)
+	}
 	// A sale beside Canary's own stop on the contract is linked to it, or
 	// the stop is shrunk first (protective_oca.go); the membership is
 	// stamped on the order sent and journaled, never on the signed draft.
@@ -196,7 +199,12 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	}
 	contract := previewIBKRStrategyContract(modifiedDraft)
 	order := previewIBKROrder(modifiedDraft)
-	if p.Origin == rpc.OrderOriginDaemonProtectiveGuard {
+	if modifiedDraft.EntryLink != nil {
+		order, err = attachedStockStopModifyOrder(view, modifiedDraft, status)
+		if err != nil {
+			return nil, err
+		}
+	} else if p.Origin == rpc.OrderOriginDaemonProtectiveGuard {
 		order.TotalQty, err = protectionModifyTotal(modifiedDraft.Quantity, view.Filled)
 		if err != nil {
 			return nil, err
@@ -210,6 +218,7 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	confirm.OrderRef = view.OrderRef
 	confirm.Endpoint = view.Endpoint
 	modify := orderJournalEventForDraft(modifiedDraft, orderJournalEventModifyRequested, journalStatus, payload.TokenID, view.ReservedOrderID, now)
+	modify.Quantity = float64(order.TotalQty)
 	attachOrderFeeBound(&modify, payload.WhatIf)
 	modify.AttemptID = attemptID
 	modify.ActionKind = corestore.ActionModify
@@ -231,17 +240,19 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	binding.orderEventSeq = stagedOrderEventSeq
 	binding.orderEndpoint = view.Endpoint
 
+	wireDraft := modifiedDraft
+	wireDraft.Quantity = order.TotalQty
 	order.OrderID = view.ReservedOrderID
 	order.ClientID = status.ClientID
 	order.Account = status.Account
 	order.Changes = orderChangeIdentity(view)
 	if err := s.submitBoundConfiguredOrder(ctx, binding, status, contract, order); err != nil {
-		if journalErr := s.appendOrderSendError(modifiedDraft, journalStatus, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify, err); journalErr != nil {
+		if journalErr := s.appendOrderSendError(wireDraft, journalStatus, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify, err); journalErr != nil {
 			err = errors.Join(err, journalErr)
 		}
 		return nil, fmt.Errorf("%s order modify: %w", auth.Route, err)
 	}
-	if err := s.appendOrderSendCompleted(modifiedDraft, journalStatus, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify); err != nil {
+	if err := s.appendOrderSendCompleted(wireDraft, journalStatus, payload.TokenID, view.ReservedOrderID, attemptID, corestore.ActionModify); err != nil {
 		return nil, fmt.Errorf("%s order modify outcome: %w", auth.Route, ibkrlib.WithSendDisposition(err, ibkrlib.SendDispositionMayHaveWritten))
 	}
 
@@ -507,6 +518,9 @@ func (s *Server) verifyPreviewTokenForModify(token string, view rpc.OrderView) (
 }
 
 func validateModifyPreviewTarget(target orderPreviewReplaceTarget, view rpc.OrderView) error {
+	if !stockEntryLinksEqual(target.EntryLink, view.EntryLink) || target.FixedStopPrice != view.FixedStopPrice || target.TriggerMethod != view.TriggerMethod {
+		return fmt.Errorf("modify preview target protection terms changed")
+	}
 	if target.ReservedOrderID <= 0 {
 		return fmt.Errorf("modify preview token is not bound to a broker order ID")
 	}
@@ -601,6 +615,7 @@ func paperGateFromStatus(status rpc.TradingStatus) ibkrlib.PaperOrderGate {
 
 func orderJournalEventForDraft(draft rpc.OrderDraft, eventType string, status rpc.TradingStatus, tokenID string, orderID int, at time.Time) orderJournalEvent {
 	return orderJournalEvent{
+		AttachedStop: draft.AttachedStop, EntryLink: draft.EntryLink, FixedStopPrice: draft.FixedStopPrice,
 		AdaptivePriority: draft.AdaptivePriority,
 		At:               at,
 		Type:             eventType,

@@ -26,8 +26,8 @@ bound to an exact preview and recorded before broker transmission.
 
 `internal/risk/stock_add.go` owns sizing. The daemon assembles broker and policy
 evidence. `internal/rpc/stock_add.go` is the CLI/MCP contract. Both surfaces
-render the same result. Desk integration, bond sizing and option construction
-are later increments.
+render the same result. Desk integrates the stock plan and exact review. The additional option and
+protected-entry contracts below leave the existing risk owner unchanged.
 
 ## Operator and model surfaces
 
@@ -191,3 +191,42 @@ and missing evidence holds. CLI golden reports cover successful and held plans.
 `make test` includes static/privacy/docs gates, render checks, race tests and
 the historical regression spine. Broker-free tests establish these contracts;
 actual broker commissioning is separate and requires the owner's policy values.
+
+
+## Protected stock entry and option selection
+
+Owner, 2026-10-21: Add can bind an optional `--stop-price` below the reviewed
+entry. This mints a distinct `protected-add` token: an older single-buy handler
+cannot redeem it. One confirmation signs a BUY LMT DAY plus an added-lot SELL
+STP GTC, LAST trigger, regular-hours child. The exact session's market-rule
+price grid validates both prices. No policy limit or default stop distance is
+introduced. Ordinary Add without this field retains its existing behavior.
+
+The existing gated executor reserves and journals both identities before one
+no-retry transport group: parent transmit false, final child transmit true.
+Uncertain writes retain both identities and cannot be retried. Partial parent
+fills have no active child protection. A full parent fill plus a later working
+child callback with exact parent, price, quantity and terms is required for
+coverage; holdings alone, a send return or an open-order disappearance is not
+proof. Status returns the original entry and child separately. A later broker
+hold or contradictory terms removes active coverage. Restart uses the same
+durable event proof.
+
+An active attached stop can only shrink through the existing modify preview,
+WhatIf, risk gates and journal frontier. Preview and submission preserve its
+absolute trigger and parent, and use cumulative broker quantity (new remaining
+plus filled). Existing independent protection receives inventory capacity first;
+newer added lots shrink first when aggregate stops exceed holdings. OCA siblings
+share capacity. Full-position mandates conflict with added-lot protection and
+require explicit review; neither workflow silently changes the other's mandate.
+The ordinary protection guard still requires fresh evidence and all write gates.
+
+`add market --stdin --json` is a bounded read adapter for a resolved USD stock
+and four standard long-call horizons, targeting 14/30/60/120 days, always more
+than seven days, delta 0.50–0.70. Exact contract refresh never substitutes a
+contract. Prices, sizes, IV/delta and their evidence clocks remain distinct.
+`add call-plan --stdin --json` computes exact fee-inclusive sizing and previews
+at most four candidates. Optional nearest-five rounding retains one/two contracts
+and explicitly reports an over-budget result; it grants no write authority.
+Desk freezes the exact selected price and size before its existing device review.
+These CLI methods are not new model write tools or an autonomous order loop.

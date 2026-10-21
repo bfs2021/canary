@@ -27,6 +27,7 @@ type inboundOrderProtoSummary struct {
 	requestID            int
 	permID               int
 	parentID             int
+	parentIDKnown        bool
 	clientID             int
 	status               string
 	symbol               string
@@ -147,6 +148,9 @@ func summarizeOrderStatusProtoCallback(body []byte) []string {
 	if err != nil {
 		return append(fields, "decode_error="+err.Error())
 	}
+	if summary.parentIDKnown {
+		fields = append(fields, "parentId="+strconv.Itoa(summary.parentID))
+	}
 	return append(fields,
 		"orderId="+strconv.Itoa(summary.orderID),
 		"status="+summary.status,
@@ -154,7 +158,6 @@ func summarizeOrderStatusProtoCallback(body []byte) []string {
 		"remaining="+summary.remaining,
 		"avgFillPrice="+formatProtoSummaryFloat(summary.avgFillPrice),
 		"permId="+strconv.Itoa(summary.permID),
-		"parentId="+strconv.Itoa(summary.parentID),
 		"lastFillPrice="+formatProtoSummaryFloat(summary.lastFillPrice),
 		"clientId="+strconv.Itoa(summary.clientID),
 		"whyHeld="+summary.whyHeld,
@@ -209,6 +212,9 @@ func appendContractSummaryFields(fields []string, summary inboundOrderProtoSumma
 }
 
 func appendOrderSummaryFields(fields []string, summary inboundOrderProtoSummary) []string {
+	if summary.parentIDKnown {
+		fields = append(fields, "parentId="+strconv.Itoa(summary.parentID))
+	}
 	if summary.deactivated != nil {
 		fields = append(fields, "deactivated="+strconv.FormatBool(*summary.deactivated))
 	}
@@ -297,6 +303,7 @@ func parseOrderStatusProtoCallback(body []byte) (inboundOrderProtoSummary, error
 				return err
 			}
 			summary.parentID = int(v)
+			summary.parentIDKnown = true
 		case 8:
 			v, err := protoFixed64Value(fieldNumber, wireType, value)
 			if err != nil {
@@ -454,6 +461,7 @@ func parseInboundOrderProto(body []byte, summary *inboundOrderProtoSummary) erro
 				return err
 			}
 			summary.parentID = int(v)
+			summary.parentIDKnown = true
 		case 5:
 			summary.action = string(value)
 		case 6:

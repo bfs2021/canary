@@ -35,8 +35,11 @@ func (s *Server) verifyPreviewTokenForPlace(token string) (orderPreviewTokenPayl
 	if err != nil {
 		return orderPreviewTokenPayload{}, err
 	}
-	if payload.Scope != rpc.OrderTokenScopePlace && payload.Scope != rpc.OrderTokenScopeStrategy {
+	if payload.Scope != rpc.OrderTokenScopePlace && payload.Scope != rpc.OrderTokenScopeStrategy && payload.Scope != rpc.OrderTokenScopeProtectedAdd {
 		return orderPreviewTokenPayload{}, fmt.Errorf("%w: preview token scope %q cannot be used for place", ErrTradingDisabled, payload.Scope)
+	}
+	if err := validateProtectedAddScope(payload.Scope, payload.Draft); err != nil {
+		return orderPreviewTokenPayload{}, err
 	}
 	if err := requireSubmitEligiblePreviewToken(payload); err != nil {
 		return orderPreviewTokenPayload{}, err

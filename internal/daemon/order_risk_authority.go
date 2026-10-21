@@ -827,7 +827,7 @@ func (s *Server) bindPreviewOrderRiskAuthority(ctx context.Context, binding *bro
 		if draft.Add == nil {
 			return fmt.Errorf("%w: equity Add policy now applies; preview again", ErrTradingDisabled)
 		}
-		if payload.Scope != rpc.OrderTokenScopePlace {
+		if payload.Scope != rpc.OrderTokenScopePlace && payload.Scope != rpc.OrderTokenScopeProtectedAdd {
 			return fmt.Errorf("%w: Add modification needs a new review", ErrTradingDisabled)
 		}
 		addEvidence, addErr := s.validateStockAddDraft(ctx, draft, payload.WhatIf)

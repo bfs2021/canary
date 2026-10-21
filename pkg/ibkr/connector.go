@@ -2975,27 +2975,29 @@ func (c *Connector) subscriptionDataType(sub *Subscription) int {
 // ContractDetailsLite contains the routing, identity, schedule, and price-tick
 // fields decoded from a broker contract-details response. Option-specific
 type ContractDetailsLite struct {
-	ReqID        int
-	Symbol       string
-	SecType      string
-	Expiry       string
-	Strike       float64
-	Right        string
-	Exchange     string
-	PrimaryExch  string
-	Currency     string
-	ConID        int
-	UnderConID   int
-	LocalSymbol  string
-	TradingClass string
-	Multiplier   int
-	Industry     string
-	Category     string
-	Subcategory  string
-	StockType    string
-	TimeZoneID   string
-	TradingHours string
-	LiquidHours  string
+	ValidExchanges string
+	MarketRuleIDs  string
+	ReqID          int
+	Symbol         string
+	SecType        string
+	Expiry         string
+	Strike         float64
+	Right          string
+	Exchange       string
+	PrimaryExch    string
+	Currency       string
+	ConID          int
+	UnderConID     int
+	LocalSymbol    string
+	TradingClass   string
+	Multiplier     int
+	Industry       string
+	Category       string
+	Subcategory    string
+	StockType      string
+	TimeZoneID     string
+	TradingHours   string
+	LiquidHours    string
 	// MinTick is the venue's minimum price increment for the contract.
 	MinTick float64
 }
@@ -3004,13 +3006,15 @@ type ContractDetailsLite struct {
 // captured on one exact Connector session. Contract always has a positive
 // ConID; MinTick is zero only when the broker omitted it.
 type ResolvedOrderContract struct {
-	UnderConID int
-	Industry   string
-	Category   string
-	StockType  string
-	Contract   Contract
-	MinTick    float64
-	TimeZoneID string
+	ValidExchanges string
+	MarketRuleIDs  string
+	UnderConID     int
+	Industry       string
+	Category       string
+	StockType      string
+	Contract       Contract
+	MinTick        float64
+	TimeZoneID     string
 }
 
 // ResolveOrderContractForSession resolves a symbol/option description to one
@@ -3189,7 +3193,7 @@ func exactOrderContract(request Contract, details []ContractDetailsLite) (Resolv
 	if selected.TradingClass != "" {
 		resolved.TradingClass = selected.TradingClass
 	}
-	return ResolvedOrderContract{Contract: resolved, UnderConID: selected.UnderConID, MinTick: selected.MinTick, TimeZoneID: selected.TimeZoneID, Industry: selected.Industry, Category: selected.Category, StockType: selected.StockType}, nil
+	return ResolvedOrderContract{ValidExchanges: selected.ValidExchanges, MarketRuleIDs: selected.MarketRuleIDs, Contract: resolved, UnderConID: selected.UnderConID, MinTick: selected.MinTick, TimeZoneID: selected.TimeZoneID, Industry: selected.Industry, Category: selected.Category, StockType: selected.StockType}, nil
 }
 
 // exactOrderContractRouteMatches applies caller-supplied routing as an
@@ -4251,7 +4255,9 @@ func parseContractDetailsLite(fields []string, expectedReqID int, serverVersion 
 	}
 
 	industry, category, subcategory, stockType := "", "", "", ""
+	validExchanges, marketRuleIDs := "", ""
 	if classification, ok := parseContractDetailsClassification(fields, serverVersion); ok {
+		validExchanges, marketRuleIDs = classification.validExchanges, classification.marketRuleIDs
 		industry = classification.industry
 		category = classification.category
 		subcategory = classification.subcategory
@@ -4259,6 +4265,7 @@ func parseContractDetailsLite(fields []string, expectedReqID int, serverVersion 
 	}
 
 	return &ContractDetailsLite{
+		ValidExchanges: validExchanges, MarketRuleIDs: marketRuleIDs,
 		ReqID:        reqID,
 		Symbol:       symbol,
 		SecType:      secType,
@@ -4285,10 +4292,12 @@ func parseContractDetailsLite(fields []string, expectedReqID int, serverVersion 
 }
 
 type contractDetailsClassification struct {
-	industry    string
-	category    string
-	subcategory string
-	stockType   string
+	validExchanges string
+	marketRuleIDs  string
+	industry       string
+	category       string
+	subcategory    string
+	stockType      string
 }
 
 // parseContractDetailsClassification follows the official contractData
@@ -4341,9 +4350,9 @@ func parseContractDetailsClassification(fields []string, serverVersion int) (con
 			return contractDetailsClassification{}, false
 		}
 	}
-	_ = cursor.string() // multiplier is a protocol string
-	_ = cursor.string() // orderTypes
-	_ = cursor.string() // validExchanges
+	_ = cursor.string()               // multiplier is a protocol string
+	_ = cursor.string()               // orderTypes
+	validExchanges := cursor.string() // aligned with marketRuleIDs
 	if version >= 2 {
 		if _, ok = cursor.integer(); !ok { // priceMagnifier
 			return contractDetailsClassification{}, false
@@ -4359,7 +4368,7 @@ func parseContractDetailsClassification(fields []string, serverVersion int) (con
 		_ = cursor.string() // primaryExchange
 	}
 
-	classification := contractDetailsClassification{}
+	classification := contractDetailsClassification{validExchanges: validExchanges}
 	if version >= 6 {
 		_ = cursor.string() // contractMonth
 		classification.industry = strings.TrimSpace(cursor.string())
@@ -4388,7 +4397,7 @@ func parseContractDetailsClassification(fields []string, serverVersion int) (con
 		_ = cursor.string() // underSecType
 	}
 	if serverVersion >= minServerVerMarketRules {
-		_ = cursor.string() // marketRuleIDs
+		classification.marketRuleIDs = cursor.string()
 	}
 	if serverVersion >= minServerVerRealExpiration {
 		_ = cursor.string() // realExpirationDate
@@ -5019,6 +5028,7 @@ func (c *Connector) unsubscribeMarketData(ctx context.Context, symbol string, bi
 // responsible for supplying a broker-valid combination of order type, prices,
 // quantity, time in force, account, and routing fields.
 type RawOrder struct {
+	ParentID int
 	// AdaptivePriority requests IBKR Adaptive, never a plain-limit fallback.
 	AdaptivePriority string
 	OrderID          int
@@ -5133,49 +5143,7 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 	}
 	conn := binding.connection
 
-	// Convert to IBKROrder for the connection
-	ibkrOrder := &IBKROrder{
-		AdaptivePriority: order.AdaptivePriority,
-		OrderID:          order.OrderID,
-		ClientID:         order.ClientID,
-		PermID:           order.PermID,
-		ConID:            contract.ConID,
-		Symbol:           contract.Symbol,
-		SecType:          contract.SecType,
-		Expiry:           contract.Expiry,
-		Strike:           contract.Strike,
-		Right:            contract.Right,
-		Multiplier:       multiplierToString(contract.Multiplier),
-		Exchange:         contract.Exchange,
-		PrimaryExch:      contract.PrimaryExch,
-		Currency:         contract.Currency,
-		LocalSymbol:      contract.LocalSymbol,
-		TradingClass:     contract.TradingClass,
-		ComboLegs:        append([]ComboLeg(nil), contract.ComboLegs...),
-		BondRules:        cloneBondOrderRules(contract.BondRules),
-		Action:           order.Action,
-		TotalQty:         order.TotalQty,
-		OrderType:        order.OrderType,
-		LmtPrice:         order.LmtPrice,
-		LmtPriceSet:      order.LmtPriceSet || strings.EqualFold(order.OrderType, "LMT"),
-		AuxPrice:         order.AuxPrice,
-		TrailStopPrice:   order.TrailStopPrice,
-		TrailingPercent:  order.TrailingPercent,
-		LmtPriceOffset:   order.LmtPriceOffset,
-		TIF:              order.TIF,
-		TriggerMethod:    order.TriggerMethod,
-		OrderRef:         order.OrderRef,
-		OutsideRth:       order.OutsideRth,
-		OcaGroup:         strings.TrimSpace(order.OcaGroup),
-		OcaType:          order.OcaType,
-		Account:          order.Account,
-		Transmit:         true,
-		OpenClose:        strings.ToUpper(strings.TrimSpace(order.OpenClose)),
-		Origin:           0,
-	}
-	if ibkrOrder.OpenClose == "" {
-		ibkrOrder.OpenClose = "O"
-	}
+	ibkrOrder := rawIBKROrder(contract, order)
 
 	// Bind the order id under the same coordination boundary used by the exact
 	// stale caller-supplied order is refused before local indexing or wire send.
@@ -5300,6 +5268,54 @@ func (c *Connector) submitOrderForSession(ctx context.Context, binding Connector
 		order.LmtPrice, order.TIF, order.OutsideRth)
 
 	return nil
+}
+
+func rawIBKROrder(contract *Contract, order *RawOrder) *IBKROrder {
+	ibkrOrder := &IBKROrder{
+		ParentID:         order.ParentID,
+		AdaptivePriority: order.AdaptivePriority,
+		OrderID:          order.OrderID,
+		ClientID:         order.ClientID,
+		PermID:           order.PermID,
+		ConID:            contract.ConID,
+		Symbol:           contract.Symbol,
+		SecType:          contract.SecType,
+		Expiry:           contract.Expiry,
+		Strike:           contract.Strike,
+		Right:            contract.Right,
+		Multiplier:       multiplierToString(contract.Multiplier),
+		Exchange:         contract.Exchange,
+		PrimaryExch:      contract.PrimaryExch,
+		Currency:         contract.Currency,
+		LocalSymbol:      contract.LocalSymbol,
+		TradingClass:     contract.TradingClass,
+		ComboLegs:        append([]ComboLeg(nil), contract.ComboLegs...),
+		BondRules:        cloneBondOrderRules(contract.BondRules),
+		Action:           order.Action,
+		TotalQty:         order.TotalQty,
+		OrderType:        order.OrderType,
+		LmtPrice:         order.LmtPrice,
+		LmtPriceSet:      order.LmtPriceSet || strings.EqualFold(order.OrderType, "LMT"),
+		AuxPrice:         order.AuxPrice,
+		TrailStopPrice:   order.TrailStopPrice,
+		TrailingPercent:  order.TrailingPercent,
+		LmtPriceOffset:   order.LmtPriceOffset,
+		TIF:              order.TIF,
+		TriggerMethod:    order.TriggerMethod,
+		OrderRef:         order.OrderRef,
+		OutsideRth:       order.OutsideRth,
+		OcaGroup:         strings.TrimSpace(order.OcaGroup),
+		OcaType:          order.OcaType,
+		Account:          order.Account,
+		Transmit:         true,
+		OpenClose:        strings.ToUpper(strings.TrimSpace(order.OpenClose)),
+		Origin:           0,
+	}
+	if ibkrOrder.OpenClose == "" {
+		ibkrOrder.OpenClose = "O"
+	}
+
+	return ibkrOrder
 }
 
 // ReserveOrderID claims the next broker order ID without submitting an order.

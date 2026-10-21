@@ -1,0 +1,20 @@
+# canary  · COLUMNS=80 · colour off
+
+Canary Order Status  FILLED
+Scope          unknown unknown
+Order          synthetic-entry BUY 10 SYNA ? ?
+Account        
+Status         filled
+Attached stop  synthetic-stop · 10 shares at 95.0000 · activation_pending
+Filled         10 / 10
+
+# canary  · COLUMNS=80 · colour on, ESC written as \x1b
+
+Canary Order Status  \x1b[32m\x1b[1mFILLED\x1b[0m\x1b[0m
+\x1b[2mScope         \x1b[0m unknown unknown
+\x1b[2mOrder         \x1b[0m synthetic-entry BUY 10 SYNA ? ?
+\x1b[2mAccount       \x1b[0m 
+\x1b[2mStatus        \x1b[0m filled
+\x1b[2mAttached stop \x1b[0m synthetic-stop · 10 shares at 95.0000 · activation_pending
+\x1b[2mFilled        \x1b[0m 10 / 10
+

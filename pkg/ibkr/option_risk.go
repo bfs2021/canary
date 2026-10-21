@@ -16,6 +16,7 @@ type OptionRiskMeasurement struct {
 	RequestedAt  time.Time
 	ReceivedAt   time.Time
 	DataType     int
+	IV           *float64
 	Delta        *float64
 	Underlying   *float64
 }
@@ -54,6 +55,9 @@ func (c *Connector) handleExactOptionRisk(origin ConnectorSessionBinding, fields
 	if tick == 83 {
 		r.DataType = 3
 	}
+	if v, err := strconv.ParseFloat(strings.TrimSpace(fields[4]), 64); err == nil && v > 0 && v < 100 {
+		r.IV = &v
+	}
 	if v, err := strconv.ParseFloat(strings.TrimSpace(fields[5]), 64); err == nil && saneGreek(v, 1.05) {
 		r.Delta = &v
 	}
@@ -83,6 +87,9 @@ func (c *Connector) OptionRiskForSession(binding ConnectorSessionBinding, key st
 		return nil
 	}
 	out := *sub.optionRisk
+	if out.IV != nil {
+		out.IV = new(*out.IV)
+	}
 	if out.Delta != nil {
 		out.Delta = new(*out.Delta)
 	}

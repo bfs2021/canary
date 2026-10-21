@@ -68,7 +68,13 @@ func (s *Server) handleSetupOptions(ctx context.Context, req *rpc.Request) (*rpc
 				return nil, err
 			}
 			contract := setupOptionContract(exact.Contract)
+			contract.MinTick = exact.MinTick
 			out.Contract = &contract
+			if rules, err := c.OrderPriceIncrements(ctx, binding, exact); err == nil {
+				for _, r := range rules {
+					out.PriceIncrements = append(out.PriceIncrements, rpc.SetupOptionPriceIncrement{LowEdge: r.LowEdge, Increment: r.Increment})
+				}
+			}
 			out.Quote = s.setupCallQuote(ctx, c, binding, contract)
 		} else {
 			// The center selects a bounded display window from real listed strikes;
@@ -116,12 +122,14 @@ const (
 // cancels a shared option quote line. It has no error result: a failed read
 // or a rule miss is a missing quote and never fails the selection.
 func (s *Server) setupCallQuote(ctx context.Context, c *ibkr.Connector, binding ibkr.ConnectorSessionBinding, call rpc.ContractParams) *rpc.SetupOptionQuote {
+	var evidence exactQuoteSizes
 	quote, reason, took := readSetupCallQuote(ctx, func(ctx context.Context, budget time.Duration) (rpc.OrderQuoteSnapshot, error) {
 		authority := s.setupQuoteAuthority(c, binding)
 		if authority == nil {
 			return rpc.OrderQuoteSnapshot{}, errors.New("broker connector changed before the quote")
 		}
-		snap, err := s.previewExactSessionContractQuote(ctx, authority, call, budget, true)
+		snap, sizes, err := s.exactSessionContractQuoteModel(ctx, authority, call, budget, true, true, true)
+		evidence = sizes
 		if err != nil {
 			// The exact path labels every failure trading-disabled for order
 			// previews; for discovery it is only an unavailable quote.
@@ -129,6 +137,15 @@ func (s *Server) setupCallQuote(ctx context.Context, c *ibkr.Connector, binding 
 		}
 		return snap, nil
 	}, time.Now)
+	if quote.Status == rpc.SetupQuoteQuoted {
+		quote.BidSize, quote.AskSize = evidence.Bid, evidence.Ask
+		m := evidence.Model
+		if m != nil && m.Contract.ConID == call.ConID && !m.ReceivedAt.Before(m.RequestedAt) && !m.ReceivedAt.After(time.Now()) && time.Since(m.ReceivedAt) <= setupQuoteMaxAge {
+			quote.IV, quote.Delta = m.IV, m.Delta
+			quote.ModelAsOf = m.ReceivedAt
+			quote.ModelDataType = marketDataTypeName(m.DataType)
+		}
+	}
 	s.debugf("setups.options quote %s %s %gC: %s (%s) in %s", call.Symbol, call.Expiry, call.Strike, quote.Status, reason, took.Round(time.Millisecond))
 	return &quote
 }
@@ -176,6 +193,9 @@ func setupOptionQuote(snap rpc.OrderQuoteSnapshot, now time.Time) (rpc.SetupOpti
 	case rpc.MarketDataLive, rpc.MarketDataDelayed, rpc.MarketDataFrozen, rpc.MarketDataDelayedFrozen:
 	default:
 		return missing, "data type unknown"
+	}
+	if snap.DataType == rpc.MarketDataLive && (snap.PriceAt.IsZero() || snap.Stale) {
+		return missing, "live side source timestamp unavailable or stale"
 	}
 	// A live quote is dated by its older side's receipt on the request's own
 	// line. IBKR sends no source time for delayed or frozen sides, so those are

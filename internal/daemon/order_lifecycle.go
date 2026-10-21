@@ -423,6 +423,15 @@ func orderJournalEventScopeMatchesView(ev orderJournalEvent, view rpc.OrderView)
 }
 
 func copyOrderJournalIdentityFromView(ev *orderJournalEvent, view rpc.OrderView) {
+	if ev.EntryLink == nil {
+		ev.EntryLink = view.EntryLink
+	}
+	if ev.AttachedStop == nil {
+		ev.AttachedStop = view.AttachedStop
+	}
+	if ev.FixedStopPrice == 0 && ev.Type != orderJournalEventBrokerAcknowledged {
+		ev.FixedStopPrice = view.FixedStopPrice
+	}
 	if ev.OrderRef == "" {
 		ev.OrderRef = view.OrderRef
 	}

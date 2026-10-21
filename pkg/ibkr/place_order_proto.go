@@ -201,8 +201,14 @@ func validatePlaceOrderProtoSupported(order *IBKROrder) error {
 		return unsupportedPlaceOrderProtoValue("secType", order.SecType, "STK/ETF/OPT/BAG/BILL/BOND/CASH only")
 	}
 	orderType := strings.ToUpper(strings.TrimSpace(order.OrderType))
-	if orderType != "LMT" && orderType != "TRAIL" && orderType != "TRAIL LIMIT" {
+	if orderType != "LMT" && orderType != "TRAIL" && orderType != "TRAIL LIMIT" && orderType != "STP" {
 		return unsupportedPlaceOrderProtoValue("orderType", order.OrderType, "LMT/TRAIL/TRAIL LIMIT only")
+	}
+	if orderType == "STP" && (secType != "STK" || order.ParentID <= 0 || order.Action != "SELL" || order.TIF != "GTC" || order.TriggerMethod != 2 || order.OutsideRth || (!order.Transmit && !order.WhatIf)) {
+		return fmt.Errorf("fixed stop is supported only as an attached regular-session stock child")
+	}
+	if order.ParentID != 0 && orderType != "STP" {
+		return unsupportedPlaceOrderProtoField("parentID")
 	}
 	if IsBillOrBond(secType) {
 		// LMT DAY on a contract id, quantity and price on the line's grid.
@@ -236,7 +242,7 @@ func validatePlaceOrderProtoSupported(order *IBKROrder) error {
 		return err
 	}
 	tif := strings.ToUpper(order.TIF)
-	gtcTrail := tif == "GTC" && (orderType == "TRAIL" || orderType == "TRAIL LIMIT")
+	gtcTrail := tif == "GTC" && (orderType == "TRAIL" || orderType == "TRAIL LIMIT" || orderType == "STP")
 	if tif != "DAY" && !gtcTrail {
 		return unsupportedPlaceOrderProtoValue("tif", order.TIF, "DAY, or GTC for TRAIL/TRAIL LIMIT")
 	}
@@ -335,7 +341,6 @@ func validatePlaceOrderProtoSupported(order *IBKROrder) error {
 		value int
 	}{
 		{"permID", order.PermID},
-		{"parentID", order.ParentID},
 		{"displaySize", order.DisplaySize},
 		{"shortSaleSlot", order.ShortSaleSlot},
 		{"minQty", order.MinQty},
@@ -454,7 +459,7 @@ func validatePlaceOrderTriggerMethod(orderType string, method int) error {
 	if method == 0 {
 		return nil
 	}
-	if orderType != "TRAIL" && orderType != "TRAIL LIMIT" {
+	if orderType != "TRAIL" && orderType != "TRAIL LIMIT" && orderType != "STP" {
 		return unsupportedPlaceOrderProtoValue("triggerMethod", strconv.Itoa(method), "only for TRAIL/TRAIL LIMIT")
 	}
 	switch method {
@@ -469,6 +474,10 @@ func validateProtoOrderTypePrices(orderType string, order *IBKROrder) error {
 	hasAmount := order.AuxPrice > 0
 	hasPercent := order.TrailingPercent > 0
 	switch orderType {
+	case "STP":
+		if !isPositiveFiniteStockPrice(order.AuxPrice) || order.LmtPrice != 0 || order.TrailStopPrice != 0 || order.TrailingPercent != 0 || order.LmtPriceOffset != 0 {
+			return fmt.Errorf("attached stock stop requires only a positive fixed auxPrice")
+		}
 	case "LMT":
 		if strings.EqualFold(order.SecType, "BAG") {
 			if !order.LmtPriceSet || math.IsNaN(order.LmtPrice) || math.IsInf(order.LmtPrice, 0) {
@@ -622,6 +631,7 @@ func summarizePlaceOrderProtoFrame(msgBytes []byte) []string {
 }
 
 type placeOrderProtoSummary struct {
+	parentID        int
 	orderID         int
 	conID           int
 	symbol          string
@@ -708,6 +718,12 @@ func parseOrderProtoSummary(body []byte, summary *placeOrderProtoSummary) error 
 				return err
 			}
 			summary.clientID = int(v)
+		case 4:
+			v, err := protoVarintValue(fieldNumber, wireType, value)
+			if err != nil {
+				return err
+			}
+			summary.parentID = int(v)
 		case 5:
 			summary.action = string(value)
 		case 6:

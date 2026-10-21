@@ -94,7 +94,11 @@ func buildProtectionCoverage(pos *rpc.PositionsResult, orders []rpc.OrderView, o
 				continue
 			}
 			coverageOrder := protectionCoverageOrder(order)
-			if protectionCoverageOrderCounts(order, row) {
+			if order.EntryLink != nil && (order.EntryState == "held" || order.EntryState == "activation_pending") {
+				coverageOrder.LastMessage = "Waiting for full entry fill and separate stop activation"
+				coverageRow.Orders = append(coverageRow.Orders, coverageOrder)
+				coverageRow.WarningCodes = appendCoverageCode(coverageRow.WarningCodes, "entry_stop_pending")
+			} else if protectionCoverageOrderCounts(order, row) {
 				coverageRow.ProtectedQuantity += orderViewRemainingQuantity(order)
 			} else {
 				coverageRow.Orders = append(coverageRow.Orders, coverageOrder)
@@ -265,11 +269,18 @@ func protectionCoverageOrderIsStopLike(order rpc.OrderView) bool {
 }
 
 func protectionCoverageOrderCounts(order rpc.OrderView, row rpc.PositionView) bool {
+	if order.EntryLink != nil && order.EntryState != "active" {
+		return false
+	}
 	if protectionCoverageOrderIsProblem(order) || (order.Deactivated != nil && *order.Deactivated) {
 		return false
 	}
 	switch order.LifecycleStatus {
 	case rpc.OrderLifecycleSubmitted, rpc.OrderLifecyclePreSubmitted:
+	case rpc.OrderLifecyclePartiallyFilled:
+		if order.EntryLink == nil || order.EntryState != "active" {
+			return false
+		}
 	default:
 		return false
 	}
@@ -277,6 +288,9 @@ func protectionCoverageOrderCounts(order rpc.OrderView, row rpc.PositionView) bo
 }
 
 func protectionCoverageOrderIsProblem(order rpc.OrderView) bool {
+	if order.EntryLink != nil && order.EntryState == "relationship_unknown" {
+		return true
+	}
 	return strings.EqualFold(order.ReconciliationState, "position_mismatch") ||
 		order.LifecycleStatus == rpc.OrderLifecycleUnknownReconcileRequired
 }
@@ -295,6 +309,9 @@ func protectionCoverageOrder(order rpc.OrderView) rpc.ProtectionCoverageOrder {
 		ReconciliationState: order.ReconciliationState,
 		UpdatedAt:           order.UpdatedAt,
 		LastMessage:         order.LastMessage,
+	}
+	if order.FixedStopPrice > 0 {
+		out.StopPrice = new(order.FixedStopPrice)
 	}
 	if order.Trail != nil && order.Trail.InitialStopPrice > 0 {
 		v := order.Trail.InitialStopPrice

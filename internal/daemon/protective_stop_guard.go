@@ -82,6 +82,7 @@ func (st protectiveStopGuardStep) key() string {
 // changing right now and how. It exists only while the guard holds
 // brokerWriteMu.
 type protectiveStopGuardWriteGrant struct {
+	Position        float64
 	Kind            string
 	OrderRef        string
 	ReservedOrderID int
@@ -189,6 +190,12 @@ func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.
 		if row.Unseen || !protectiveStopGuardOrder(order) {
 			continue
 		}
+		if row.Journal != nil && row.Journal.EntryLink != nil && row.Journal.EntryState != "active" {
+			if row.Journal.EntryState != "held" {
+				steps = append(steps, protectiveStopGuardStep{Order: order, View: *row.Journal, Kind: protectiveStopGuardReport, Reason: "Attached stop activation is unconfirmed; reconcile the original entry and child before changing protection"})
+			}
+			continue
+		}
 		remaining := brokerOrderRemaining(order)
 		if remaining <= 0 {
 			continue
@@ -206,6 +213,10 @@ func planProtectiveStopGuard(working []brokerWorkingOrder, positions []*ibkrlib.
 		step.Position = position
 		step.Committed = protectiveStopGuardCommitted(working, row, contract, scope)
 		headroom := position - step.Committed
+		if allocated, ok := attachedStopCapacity(working, row, contract, scope, position); ok {
+			headroom = math.Min(headroom, allocated)
+			step.Committed = math.Max(0, position-headroom)
+		}
 		units := positionUnits(contract.SecType)
 		held := fmt.Sprintf("%.4g %s are held", position, units)
 		if step.Committed > 0 {

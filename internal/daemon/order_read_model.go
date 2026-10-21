@@ -180,17 +180,34 @@ func (s *Server) handleOrderStatus(ctx context.Context, req *rpc.Request) (*rpc.
 	}
 	scope := s.currentBrokerStateScope()
 	for _, view := range views {
+		if view.EntryLink != nil && id == view.PreviewTokenID {
+			continue
+		}
 		if !orderViewMatchesID(view, id) {
 			continue
 		}
 		if !orderViewMatchesBrokerScope(view, scope) {
 			continue
 		}
+		var child *rpc.OrderView
+		if view.AttachedStop != nil {
+			for _, candidate := range views {
+				if candidate.EntryLink != nil && candidate.EntryLink.ParentRef == view.OrderRef && candidate.EntryLink.ParentID == view.ReservedOrderID && candidate.Endpoint == view.Endpoint && candidate.Account == view.Account && candidate.ClientID == view.ClientID && candidate.Mode == view.Mode {
+					if child != nil {
+						child = nil
+						break
+					}
+					copy := candidate
+					child = &copy
+				}
+			}
+		}
 		events := append([]rpc.OrderEvent{}, eventsByKey[orderViewKey(view)]...)
 		lastLocalEventAt := latestOrderEventAt(events)
 		return &rpc.OrderStatusResult{
 			Found:              true,
 			Order:              view,
+			AttachedStop:       child,
 			Events:             events,
 			AsOf:               s.orderNow(),
 			Account:            scope.Account,
@@ -627,6 +644,9 @@ func protectiveCloseCoverage(view rpc.OrderView, current float64) float64 {
 }
 
 func orderViewIsCloseProtective(view rpc.OrderView) bool {
+	if view.EntryLink != nil {
+		return view.EntryState == "active" && view.OrderType == "STP"
+	}
 	if !strings.EqualFold(view.OpenClose, "C") && !strings.EqualFold(view.Source, proposalOrderSource) {
 		return false
 	}
@@ -787,6 +807,7 @@ func buildOrderViews(events []orderJournalEvent) []rpc.OrderView {
 		view.CancelEligible = orderViewCancelEligibleWithAttemptTruth(view, attemptUncertain)
 		views = append(views, view)
 	}
+	deriveStockEntryStates(views, events)
 	sortOrderViews(views)
 	return views
 }
@@ -932,6 +953,9 @@ func orderModifyAcknowledgementMatches(intent, ack orderJournalEvent) bool {
 	equalText := func(a, b string) bool {
 		return strings.EqualFold(strings.TrimSpace(a), strings.TrimSpace(b))
 	}
+	if intent.EntryLink != nil && (ack.BrokerParentID == nil || *ack.BrokerParentID != intent.EntryLink.ParentID || intent.FixedStopPrice != ack.FixedStopPrice) {
+		return false
+	}
 	return equalText(intent.Action, ack.Action) &&
 		equalText(intent.OrderType, ack.OrderType) &&
 		equalText(intent.TIF, ack.TIF) &&
@@ -1034,6 +1058,7 @@ func buildOrderEventsByKey(events []orderJournalEvent) map[string][]rpc.OrderEve
 // orderJournalEventFromView projects a folded view back into a journal event
 func orderJournalEventFromView(view rpc.OrderView, eventType string, at time.Time) orderJournalEvent {
 	return orderJournalEvent{
+		AttachedStop: view.AttachedStop, EntryLink: view.EntryLink, FixedStopPrice: view.FixedStopPrice, BrokerParentID: view.BrokerParentID,
 		At:               at,
 		Type:             eventType,
 		OrderRef:         view.OrderRef,
@@ -1085,6 +1110,18 @@ func orderJournalEventFromView(view rpc.OrderView, eventType string, at time.Tim
 }
 
 func mergeOrderJournalEventIntoView(view *rpc.OrderView, ev orderJournalEvent) {
+	if view.AttachedStop == nil && ev.AttachedStop != nil {
+		view.AttachedStop = new(*ev.AttachedStop)
+	}
+	if view.EntryLink == nil && ev.EntryLink != nil {
+		view.EntryLink = new(*ev.EntryLink)
+	}
+	if ev.FixedStopPrice > 0 || (ev.Type == orderJournalEventBrokerAcknowledged && view.EntryLink != nil) {
+		view.FixedStopPrice = ev.FixedStopPrice
+	}
+	if ev.BrokerParentID != nil {
+		view.BrokerParentID = new(*ev.BrokerParentID)
+	}
 	preserveWorkingOrderOnBrokerError := brokerErrorShouldPreserveWorkingOrder(*view, ev)
 	brokerErrorLifecycleStatus := ""
 	if ev.Type == orderJournalEventBrokerError {
@@ -1226,7 +1263,7 @@ func mergeOrderJournalEventIntoView(view *rpc.OrderView, ev orderJournalEvent) {
 	if ev.LastFillPrice != 0 {
 		view.LastFillPrice = ev.LastFillPrice
 	}
-	if ev.WhyHeld != "" {
+	if ev.WhyHeld != "" || ev.Type == orderJournalEventBrokerAcknowledged || (ev.Type == orderJournalEventStatusUpdated && ev.Status != "Execution") {
 		view.WhyHeld = ev.WhyHeld
 	}
 	if ev.MktCapPrice != 0 {
@@ -1290,6 +1327,7 @@ func brokerErrorShouldPreserveWorkingOrder(view rpc.OrderView, ev orderJournalEv
 
 func orderEventFromJournal(ev orderJournalEvent) rpc.OrderEvent {
 	return rpc.OrderEvent{
+		AttachedStop: ev.AttachedStop, EntryLink: ev.EntryLink, FixedStopPrice: ev.FixedStopPrice, BrokerParentID: ev.BrokerParentID,
 		At:               ev.At,
 		Type:             ev.Type,
 		OrderRef:         ev.OrderRef,
@@ -1379,6 +1417,7 @@ func orderOriginForRead(origin string) string {
 
 func orderJournalEventFromLifecycle(ev ibkrlib.OrderLifecycleEvent, at time.Time) (orderJournalEvent, bool) {
 	out := orderJournalEvent{
+		BrokerParentID:   ev.ParentID,
 		At:               at,
 		OrderRef:         ev.OrderRef,
 		ReservedOrderID:  ev.OrderID,
@@ -1422,6 +1461,9 @@ func orderJournalEventFromLifecycle(ev ibkrlib.OrderLifecycleEvent, at time.Time
 		ExecTime:         ev.ExecTime,
 		ErrorCode:        ev.ErrorCode,
 		Message:          ev.Message,
+	}
+	if ev.OrderType == "STP" && ev.AuxPrice > 0 {
+		out.FixedStopPrice = ev.AuxPrice
 	}
 	switch ev.Type {
 	case ibkrlib.OrderLifecycleEventOpenOrder:
@@ -1722,6 +1764,9 @@ func orderViewIsOpen(view rpc.OrderView) bool {
 }
 
 func orderViewModifyEligible(view rpc.OrderView) bool {
+	if view.AttachedStop != nil || (view.EntryLink != nil && view.EntryState != "active") {
+		return false
+	}
 	if !view.Open ||
 		view.ReservedOrderID <= 0 ||
 		!orderViewBrokerConfirmedForWrite(view) ||
@@ -1730,6 +1775,8 @@ func orderViewModifyEligible(view rpc.OrderView) bool {
 		return false
 	}
 	switch strings.ToUpper(strings.TrimSpace(view.OrderType)) {
+	case "STP":
+		return view.EntryLink != nil && view.EntryState == "active" && view.TIF == "GTC" && view.TriggerMethod == 2 && !view.OutsideRTH && positiveFinite(view.FixedStopPrice)
 	case rpc.OrderTypeLMT:
 		return strings.EqualFold(view.TIF, rpc.OrderTIFDay)
 	case rpc.OrderTypeTRAIL, rpc.OrderTypeTRAILLIMIT:

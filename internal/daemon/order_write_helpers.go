@@ -194,7 +194,7 @@ func validateModifyDraft(view rpc.OrderView, draft rpc.OrderDraft) error {
 	viewType := strings.ToUpper(strings.TrimSpace(view.OrderType))
 	draftType := strings.ToUpper(strings.TrimSpace(draft.OrderType))
 	switch viewType {
-	case rpc.OrderTypeLMT, rpc.OrderTypeTRAIL, rpc.OrderTypeTRAILLIMIT:
+	case rpc.OrderTypeLMT, rpc.OrderTypeTRAIL, rpc.OrderTypeTRAILLIMIT, "STP":
 	default:
 		return errBadRequest("order modify supports LMT, TRAIL, and TRAIL LIMIT orders only")
 	}
@@ -207,7 +207,7 @@ func validateModifyDraft(view rpc.OrderView, draft rpc.OrderDraft) error {
 	if view.TriggerMethod != draft.TriggerMethod {
 		return errBadRequest("order modify cannot change trigger_method")
 	}
-	if isTrailOrderType(viewType) {
+	if isTrailOrderType(viewType) || viewType == "STP" {
 		if !strings.EqualFold(view.TIF, rpc.OrderTIFDay) && !strings.EqualFold(view.TIF, rpc.OrderTIFGTC) {
 			return errBadRequest("order modify supports DAY or GTC time-in-force for TRAIL orders")
 		}
@@ -217,7 +217,11 @@ func validateModifyDraft(view rpc.OrderView, draft rpc.OrderDraft) error {
 	if draft.OutsideRTH != view.OutsideRTH {
 		return errBadRequest("order modify cannot change outside_rth")
 	}
-	if isTrailOrderType(draftType) {
+	if draftType == "STP" {
+		if view.EntryState != "active" || view.EntryLink == nil || !stockEntryLinksEqual(view.EntryLink, draft.EntryLink) || !positiveFinite(draft.FixedStopPrice) || draft.FixedStopPrice != view.FixedStopPrice || draft.LimitPrice != 0 || draft.Trail != nil || view.Action != "SELL" || view.TIF != "GTC" || view.OutsideRTH || view.TriggerMethod != 2 || float64(draft.Quantity) >= orderViewRemainingQuantity(view) {
+			return errBadRequest("attached stop replacement may only reduce quantity with its fixed price and parent unchanged")
+		}
+	} else if isTrailOrderType(draftType) {
 		if err := validateModifyTrailDraft(draftType, draft); err != nil {
 			return err
 		}

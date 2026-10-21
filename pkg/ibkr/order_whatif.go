@@ -245,6 +245,7 @@ func (c *Connector) previewOrderWhatIf(ctx context.Context, contract *Contract, 
 	}
 
 	ibkrOrder := &IBKROrder{
+		ParentID:         order.ParentID,
 		AdaptivePriority: order.AdaptivePriority,
 		ConID:            contract.ConID,
 		Symbol:           contract.Symbol,

@@ -625,6 +625,15 @@ func markProtectionSummaryJournalOrdersAbsent(summary *rpc.ProtectionCoverageSum
 
 func protectionOrderViewFromSnapshot(view rpc.OrderView, order ibkrlib.OrderLifecycleEvent, asOf time.Time) rpc.OrderView {
 	out := view
+	if order.ParentID != nil {
+		out.BrokerParentID = new(*order.ParentID)
+	}
+	if out.EntryLink != nil && (out.BrokerParentID == nil || *out.BrokerParentID != out.EntryLink.ParentID) {
+		out.EntryState = "relationship_unknown"
+	}
+	if order.OrderType == "STP" && order.AuxPrice > 0 {
+		out.FixedStopPrice = order.AuxPrice
+	}
 	if order.OrderID > 0 {
 		out.ReservedOrderID = order.OrderID
 	}
@@ -698,6 +707,17 @@ func protectionOrderViewFromSnapshot(view rpc.OrderView, order ibkrlib.OrderLife
 	out.UpdatedAt = asOf.UTC()
 	if trail := trailSpecFromLifecycle(order); trail != nil {
 		out.Trail = trail
+	}
+	if view.EntryLink != nil {
+		// A snapshot may disprove activation; only durable ordered callbacks
+		// can prove it. Do not substitute local intent for missing broker terms.
+		out.ModifyEligible = false
+		if order.ParentID == nil || *order.ParentID != view.EntryLink.ParentID || order.OrderID != view.ReservedOrderID || order.ConID != view.ConID || order.Action != "SELL" || order.OrderType != "STP" || order.TIF != "GTC" || order.TriggerMethod != 2 || order.OutsideRth || order.AuxPrice != view.FixedStopPrice || order.TotalQuantity != view.Quantity {
+			out.EntryState = "relationship_unknown"
+		} else if order.WhyHeld != "" || (order.Deactivated != nil && *order.Deactivated) || (order.Status != "Submitted" && order.Status != "PreSubmitted") {
+			out.EntryState = "activation_pending"
+		}
+		out.ModifyEligible = orderViewModifyEligible(out)
 	}
 	return out
 }

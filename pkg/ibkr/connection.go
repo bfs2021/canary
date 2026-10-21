@@ -3977,6 +3977,11 @@ func (c *Connection) sendMessageWithTypeContextForEpochGuarded(ctx context.Conte
 }
 
 func (c *Connection) sendMessageWithMarketDataMode(ctx context.Context, msg []byte, reqType RequestType, epoch uint64, requireEpoch bool, guard func() error, dataType int) error {
+	return c.sendBoundFrames(ctx, msg, reqType, epoch, requireEpoch, guard, dataType, nil)
+}
+
+// sendBoundFrames holds one session, evidence and transport admission for a bounded frame group.
+func (c *Connection) sendBoundFrames(ctx context.Context, msg []byte, reqType RequestType, epoch uint64, requireEpoch bool, guard func() error, dataType int, additional [][]byte) error {
 	// Broker instructions and epoch-bound authority reads must be exactly-once
 	protectedSend := requireEpoch || reqType == RequestTypeOrder
 	outboundState := c.outboundSessionState.Load()
@@ -4047,7 +4052,7 @@ func (c *Connection) sendMessageWithMarketDataMode(ctx context.Context, msg []by
 			if protectedSend && (outboundState&1 != 0 || c.outboundSessionState.Load() != outboundState) {
 				return brokerSendError(fmt.Errorf("broker outbound session changed before request send"), SendDispositionDefinitelyUnsent, true)
 			}
-			frames := [][]byte{msg}
+			frames := append([][]byte{msg}, additional...)
 			defaultMode := c.marketDataDefaultMode
 			currentEpoch := c.BrokerSessionEpoch()
 			if defaultMode == 0 || c.marketDataModeEpoch != currentEpoch {
@@ -4079,7 +4084,7 @@ func (c *Connection) sendMessageWithMarketDataMode(ctx context.Context, msg []by
 			}
 			bufferedBefore := c.writer.Buffered()
 			accepted := 0
-			if len(frames) > 1 {
+			if dataType != 0 || repairMode {
 				c.marketDataDefaultMode, c.marketDataModeEpoch, c.marketDataModeDirty = defaultMode, currentEpoch, true
 			}
 			for _, frame := range frames {
@@ -4107,7 +4112,7 @@ func (c *Connection) sendMessageWithMarketDataMode(ctx context.Context, msg []by
 			if err := c.writer.Flush(); err != nil {
 				return brokerSendError(err, bufferedWriteDisposition(c.writer, bufferedBefore, accepted), protectedSend)
 			}
-			if len(frames) > 1 {
+			if dataType != 0 || repairMode {
 				c.marketDataModeDirty = false
 			}
 			// Only explicit mode setters change the default, and only after a

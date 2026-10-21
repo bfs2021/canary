@@ -102,3 +102,29 @@ func TestExactOptionRiskRejectsClassConIDAndReconnectCrossTalk(t *testing.T) {
 		t.Fatal("reconnect retained old model authority")
 	}
 }
+
+func TestExactOptionRiskIVIsAtomicAndCallerOwned(t *testing.T) {
+	conn, c, _, _, _ := newQueuedInstructionReconnectFixture(t)
+	binding, _ := c.CaptureSession()
+	key, err := c.SubscribeMarketDataWithContractForSession(context.Background(), binding, exactQuoteTestContract(900001), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := exactQuoteSubscriptionReqID(t, c, key)
+	conn.processMarketDataTypeAtEpoch([]string{"58", "1", strconv.Itoa(id), "1"}, binding.epoch)
+	f := exactModelFields(id, "13", "0.6", "100")
+	c.handleExactOptionRisk(binding, f)
+	r := c.OptionRiskForSession(binding, key)
+	if r.IV == nil || *r.IV != .2 {
+		t.Fatal("exact model IV missing")
+	}
+	*r.IV = .8
+	if *c.OptionRiskForSession(binding, key).IV != .2 {
+		t.Fatal("caller changed model IV")
+	}
+	f[4] = "NaN"
+	c.handleExactOptionRisk(binding, f)
+	if c.OptionRiskForSession(binding, key).IV != nil {
+		t.Fatal("partial model borrowed old IV")
+	}
+}

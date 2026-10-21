@@ -86,6 +86,8 @@ func TestSetupCallQuoteIsQuotedOnlyForDatedLabelledTwoSidedPrices(t *testing.T) 
 		{"read older than sixty seconds", func(q *rpc.OrderQuoteSnapshot) {
 			q.DataType, q.PriceAt, q.AsOf = rpc.MarketDataFrozen, time.Time{}, now.Add(-2*time.Minute)
 		}},
+		{"live source undated", func(q *rpc.OrderQuoteSnapshot) { q.PriceAt = time.Time{} }},
+		{"live source stale", func(q *rpc.OrderQuoteSnapshot) { q.Stale = true }},
 		{"undated", func(q *rpc.OrderQuoteSnapshot) { q.PriceAt, q.AsOf = time.Time{}, time.Time{} }},
 		{"future dated", func(q *rpc.OrderQuoteSnapshot) { q.PriceAt = now.Add(time.Second) }},
 	} {

@@ -264,6 +264,13 @@ func renderOrderStatusText(env *Env, res *rpc.OrderStatusResult, id string) {
 	}
 	statusRow(env, out, "Account", res.Order.Account)
 	statusRow(env, out, "Status", nonEmpty(res.Order.Status, res.Order.LifecycleStatus))
+	if res.Order.AttachedStop != nil {
+		text := "activation unconfirmed; reconcile the original pair"
+		if c := res.AttachedStop; c != nil {
+			text = fmt.Sprintf("%s · %.4g shares at %.4f · %s", c.OrderRef, c.Remaining, c.FixedStopPrice, c.EntryState)
+		}
+		statusRow(env, out, "Attached stop", text)
+	}
 	statusRow(env, out, "Filled", fmt.Sprintf("%.4g / %.4g", res.Order.Filled, res.Order.Quantity))
 	if res.Order.TriggerMethod != 0 {
 		statusRow(env, out, "Trigger", formatOrderTriggerMethod(res.Order.TriggerMethod))

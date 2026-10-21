@@ -27,6 +27,7 @@ const (
 // Raw is a copied slice of untrusted wire fields and may be nil for synthesized
 // error events.
 type OrderLifecycleEvent struct {
+	ParentID *int // nil means the callback did not report a parent.
 	// ModifyTermsKnown is true only for decoded callbacks whose order fields
 	// were checked for terms the replacement encoder cannot preserve.
 	ModifyTermsKnown  bool
@@ -254,6 +255,7 @@ func parseOpenOrderProtoEvent(fields []string) (OrderLifecycleEvent, bool) {
 	}
 	clientID, clientIDPresent := orderEventSummaryInt(fields, "clientId=")
 	ev := OrderLifecycleEvent{
+		ParentID:          orderEventParentID(fields),
 		ModifyTermsKnown:  summaryFieldValue(fields, "modifyTermsKnown=") == "true",
 		ModifyUnsupported: summaryFieldValue(fields, "modifyUnsupported="),
 		PrimaryExch:       summaryFieldValue(fields, "primaryExch="),
@@ -317,6 +319,7 @@ func orderEventWarningMessage(fields []string) string {
 func parseOrderStatusProtoEvent(fields []string) (OrderLifecycleEvent, bool) {
 	clientID, clientIDPresent := orderEventSummaryInt(fields, "clientId=")
 	ev := OrderLifecycleEvent{
+		ParentID:        orderEventParentID(fields),
 		Type:            OrderLifecycleEventStatus,
 		OrderID:         orderEventInt(summaryFieldValue(fields, "orderId=")),
 		ConID:           orderEventInt(summaryFieldValue(fields, "conId=")),
@@ -399,4 +402,12 @@ func orderEventSummaryInt(fields []string, prefix string) (int, bool) {
 func orderEventFloat(s string) float64 {
 	v, _ := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	return v
+}
+
+func orderEventParentID(fields []string) *int {
+	n, ok := orderEventSummaryInt(fields, "parentId=")
+	if !ok {
+		return nil
+	}
+	return &n
 }
