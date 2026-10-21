@@ -109,17 +109,14 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			date, dte := addHorizonExpiry(expiries, target, bounds[0], bounds[1], time.Now())
 			row := rpc.AddCallCandidate{Horizon: target, DTE: dte, Unavailable: "No eligible call"}
 			if date != "" && spot != nil && *spot > 0 {
-				strikes, err := setupListedStrikes(listing, u.Symbol, date)
+				calls, err := c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 8*time.Second)
 				if err == nil {
-					slices.SortFunc(strikes, func(a, b float64) int { return compareDistance(a, b, *spot) })
-					for _, k := range strikes[:min(3, len(strikes))] {
-						candidate := s.addCallMarket(ctx, c, binding, exact.Contract, date, k)
-						candidate.Horizon, candidate.DTE = target, dte
-						if eligibleAddCall(candidate, time.Now()) {
-							row = candidate
-							break
-						}
-					}
+					row = selectAddCall(calls, *spot, func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
+						return s.addResolvedCallMarket(ctx, c, binding, exact.Contract, call)
+					})
+					row.Horizon, row.DTE = target, dte
+				} else {
+					row.Unavailable = "Call contracts unavailable"
 				}
 			}
 			out.Calls[i] = row
@@ -131,6 +128,23 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	out.AsOf = time.Now()
 	return out, nil
 }
+
+// Quote only the nearest actual contracts for this expiry. The broker's
+// separate SecDef expiry/strike sets must never consume these three slots.
+func selectAddCall(calls []ibkr.ResolvedOrderContract, spot float64, quote func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate) rpc.AddCallCandidate {
+	calls = slices.Clone(calls)
+	slices.SortFunc(calls, func(a, b ibkr.ResolvedOrderContract) int {
+		return compareDistance(a.Contract.Strike, b.Contract.Strike, spot)
+	})
+	for _, call := range calls[:min(3, len(calls))] {
+		candidate := quote(call)
+		if eligibleAddCall(candidate, time.Now()) {
+			return candidate
+		}
+	}
+	return rpc.AddCallCandidate{Unavailable: "No eligible call"}
+}
+
 func compareDistance(a, b, spot float64) int {
 	da, db := math.Abs(a-spot), math.Abs(b-spot)
 	if da < db || da == db && a < b {
@@ -179,6 +193,16 @@ func (s *Server) addCallMarket(ctx context.Context, c *ibkr.Connector, binding i
 	requested := ibkr.Contract{Symbol: under.Symbol, SecType: "OPT", Exchange: "SMART", Currency: "USD", Expiry: expiry, Strike: strike, Right: "C", Multiplier: 100, TradingClass: under.Symbol}
 	exact, err := c.ResolveOrderContractForSession(ctx, binding, requested, 5*time.Second)
 	if err != nil || ibkr.ValidateSetupCallResolution(exact, under, expiry, strike) != nil {
+		return row
+	}
+	return s.addResolvedCallMarket(ctx, c, binding, under, exact)
+}
+
+func (s *Server) addResolvedCallMarket(ctx context.Context, c *ibkr.Connector, binding ibkr.ConnectorSessionBinding, under ibkr.Contract, exact ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
+	row := rpc.AddCallCandidate{Unavailable: "Exact call evidence unavailable"}
+	call := exact.Contract
+	parsed, err := time.Parse("20060102", call.Expiry)
+	if err != nil || parsed.Before(time.Now().Add(7*24*time.Hour)) || !positiveFinite(call.Strike) || !c.SessionCurrent(binding) || ibkr.ValidateSetupCallResolution(exact, under, call.Expiry, call.Strike) != nil {
 		return row
 	}
 	contract := setupOptionContract(exact.Contract)

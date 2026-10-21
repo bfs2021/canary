@@ -25,7 +25,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary market`](#canary-market) | Markets | Observed quotes, price history and a daily price/breadth/volume tape | `read-only` | yes |
 | [`canary technical`](#canary-technical) | Markets | Trend, relative strength, ATR, and liquidity from daily bars | `read-only` | yes |
 | [`canary watchlist`](#canary-watchlist) | Markets | View and edit your saved watchlist; no orders or risk-limit changes | `local` | CLI only |
-| [`canary add`](#canary-add) |  | Plan a stock addition or opening and review it through existing order confirmation | `read-only` | yes |
+| [`canary add`](#canary-add) | Desk | Plan a stock addition or opening and review it through existing order confirmation | `read-only` | yes |
 | [`canary setups`](#canary-setups) | Markets | Review volume signals, find standard call options and check prices after entry; no orders or risk-limit changes | `read-only` | CLI only |
 | [`canary chains`](#canary-chains) | Markets | Daily option-chain snapshots the recorder kept: coverage per run and a CSV export of quotes, IV, greeks and open interest | `read-only` | CLI only |
 | [`canary calendar`](#canary-calendar) | Markets | Official exchange sessions, holidays, early closes, and coverage bounds | `read-only` | yes |
@@ -284,7 +284,21 @@ canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity N
 --max) [--con-id ID] [--json]
 ```
 
-*The catalog records no flags. Run `canary add --help` for what the command parses.*
+Subcommands: `plan`, `preview`, `market`, `call-plan`.
+
+**Flags**
+
+| Flag | Takes a value | Allowed values |
+|------|---------------|----------------|
+| `--limit` | yes | - |
+| `--stop-price` | yes | - |
+| `--quantity` | yes | - |
+| `--max` | no | - |
+| `--currency` | yes | - |
+| `--con-id` | yes | - |
+| `--exchange` | yes | - |
+| `--adaptive-priority` | yes | `Normal`, `Patient`, `Urgent` |
+| `--json` | no | - |
 
 ## `canary setups`
 

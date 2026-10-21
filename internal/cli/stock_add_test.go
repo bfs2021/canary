@@ -72,6 +72,51 @@ func TestStockAddCLIOnlyPlansOrPreviews(t *testing.T) {
 		}
 	}
 }
+func TestStockAddCLIStopPriceSurvivesDispatch(t *testing.T) {
+	for _, action := range []string{"plan", "preview"} {
+		for _, stopFlags := range [][]string{{"--stop-price", "90.25", "--json"}, {"--json", "--stop-price", "90.25"}, {"--stop-price=90.25", "--json"}} {
+			t.Run(action+"/"+strings.Join(stopFlags, "_"), func(t *testing.T) {
+				conn := &stockAddConn{}
+				var out bytes.Buffer
+				args := append([]string{action, "SYNA", "--currency", "USD", "--limit", "100", "--quantity", "3", "--con-id", "10001"}, stopFlags...)
+				code := Run(t.Context(), &Env{Conn: conn, Stdout: &out, Stderr: &out}, "add", args)
+				want := rpc.MethodAddPlan
+				if action == "preview" {
+					want = rpc.MethodAddPreview
+				}
+				if code != 0 || conn.method != want || conn.params.StopPrice != 90.25 || conn.params.LimitPrice != 100 || conn.params.Quantity != 3 || conn.params.Contract.ConID != 10001 {
+					t.Fatalf("%v: exit=%d method=%s params=%+v output=%s", args, code, conn.method, conn.params, out.String())
+				}
+			})
+		}
+	}
+}
+
+func TestStockAddCatalogDeclaresReadOnlySubcommands(t *testing.T) {
+	for _, spec := range Catalog() {
+		if spec.Name != "add" {
+			continue
+		}
+		if spec.Guard != GuardReadOnly {
+			t.Fatalf("Add guard = %s", spec.Guard)
+		}
+		seen := map[string]bool{}
+		for _, sub := range spec.Subcommands {
+			if sub.Guard != GuardReadOnly {
+				t.Fatalf("Add %s guard = %s", sub.Name, sub.Guard)
+			}
+			seen[sub.Name] = true
+		}
+		for _, name := range []string{"plan", "preview", "market", "call-plan"} {
+			if !seen[name] {
+				t.Fatalf("Add %s is missing from the catalog", name)
+			}
+		}
+		return
+	}
+	t.Fatal("Add is missing from the catalog")
+}
+
 func goldenStockAdd() rpc.AddPlanResult {
 	return rpc.AddPlanResult{Contract: rpc.ContractParams{Symbol: "SYNA"}, Currency: "USD", BaseCurrency: "USD", LimitPrice: 100,
 		Before: 4, After: 13, Quantity: 9, MaxQuantity: 9, MaximumKnown: true, Sizing: "max", OrderUpperBound: 10, AllocationRoom: 20, Effect: "increase_long", Cost: 905, CashAfter: 95, Binding: "cash",

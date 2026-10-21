@@ -5,9 +5,81 @@ import (
 	"errors"
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkr "github.com/osauer/canary/v2/pkg/ibkr"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestAddCallSelectionUsesActualExpiryInventory(t *testing.T) {
+	// SecDef lists 772/773/774 somewhere in the chain. For this expiry,
+	// only five-dollar strikes exist. The former three nearest probes all
+	// failed; 770 is valid and in range after 775's delta proves too low.
+	now := time.Now()
+	call := func(k float64) ibkr.ResolvedOrderContract {
+		return ibkr.ResolvedOrderContract{UnderConID: 17, MinTick: .01, ValidExchanges: "SMART", MarketRuleIDs: "27", Contract: ibkr.Contract{ConID: 10000 + int(k), Symbol: "SYNTH", SecType: "OPT", Expiry: "20270219", Strike: k, Right: "C", Multiplier: 100, Currency: "USD", Exchange: "SMART", TradingClass: "SYNTH", LocalSymbol: "SYNTH call"}}
+	}
+	var quoted []float64
+	quote := func(exact ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
+		k := exact.Contract.Strike
+		quoted = append(quoted, k)
+		if k != 765 && k != 770 && k != 775 && k != 780 {
+			return rpc.AddCallCandidate{Unavailable: "No exact contract"}
+		}
+		if exact.UnderConID != 17 || exact.MarketRuleIDs != "27" || exact.MinTick != .01 {
+			t.Fatal("inventory routing evidence lost before quote", exact)
+		}
+		delta := map[float64]float64{765: .75, 770: .62, 775: .47, 780: .35}[k]
+		contract := setupOptionContract(exact.Contract)
+		return rpc.AddCallCandidate{Contract: &contract, PriceIncrements: []rpc.SetupOptionPriceIncrement{{LowEdge: 0, Increment: .01}}, Quote: &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, DataType: rpc.MarketDataLive, ModelDataType: rpc.MarketDataLive, AsOf: now, ModelAsOf: now, IV: new(.2), Delta: &delta}}
+	}
+	union := []ibkr.ResolvedOrderContract{call(765), call(770), call(772), call(773), call(774), call(775), call(780)}
+	before := selectAddCall(union, 772.94, quote)
+	if before.Contract != nil || !reflect.DeepEqual(quoted, []float64{773, 772, 774}) {
+		t.Fatalf("fixture did not reproduce the old union probe failure: %+v %v", before, quoted)
+	}
+	quoted = nil
+	actual := []ibkr.ResolvedOrderContract{call(765), call(770), call(775), call(780)}
+	after := selectAddCall(actual, 772.94, quote)
+	if after.Contract == nil || after.Contract.Strike != 770 || !reflect.DeepEqual(quoted, []float64{775, 770}) {
+		t.Fatalf("valid expiry call not selected: %+v %v", after, quoted)
+	}
+}
+
+func TestAddCallSelectionKeepsQuoteBoundAndEligibility(t *testing.T) {
+	for _, mode := range []string{"low-delta", "high-delta", "stale-model", "delayed-model", "missing-iv", "missing-grid"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := make([]ibkr.ResolvedOrderContract, 6)
+			for i := range calls {
+				calls[i].Contract.Strike = 100 + float64(i)
+			}
+			count := 0
+			got := selectAddCall(calls, 100, func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
+				count++
+				now := time.Now()
+				q := &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, DataType: rpc.MarketDataLive, ModelDataType: rpc.MarketDataLive, AsOf: now, ModelAsOf: now, IV: new(.2), Delta: new(.6)}
+				row := rpc.AddCallCandidate{Contract: &rpc.ContractParams{ConID: 10001}, Quote: q, PriceIncrements: []rpc.SetupOptionPriceIncrement{{LowEdge: 0, Increment: .01}}}
+				switch mode {
+				case "low-delta":
+					q.Delta = new(.49)
+				case "high-delta":
+					q.Delta = new(.71)
+				case "stale-model":
+					q.ModelAsOf = now.Add(-16 * time.Second)
+				case "delayed-model":
+					q.ModelDataType = rpc.MarketDataDelayed
+				case "missing-iv":
+					q.IV = nil
+				case "missing-grid":
+					row.PriceIncrements = nil
+				}
+				return row
+			})
+			if count != 3 || got.Contract != nil || got.Unavailable == "" {
+				t.Fatalf("quote bound or eligibility lost: %d %+v", count, got)
+			}
+		})
+	}
+}
 
 func TestAddHorizonSkipsWeekAndKeepsDistinctRanges(t *testing.T) {
 	now := time.Date(2026, 10, 21, 15, 0, 0, 0, time.UTC)

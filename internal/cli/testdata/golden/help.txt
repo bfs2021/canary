@@ -15,6 +15,8 @@ Account, positions, orders and risk
   strategies      View option strategies; close or reduce them as one order
   portfolio       Holdings by asset class and sector; review the next planned
                   action
+  add             Plan a stock addition or opening and review it through
+                  existing order confirmation
   stress          Check portfolio risks and the evidence behind them
   mandate         Check the book's risk against the mandate's volatility budget
   core            See the core sleeve's monthly target, its pending row and what
@@ -90,6 +92,8 @@ Start: canary status — check the broker connection
   \x1b[36mstrategies      \x1b[0mView option strategies; close or reduce them as one order
   \x1b[36mportfolio       \x1b[0mHoldings by asset class and sector; review the next planned
                   action
+  \x1b[36madd             \x1b[0mPlan a stock addition or opening and review it through
+                  existing order confirmation
   \x1b[36mstress          \x1b[0mCheck portfolio risks and the evidence behind them
   \x1b[36mmandate         \x1b[0mCheck the book's risk against the mandate's volatility budget
   \x1b[36mcore            \x1b[0mSee the core sleeve's monthly target, its pending row and what
