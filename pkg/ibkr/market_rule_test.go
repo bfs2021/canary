@@ -27,7 +27,7 @@ func TestMarketPriceRulesRejectIncompleteOrInvalidBands(t *testing.T) {
 	if err != nil || len(rows) != 2 || rows[1].Increment != .05 {
 		t.Fatalf("%v %v", rows, err)
 	}
-	for _, bad := range [][]string{good[:6], {"93", "27", "1", "0", "NaN"}, {"93", "27", "2", "0", ".01", "0", ".05"}, {"93", "27", "1", "1", ".01"}, {"93", "28", "1", "0", ".01"}} {
+	for _, bad := range [][]string{good[:6], {"93", "27", "1", "0", "NaN"}, {"93", "27", "2", "0", ".01", "0", ".05"}, {"93", "27", "1", "1", ".01"}, {"93", "28", "1", "0", ".01"}, {"93", "27", "1", "0", ".01", "junk"}, {"93", "27", "1", "0", ".01", "", ""}} {
 		if _, err := decodePriceIncrements(bad, 27); err == nil {
 			t.Fatal("malformed rule accepted")
 		}
@@ -80,7 +80,9 @@ func TestMarketRulesWireRejectsOtherRuleAndEpochAndHonorsCancellation(t *testing
 			if mode == "cancel" {
 				cancel()
 			} else {
-				conn.dispatchHandlers(msgMarketRule, []string{"93", "27", "2", "0", ".01", "3", ".05"}, conn.BrokerSessionEpoch())
+				// Real callbacks pass through the NUL-delimited frame decoder;
+				// direct dispatch would hide its trailing framing field.
+				conn.processMessageAtEpoch(conn.encodeMsg(msgMarketRule, 27, 2, 0, .01, 3, .05), conn.BrokerSessionEpoch())
 			}
 			got := <-done
 			if mode == "cancel" {

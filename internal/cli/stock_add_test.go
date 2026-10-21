@@ -5,11 +5,35 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
+
+func TestAddMarketAndCallPlanDispatchThroughCLI(t *testing.T) {
+	for _, tc := range []struct{ action, method, body string }{
+		{"market", rpc.MethodAddMarket, `{"underlying":{"symbol":"SYNA","sec_type":"STK","currency":"USD","exchange":"SMART"},"discover":true}`},
+		{"call-plan", rpc.MethodAddCallPlan, `{"contract":{"symbol":"SYNA","sec_type":"OPT"},"limit_price":5.5,"budget":5000,"round_size":true}`},
+	} {
+		for _, args := range [][]string{{tc.action, "--json"}, {"--json", tc.action}, {tc.action}} {
+			c := &stockAddConn{}
+			var out bytes.Buffer
+			code := Run(t.Context(), &Env{Conn: c, Stdin: strings.NewReader(tc.body), Stdout: &out, Stderr: &out}, "add", args)
+			if code != 0 || c.method != tc.method {
+				t.Fatalf("%v: exit=%d method=%s %s", args, code, c.method, out.String())
+			}
+		}
+		for _, args := range [][]string{{tc.action, "--limit", "5"}, {tc.action, "unexpected"}} {
+			c := &stockAddConn{}
+			var out bytes.Buffer
+			if Run(t.Context(), &Env{Conn: c, Stdin: strings.NewReader(tc.body), Stdout: &out, Stderr: &out}, "add", args) == 0 || c.method != "" {
+				t.Fatalf("unexpected arguments reached RPC: %v", args)
+			}
+		}
+	}
+}
 
 type stockAddConn struct {
 	method string

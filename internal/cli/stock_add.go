@@ -10,12 +10,6 @@ import (
 )
 
 func runAdd(ctx context.Context, env *Env, args []string) int {
-	if len(args) > 0 && args[0] == "call-plan" {
-		return runAddCallPlan(ctx, env, args[1:])
-	}
-	if len(args) > 0 && args[0] == "market" {
-		return runAddMarket(ctx, env, args[1:])
-	}
 	fs := flagSet(env, "add")
 	stop := fs.Float64("stop-price", 0, "fixed attached stop below entry; added shares only, GTC regular session")
 	price := fs.Float64("limit", 0, "maximum price per share in the stock currency")
@@ -28,6 +22,16 @@ func runAdd(ctx context.Context, env *Env, args []string) int {
 	jsonOut := fs.Bool("json", false, "emit typed Add evidence")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
+	}
+	// Run hoists flags before positionals. Keep the subcommand's own parser
+	// responsible for rejecting stock-only flags on these read-only requests.
+	if fs.NArg() == 1 {
+		switch fs.Arg(0) {
+		case "market":
+			return runAddMarket(ctx, env, args[:len(args)-1])
+		case "call-plan":
+			return runAddCallPlan(ctx, env, args[:len(args)-1])
+		}
 	}
 	if fs.NArg() != 2 || (fs.Arg(0) != "plan" && fs.Arg(0) != "preview") {
 		return fail(env, "usage: canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity N | --max) [--con-id ID] [--json]")

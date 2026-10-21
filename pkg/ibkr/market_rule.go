@@ -42,7 +42,16 @@ func decodePriceIncrements(fields []string, id int) ([]PriceIncrement, error) {
 		return nil, invalid
 	}
 	n, err := strconv.Atoi(fields[2])
-	if err != nil || n < 1 || n > 128 || len(fields) != 3+n*2 {
+	if err != nil || n < 1 || n > 128 {
+		return nil, invalid
+	}
+	expected := 3 + n*2
+	// The socket decoder retains the final NUL as one empty framing field.
+	// Accept that terminator only; extra empty or nonempty fields are invalid.
+	if len(fields) == expected+1 && fields[expected] == "" {
+		fields = fields[:expected]
+	}
+	if len(fields) != expected {
 		return nil, invalid
 	}
 	out := make([]PriceIncrement, 0, n)
