@@ -216,16 +216,17 @@ An active attached stop can only shrink through the existing modify preview,
 WhatIf, risk gates and journal frontier. Preview and submission preserve its
 absolute trigger and parent, and use cumulative broker quantity (new remaining
 plus filled). Existing independent protection receives inventory capacity first;
-newer added lots shrink first when aggregate stops exceed holdings. OCA siblings
-share capacity. Full-position mandates conflict with added-lot protection and
+newer added lots shrink first when aggregate stops exceed holdings. Only broker-confirmed reducing OCA siblings
+share capacity; unconfirmed journal intent reserves independently. Full-position mandates conflict with added-lot protection and
 require explicit review; neither workflow silently changes the other's mandate.
 The ordinary protection guard still requires fresh evidence and all write gates.
 
-`add market --stdin --json` is a bounded read adapter for a resolved USD stock
-and four standard long-call horizons, targeting 14/30/60/120 days, always more
+`add market --json` reads JSON on standard input and returns a resolved stock
+in its trading currency. For USD underlyings it also offers four standard
+long-call horizons, targeting 14/30/60/120 days, always more
 than seven days, delta 0.50–0.70. Exact contract refresh never substitutes a
 contract. Prices, sizes, IV/delta and their evidence clocks remain distinct.
-`add call-plan --stdin --json` computes exact fee-inclusive sizing and previews
+`add call-plan --json` reads JSON on standard input and computes exact fee-inclusive sizing and previews
 at most four candidates. Optional nearest-five rounding retains one/two contracts
 and explicitly reports an over-budget result; it grants no write authority.
 Desk freezes the exact selected price and size before its existing device review.

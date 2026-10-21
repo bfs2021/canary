@@ -1,7 +1,10 @@
 package daemon
 
 import (
+	"encoding/json"
+	"errors"
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkr "github.com/osauer/canary/v2/pkg/ibkr"
 	"testing"
 	"time"
 )
@@ -40,6 +43,23 @@ func TestRoundCallQuantityPreservesSmallLotsAndRoundsBothDirections(t *testing.T
 	for n, want := range map[int]int{0: 0, 1: 1, 2: 2, 3: 5, 6: 5, 7: 5, 8: 10, 9: 10, 10: 10, 12: 10, 13: 15} {
 		if got := roundCallQuantity(n); got != want {
 			t.Fatalf("%d -> %d, want %d", n, got, want)
+		}
+	}
+}
+
+func TestAddMarketStockCurrencyDoesNotEnableForeignCalls(t *testing.T) {
+	for _, tc := range []struct {
+		currency string
+		discover bool
+		allowed  bool
+	}{{"EUR", false, true}, {"JPY", false, true}, {"USD", true, true}, {"EUR", true, false}, {"usd", false, false}, {"", false, false}} {
+		p := rpc.AddMarketParams{Underlying: rpc.ContractParams{ConID: 10001, Symbol: "SYNX", SecType: "STK", Exchange: "SMART", Currency: tc.currency}, Discover: tc.discover}
+		raw, _ := json.Marshal(p)
+		_, err := (&Server{}).handleAddMarket(t.Context(), &rpc.Request{Params: raw})
+		// A zero server has no broker. Allowed identities reach that explicit boundary;
+		// unsupported call currencies must fail validation before any broker access.
+		if got := errors.Is(err, ibkr.ErrIBKRUnavailable); got != tc.allowed {
+			t.Fatalf("currency=%s discover=%v allowed=%v: %v", tc.currency, tc.discover, tc.allowed, err)
 		}
 	}
 }

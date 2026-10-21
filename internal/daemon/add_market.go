@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,8 +20,12 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 		return nil, err
 	}
 	u := p.Underlying
-	if u.Symbol == "" || len(u.Symbol) > 32 || u.SecType != "STK" || u.Currency != "USD" || u.Exchange != "SMART" || u.ConID < 0 || u.Expiry != "" || u.Strike != 0 || u.Right != "" {
-		return nil, errBadRequest("Add requires an exact SMART USD stock underlying")
+	currencyValid := len(u.Currency) == 3 && strings.IndexFunc(u.Currency, func(r rune) bool { return r < 'A' || r > 'Z' }) < 0
+	if u.Symbol == "" || len(u.Symbol) > 32 || u.SecType != "STK" || !currencyValid || u.Exchange != "SMART" || u.ConID < 0 || u.Expiry != "" || u.Strike != 0 || u.Right != "" {
+		return nil, errBadRequest("Add requires an exact SMART stock underlying and trading currency")
+	}
+	if u.Currency != "USD" && (p.Discover || p.Selected != nil || len(p.Refresh) > 0) {
+		return nil, errBadRequest("The call picker supports standard USD calls")
 	}
 	if len(p.Refresh) > 4 || p.Discover && len(p.Refresh) > 0 {
 		return nil, errBadRequest("Choose discovery or at most four exact call refreshes")
@@ -40,11 +45,11 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	if !ok {
 		return nil, s.gatewayUnavailableError()
 	}
-	exact, err := c.ResolveOrderContractForSession(ctx, binding, ibkr.Contract{ConID: u.ConID, Symbol: u.Symbol, SecType: "STK", Currency: "USD", Exchange: "SMART"}, 8*time.Second)
+	exact, err := c.ResolveOrderContractForSession(ctx, binding, ibkr.Contract{ConID: u.ConID, Symbol: u.Symbol, SecType: "STK", Currency: u.Currency, Exchange: "SMART"}, 8*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	if exact.Contract.Symbol != u.Symbol || exact.Contract.SecType != "STK" || exact.Contract.Currency != "USD" || u.ConID > 0 && exact.Contract.ConID != u.ConID {
+	if exact.Contract.Symbol != u.Symbol || exact.Contract.SecType != "STK" || exact.Contract.Currency != u.Currency || u.ConID > 0 && exact.Contract.ConID != u.ConID {
 		return nil, errBadRequest("underlying identity changed")
 	}
 	// Keep the exact underlying subscription alive while TWS computes option models.
