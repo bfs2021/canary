@@ -175,6 +175,12 @@ func runStopCore(ctx context.Context, opts *stopOptions, deps stopDeps) int {
 		fmt.Fprintf(opts.err, "%s: CANARY_SOCKET is set; the app is not part of that daemon scope and was left untouched\n", prefix)
 	}
 
+	if stopApp && deps.app.preflight != nil {
+		if err := deps.app.preflight(ctx); err != nil {
+			fmt.Fprintf(opts.err, "%s: %v; no process was stopped\n", prefix, err)
+			return abort("refused", 1)
+		}
+	}
 	if opts.daemon {
 		blockers, exit := stopPreflight(ctx, opts, deps, prefix)
 		res.Blockers = blockers
@@ -309,6 +315,12 @@ func stopAppStage(ctx context.Context, opts *stopOptions, deps appRestartDeps, p
 
 // stopSupervisedApp unloads the launchd job before signalling anything.
 func stopSupervisedApp(ctx context.Context, opts *stopOptions, deps appRestartDeps, prefix string, proc appProcess, findErr error, sup appSupervisor) (appStopResult, int) {
+	if deps.verifySupervisor != nil {
+		if err := deps.verifySupervisor(ctx, sup); err != nil {
+			fmt.Fprintf(opts.err, "%s: %v\n", prefix, err)
+			return appStopResult{}, 1
+		}
+	}
 	res := appStopResult{Target: "app", Action: "stopped", Supervisor: sup.Target}
 	if sup.ParseError != "" || !isAppServerArgs(sup.Args) {
 		fmt.Fprintf(opts.err, "%s: launchd job %s is untrusted or unparseable (%s); refusing to unload or stop it\n", prefix, sup.Target, supervisorParseFailure(sup))

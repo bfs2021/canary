@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.26.3 — 2026-10-21 08:06 CEST
+
+### What's new
+
+Installation now explains when your terminal still selects an older Canary, and app restarts preserve paths containing spaces and refuse to cross profiles.
+
+**Upgrading from v3.26.2 or earlier:** if your app uses spaced paths or separate HOME/XDG profiles, run `canary update --no-restart`, then run the newly installed `canary restart` from the original app profile. The older updater's in-process restart logic cannot acquire this fix during activation.
+
+### Fixed
+
+- The installer warns when an older executable wins on PATH and gives an absolute command for the installed version (#122).
+- MCP setup preserves a validated stable launcher symlink across managed version-directory upgrades. Existing affected configurations need `canary setup claude-desktop` once through that launcher, then a full host restart (#123).
+- App restart preserves argument boundaries, including paths with spaces, and gives an exact app recovery command when resume fails (#124).
+- Readonly shell startup files no longer abort installation after replacing the binary; the installer prints the manual PATH step and continues initialization (#125).
+- Troubleshooting no longer advertises unsupported native Windows Claude Desktop setup (#126).
+- App lifecycle commands refuse a different or unverified HOME/XDG profile before stopping processes. Saved supervisor recovery now checks profile identity; older records need explicit recovery with `canary setup app` from their original profile (#127).
+
+### Security
+
+- Builds require Go 1.27.3, which fixes the certificate-verification vulnerability GO-2026-6809 in the Go standard library.
+
 ## v3.26.2 — 2026-10-20 21:34 CEST
 
 ### What's new

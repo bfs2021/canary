@@ -402,7 +402,11 @@ func TestRunRestartAppCoreResumesSupervisorFromQuiesceRecord(t *testing.T) {
 func TestRunRestartAllCoreDiscardsQuiesceRecordWhenPlistIsGone(t *testing.T) {
 	root := testRestartStateHome(t)
 	exe := testCurrentExecutable(t)
-	recordPath := writeTestQuiesceMarker(t, testAppLaunchAgentPath(root), exe, time.Now(), "app", "--remote")
+	plistPath := writeTestAppLaunchAgent(t, root, exe, "app", "--remote")
+	recordPath := writeTestQuiesceMarker(t, plistPath, exe, time.Now(), "app", "--remote")
+	if err := os.Remove(plistPath); err != nil {
+		t.Fatal(err)
+	}
 
 	var out, errBuf bytes.Buffer
 	opts := &restartOptions{timeout: time.Second, out: &out, err: &errBuf}

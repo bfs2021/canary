@@ -508,4 +508,28 @@ fi
 cmp "$test_root/original-installation" "$test_root/failed-probe/bin/canary"
 echo "install validation and activation regressions: OK"
 
+# Earlier executables are reported without executing them. A symlink to the
+# new file is equivalent, and must not produce a false shadow warning.
+shadow_home="$test_root/path-shadow"
+mkdir -p "$shadow_home/.local/bin" "$test_root/earlier"
+printf '#!/bin/sh\nexit 99\n' > "$test_root/earlier/canary"
+chmod 0755 "$test_root/earlier/canary"
+run_installer v9.9.9 env HOME="$shadow_home" PATH="$test_root/earlier:$fake_bin:/usr/bin:/bin:$shadow_home/.local/bin" 2>"$test_root/shadow.log"
+grep -F 'Your PATH still selects' "$test_root/shadow.log"
+rm "$test_root/earlier/canary"
+ln -s "$shadow_home/.local/bin/canary" "$test_root/earlier/canary"
+run_installer v9.9.9 env HOME="$shadow_home" PATH="$test_root/earlier:$fake_bin:/usr/bin:/bin:$shadow_home/.local/bin" 2>"$test_root/same-file.log"
+if grep -Fq 'Your PATH still selects' "$test_root/same-file.log"; then echo 'false symlink warning' >&2; exit 1; fi
+
+# A directory at the rc path makes the append fail even when the harness is
+# root. It must not suppress policy initialization or the success summary.
+readonly_home="$test_root/readonly-startup"
+mkdir -p "$readonly_home/.bashrc"
+run_installer v9.9.9 env HOME="$readonly_home" SHELL=/bin/bash 2>"$test_root/readonly.log"
+grep -F 'could not update' "$test_root/readonly.log"
+grep -F 'Add this line yourself:' "$test_root/readonly.log"
+grep -Fx 'policy ensure' "$readonly_home/.fixture-calls"
+[ -d "$readonly_home/.bashrc" ]
+echo 'installer activation and optional shell setup: OK'
+
 python3 "$repo_root/scripts/install_signature_test.py"

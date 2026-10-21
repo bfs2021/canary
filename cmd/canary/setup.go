@@ -10,6 +10,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -110,12 +111,7 @@ func setupClaudeDesktop() int {
 		fmt.Fprintf(os.Stderr, "%s setup: locate own binary: %v\n", productidentity.Executable, err)
 		return 1
 	}
-	// Resolve symlinks so the config holds the canonical path. Without
-	// this, a launcher symlink could record a fragile command path that breaks
-	// across reinstalls.
-	if resolved, err := filepath.EvalSymlinks(binPath); err == nil {
-		binPath = resolved
-	}
+	binPath = stableMCPExecutable(binPath, os.Args[0])
 
 	// Read existing config (or start from an empty object). We round-trip
 	// through a generic map so unrelated top-level keys the user may have
@@ -171,6 +167,32 @@ func setupClaudeDesktop() int {
 	fmt.Println()
 	fmt.Println("Troubleshooting log: ~/Library/Logs/Claude/mcp-server-canary.log")
 	return 0
+}
+
+// stableMCPExecutable preserves an invocation symlink only when it still names
+// the running executable. A misleading argv[0] or PATH entry must not wire a
+// different program into the host. The absolute executable is the safe fallback.
+func stableMCPExecutable(executable, invocation string) string {
+	running, err := os.Stat(executable)
+	if err != nil {
+		return executable
+	}
+	candidate := invocation
+	if !strings.ContainsRune(candidate, os.PathSeparator) {
+		candidate, err = exec.LookPath(candidate)
+		if err != nil {
+			return executable
+		}
+	}
+	candidate, err = filepath.Abs(candidate)
+	if err != nil {
+		return executable
+	}
+	info, err := os.Stat(candidate)
+	if err == nil && info.Mode().IsRegular() && os.SameFile(running, info) {
+		return candidate
+	}
+	return executable
 }
 
 // mergeCanaryMCPEntry takes a parsed config map and the binary's absolute

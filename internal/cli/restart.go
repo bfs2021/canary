@@ -94,11 +94,13 @@ type appProcess struct {
 }
 
 type appRestartDeps struct {
-	find            func(context.Context) (appProcess, error)
-	stop            func(int, time.Duration) error
-	kill            func(int, time.Duration) error
-	start           func(context.Context, []string) (int, error)
-	executablePaths map[string]struct{}
+	preflight        func(context.Context) error
+	verifySupervisor func(context.Context, appSupervisor) error
+	find             func(context.Context) (appProcess, error)
+	stop             func(int, time.Duration) error
+	kill             func(int, time.Duration) error
+	start            func(context.Context, []string) (int, error)
+	executablePaths  map[string]struct{}
 	// supervisor reports a loaded launchd job owning the app. migrate performs
 	supervisor func(context.Context) (appSupervisor, bool)
 	migrate    func(context.Context, appSupervisor) error
@@ -230,14 +232,20 @@ func productionAppRestartDepsForExecutable(executable string) appRestartDeps {
 		currentExecutable = bin
 	}
 	return appRestartDeps{
+		preflight: func(ctx context.Context) error { return verifyAppScope(ctx, executablePaths) },
 		find: func(ctx context.Context) (appProcess, error) {
 			return findAppProcessForExecutables(ctx, executablePaths)
 		},
-		stop:            stopAppProcess,
-		kill:            killAppProcess,
-		start:           start,
-		executablePaths: executablePaths,
-		supervisor:      findAppLaunchAgent,
+		stop: func(pid int, timeout time.Duration) error {
+			return signalVerifiedApp(pid, timeout, procinfo.Inspect, stopAppProcess)
+		},
+		kill: func(pid int, timeout time.Duration) error {
+			return signalVerifiedApp(pid, timeout, procinfo.Inspect, killAppProcess)
+		},
+		verifySupervisor: verifySelectedSupervisor,
+		start:            start,
+		executablePaths:  executablePaths,
+		supervisor:       findAppLaunchAgent,
 		migrate: func(ctx context.Context, sup appSupervisor) error {
 			return migrateAppLaunchAgent(ctx, sup, currentExecutable)
 		},
@@ -246,7 +254,12 @@ func productionAppRestartDepsForExecutable(executable string) appRestartDeps {
 			return rewriteAppLaunchAgentForMigration(sup, currentExecutable)
 		},
 		unload: unloadAppLaunchAgent,
-		load:   loadAppLaunchAgent,
+		load: func(ctx context.Context, sup appSupervisor) error {
+			if err := verifySupervisorDefinition(sup); err != nil {
+				return err
+			}
+			return loadAppLaunchAgent(ctx, sup)
+		},
 	}
 }
 
@@ -259,6 +272,12 @@ func runRestartAllCore(ctx context.Context, opts *restartOptions, daemonDeps res
 }
 
 func runRestartStackCore(ctx context.Context, opts *restartOptions, daemonDeps restartDeps, appDeps appRestartDeps, behavior restartStackBehavior) int {
+	if !dial.SocketPathOverridden() && appDeps.preflight != nil {
+		if err := appDeps.preflight(ctx); err != nil {
+			fmt.Fprintf(opts.err, "canary restart: %v; no process was stopped\n", err)
+			return 1
+		}
+	}
 	ctx, release, err := dial.WithStartupLock(ctx, dial.DefaultSocketPath())
 	if err != nil {
 		fmt.Fprintf(opts.err, "%s restart: reserve daemon startup: %v\n", productidentity.Executable, err)
@@ -332,7 +351,11 @@ func runRestartStackCore(ctx context.Context, opts *restartOptions, daemonDeps r
 		completed, appExit := resumeAppAfterDaemonRestart(ctx, opts, appDeps, appPlan)
 		res.App = &completed
 		if appExit != 0 {
-			fmt.Fprintf(opts.err, "%s restart: daemon restarted but app resume failed; the daemon remains running (fix the reported failure and rerun `%s restart`)\n", productidentity.Executable, productidentity.Executable)
+			if appPlan.supervisor == nil {
+				fmt.Fprintf(opts.err, "canary restart: daemon restarted but app resume failed; after fixing the failure, run %s\n", appRecoveryCommand(appPlan.args))
+			} else {
+				fmt.Fprintf(opts.err, "canary restart: daemon restarted but app resume failed; fix the reported failure and rerun `canary restart`\n")
+			}
 			if opts.jsonOut {
 				if jsonExit := printJSON(&Env{Stdout: opts.out, Stderr: opts.err}, res); jsonExit != 0 {
 					return jsonExit
@@ -424,6 +447,12 @@ func quiesceAppForDaemonRestart(ctx context.Context, opts *restartOptions, deps 
 }
 
 func quiesceSupervisedAppForDaemonRestart(ctx context.Context, opts *restartOptions, deps appRestartDeps, prefix string, proc appProcess, findErr error, sup appSupervisor, plan appStackRestartPlan) (appStackRestartPlan, int) {
+	if deps.verifySupervisor != nil {
+		if err := deps.verifySupervisor(ctx, sup); err != nil {
+			fmt.Fprintf(opts.err, "%s: %v\n", prefix, err)
+			return plan, 1
+		}
+	}
 	plan.ran = true
 	plan.supervisor = &sup
 	plan.currentPath = restartExecutablePaths(deps)
@@ -622,6 +651,12 @@ func restartStartupTimeout(ctx context.Context) time.Duration {
 }
 
 func runRestartAppCore(ctx context.Context, opts *restartOptions, deps appRestartDeps) int {
+	if deps.preflight != nil {
+		if err := deps.preflight(ctx); err != nil {
+			fmt.Fprintf(opts.err, "canary restart: %v; no process was stopped\n", err)
+			return 1
+		}
+	}
 	res, _, exit := restartApp(ctx, opts, deps, appRestartBehavior{
 		startWhenMissing: true,
 		prefix:           productidentity.Executable + " restart --app",
@@ -810,6 +845,12 @@ func appArgsStateDir(args []string) string {
 // the supervised process by hand races launchd's KeepAlive respawn: whoever
 // loses the race leaves an orphan holding the app state lock while launchd
 func restartSupervisedApp(ctx context.Context, opts *restartOptions, deps appRestartDeps, prefix string, startedAt time.Time, proc appProcess, findErr error, sup appSupervisor) (appRestartResult, bool, int) {
+	if deps.verifySupervisor != nil {
+		if err := deps.verifySupervisor(ctx, sup); err != nil {
+			fmt.Fprintf(opts.err, "%s: %v\n", prefix, err)
+			return appRestartResult{}, true, 1
+		}
+	}
 	res := appRestartResult{Action: "restarted", Target: "app", Supervisor: sup.Target, Args: sup.Args}
 	if sup.ParseError != "" || !isAppServerArgs(sup.Args) {
 		fmt.Fprintf(opts.err, "%s: launchd job %s is untrusted or unparseable (%s); refusing to rewrite, stop, or restart it (repair it with `%s setup app`, reload it, then rerun)\n", prefix, sup.Target, supervisorParseFailure(sup), productidentity.Executable)
@@ -1115,7 +1156,18 @@ func findAppProcessForExecutables(ctx context.Context, executablePaths map[strin
 		if p.PID == self || !dial.IsProcessAlive(p.PID) {
 			continue
 		}
-		args, exact, ok := appCommandMatch(p.Command, executablePaths)
+		_, _, ok := appCommandMatch(p.Command, executablePaths)
+		if p.Args != nil {
+			_, _, ok = appArgvMatch(p.Args, executablePaths)
+		}
+		if !ok {
+			continue
+		}
+		invocation, err := procinfo.Inspect(p.PID)
+		if err != nil {
+			return appProcess{}, fmt.Errorf("%w: cannot read exact launch arguments for pid %d: %v; app left untouched", errAppUnverified, p.PID, err)
+		}
+		args, exact, ok := appArgvMatch(invocation.Args, executablePaths)
 		if !ok {
 			continue
 		}
@@ -1138,6 +1190,15 @@ func findAppProcessForExecutables(ctx context.Context, executablePaths map[strin
 	default:
 		return appProcess{}, fmt.Errorf("%w: multiple Canary app processes found", errAppUnverified)
 	}
+}
+
+// appArgvMatch only accepts a direct executable and app subcommand; wrappers
+// and arguments mentioning a product executable do not confer process identity.
+func appArgvMatch(argv []string, exactPaths map[string]struct{}) ([]string, bool, bool) {
+	if len(argv) < 2 || !productidentity.IsManagedProcessExecutableBase(filepath.Base(argv[0])) || !isAppServerArgs(argv[1:]) {
+		return nil, false, false
+	}
+	return slices.Clone(argv[1:]), executablePathMatches(argv[0], exactPaths), true
 }
 
 func appCommandMatch(cmdline string, exactPaths map[string]struct{}) ([]string, bool, bool) {
@@ -1412,4 +1473,14 @@ func appRestartLogPath() string {
 		return ""
 	}
 	return filepath.Join(home, ".local", "state", "ibkr", "ibkr-app.log")
+}
+
+// appRecoveryCommand retains argument boundaries, including quotes and empty
+// values, in the manual recovery command for an unsupervised app.
+func appRecoveryCommand(args []string) string {
+	parts := []string{"canary", "app"}
+	for _, arg := range args[1:] {
+		parts = append(parts, "'"+strings.ReplaceAll(arg, "'", "'\\''")+"'")
+	}
+	return strings.Join(parts, " ")
 }

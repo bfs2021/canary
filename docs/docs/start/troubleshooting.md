@@ -251,7 +251,7 @@ stays unavailable and the error still names IBKR 354.
 
 Quit Claude Desktop completely and reopen it. A closed window is not a quit, and the MCP server is only respawned on a real relaunch. This is also the step people miss after reinstalling the bundle.
 
-`canary setup claude-desktop` writes an `mcpServers.canary` entry pointing at the resolved absolute path of the running binary, into `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS or `%APPDATA%\Claude\claude_desktop_config.json` on Windows. It backs up any existing config first. It refuses to write over a file that is not valid JSON, and prints the path so you can fix or delete it. [Connect an MCP host](hosts.md) covers the wiring for each host in full.
+`canary setup claude-desktop` writes an `mcpServers.canary` entry pointing at the validated absolute launcher path of the running binary, into `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS. It backs up any existing config first. It refuses to write over a file that is not valid JSON, and prints the path so you can fix or delete it. [Connect an MCP host](hosts.md) covers the wiring for each host in full.
 
 If the tools still do not appear, read Claude Desktop's own log at `~/Library/Logs/Claude/mcp-server-canary.log`.
 

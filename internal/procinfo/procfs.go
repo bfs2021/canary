@@ -30,7 +30,8 @@ func procfsProcess(root string, pid int) (Process, error) {
 		return Process{}, fmt.Errorf("empty command line in %s", filepath.Join(dir, "cmdline"))
 	}
 	exe, _ := os.Readlink(filepath.Join(dir, "exe")) // unreadable for other users; only needed for emulators
-	proc := Process{PID: pid, Command: strings.Join(guestArgs(args, exe), " ")}
+	args = guestArgs(args, exe)
+	proc := Process{PID: pid, Args: args, Command: strings.Join(args, " ")}
 	if data, err := os.ReadFile(filepath.Join(dir, "stat")); err == nil {
 		if stat, err := parseStat(string(data)); err == nil {
 			proc.PPID = stat.ppid
@@ -102,7 +103,7 @@ func procfsError(root string, pid int, err error) error {
 // splitCmdline splits the NUL-separated argv of <pid>/cmdline. A process
 // that rewrote its title into one string yields one field, as ps shows it.
 func splitCmdline(raw []byte) []string {
-	raw = bytes.TrimRight(raw, "\x00")
+	raw = bytes.TrimSuffix(raw, []byte{0})
 	if len(raw) == 0 {
 		return nil
 	}

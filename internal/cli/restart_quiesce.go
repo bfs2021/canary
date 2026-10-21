@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,12 +35,14 @@ const (
 // own ProgramArguments and nothing else: no tokens, secret URLs or account
 // data.
 type restartQuiesceMarker struct {
-	Version    int      `json:"version"`
-	Target     string   `json:"target"`
-	PlistPath  string   `json:"plist_path"`
-	Args       []string `json:"args"`
-	Executable string   `json:"executable"`
-	QuiescedAt string   `json:"quiesced_at"`
+	PlistSHA256 string       `json:"plist_sha256"`
+	Version     int          `json:"version"`
+	Scope       processScope `json:"scope"`
+	Target      string       `json:"target"`
+	PlistPath   string       `json:"plist_path"`
+	Args        []string     `json:"args"`
+	Executable  string       `json:"executable"`
+	QuiescedAt  string       `json:"quiesced_at"`
 }
 
 // pendingSupervisorResume is a validated quiesce record: the launchd job to
@@ -62,13 +66,24 @@ func writeRestartQuiesceMarker(path string, sup appSupervisor, now time.Time) er
 	if strings.TrimSpace(path) == "" {
 		return errors.New("no app state directory for the quiesce record")
 	}
+	scope, err := scopeFromEnvironment(os.Environ())
+	if err != nil {
+		return err
+	}
+	plist, err := os.ReadFile(sup.PlistPath)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(plist)
 	marker := restartQuiesceMarker{
-		Version:    restartQuiesceMarkerVersion,
-		Target:     sup.Target,
-		PlistPath:  sup.PlistPath,
-		Args:       slices.Clone(sup.Args),
-		Executable: sup.Executable,
-		QuiescedAt: now.UTC().Format(time.RFC3339),
+		PlistSHA256: hex.EncodeToString(digest[:]),
+		Scope:       scope,
+		Version:     restartQuiesceMarkerVersion,
+		Target:      sup.Target,
+		PlistPath:   sup.PlistPath,
+		Args:        slices.Clone(sup.Args),
+		Executable:  sup.Executable,
+		QuiescedAt:  now.UTC().Format(time.RFC3339),
 	}
 	data, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
@@ -121,6 +136,10 @@ func removeRestartQuiesceMarker(path string) error {
 // who booted the app out on purpose and removed its plist must not get it
 // back.
 func validateRestartQuiesceMarker(marker restartQuiesceMarker, currentPaths map[string]struct{}, canMigrate bool) (pendingSupervisorResume, error) {
+	scope, scopeErr := scopeFromEnvironment(os.Environ())
+	if scopeErr != nil || marker.Scope != scope {
+		return pendingSupervisorResume{}, errors.New("quiesce record profile cannot be verified")
+	}
 	if marker.Version != restartQuiesceMarkerVersion {
 		return pendingSupervisorResume{}, fmt.Errorf("unsupported record version %d", marker.Version)
 	}
@@ -168,6 +187,10 @@ func validateRestartQuiesceMarker(marker restartQuiesceMarker, currentPaths map[
 	migrate := !executablePathMatches(program.executable, currentPaths)
 	if migrate && (filepath.Base(program.executable) != productidentity.PreUpgradeExecutable || !canMigrate) {
 		return pendingSupervisorResume{}, fmt.Errorf("plist points at %q, not the current installed Canary executable or the explicit pre-upgrade executable", program.executable)
+	}
+	digest := sha256.Sum256(data)
+	if marker.PlistSHA256 == "" || marker.PlistSHA256 != hex.EncodeToString(digest[:]) {
+		return pendingSupervisorResume{}, errors.New("app supervisor definition changed since quiescing; use explicit setup from its original profile")
 	}
 	sup.Executable = program.executable
 	sup.Args = program.args

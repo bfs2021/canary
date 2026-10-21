@@ -412,9 +412,11 @@ if [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
 			if [ -f "$rc" ] && grep -Fxq "$line" "$rc" 2>/dev/null; then
 				info "$INSTALL_DIR already referenced in $rc — leaving it alone"
 			else
-				mkdir -p "$(dirname "$rc")"
-				printf '\n# Added by Canary installer\n%s\n' "$line" >> "$rc"
-				info "Added $INSTALL_DIR to PATH in $rc"
+				if mkdir -p "$(dirname "$rc")" && (printf '\n# Added by Canary installer\n%s\n' "$line" >> "$rc"); then
+					info "Added $INSTALL_DIR to PATH in $rc"
+				else
+					warn "Canary is installed at $canonical, but could not update $rc. Add this line yourself: $line"
+				fi
 			fi
 		}
 		add_path_to_rc "$rc"
@@ -436,6 +438,20 @@ else
 		*":${INSTALL_DIR}:"*) ;;
 		*) warn "$INSTALL_DIR is not on \$PATH; add it manually or invoke canary by absolute path" ;;
 	esac
+fi
+
+# Check activation separately from verifying the installed bytes. Never execute
+# an earlier PATH entry; it may be unrelated or untrusted. -ef also accepts a
+# stable symlink to the installed file (supported by both macOS and BusyBox sh).
+selected_canary=$(command -v canary 2>/dev/null || true)
+if [ -n "$selected_canary" ] && ! [ "$selected_canary" -ef "$canonical" ]; then
+	warn "Your PATH still selects $selected_canary; the new Canary is installed at $canonical. Put $INSTALL_DIR first on PATH, then open a new terminal and check command -v canary."
+fi
+if [ -z "$selected_canary" ] || ! [ "$selected_canary" -ef "$canonical" ]; then
+	# Shell single-quote escaping keeps paths containing spaces or apostrophes
+	# usable when the user copies the absolute invocation.
+	quoted_canary=$(printf '%s' "$canonical" | sed "s/'/'\\\\''/g")
+	warn "Use the installed version directly: '$quoted_canary' version"
 fi
 
 # --- verify install ----------------------------------------------------------

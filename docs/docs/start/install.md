@@ -16,6 +16,12 @@ There is no Windows build. The daemon uses `setsid`, `flock`, and AF_UNIX socket
 
 On Linux, `canary stop`, `canary restart` and the restart after `canary update` read process identity from `/proc`, so they need no `ps` and work the same on BusyBox systems such as Alpine. Before Canary signals a process, it checks that the PID in the daemon's lock file runs `canary daemon`, and it refuses an unrelated or unreadable process without sending a signal. An amd64 binary run on an arm64 host through qemu-user emulation is recognised by its interpreter. Other emulators, such as Rosetta for Linux, FEX or box64, are not: `stop` names the command it saw and leaves the daemon running, so stop it yourself with `kill`.
 
+### Upgrading from v3.26.2 or earlier
+
+If your app uses a path containing spaces, or you run separate HOME/XDG profiles, use `canary update --no-restart` first. Then invoke the newly installed `canary restart` from the app's original profile. The older updater performs activation with its own old restart code even after replacing the file, so its `--restart` cannot apply these fixes. Trading-build users should install the new trading artifact through their existing installation procedure before restarting.
+
+From v3.26.3, app lifecycle commands verify the app's effective HOME, socket, config and state paths before stopping it. A different or unreadable profile is refused without stopping a process; use the app's original environment. Relative profile paths and relative app `--state-dir`/`--log` values need absolute paths. Custom launchd jobs with their own environment or working directory require explicit supervisor management; automatic lifecycle commands leave them untouched. An older saved supervisor recovery record has no profile identity: recover it with `canary setup app` from its original profile instead of automatically resuming it under the current environment.
+
 ## Pick an install path
 
 | Path | How | Use it when |
@@ -66,7 +72,7 @@ Go, Make and the versions declared in the repository are required.
 6. Lists the archive before extracting it. Anything beyond `canary`, `LICENSE`, and `README.md` is rejected, and a symlinked `canary` is rejected too.
 7. Installs the binary mode 0755 into `~/.local/bin`, or into `CANARY_INSTALL_DIR` if you set one.
 8. Clears the macOS `com.apple.quarantine` attribute so Gatekeeper does not block the first run.
-9. Adds `~/.local/bin` when it is missing from `PATH`. For Bash it updates `.bashrc` and the first existing login file (`.bash_profile`, `.bash_login`, or `.profile`), creating `.bash_profile` if none exists. For Zsh it updates `${ZDOTDIR:-$HOME}/.zshrc`; fish uses `${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish`; other shells use `.profile`. Open a new terminal afterwards. A custom `CANARY_INSTALL_DIR` leaves shell configuration to you.
+9. Adds `~/.local/bin` when it is missing from `PATH`. For Bash it updates `.bashrc` and the first existing login file (`.bash_profile`, `.bash_login`, or `.profile`), creating `.bash_profile` if none exists. For Zsh it updates `${ZDOTDIR:-$HOME}/.zshrc`; fish uses `${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish`; other shells use `.profile`. Open a new terminal afterwards. A custom `CANARY_INSTALL_DIR` leaves shell configuration to you. If a startup file is not writable, installation continues and prints the line to add manually. The installer warns when an older executable takes precedence on PATH and shows an absolute command for the installed version.
 10. Runs `canary version` and warns if the installed binary reports something other than the version it just fetched.
 
 Prefer to read it first: `curl -fsSL https://raw.githubusercontent.com/osauer/canary/main/install.sh -o install.sh`, then `less install.sh`, then `sh install.sh`.

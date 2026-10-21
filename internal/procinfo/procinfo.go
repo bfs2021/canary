@@ -26,7 +26,8 @@ import (
 type Process struct {
 	PID     int
 	PPID    int
-	Command string // argv joined by single spaces, as `ps -o args=` prints it
+	Args    []string // lossless argv when supplied by procfs; nil for display-only listings
+	Command string   // argv joined by single spaces, as `ps -o args=` prints it
 }
 
 // ErrNoProcess reports that no process holds the requested PID.

@@ -20,7 +20,7 @@ Two ways in, and they update differently.
 canary setup claude-desktop
 ```
 
-That writes an `mcpServers.canary` entry into `~/Library/Application Support/Claude/claude_desktop_config.json`, recording the resolved (symlink-free) path of the binary that ran the command. It backs the old file up to `claude_desktop_config.json.bak-<timestamp>` first, keeps unrelated top-level keys, and overwrites any previous `canary` entry. If the existing file is not valid JSON it stops and changes nothing. macOS is the only target: anywhere else the command exits with an error pointing at the generic snippet below.
+That writes an `mcpServers.canary` entry into `~/Library/Application Support/Claude/claude_desktop_config.json`, recording the validated absolute launcher path of the binary that ran the command. It backs the old file up to `claude_desktop_config.json.bak-<timestamp>` first, keeps unrelated top-level keys, and overwrites any previous `canary` entry. If the existing file is not valid JSON it stops and changes nothing. macOS is the only target: anywhere else the command exits with an error pointing at the generic snippet below.
 
 Then fully quit Claude Desktop with Command-Q and reopen it. Closing the window is not enough.
 
@@ -171,3 +171,5 @@ For a compact market dashboard, call `canary_regime` with `view: "monitor"`, or
 `canary regime --json --view monitor`. It uses the shared typed monitor
 projection, retaining indicator eligibility and freshness. The default remains
 full detail; monitor cannot be combined with profile arrays.
+
+A stable launcher symlink is preserved when it points to the running executable, so managed version-directory upgrades keep working. If you configured MCP before v3.26.3 through such a launcher, run `canary setup claude-desktop` once through the stable launcher to replace the old version-specific path, then fully quit and reopen Claude Desktop.

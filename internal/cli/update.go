@@ -166,7 +166,7 @@ func runUpdateCore(ctx context.Context, opts *updateOptions, fetch fetchFunc, do
 			return 1
 		}
 		if exit := restart(ctx, plan.DestPath, opts.out, opts.err); exit != 0 {
-			fmt.Fprintf(opts.err, "%s update: stack restart failed; app and daemon stages are ordered but non-atomic, and successful earlier stages are not rolled back (fix the reported failure and rerun `%s restart`)\n", productidentity.Executable, productidentity.Executable)
+			fmt.Fprintf(opts.err, "%s update: stack restart failed; app and daemon stages are ordered but non-atomic, and successful earlier stages are not rolled back (follow the failed stage’s recovery instructions)\n", productidentity.Executable)
 			return exit
 		}
 		fmt.Fprintf(opts.out, "%s update: requested restart stages completed; previously stopped processes remain stopped\n", productidentity.Executable)
