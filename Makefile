@@ -503,7 +503,7 @@ parity-check: ## Verify MCP tool inventory matches the CLI surface
 	go test -run 'TestParity|TestNoTradingTools|TestDeskDiscoveryToolsStayReadOnly|TestMCPToolsDeclareCataloguedMethodsAndHeadroom' ./internal/mcp/
 
 # Idiom-drift gate. `go fix -diff` is the toolchain-native fixer (tracks the
-# Go version pinned in go.mod); `go tool modernize` runs the broader gopls
+# Go version pinned in go.mod); `go tool modernize` runs the broader x/tools
 # analyzer suite (range N, wg.Go, b.Loop, maps.Copy, SplitSeq, new(expr), …).
 # Version of modernize is pinned via the `tool` directive in tools/go.mod, so
 # this gate is reproducible without adding analyzer dependencies to the
