@@ -657,13 +657,14 @@ func (e *proposalEngine) revalidateOptionExitEconomics(ctx context.Context, prop
 // checkOptionExitEconomics only binds a fresh proof while creating a preview.
 // A prepared submission must keep its original token, evidence and expiry.
 func (e *proposalEngine) checkOptionExitEconomics(ctx context.Context, prop rpc.TradeProposal, preview *rpc.OrderPreviewResult, bindPreview bool) []rpc.TradingBlocker {
-	if prop.OptionExit == nil || !e.rulebookPolicy().IsHedgeSymbol(prop.Symbol) || prop.Contract.Right != "P" {
+	reduction := prop.Bucket == rpc.TradeProposalBucketBudgetReduction || prop.Bucket == rpc.TradeProposalBucketMandateReduction
+	if (prop.OptionExit == nil && !reduction) || !e.rulebookPolicy().IsHedgeSymbol(prop.Symbol) || prop.Contract.Right != "P" {
 		return nil
 	}
 	blocked := func() []rpc.TradingBlocker {
 		return []rpc.TradingBlocker{{Code: "option_exit_economic_evidence_changed", Message: "current exact-contract portfolio evidence no longer confirms this directional exit", Action: "Refresh proposals from a complete live portfolio and preview again."}}
 	}
-	if e.server == nil || e.server.orderTokens == nil || preview == nil || prop.OptionExit.EconomicEvidence == nil {
+	if e.server == nil || e.server.orderTokens == nil || preview == nil || (!reduction && prop.OptionExit.EconomicEvidence == nil) {
 		return blocked()
 	}
 	pos, err := e.server.handlePositionsList(ctx, &rpc.Request{})
@@ -675,12 +676,12 @@ func (e *proposalEngine) checkOptionExitEconomics(ctx context.Context, prop rpc.
 	intents := directionalOptionIntents(policy.Buckets.TrailingStop.Options)
 	intent, ok := intents[prop.Contract.ConID]
 	legs, ambiguous := optionExitStrategyScope(pos, intents, e.clock())
-	if !ok || e.clock().Before(intent.ApprovedAt) || !e.clock().Before(intent.ExpiresAt) ||
+	if (!reduction && (!ok || e.clock().Before(intent.ApprovedAt) || !e.clock().Before(intent.ExpiresAt))) ||
 		status.Fingerprint != prop.PolicyFingerprint || len(status.Blockers) > 0 || legs[prop.Contract.ConID] || ambiguous[prop.Symbol] {
 		return blocked()
 	}
 	evidence := e.optionExitEvidence(ctx, pos, e.clock())
-	if evidence.Scope != prop.OptionExit.EconomicEvidence.Scope || evidence.Fingerprint == "" || evidence.Roles[prop.Contract.ConID] != risk.IndexPutRoleDirectional || evidence.Closed {
+	if (!reduction && evidence.Scope != prop.OptionExit.EconomicEvidence.Scope) || evidence.Scope == "" || evidence.Fingerprint == "" || evidence.Roles[prop.Contract.ConID] != risk.IndexPutRoleDirectional || evidence.Closed {
 		return blocked()
 	}
 	payload, err := e.server.orderTokens.verify(preview.PreviewToken)

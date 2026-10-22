@@ -11,6 +11,7 @@ import (
 
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/marketcal"
+	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
@@ -533,7 +534,7 @@ func mandateMergedLegs(legs []mandate.Leg) []mandate.Leg {
 // unwinding one with its shares takes a combination order Canary does not
 // route), the shares short options are covered by, the shares long options
 // would deliver or take at exercise (so an exercise never flips the line), a
-// protection leg (a hedge-listed put, a long option that protects its own
+// protection leg (a Rulebook-classified index put, a long option that protects its own
 // stock, a leg the option policy derives as protection: the budget
 // governor's test), a leg of a multi-leg unit (the strategy workflow reduces
 // it), a row the owner ignored, and a line a working stop or trail holds
@@ -587,8 +588,11 @@ func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateRe
 		case option && leg.Quantity < 0:
 			leftOut = append(leftOut, name+" (a short option: buying it back is yours, the reduction never does)")
 			continue
-		case option && budgetLegIsProtection(cfg, row, pos, unitLegs, ambiguous, pol, now):
+		case option && budgetLegRole(cfg, row, pos, unitLegs, ambiguous, pol, now) == risk.IndexPutRoleProtection:
 			leftOut = append(leftOut, name+" (protection: the reduction never sells it)")
+			continue
+		case option && budgetLegRole(cfg, row, pos, unitLegs, ambiguous, pol, now) == risk.IndexPutRoleUnclassified:
+			leftOut = append(leftOut, name+" (index-put classification unavailable; reduction waits for complete position data)")
 			continue
 		case option && (unitLegs[row.ConID] || ambiguous[normSym(row.Symbol)]):
 			leftOut = append(leftOut, name+" (a leg of a multi-leg unit; reduce it through the strategy workflow)")

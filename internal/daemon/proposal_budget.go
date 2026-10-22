@@ -278,7 +278,7 @@ func budgetMeasurePlan(policy protectionPolicy, input budgetGovernorInput, pos *
 
 	plan.lines, plan.total = budgetMeasureLines(policy, input.Rulebook, pos, st, now)
 	if st.IncludedLegs == 0 && st.ExcludedLegs > 0 {
-		st.State, st.Reason = rpc.BudgetStateUnmeasurable, fmt.Sprintf("%d long option %s without a base market value; nothing can be measured", st.ExcludedLegs, pluralNoun(st.ExcludedLegs, "leg"))
+		st.State, st.Reason = rpc.BudgetStateUnmeasurable, fmt.Sprintf("%d long option %s without a base market value or index-put classification; nothing can be measured", st.ExcludedLegs, pluralNoun(st.ExcludedLegs, "leg"))
 		return plan
 	}
 	st.MeasuredPremiumBase = new(plan.total)
@@ -320,7 +320,7 @@ func budgetMeasurePlan(policy protectionPolicy, input budgetGovernorInput, pos *
 		st.State = rpc.BudgetStateWithinBudget
 	}
 	if st.ExcludedLegs > 0 {
-		st.Reason = fmt.Sprintf("%d long option %s excluded for want of a base market value; the measured total is understated by that much", st.ExcludedLegs, pluralNoun(st.ExcludedLegs, "leg"))
+		st.Reason = fmt.Sprintf("%d long option %s excluded because a base market value or index-put classification is missing; the measured total is understated by that much", st.ExcludedLegs, pluralNoun(st.ExcludedLegs, "leg"))
 	}
 	return plan
 }
@@ -340,7 +340,11 @@ func budgetMeasureLines(policy protectionPolicy, rulebook risk.RulebookPolicy, p
 		if row.Quantity <= 0 || math.IsNaN(row.Quantity) || math.IsInf(row.Quantity, 0) || positionWireSecType(row.SecType) != "OPT" {
 			continue
 		}
-		if budgetLegIsProtection(policy.Buckets.TrailingStop.Options, row, pos, strategyLegs, ambiguous, rulebook, now) {
+		switch budgetLegRole(policy.Buckets.TrailingStop.Options, row, pos, strategyLegs, ambiguous, rulebook, now) {
+		case risk.IndexPutRoleUnclassified:
+			st.ExcludedLegs++
+			continue
+		case risk.IndexPutRoleProtection:
 			st.ProtectionLegs++
 			continue
 		}
@@ -560,7 +564,7 @@ func budgetRulebookPlan(policy protectionPolicy, input budgetGovernorInput, pos 
 	plan.totalCap = watchPct / 100 * plan.nlv
 	plan.lines, _ = budgetMeasureLines(policy, rb, pos, st, now)
 	if st.IncludedLegs == 0 && st.ExcludedLegs > 0 {
-		st.State, st.Reason = rpc.BudgetStateUnmeasurable, fmt.Sprintf("%d long option %s without a base market value; nothing can be measured", st.ExcludedLegs, pluralNoun(st.ExcludedLegs, "leg"))
+		st.State, st.Reason = rpc.BudgetStateUnmeasurable, fmt.Sprintf("%d long option %s without a base market value or index-put classification; nothing can be measured", st.ExcludedLegs, pluralNoun(st.ExcludedLegs, "leg"))
 		return plan
 	}
 	// The Rulebook's measure is premium at risk, not value: a losing line
@@ -601,23 +605,37 @@ func budgetRulebookPlan(policy protectionPolicy, input budgetGovernorInput, pos 
 		st.State = rpc.BudgetStateWithinBudget
 	}
 	if st.ExcludedLegs > 0 {
-		st.Reason = fmt.Sprintf("%d long option %s excluded for want of a base market value", st.ExcludedLegs, pluralNoun(st.ExcludedLegs, "leg"))
+		st.Reason = fmt.Sprintf("%d long option %s excluded because a base market value or index-put classification is missing", st.ExcludedLegs, pluralNoun(st.ExcludedLegs, "leg"))
 	}
 	return plan
 }
 
-// budgetLegIsProtection applies the standing option-purpose derivation and,
-// on top of it, the two rules the governor never bends: a hedge-listed long
-// put is protection whatever any declaration says, and an option that covers a
-// stock of its own underlying is protection.
-func budgetLegIsProtection(cfg protectionTrailOptionPolicy, row rpc.PositionView, pos *rpc.PositionsResult, legs map[int]bool, ambiguous map[string]bool, pol risk.RulebookPolicy, now time.Time) bool {
-	if optionExitPurpose(cfg, row, pos, legs, ambiguous, pol, now) == "protection" {
-		return true
-	}
+// budgetLegRole uses the Rulebook's measured index-put role, not a symbol
+// exemption. Unknown inputs hold the line without calling it protection.
+func budgetLegRole(cfg protectionTrailOptionPolicy, row rpc.PositionView, pos *rpc.PositionsResult, legs map[int]bool, ambiguous map[string]bool, pol risk.RulebookPolicy, now time.Time) string {
 	if strings.EqualFold(strings.TrimSpace(row.Right), "P") && pol.IsHedgeSymbol(row.Symbol) {
-		return true
+		if pos == nil {
+			return risk.IndexPutRoleUnclassified
+		}
+		book := *pos
+		base := protectionCoverageBaseCurrency(pos)
+		if len(book.ByUnderlying) == 0 {
+			book.ByUnderlying = groupByUnderlying(book.Stocks, book.Options, base, nil)
+		}
+		classified := risk.ClassifyIndexPutRoles(risk.RuleInputs{Names: mapRuleNames(&book, pol, base)}, pol)
+		for _, name := range classified.Names {
+			for _, leg := range name.Legs {
+				if leg.Desc == legDesc(row) {
+					return leg.IndexPutRole
+				}
+			}
+		}
+		return risk.IndexPutRoleUnclassified
 	}
-	return optionExitCallHedge(row, pos, pol) || optionExitPutHedge(row, pos, pol)
+	if optionExitPurpose(cfg, row, pos, legs, ambiguous, pol, now) == "protection" || optionExitCallHedge(row, pos, pol) || optionExitPutHedge(row, pos, pol) {
+		return risk.IndexPutRoleProtection
+	}
+	return risk.IndexPutRoleDirectional
 }
 
 // budgetLinePnLBase reads the unrealised P&L in base currency, converting the
