@@ -80,8 +80,9 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	out := &rpc.AddMarketResult{Version: 1, Underlying: setupOptionContract(exact.Contract), OptionsSession: session.current, OptionsLastSession: session.last, OptionMode: session.mode}
 	out.PriceIncrements = addPriceRules(ctx, c, binding, exact)
 	var expiries []rpc.SetupOptionExpiry
+	var listing map[string][]ibkr.ExpiryClassedStrikes
 	if p.Discover && session.mode != "unavailable" {
-		listing, err := c.FetchSetupOptionStrikes(ctx, binding, exact.Contract, 10*time.Second)
+		listing, err = c.FetchSetupOptionStrikes(ctx, binding, exact.Contract, 10*time.Second)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +108,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	}
 	if len(p.Refresh) > 0 {
 		out.Calls = make([]rpc.AddCallCandidate, len(p.Refresh))
-		addParallel(len(p.Refresh), func(i int) {
+		addParallel(len(p.Refresh), addHorizonSlots, func(i int) {
 			item := p.Refresh[i]
 			row := s.addCallMarket(ctx, c, binding, exact.Contract, item.Contract.Expiry, item.Contract.Strike, class)
 			if row.Contract != nil && !sameAddCall(*row.Contract, item.Contract) {
@@ -121,7 +122,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	if p.Discover {
 		spot, _ := quoteCurrentPrice(out.Quote)
 		out.Calls = make([]rpc.AddCallCandidate, 4)
-		addParallel(4, func(i int) {
+		addParallel(4, addHorizonSlots, func(i int) {
 			target := []int{14, 30, 60, 120}[i]
 			bounds := [][2]int{{8, 21}, {22, 45}, {46, 90}, {91, 150}}[i]
 			date, dte := addHorizonExpiry(expiries, target, bounds[0], bounds[1], time.Now())
@@ -131,7 +132,13 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			}
 			if date != "" && spot != nil && *spot > 0 {
 				started := time.Now()
-				calls, err := c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 30*time.Second)
+				calls := s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, *spot)
+				var err error
+				if len(calls) < 3 {
+					// Too few listed strikes resolved for this expiry: take the
+					// broker's complete call inventory, slower but exhaustive.
+					calls, err = c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 30*time.Second)
+				}
 				if err == nil {
 					row = selectAddCall(calls, *spot, func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
 						return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, class.of(call))
@@ -211,8 +218,14 @@ func selectAddCall(calls []ibkr.ResolvedOrderContract, spot float64, quote func(
 		return compareDistance(a.Contract.Strike, b.Contract.Strike, spot)
 	})
 	var unqualified *rpc.AddCallCandidate
-	for _, call := range calls[:min(3, len(calls))] {
-		candidate := quote(call)
+	// The three nearest are quoted at once and judged nearest first.
+	candidates := make([]rpc.AddCallCandidate, min(3, len(calls)))
+	var wg sync.WaitGroup
+	for i := range candidates {
+		wg.Go(func() { candidates[i] = quote(calls[i]) })
+	}
+	wg.Wait()
+	for _, candidate := range candidates {
 		if eligibleAddCall(candidate, time.Now()) {
 			return candidate
 		}
@@ -485,14 +498,67 @@ func (s *Server) addPlanningCallQuote(ctx context.Context, c *ibkr.Connector, bi
 	return &quote
 }
 
-// Two active reads bound TWS subscription pressure while refreshing the comparison.
-func addParallel(n int, read func(int)) {
+const (
+	// All four horizons run at once: with three quotes each, discovery holds at
+	// most twelve option lines, well inside the broker's market-data allowance.
+	addHorizonSlots = 4
+	// Listed strikes resolved per expiry. SecDef pools strikes across expiries,
+	// so some nearest listed strikes do not exist for this one; eight leaves
+	// room for those and still yields the three quote candidates.
+	addResolveWidth = 8
+)
+
+func addParallel(n, slots int, read func(int)) {
 	var wg sync.WaitGroup
-	slots := make(chan struct{}, 2)
+	sem := make(chan struct{}, slots)
 	for i := range n {
-		wg.Go(func() { ; slots <- struct{}{}; defer func() { <-slots }(); read(i) })
+		wg.Go(func() { sem <- struct{}{}; defer func() { <-sem }(); read(i) })
 	}
 	wg.Wait()
+}
+
+// addNearestExpiryCalls resolves the listed strikes nearest spot as fully
+// specified contracts, as TWS does, instead of waiting for the broker to list
+// every call in the expiry. Only broker-resolved contracts are returned.
+func (s *Server) addNearestExpiryCalls(ctx context.Context, c *ibkr.Connector, binding ibkr.ConnectorSessionBinding, under ibkr.Contract, listing map[string][]ibkr.ExpiryClassedStrikes, expiry string, spot float64) []ibkr.ResolvedOrderContract {
+	listed, err := setupListedStrikes(listing, under.Symbol, expiry)
+	if err != nil {
+		return nil
+	}
+	return nearestResolvedCalls(listed, spot, func(k float64) (ibkr.ResolvedOrderContract, error) {
+		requested := ibkr.Contract{Symbol: under.Symbol, SecType: "OPT", Exchange: "SMART", Currency: "USD", Expiry: expiry, Strike: k, Right: "C", Multiplier: 100, TradingClass: under.Symbol}
+		exact, err := c.ResolveOrderContractForSession(ctx, binding, requested, 5*time.Second)
+		if err == nil {
+			err = ibkr.ValidateSetupCallResolution(exact, under, expiry, k)
+		}
+		return exact, err
+	})
+}
+
+// nearestResolvedCalls resolves the addResolveWidth listed strikes nearest
+// spot in parallel and returns those that exist, nearest first. A phantom
+// strike fails its own lookup and never takes a quote slot.
+func nearestResolvedCalls(listed []float64, spot float64, resolve func(float64) (ibkr.ResolvedOrderContract, error)) []ibkr.ResolvedOrderContract {
+	strikes := slices.Clone(listed)
+	slices.SortFunc(strikes, func(a, b float64) int { return compareDistance(a, b, spot) })
+	strikes = strikes[:min(addResolveWidth, len(strikes))]
+	found := make([]*ibkr.ResolvedOrderContract, len(strikes))
+	var wg sync.WaitGroup
+	for i, k := range strikes {
+		wg.Go(func() {
+			if exact, err := resolve(k); err == nil {
+				found[i] = &exact
+			}
+		})
+	}
+	wg.Wait()
+	out := []ibkr.ResolvedOrderContract{}
+	for _, r := range found {
+		if r != nil {
+			out = append(out, *r)
+		}
+	}
+	return out
 }
 func validAddCallSelection(c rpc.ContractParams, symbol string) bool {
 	return c.Symbol == symbol && c.SecType == "OPT" && c.Right == "C" && c.Multiplier == 100 && c.ConID > 0 && c.Currency == "USD" && c.Exchange == "SMART" && c.TradingClass != "" && positiveFinite(c.Strike)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,7 +117,12 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 			return
 		}
 		var writeErr error
+		// TWS answers subscriptions concurrently; option replies below run
+		// on their own goroutines, so writes are serialized here.
+		var sendMu sync.Mutex
 		send := func(id uint32, fields ...string) {
+			sendMu.Lock()
+			defer sendMu.Unlock()
 			if writeErr == nil {
 				body := binary.BigEndian.AppendUint32(nil, id)
 				writeErr = writeTWSFrame(conn, append(body, strings.Join(fields, "\x00")+"\x00"...))
@@ -124,7 +130,8 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 		}
 		send(9, "1", "1")          // nextValidId
 		send(15, "1", "DU1234567") // managedAccounts: no one-second startup grace
-		for writeErr == nil {
+		failed := func() bool { sendMu.Lock(); defer sendMu.Unlock(); return writeErr != nil }
+		for !failed() {
 			frame, err := readTWSFrame(r)
 			if err != nil {
 				done <- nil // normal connector shutdown
@@ -141,6 +148,9 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 					send(10, addSnapshotContractFields(id, "STK", "", "", "17")...)
 				} else if f[3] != "0" {
 					send(10, optionFields(id, f[7], f[3])...)
+				} else if f[7] != "" && f[7] != "0" {
+					// A fully specified lookup names one strike, as at the broker.
+					send(10, optionFields(id, f[7], "10"+f[7])...)
 				} else {
 					for _, strike := range []string{"100", "110", "120"} {
 						send(10, optionFields(id, strike, "10"+strike)...)
@@ -166,25 +176,27 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 					send(1, "6", id, "9", "109", "100", "0")
 				}
 				if f[5] == "OPT" {
-					feed := "1"
-					if scenario == "planning" || scenario == "class-closed" {
-						feed = "2"
-					}
-					if scenario == "model-before-notice" {
+					go func() {
+						feed := "1"
+						if scenario == "planning" || scenario == "class-closed" {
+							feed = "2"
+						}
+						if scenario == "model-before-notice" {
+							send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+						}
+						send(58, "1", id, feed)
+						if scenario == "planning" {
+							time.Sleep(2 * time.Second)
+						}
+						send(1, "6", id, "1", "1.00", "100", "0")
+						send(1, "6", id, "2", "1.02", "100", "0")
+						send(2, "6", id, "0", "100")
+						send(2, "6", id, "3", "100")
+						if scenario == "model-before-notice" {
+							time.Sleep(300 * time.Millisecond)
+						}
 						send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
-					}
-					send(58, "1", id, feed)
-					if scenario == "planning" {
-						time.Sleep(2 * time.Second)
-					}
-					send(1, "6", id, "1", "1.00", "100", "0")
-					send(1, "6", id, "2", "1.02", "100", "0")
-					send(2, "6", id, "0", "100")
-					send(2, "6", id, "3", "100")
-					if scenario == "model-before-notice" {
-						time.Sleep(300 * time.Millisecond)
-					}
-					send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+					}()
 				}
 			case "78":
 				mu.Lock()
@@ -279,18 +291,18 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 		return
 	}
 	if len(got.Calls) != 4 || got.Calls[1].Contract == nil || got.Calls[1].Contract.Strike != 110 || got.Calls[1].Unavailable != "" {
-		t.Fatalf("late underlying price did not select the nearest eligible call: %+v", got.Calls)
+		t.Fatalf("late underlying price did not select the nearest eligible call: %+v %+v", got.Calls, got.Calls[1].Contract)
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if scenario == "planning" {
 		row := got.Calls[1]
 		p := row.Planning
-		if got.OptionMode != "planning" || p == nil || p.Price == nil || *p.Price != 1.01 || p.PriceSource != "broker_midpoint" || p.DeltaStatus != "in_range" || row.Quote == nil || row.Quote.IV == nil || row.Quote.ModelDataType != rpc.MarketDataFrozen || eligibleAddCall(row, time.Now()) || optionHistoryRequests != 0 || len(optionStrikes) != 1 {
+		if got.OptionMode != "planning" || p == nil || p.Price == nil || *p.Price != 1.01 || p.PriceSource != "broker_midpoint" || p.DeltaStatus != "in_range" || row.Quote == nil || row.Quote.IV == nil || row.Quote.ModelDataType != rpc.MarketDataFrozen || eligibleAddCall(row, time.Now()) || optionHistoryRequests != 0 || len(optionStrikes) != 3 {
 			t.Fatalf("closed read lost the closing quote, read history or invented eligibility: row=%+v planning=%+v history=%d strikes=%v", row, p, optionHistoryRequests, optionStrikes)
 		}
-	} else if len(optionStrikes) != 1 || optionStrikes[0] != "110" {
-		t.Fatalf("strike ranking changed: %v", optionStrikes)
+	} else if !slices.Equal(slices.Sorted(slices.Values(optionStrikes)), []string{"100", "110", "120"}) {
+		t.Fatalf("the three nearest calls were not quoted together: %v", optionStrikes)
 	}
 	if len(stockRequests) != 1 {
 		t.Fatalf("held cache was not reused: stock lines=%d", len(stockRequests))

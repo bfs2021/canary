@@ -53,6 +53,10 @@ var ErrBrokerIDNamespaceConflict = errors.New("broker id namespace conflict")
 
 // Connector owns one broker connection and its in-memory subscriptions and caches.
 type Connector struct {
+	// marketRules caches price rules by broker session and rule ID.
+	marketRulesMu sync.Mutex
+	marketRules   map[marketRuleKey][]PriceIncrement
+
 	display displayChanges
 	name    string
 	config  *ConnectorConfig
