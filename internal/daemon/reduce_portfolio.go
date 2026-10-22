@@ -409,15 +409,21 @@ func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposal
 		}
 		res.Legs = append(res.Legs, leg)
 	}
-	s.reduceIndexLoss(res, reduceTradeChanges(res.Legs))
+	s.reduceIndexLoss(ctx, res, reduceTradeChanges(res.Legs))
 	aggregateBasket(res, false)
 	if p.PlanOnly {
-		// A plan is never a basket to submit.
-		res.Accepted = false
-		res.EligibleCount = 0
-		for i := range res.Legs {
+		// A plan is never a basket to submit: its legs are planned or
+		// blocked, and its total is the planned legs' marks.
+		res.PlanOnly, res.Accepted, res.EligibleCount, res.BlockedCount, res.TotalNotional = true, false, 0, 0, 0
+		for i, leg := range res.Legs {
 			res.Legs[i].SubmitEligible = false
+			if len(leg.Blockers) > 0 {
+				res.BlockedCount++
+			} else if leg.NotionalBase != nil {
+				res.TotalNotional += *leg.NotionalBase
+			}
 		}
+		res.Message = fmt.Sprintf("%d planned · %d blocked of %d legs", res.LegCount-res.BlockedCount, res.BlockedCount, res.LegCount)
 	}
 	return res, nil
 }

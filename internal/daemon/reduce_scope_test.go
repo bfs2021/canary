@@ -212,8 +212,23 @@ func TestMandateInputWithTradesMovesOnlyTheTradedLines(t *testing.T) {
 		t.Fatal("the kept input must not change")
 	}
 	res := &rpc.TradeProposalReducePortfolioResult{}
-	(&Server{}).reduceIndexLoss(res, nil)
+	(&Server{}).reduceIndexLoss(t.Context(), res, nil)
 	if res.IndexLossBeforeBase != nil || res.IndexLossUnknown == "" || res.IndexShockPct != mandate.IndexShockPct {
 		t.Fatalf("no mandate = %+v, want the loss unknown and said why", res)
+	}
+}
+
+// A plan says it is one: its legs read planned, never blocked for want of a
+// token, and its total is the planned legs' marks (found live 2026-10-22).
+func TestReducePlanSaysItIsAPlan(t *testing.T) {
+	row := reduceTestStockRow(100)
+	row.MarketValue, row.MarketValueBase = 2500, new(2400.0)
+	srv, _ := newReducePreviewTestServer(t, row)
+	res, err := srv.reducePortfolioPreview(t.Context(), rpc.TradeProposalReducePortfolioParams{Mode: rpc.ReduceModeLongs, Percent: 25, PlanOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.PlanOnly || res.Accepted || res.LegCount != 1 || res.BlockedCount != 0 || res.TotalNotional != 600 || res.Legs[0].PreviewToken != "" || res.Legs[0].SubmitEligible {
+		t.Fatalf("plan = %+v, want one planned leg, no token, total 600", res)
 	}
 }

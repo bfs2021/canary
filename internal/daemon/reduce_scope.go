@@ -158,10 +158,20 @@ func reduceScopedCandidates(pos *rpc.PositionsResult, p rpc.TradeProposalReduceP
 // reduceIndexLoss measures the mandate's index stress on the book now and
 // with every planned leg filled, on the last evaluation's input. trades maps
 // a contract to its signed quantity change.
-func (s *Server) reduceIndexLoss(res *rpc.TradeProposalReducePortfolioResult, trades map[int]float64) {
+func (s *Server) reduceIndexLoss(ctx context.Context, res *rpc.TradeProposalReducePortfolioResult, trades map[int]float64) {
 	res.IndexShockPct = mandate.IndexShockPct
 	_, input, _, fp := s.mandateVerdicts.current()
-	if input == nil || s.riskPolicies == nil || fp != s.riskPolicies.snapshot().policy.FingerprintKey() {
+	current := func() bool {
+		return input != nil && s.riskPolicies != nil && fp == s.riskPolicies.snapshot().policy.FingerprintKey()
+	}
+	if !current() && s.riskPolicies != nil {
+		// No evaluation since the daemon started, or one under another
+		// policy: a read's evaluation (it never counts toward the forced
+		// reduction's streak) measures the book now.
+		s.evaluateMandate(ctx, true)
+		_, input, _, fp = s.mandateVerdicts.current()
+	}
+	if !current() {
 		res.IndexLossUnknown = "the mandate has not measured the book under the current policy yet"
 		return
 	}
