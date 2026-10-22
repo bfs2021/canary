@@ -69,38 +69,28 @@ func TestAddOptionsCalendarSchedulesClosedPeriodsAndFailsSafeOutsideCoverage(t *
 	}
 }
 
-func TestAddPlanningRequiresAnActualLastSessionBar(t *testing.T) {
-	observed := time.Date(2026, 3, 7, 16, 0, 0, 0, time.UTC)
-	last := addOptionsCalendar(observed).last
-	if last == nil {
-		t.Fatal("missing covered last session")
-	}
-	received := observed.Add(-time.Hour)
-	quote := &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, Bid: new(1.0), Ask: new(1.2), DataType: rpc.MarketDataFrozen, AsOf: received}
+func TestAddPlanningPricesFromTheBrokerQuoteReceipt(t *testing.T) {
+	received := time.Date(2026, 3, 7, 15, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		name, date string
-		price      float64
-		wantClose  bool
+		name  string
+		quote *rpc.SetupOptionQuote
+		want  *float64
 	}{
-		{"last completed session", "20260306", 1.05, true},
-		{"older session", "20260305", 1.05, false},
-		{"current observation date", "20260307", 1.05, false},
-		{"undated", "", 1.05, false},
-		{"nonpositive", "20260306", 0, false},
+		{"two-sided", &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, Bid: new(1.0), Ask: new(1.2), DataType: rpc.MarketDataFrozen, AsOf: received}, new(1.1)},
+		{"one-sided", &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, Bid: new(1.0), DataType: rpc.MarketDataFrozen, AsOf: received}, nil},
+		{"missing", &rpc.SetupOptionQuote{Status: rpc.SetupQuoteMissing}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			planning := addPlanningObservation(quote)
-			date, _ := time.Parse("20060102", tc.date)
-			applyAddPlanningClose(planning, []ibkr.HistoricalBar{{Date: tc.date, Time: date, Close: tc.price}}, *last, observed)
-			if tc.wantClose {
-				if planning.Price == nil || *planning.Price != tc.price || planning.PriceSource != "last_session_close" || planning.SessionDate != "2026-03-06" || !planning.ObservedAt.Equal(observed) {
-					t.Fatalf("dated broker close lost: %+v", planning)
+			planning := addPlanningObservation(tc.quote)
+			if tc.want == nil {
+				if planning.Price != nil || planning.PriceSource != "" {
+					t.Fatalf("priced an incomplete quote: %+v", planning)
 				}
-			} else if planning.Price == nil || *planning.Price != 1.1 || planning.PriceSource != "broker_midpoint" || planning.SessionDate != "" || !planning.ObservedAt.Equal(received) {
-				t.Fatalf("receipt was relabelled as a session price: %+v", planning)
+			} else if planning.Price == nil || *planning.Price != *tc.want || planning.PriceSource != "broker_midpoint" || !planning.ObservedAt.Equal(received) {
+				t.Fatalf("receipt price lost or relabelled: %+v", planning)
 			}
 			if planning.DeltaStatus != "unavailable" {
-				t.Fatal("history or receipt manufactured delta qualification")
+				t.Fatal("a quote without a model manufactured delta qualification")
 			}
 		})
 	}

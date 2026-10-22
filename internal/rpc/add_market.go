@@ -31,13 +31,11 @@ type AddCallCandidate struct {
 }
 
 // AddCallPlanning is closed-session context, never live selection or order
-// evidence. ObservedAt is when the source was received, not an exchange time.
-// SessionDate is present only for an actual dated bar from that completed
-// session. Broker midpoint receipts never acquire a session date by inference.
+// evidence. ObservedAt is when the source was received, not an exchange time;
+// a broker midpoint receipt never acquires a session date by inference.
 type AddCallPlanning struct {
 	Price       *float64  `json:"price,omitempty"`
-	PriceSource string    `json:"price_source,omitempty"` // last_session_close | broker_midpoint
-	SessionDate string    `json:"session_date,omitempty"`
+	PriceSource string    `json:"price_source,omitempty"` // broker_midpoint
 	ObservedAt  time.Time `json:"observed_at,omitzero"`
 	DeltaStatus string    `json:"delta_status"` // in_range | unavailable | out_of_range
 }

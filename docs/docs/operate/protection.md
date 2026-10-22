@@ -187,6 +187,16 @@ open rules the sale relieves, and the next two candidates with their `why`.
 Ignoring a row takes its line out of the plan: the next refresh moves to the
 next candidate.
 
+Index-put classification is shared with the Rulebook for both budget and
+mandate reduction plans. A measured directional put can enter the plan even
+when its symbol is on the hedge list; measured protection stays excluded.
+Missing classification holds the line and is reported separately from
+protection. Planning may use the same closed-session observations as the
+warning. Before preview or prepared submission admits a reduction, a fresh,
+complete broker measurement must still confirm that the put is directional;
+the existing scope-bound evidence expires with the order token. The policy
+limits, order caps, veto window and approval requirements are unchanged.
+
 **Measured against the Rulebook instead.** `basis = "rulebook"` replaces the
 two caps with limits you already keep in the Rulebook policy, as shares of NLV:
 a line is cut to `option_line_act_pct` (its premium at risk being the higher of

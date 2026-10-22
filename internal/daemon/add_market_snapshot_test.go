@@ -29,7 +29,9 @@ func TestAddUnknownCalendarSkipsOptionAcquisition(t *testing.T) {
 	runAddSnapshotScenario(t, "unknown")
 }
 
-func TestAddClosedPlanningRetainsDatedHistoryWithoutGreeks(t *testing.T) {
+// On 2026-10-22 the broker answered every option daily-bar read with no data,
+// and its frozen closing quote took longer than the old 1.5 s read.
+func TestAddClosedPlanningPricesFromALateClosingQuoteWithoutHistory(t *testing.T) {
 	runAddSnapshotScenario(t, "planning")
 }
 
@@ -142,11 +144,12 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 						feed = "2"
 					}
 					send(58, "1", id, feed)
+					if scenario == "planning" {
+						time.Sleep(2 * time.Second)
+					}
 					send(1, "6", id, "1", "1.00", "100", "0")
 					send(1, "6", id, "2", "1.02", "100", "0")
-					if scenario != "planning" {
-						send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
-					}
+					send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
 				}
 			case "78":
 				mu.Lock()
@@ -224,8 +227,8 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 	if scenario == "planning" {
 		row := got.Calls[1]
 		p := row.Planning
-		if got.OptionMode != "planning" || p == nil || p.Price == nil || *p.Price != 1.07 || p.PriceSource != "last_session_close" || p.SessionDate != lastSession.Date || p.DeltaStatus != "unavailable" || eligibleAddCall(row, time.Now()) || optionHistoryRequests != 1 || len(optionStrikes) != 3 {
-			t.Fatalf("closed read lost dated history or invented eligibility: row=%+v planning=%+v history=%d strikes=%v", row, p, optionHistoryRequests, optionStrikes)
+		if got.OptionMode != "planning" || p == nil || p.Price == nil || *p.Price != 1.01 || p.PriceSource != "broker_midpoint" || p.DeltaStatus != "in_range" || row.Quote == nil || row.Quote.IV == nil || row.Quote.ModelDataType != rpc.MarketDataFrozen || eligibleAddCall(row, time.Now()) || optionHistoryRequests != 0 || len(optionStrikes) != 1 {
+			t.Fatalf("closed read lost the closing quote, read history or invented eligibility: row=%+v planning=%+v history=%d strikes=%v", row, p, optionHistoryRequests, optionStrikes)
 		}
 	} else if len(optionStrikes) != 1 || optionStrikes[0] != "110" {
 		t.Fatalf("strike ranking changed: %v", optionStrikes)

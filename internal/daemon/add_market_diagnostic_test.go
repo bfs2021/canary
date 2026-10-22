@@ -32,10 +32,6 @@ func TestAddInventoryRetainsSlowCompleteReply(t *testing.T) {
 	runAddInventoryDiagnostic(t, "slow-complete")
 }
 
-func TestAddPlanningCloseFailureLogsSanitizedBrokerVerdict(t *testing.T) {
-	runAddInventoryDiagnostic(t, "history-rejection")
-}
-
 func runAddInventoryDiagnostic(t *testing.T, mode string) {
 	const privateText = "private-marker-do-not-log"
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -137,11 +133,7 @@ func runAddInventoryDiagnostic(t *testing.T, mode string) {
 				send(75, f[1], "SMART", "17", "SYNTH", "100", "1", expiry, "1", "110")
 				send(76, f[1])
 			case "20":
-				if mode == "history-rejection" && f[4] == "OPT" {
-					sendError(f[1], 162, privateText)
-				} else {
-					send(17, f[1], "", "", "0")
-				}
+				send(17, f[1], "", "", "0")
 			}
 		}
 		done <- writeErr
@@ -181,20 +173,8 @@ func runAddInventoryDiagnostic(t *testing.T, mode string) {
 		if row.Contract == nil || row.Contract.ConID != 10110 || inventoryRequests.Load() != 1 {
 			t.Fatalf("complete inventory was discarded or retried: row=%+v requests=%d log=%s", row, inventoryRequests.Load(), logs.String())
 		}
-		if mode == "slow-complete" {
-			if strings.Contains(logs.String(), "add.inventory") {
-				t.Fatalf("complete inventory was reported failed: %s", logs.String())
-			}
-		} else {
-			logged := logs.String()
-			for _, want := range []string{"level=WARN", "add.planning_close", "symbol=SYNTH", "expiry=" + expiry, "reason=broker_162"} {
-				if !strings.Contains(logged, want) {
-					t.Fatalf("missing normal-log planning evidence %q: %s", want, logged)
-				}
-			}
-			if strings.Contains(logged, privateText) || strings.Count(logged, "add.planning_close") != 1 {
-				t.Fatalf("planning diagnostic leaked raw text or repeated: %s", logged)
-			}
+		if strings.Contains(logs.String(), "add.inventory") {
+			t.Fatalf("complete inventory was reported failed: %s", logs.String())
 		}
 		return
 	}
@@ -238,43 +218,6 @@ func TestAddInventoryDiagnosticNeverLogsRawErrors(t *testing.T) {
 			logged := logs.String()
 			if !strings.Contains(logged, "level=WARN") || !strings.Contains(logged, "elapsed_ms=1250 reason="+tc.reason+"\"") || strings.Contains(logged, privateText) || strings.Count(logged, "add.inventory") != 1 {
 				t.Fatalf("diagnostic did not retain safe context and classification: %s", logged)
-			}
-		})
-	}
-}
-
-func TestAddPlanningCloseDiagnosticNeverLogsRawErrors(t *testing.T) {
-	const privateText = "private-marker-do-not-log"
-	for _, tc := range []struct {
-		name, reason string
-		err          error
-	}{
-		{"timeout", "timeout", fmt.Errorf(privateText+": %w", context.DeadlineExceeded)},
-		{"historical rejection", "broker_162", &ibkr.HistoricalRequestError{Code: 162, Message: privateText}},
-		{"broker no data", "broker_162_no_data", &ibkr.HistoricalRequestError{Code: 162, Message: "HMDS query returned no data: " + privateText}},
-		{"broker permission", "broker_162_not_entitled", &ibkr.HistoricalRequestError{Code: 162, Message: "No market data permissions for " + privateText}},
-		{"broker pacing", "broker_162_pacing", &ibkr.HistoricalRequestError{Code: 162, Message: "Historical data request pacing violation " + privateText}},
-		{"invalid bars", "invalid_history", &ibkr.HistoricalDataValidationError{Reason: privateText}},
-		{"invalid payload", "invalid_history", &ibkr.HistoricalRequestError{Category: ibkr.HistoricalFailureInvalidPayload, Message: privateText}},
-		{"no last bar", "no_last_session_bar", errors.New("add planning last-session bar unavailable")},
-		{"no data", "no_last_session_bar", &ibkr.HistoricalRequestError{Category: ibkr.HistoricalFailureNoData, Message: privateText}},
-		{"session", "session_changed", fmt.Errorf(privateText+": %w", errors.New("broker session changed during history"))},
-		{"gateway", "session_changed", &ibkr.HistoricalRequestError{Category: ibkr.HistoricalFailureGatewayUnavailable, Message: privateText}},
-		{"identity", "identity_mismatch", errors.New("add planning history identity mismatch")},
-		{"unknown", "read_failed", errors.New(privateText)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			logs := &lockedBuffer{}
-			s := &Server{logger: NewLogger(logs, "warn")}
-			s.warnAddPlanningCloseFailure(rpc.ContractParams{Symbol: "SYNTH", Expiry: "20270219", Strike: 110}, "2026-10-22", 1250*time.Millisecond, tc.err)
-			logged := logs.String()
-			for _, want := range []string{"level=WARN", "add.planning_close", "symbol=SYNTH", "expiry=20270219", "strike=110", "session_date=2026-10-22", "elapsed_ms=1250", "reason=" + tc.reason + "\""} {
-				if !strings.Contains(logged, want) {
-					t.Fatalf("missing sanitized diagnostic %q: %s", want, logged)
-				}
-			}
-			if strings.Contains(logged, privateText) || strings.Count(logged, "add.planning_close") != 1 {
-				t.Fatalf("raw error leaked or repeated: %s", logged)
 			}
 		})
 	}

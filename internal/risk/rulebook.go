@@ -545,6 +545,14 @@ func limitText(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
+// ClassifyIndexPutRoles shares the Rulebook's advisory classification with
+// reduction planning. It uses the same observed book; fresh broker evidence
+// remains a separate requirement before an order can be admitted.
+func ClassifyIndexPutRoles(in RuleInputs, pol RulebookPolicy) RuleInputs {
+	pol.Normalize()
+	return classifyIndexPutRoles(in, pol)
+}
+
 // classifyIndexPutRoles reserves hedge treatment for positions that can
 // plausibly protect the current long book. With no long book, or with short
 // delta above the over-hedge multiple of the widest configured protection band, the position is

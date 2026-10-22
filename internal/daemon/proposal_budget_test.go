@@ -53,9 +53,9 @@ func budgetOptionLeg(symbol string, conID int, right string, qty float64, unitBa
 //	BBB  4 ct × 2,500 = 10,000 (20%)  loss 4,000
 //	CCC  2 ct × 3,000 =  6,000 (12%)  gain   500
 func budgetTestBook() *rpc.PositionsResult {
-	return &rpc.PositionsResult{
+	pos := &rpc.PositionsResult{
 		Portfolio: &rpc.PositionsPortfolio{BaseCurrency: "EUR"},
-		Stocks:    []rpc.PositionView{{Symbol: "TEST", SecType: "STK", ConID: 7, Quantity: 100, Multiplier: 1}},
+		Stocks:    []rpc.PositionView{{Symbol: "TEST", SecType: "STK", ConID: 7, Quantity: 100, Multiplier: 1, Currency: "EUR", Mark: 1000}},
 		Options: []rpc.PositionView{
 			budgetOptionLeg("SPY", 501, "P", 3, 2000, -300),
 			budgetOptionLeg("TEST", 502, "P", 1, 1000, -100),
@@ -64,6 +64,13 @@ func budgetTestBook() *rpc.PositionsResult {
 			budgetOptionLeg("CCC", 603, "C", 2, 3000, 500),
 		},
 	}
+	// These are measured hedges, not exemptions based on their symbol.
+	pos.Options[0].Delta, pos.Options[0].Underlying = new(-0.5), new(100.0)
+	pos.Options[1].Delta, pos.Options[1].Underlying = new(0.0), new(100.0)
+	for i := range pos.Options {
+		pos.Options[i].FXRate = new(1.0)
+	}
+	return pos
 }
 
 func budgetRowsByConID(rows []rpc.TradeProposal) map[int]rpc.TradeProposal {
@@ -264,7 +271,7 @@ func TestBudgetReductionGatesNameWhyNothingIsGenerated(t *testing.T) {
 	for i := range blind.Options {
 		blind.Options[i].MarketValueBase = nil
 	}
-	if rows, st := engine.budgetReductionProposals(policy, rpc.ProtectionPolicyStatus{}, budgetLatchedInput(), nil, blind, rpc.TradeProposalSourceFingerprints{}, nil, brokerStateScope{}, now); len(rows) != 0 || st.State != rpc.BudgetStateUnmeasurable || st.ExcludedLegs != 3 {
+	if rows, st := engine.budgetReductionProposals(policy, rpc.ProtectionPolicyStatus{}, budgetLatchedInput(), nil, blind, rpc.TradeProposalSourceFingerprints{}, nil, brokerStateScope{}, now); len(rows) != 0 || st.State != rpc.BudgetStateUnmeasurable || st.ExcludedLegs != 4 || st.ProtectionLegs != 1 {
 		t.Fatalf("blind book: rows %d status %+v", len(rows), st)
 	}
 }
