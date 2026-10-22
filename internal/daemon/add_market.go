@@ -130,6 +130,12 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	}
 	if p.Discover {
 		spot, _ := quoteCurrentPrice(out.Quote)
+		// The stock's implied volatility aims capped horizons straight at
+		// their target delta; the live option delta still decides.
+		stockIV := 0.0
+		if q := out.Quote; q != nil && q.IV != nil && positiveFinite(*q.IV) {
+			stockIV = *q.IV
+		}
 		out.Calls = make([]rpc.AddCallCandidate, 4)
 		timing := make([]string, 4)
 		addParallel(4, addHorizonSlots, func(i int) {
@@ -142,26 +148,22 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			}
 			if date != "" && spot != nil && *spot > 0 {
 				started := time.Now()
-				calls := s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, *spot)
-				resolved := time.Since(started)
-				var err error
-				inventory := ""
-				if len(calls) < 3 {
+				near := func(ref float64) ([]ibkr.ResolvedOrderContract, error) {
+					if calls := s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, ref); len(calls) >= 3 {
+						return calls, nil
+					}
 					// Too few listed strikes resolved for this expiry: take the
 					// broker's complete call inventory, slower but exhaustive.
-					listed := time.Now()
-					calls, err = c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 30*time.Second)
-					inventory = fmt.Sprintf(",inventory=%d", time.Since(listed).Milliseconds())
+					return c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 30*time.Second)
 				}
+				quote := func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
+					return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, class.of(call))
+				}
+				var spent string
+				var err error
+				row, spent, err = selectAddCallAimed(*spot, stockIV, dte, quote, near)
+				timing[i] = fmt.Sprintf("%d:%s", target, spent)
 				if err == nil {
-					quote := func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
-						return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, class.of(call))
-					}
-					var spent string
-					row, spent = selectAddCallAimed(calls, *spot, dte, quote, func(aim float64) []ibkr.ResolvedOrderContract {
-						return s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, aim)
-					})
-					timing[i] = fmt.Sprintf("%d:resolve=%d%s,%s", target, resolved.Milliseconds(), inventory, spent)
 					row.Horizon, row.DTE = target, dte
 				} else {
 					s.warnAddInventoryFailure(u.Symbol, date, target, time.Since(started), err)
@@ -245,8 +247,8 @@ func selectAddCall(calls []ibkr.ResolvedOrderContract, spot float64, quote func(
 }
 
 // selectAddCallNear quotes the three actual contracts nearest ref at once and
-// keeps the in-band call whose delta is closest to its band's target. It also
-// returns an implied volatility it observed, to aim a second search.
+// keeps the best of them (pickAddCall). It also returns an implied
+// volatility it observed, to aim a further round.
 func selectAddCallNear(calls []ibkr.ResolvedOrderContract, ref float64, quote func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate) (rpc.AddCallCandidate, float64) {
 	calls = slices.Clone(calls)
 	slices.SortFunc(calls, func(a, b ibkr.ResolvedOrderContract) int {
@@ -258,17 +260,26 @@ func selectAddCallNear(calls []ibkr.ResolvedOrderContract, ref float64, quote fu
 		wg.Go(func() { candidates[i] = quote(calls[i]) })
 	}
 	wg.Wait()
-	var best, unqualified *rpc.AddCallCandidate
 	iv := 0.0
+	for _, c := range candidates {
+		if q := c.Quote; iv == 0 && q != nil && q.IV != nil && positiveFinite(*q.IV) {
+			iv = *q.IV
+		}
+	}
+	return pickAddCall(candidates...), iv
+}
+
+// pickAddCall keeps, in order: a live in-range call nearest its band's
+// target, a closed-market call whose last delta was in range, then a
+// closed-market call without a delta. Earlier candidates win ties.
+func pickAddCall(candidates ...rpc.AddCallCandidate) rpc.AddCallCandidate {
+	var best, unqualified *rpc.AddCallCandidate
 	closer := func(a, b *rpc.AddCallCandidate) bool {
 		target := addDeltaBandFor(a.Contract).Target
 		return b == nil || math.Abs(*a.Quote.Delta-target) < math.Abs(*b.Quote.Delta-target)
 	}
 	for i := range candidates {
 		c := &candidates[i]
-		if q := c.Quote; iv == 0 && q != nil && q.IV != nil && positiveFinite(*q.IV) {
-			iv = *q.IV
-		}
 		switch {
 		case eligibleAddCall(*c, time.Now()):
 			if best == nil || best.Planning != nil || closer(c, best) {
@@ -286,27 +297,50 @@ func selectAddCallNear(calls []ibkr.ResolvedOrderContract, ref float64, quote fu
 		best = unqualified
 	}
 	if best == nil {
-		return rpc.AddCallCandidate{Unavailable: "No eligible call"}, iv
+		return rpc.AddCallCandidate{Unavailable: "No eligible call"}
 	}
-	return *best, iv
+	return *best
 }
 
-// selectAddCallAimed picks from the calls nearest spot and, when none is in
-// its range, searches again around the strike the observed volatility puts at
-// the range's target. It also says, in milliseconds, what each round took.
-func selectAddCallAimed(calls []ibkr.ResolvedOrderContract, spot float64, dte int, quote func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate, near func(float64) []ibkr.ResolvedOrderContract) (rpc.AddCallCandidate, string) {
-	started := time.Now()
-	row, iv := selectAddCallNear(calls, spot, quote)
-	spent := fmt.Sprintf("quote=%d", time.Since(started).Milliseconds())
-	if row.Contract != nil || iv <= 0 {
-		return row, spent
+// selectAddCallAimed searches one expiry in at most two rounds. The first
+// starts at spot, or for a capped range at the strike the stock's implied
+// volatility puts at the target delta. Without a live in-range call, a
+// second round aims with the volatility the options themselves showed, or
+// repeats the first when no quote returned one (a missed quote window). The
+// better call of the two rounds is kept, so a miss in one cannot empty the
+// row. It also says what each round took, in milliseconds.
+func selectAddCallAimed(spot, stockIV float64, dte int, quote func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate, near func(float64) ([]ibkr.ResolvedOrderContract, error)) (rpc.AddCallCandidate, string, error) {
+	band := addDeltaBandForDTE(dte)
+	notes := []string{}
+	round := func(ref float64) (rpc.AddCallCandidate, float64, error) {
+		started := time.Now()
+		calls, err := near(ref)
+		looked := time.Since(started)
+		if err != nil {
+			return rpc.AddCallCandidate{}, 0, err
+		}
+		started = time.Now()
+		row, iv := selectAddCallNear(calls, ref, quote)
+		notes = append(notes, fmt.Sprintf("resolve=%d,quote=%d", looked.Milliseconds(), time.Since(started).Milliseconds()))
+		return row, iv, nil
 	}
-	started = time.Now()
-	aim := addAimStrike(spot, iv, dte, addDeltaBandForDTE(dte).Target)
-	if calls := near(aim); len(calls) > 0 {
-		row, _ = selectAddCallNear(calls, aim, quote)
+	ref := spot
+	if band.Target < .5 && stockIV > 0 {
+		ref = addAimStrike(spot, stockIV, dte, band.Target)
 	}
-	return row, spent + fmt.Sprintf(",aim=%d", time.Since(started).Milliseconds())
+	first, iv, err := round(ref)
+	// A closed market has no live call; its planning row stands as found.
+	if err != nil || eligibleAddCall(first, time.Now()) || selectableAddPlanningCall(first) {
+		return first, strings.Join(notes, "+"), err
+	}
+	if iv > 0 {
+		ref = addAimStrike(spot, iv, dte, band.Target)
+	}
+	second, _, err := round(ref)
+	if err != nil {
+		return first, strings.Join(notes, "+"), nil
+	}
+	return pickAddCall(first, second), strings.Join(notes, "+"), nil
 }
 
 // addDeltaBand is the owner's call delta range by days to expiry.

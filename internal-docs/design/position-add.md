@@ -227,8 +227,11 @@ long-call horizons, targeting 14/30/60/120 days, always more
 than seven days. Live delta ranges follow days to expiry: 0.50–0.70 to 21 days,
 0.35–0.50 to 45 days, 0.25–0.40 beyond, and each row carries its `delta_band`
 (owner, 2026-10-22 20:34 CEST: "max 0.5 for 30 days, 0.4 for 60 and 120 days").
-Long horizons aim at the cap: when the strikes nearest spot are above it, a
-second search starts at the strike the observed volatility puts at the cap.
+Capped horizons aim at the cap from the start, at the strike the stock's
+implied volatility puts there; the live option delta still decides. Without a
+live in-range call, a second round aims with the options' own volatility, or
+repeats the first when every quote missed its window, and the better call of
+the two rounds is kept. A closed-market planning row ends the search.
 Each expiry resolves the eight listed strikes nearest its aim as single
 contracts and quotes the three nearest at once; all four horizons run
 together, and the complete expiry inventory remains the fallback. Exact contract refresh never substitutes a

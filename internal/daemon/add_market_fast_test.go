@@ -3,7 +3,6 @@ package daemon
 import (
 	"errors"
 	"slices"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,30 +124,94 @@ func TestAddLongHorizonPicksTheDeltaNearestItsCap(t *testing.T) {
 	}
 }
 
-// Spot moved so all three calls near it sit above 0.50: the 30-day row must
-// aim again, not come back empty (seen live 2026-10-22 21:03 CEST).
-func TestAddThirtyDayRowAimsBelowItsCapWhenSpotStrikesAreAbove(t *testing.T) {
-	expiry := time.Now().AddDate(0, 0, 29).Format("20060102")
-	deltas := map[float64]float64{320: .57, 322.5: .54, 325: .515, 327.5: .49, 330: .465}
-	all := []ibkr.ResolvedOrderContract{}
-	for k := range deltas {
-		all = append(all, ibkr.ResolvedOrderContract{Contract: ibkr.Contract{ConID: int(k * 10), Strike: k, Expiry: expiry}})
+// addPool serves strikes with fixed deltas for one expiry. missing makes
+// every quote miss its window until it is cleared; refs records each
+// round's starting strike.
+type addPool struct {
+	expiry  string
+	deltas  map[float64]float64
+	mu      sync.Mutex
+	missing int
+	refs    []float64
+}
+
+func newAddPool(dte int, deltas map[float64]float64) *addPool {
+	return &addPool{expiry: time.Now().AddDate(0, 0, dte).Format("20060102"), deltas: deltas}
+}
+
+func (p *addPool) near(ref float64) ([]ibkr.ResolvedOrderContract, error) {
+	p.mu.Lock()
+	p.refs = append(p.refs, ref)
+	p.mu.Unlock()
+	out := []ibkr.ResolvedOrderContract{}
+	for k := range p.deltas {
+		out = append(out, ibkr.ResolvedOrderContract{Contract: ibkr.Contract{ConID: int(k * 10), Strike: k, Expiry: p.expiry}})
+	}
+	return out, nil
+}
+
+func (p *addPool) quote(exact ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
+	contract := setupOptionContract(exact.Contract)
+	p.mu.Lock()
+	miss := p.missing > 0
+	if miss {
+		p.missing--
+	}
+	p.mu.Unlock()
+	if miss {
+		return rpc.AddCallCandidate{Contract: &contract, Quote: &rpc.SetupOptionQuote{Status: rpc.SetupQuoteMissing}, Unavailable: "Exact call evidence unavailable"}
 	}
 	now := time.Now()
-	quote := func(exact ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
-		contract := setupOptionContract(exact.Contract)
-		return rpc.AddCallCandidate{Contract: &contract, PriceIncrements: []rpc.SetupOptionPriceIncrement{{LowEdge: 0, Increment: .01}}, Quote: &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, DataType: rpc.MarketDataLive, ModelDataType: rpc.MarketDataLive, AsOf: now, ModelAsOf: now, IV: new(.42), Delta: new(deltas[exact.Contract.Strike])}}
+	return rpc.AddCallCandidate{Contract: &contract, PriceIncrements: []rpc.SetupOptionPriceIncrement{{LowEdge: 0, Increment: .01}}, Quote: &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, DataType: rpc.MarketDataLive, ModelDataType: rpc.MarketDataLive, AsOf: now, ModelAsOf: now, IV: new(.42), Delta: new(p.deltas[exact.Contract.Strike])}}
+}
+
+var addLongDeltas = map[float64]float64{320: .6, 325: .55, 330: .52, 345: .44, 350: .42, 355: .39, 360: .36, 365: .33}
+
+// The stock's volatility aims a capped horizon straight at its target: one
+// round, starting near the 0.40 strike rather than at spot.
+func TestAddCappedHorizonAimsWithTheStockVolatility(t *testing.T) {
+	p := newAddPool(120, addLongDeltas)
+	row, _, err := selectAddCallAimed(325.5, .42, 120, p.quote, p.near)
+	if err != nil || row.Contract == nil || row.Contract.Strike != 355 || len(p.refs) != 1 || p.refs[0] < 350 {
+		t.Fatalf("picked %+v after rounds from %v, want 355 in one round aimed near 0.40", row.Contract, p.refs)
 	}
-	nearSpot := []ibkr.ResolvedOrderContract{all[0], all[1], all[2]}
-	for i, c := range all {
-		switch c.Contract.Strike {
-		case 320, 322.5, 325:
-			nearSpot[map[float64]int{320: 0, 322.5: 1, 325: 2}[c.Contract.Strike]] = all[i]
+}
+
+// Without a stock volatility the first round starts at spot; when nothing
+// there is in range, the options' own volatility aims the second (seen live
+// 2026-10-22 21:03 CEST on a 30-day row).
+func TestAddSecondRoundAimsWithTheOptionVolatility(t *testing.T) {
+	p := newAddPool(29, map[float64]float64{320: .57, 322.5: .54, 325: .515, 327.5: .49, 330: .465})
+	row, _, err := selectAddCallAimed(322.6, 0, 29, p.quote, p.near)
+	if err != nil || row.Contract == nil || row.Contract.Strike != 327.5 || len(p.refs) != 2 {
+		t.Fatalf("picked %+v after rounds from %v, want 327.5 after aiming", row.Contract, p.refs)
+	}
+}
+
+// Every quote of the first round missed its window (seen live under load
+// on a 60-day row): the round is repeated rather than the row left empty.
+func TestAddMissedQuotesAreRetriedOnce(t *testing.T) {
+	p := newAddPool(57, addLongDeltas)
+	p.missing = 3
+	row, _, err := selectAddCallAimed(325.5, .42, 57, p.quote, p.near)
+	if err != nil || row.Contract == nil || addDeltaBandForDTE(57).holds(*row.Quote.Delta) == false || len(p.refs) != 2 {
+		t.Fatalf("picked %+v after rounds from %v, want an in-range call from the retry", row.Contract, p.refs)
+	}
+}
+
+// A failed second round never discards what the first round found.
+func TestAddFailedSecondRoundKeepsTheFirst(t *testing.T) {
+	p := newAddPool(120, map[float64]float64{325: .55, 330: .52, 335: .49})
+	calls := 0
+	near := func(ref float64) ([]ibkr.ResolvedOrderContract, error) {
+		if calls++; calls > 1 {
+			return nil, errors.New("inventory timeout")
 		}
+		return p.near(ref)
 	}
-	row, spent := selectAddCallAimed(nearSpot, 322.6, 29, quote, func(float64) []ibkr.ResolvedOrderContract { return all })
-	if row.Contract == nil || row.Contract.Strike != 327.5 || !strings.Contains(spent, "aim=") {
-		t.Fatalf("picked %+v (%s), want 327.5 at 0.49 after aiming", row.Contract, spent)
+	row, _, err := selectAddCallAimed(325.5, 0, 120, p.quote, near)
+	if err != nil || row.Unavailable != "No eligible call" || calls != 2 {
+		t.Fatalf("got %+v err=%v after %d rounds, want the first round's result kept", row, err, calls)
 	}
 }
 
