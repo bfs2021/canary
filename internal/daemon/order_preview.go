@@ -1460,7 +1460,9 @@ func (s *Server) exactSessionContractQuoteModel(ctx context.Context, authority *
 		if waitModel {
 			model = authority.connector.OptionRiskForSession(authority.session, key)
 		}
-		return sidesReady && (!waitSizes || q.BidSize != nil && q.AskSize != nil) && (!waitModel || model != nil && model.IV != nil && model.Delta != nil)
+		// A model computed before the request's feed notice stays unclassified
+		// (the connector never upgrades it), so wait for the next computation.
+		return sidesReady && (!waitSizes || q.BidSize != nil && q.AskSize != nil) && (!waitModel || model != nil && model.IV != nil && model.Delta != nil && model.DataType != 0)
 	}); err != nil && (!(waitSizes || waitModel) || !sidesReady || !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil) {
 		return rpc.OrderQuoteSnapshot{}, exactQuoteSizes{}, fmt.Errorf("%w: exact contract quote unavailable: %v", ErrTradingDisabled, err)
 	}

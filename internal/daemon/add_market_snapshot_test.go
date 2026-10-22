@@ -45,6 +45,13 @@ func TestAddLateClassStaysLiveUntilItsBrokerClose(t *testing.T) {
 	runAddSnapshotScenario(t, "late-class")
 }
 
+// On 2026-10-22 refreshes of an already-watched call returned delta and IV
+// with no data type: the broker computed the model before its feed notice, so
+// that receipt stays unclassified. The read must wait for a classified model.
+func TestAddCallQuoteWaitsForAClassifiedModel(t *testing.T) {
+	runAddSnapshotScenario(t, "model-before-notice")
+}
+
 func runAddSnapshotScenario(t *testing.T, scenario string) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -163,6 +170,9 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 					if scenario == "planning" || scenario == "class-closed" {
 						feed = "2"
 					}
+					if scenario == "model-before-notice" {
+						send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+					}
 					send(58, "1", id, feed)
 					if scenario == "planning" {
 						time.Sleep(2 * time.Second)
@@ -171,6 +181,9 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 					send(1, "6", id, "2", "1.02", "100", "0")
 					send(2, "6", id, "0", "100")
 					send(2, "6", id, "3", "100")
+					if scenario == "model-before-notice" {
+						time.Sleep(300 * time.Millisecond)
+					}
 					send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
 				}
 			case "78":
@@ -218,6 +231,15 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 	s.connector = c
 	if scenario != "cache" {
 		s.now = func() time.Time { return calendarAt }
+	}
+	if scenario == "model-before-notice" {
+		binding, _ := c.CaptureSession()
+		call := rpc.ContractParams{ConID: 10110, Symbol: "SYNTH", SecType: "OPT", Exchange: "SMART", Currency: "USD", Expiry: expiry, Strike: 110, Right: "C", Multiplier: 100, TradingClass: "SYNTH"}
+		_, sizes, err := s.exactSessionContractQuoteModel(ctx, s.setupQuoteAuthority(c, binding), call, setupQuoteBudget, true, true, true)
+		if err != nil || sizes.Model == nil || sizes.Model.Delta == nil || marketDataTypeName(sizes.Model.DataType) != rpc.MarketDataLive {
+			t.Fatalf("model computed before the feed notice ended the read unclassified: err=%v model=%+v", err, sizes.Model)
+		}
+		return
 	}
 	params, _ := json.Marshal(rpc.AddMarketParams{Underlying: rpc.ContractParams{ConID: 17, Symbol: "SYNTH", SecType: "STK", Exchange: "SMART", Currency: "USD"}, Discover: true})
 	got, err := s.handleAddMarket(ctx, &rpc.Request{Params: params})
