@@ -151,3 +151,34 @@ func TestAddThirtyDayRowAimsBelowItsCapWhenSpotStrikesAreAbove(t *testing.T) {
 		t.Fatalf("picked %+v (%s), want 327.5 at 0.49 after aiming", row.Contract, spent)
 	}
 }
+
+// A SecDef list can mix 1, 2.5 and 5 USD spacing. A long expiry with only
+// five-dollar strikes finds one or two in the first eight; the search widens
+// instead of falling back to the slow complete inventory.
+func TestNearestResolvedCallsWidenPastMixedSpacing(t *testing.T) {
+	listed := []float64{}
+	for k := 300.0; k <= 350; k++ {
+		listed = append(listed, k)
+		if k < 350 {
+			listed = append(listed, k+.5)
+		}
+	}
+	var mu sync.Mutex
+	asked := 0
+	got := nearestResolvedCalls(listed, 323.4, func(k float64) (ibkr.ResolvedOrderContract, error) {
+		mu.Lock()
+		asked++
+		mu.Unlock()
+		if int(k*10)%50 != 0 {
+			return ibkr.ResolvedOrderContract{}, errors.New("no definition")
+		}
+		return ibkr.ResolvedOrderContract{Contract: ibkr.Contract{ConID: int(k), Strike: k}}, nil
+	})
+	strikes := []float64{}
+	for _, c := range got {
+		strikes = append(strikes, c.Contract.Strike)
+	}
+	if len(strikes) < 3 || strikes[0] != 325 || strikes[1] != 320 || asked > addResolveWidth*addResolveBatches {
+		t.Fatalf("resolved %v after %d lookups, want 325, 320 and a third without the inventory", strikes, asked)
+	}
+}

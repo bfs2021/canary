@@ -145,10 +145,13 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 				calls := s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, *spot)
 				resolved := time.Since(started)
 				var err error
+				inventory := ""
 				if len(calls) < 3 {
 					// Too few listed strikes resolved for this expiry: take the
 					// broker's complete call inventory, slower but exhaustive.
+					listed := time.Now()
 					calls, err = c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 30*time.Second)
+					inventory = fmt.Sprintf(",inventory=%d", time.Since(listed).Milliseconds())
 				}
 				if err == nil {
 					quote := func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
@@ -158,7 +161,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 					row, spent = selectAddCallAimed(calls, *spot, dte, quote, func(aim float64) []ibkr.ResolvedOrderContract {
 						return s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, aim)
 					})
-					timing[i] = fmt.Sprintf("%d:resolve=%d,%s", target, resolved.Milliseconds(), spent)
+					timing[i] = fmt.Sprintf("%d:resolve=%d%s,%s", target, resolved.Milliseconds(), inventory, spent)
 					row.Horizon, row.DTE = target, dte
 				} else {
 					s.warnAddInventoryFailure(u.Symbol, date, target, time.Since(started), err)
@@ -608,6 +611,8 @@ const (
 	// so some nearest listed strikes do not exist for this one; eight leaves
 	// room for those and still yields the three quote candidates.
 	addResolveWidth = 8
+	// Batches before the complete expiry inventory becomes the fallback.
+	addResolveBatches = 4
 )
 
 func addParallel(n, slots int, read func(int)) {
@@ -637,27 +642,32 @@ func (s *Server) addNearestExpiryCalls(ctx context.Context, c *ibkr.Connector, b
 	})
 }
 
-// nearestResolvedCalls resolves the addResolveWidth listed strikes nearest
-// spot in parallel and returns those that exist, nearest first. A phantom
-// strike fails its own lookup and never takes a quote slot.
+// nearestResolvedCalls resolves listed strikes nearest spot in parallel
+// batches of addResolveWidth and returns those that exist, nearest first. A
+// phantom strike fails its own lookup and never takes a quote slot. SecDef
+// mixes every expiry's strike spacing (1, 2.5 and 5 USD for one stock), so a batch
+// can hold fewer than three real strikes; the next batch then continues
+// outward, up to addResolveBatches.
 func nearestResolvedCalls(listed []float64, spot float64, resolve func(float64) (ibkr.ResolvedOrderContract, error)) []ibkr.ResolvedOrderContract {
 	strikes := slices.Clone(listed)
 	slices.SortFunc(strikes, func(a, b float64) int { return compareDistance(a, b, spot) })
-	strikes = strikes[:min(addResolveWidth, len(strikes))]
-	found := make([]*ibkr.ResolvedOrderContract, len(strikes))
-	var wg sync.WaitGroup
-	for i, k := range strikes {
-		wg.Go(func() {
-			if exact, err := resolve(k); err == nil {
-				found[i] = &exact
-			}
-		})
-	}
-	wg.Wait()
 	out := []ibkr.ResolvedOrderContract{}
-	for _, r := range found {
-		if r != nil {
-			out = append(out, *r)
+	for start := 0; start < len(strikes) && start < addResolveWidth*addResolveBatches && len(out) < 3; start += addResolveWidth {
+		batch := strikes[start:min(start+addResolveWidth, len(strikes))]
+		found := make([]*ibkr.ResolvedOrderContract, len(batch))
+		var wg sync.WaitGroup
+		for i, k := range batch {
+			wg.Go(func() {
+				if exact, err := resolve(k); err == nil {
+					found[i] = &exact
+				}
+			})
+		}
+		wg.Wait()
+		for _, r := range found {
+			if r != nil {
+				out = append(out, *r)
+			}
 		}
 	}
 	return out
