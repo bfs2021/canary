@@ -1683,6 +1683,37 @@ type TradeProposalReducePortfolioParams struct {
 	// leg never holds the others. Without them, submit sizes the sweep from
 	// the live book (the paired app's path).
 	PreviewTokens []string `json:"preview_tokens,omitempty"`
+	// Mode chooses the lines: "" or "net" trims the unlocked book's net
+	// delta direction; "longs" sells Percent of every long-delta line;
+	// "all" cuts Percent of every line, selling longs and buying back
+	// shorts. Locked holdings are never selected in any mode.
+	Mode string `json:"mode,omitempty"`
+	// Sectors and MinBeta narrow a "longs" or "all" sweep to lines in one of
+	// the GICS sectors, or whose underlying's beta to the index is at least
+	// MinBeta. Both empty means every line the mode selects.
+	Sectors []string `json:"sectors,omitempty"`
+	MinBeta float64  `json:"min_beta,omitempty"`
+	// PlanOnly sizes the legs and measures the index loss without broker
+	// previews: no tokens, nothing submit-eligible. It lets a console show
+	// what each choice would do before one is reviewed.
+	PlanOnly bool `json:"plan_only,omitempty"`
+}
+
+// Reduce modes for TradeProposalReducePortfolioParams.Mode.
+const (
+	ReduceModeNet   = "net"
+	ReduceModeLongs = "longs"
+	ReduceModeAll   = "all"
+)
+
+// TradeProposalReduceKept is a held line the sweep left alone, and why.
+type TradeProposalReduceKept struct {
+	ConID  int    `json:"con_id,omitempty"`
+	Symbol string `json:"symbol"`
+	// Reason is "locked" (the owner's keep list), "short" (a longs sweep
+	// keeps short-delta lines) or "out_of_scope" (outside Sectors/MinBeta).
+	Reason string `json:"reason"`
+	Role   string `json:"role,omitempty"`
 }
 
 // TradeProposalReduceLeg is one position's slice of a portfolio sweep. On
@@ -1714,12 +1745,16 @@ type TradeProposalReduceLeg struct {
 	OrderRef                  string                     `json:"order_ref,omitempty"`
 	Blockers                  []TradingBlocker           `json:"blockers,omitempty"`
 	Message                   string                     `json:"message,omitempty"`
+	// Sector and Beta are the facts a scoped sweep selected the line on.
+	Sector string   `json:"sector,omitempty"`
+	Beta   *float64 `json:"beta,omitempty"`
 }
 
 // TradeProposalReducePortfolioResult is the basket preview/submit envelope.
 type TradeProposalReducePortfolioResult struct {
 	Accepted             bool                     `json:"accepted"`
 	Percent              int                      `json:"percent"`
+	Mode                 string                   `json:"mode,omitempty"`
 	NetDollarDeltaBefore float64                  `json:"net_dollar_delta_before,omitempty"`
 	NetDeltaIncomplete   bool                     `json:"net_delta_incomplete,omitempty"`
 	TargetDollarDelta    float64                  `json:"target_dollar_delta,omitempty"`
@@ -1737,4 +1772,16 @@ type TradeProposalReducePortfolioResult struct {
 	Blockers             []TradingBlocker         `json:"blockers,omitempty"`
 	Message              string                   `json:"message,omitempty"`
 	AsOf                 time.Time                `json:"as_of"`
+	// Kept lists the held lines the sweep left alone.
+	Kept []TradeProposalReduceKept `json:"kept,omitempty"`
+	// IndexLossBeforeBase and IndexLossAfterBase are the mandate's index
+	// stress (the index falls IndexShockPct and every name follows with its
+	// beta, options repriced) on the book now and with every planned leg
+	// filled. A negative loss is a gain. Nil with IndexLossUnknown when the
+	// mandate cannot measure the book.
+	IndexShockPct       float64  `json:"index_shock_pct,omitempty"`
+	IndexLossBeforeBase *float64 `json:"index_loss_before_base,omitempty"`
+	IndexLossAfterBase  *float64 `json:"index_loss_after_base,omitempty"`
+	IndexLossUnknown    string   `json:"index_loss_unknown,omitempty"`
+	PlanOnly            bool     `json:"plan_only,omitempty"`
 }

@@ -88,6 +88,19 @@ func goldenReducePortfolioPreview() rpc.TradeProposalReducePortfolioResult {
 		Message: "2 eligible · 0 blocked of 2 legs · removing ~1875 of 1875 USD targeted net delta (100%)"}
 }
 
+// goldenReducePortfolioPlanLongs is a 25% longs plan: sized from the marks,
+// no tokens, a locked hedge and a short kept, and the index stress measured.
+func goldenReducePortfolioPlanLongs() rpc.TradeProposalReducePortfolioResult {
+	before, after := 8300.0, 5100.0
+	return rpc.TradeProposalReducePortfolioResult{Percent: 25, Mode: rpc.ReduceModeLongs, PlanOnly: true, BaseCurrency: "USD", AsOf: goldenAt,
+		LegCount: 2, BlockedCount: 0, TotalNotional: 0, IndexShockPct: 10, IndexLossBeforeBase: &before, IndexLossAfterBase: &after,
+		Kept: []rpc.TradeProposalReduceKept{{ConID: goldenReduceOptionCon, Symbol: "SYNB", Reason: "locked", Role: rpc.HoldingLockRoleHedge}, {ConID: 7070, Symbol: "SYNS", Reason: "short"}},
+		Legs: []rpc.TradeProposalReduceLeg{
+			{ConID: goldenReduceStockCon, Symbol: "SYNA", SecType: "STK", Action: rpc.OrderActionSell, PositionQuantity: 100, ReduceQuantity: 25, DollarDelta: 2500, RiskContributionCut: 625, Notional: 625, NotionalCurrency: "USD", NotionalBase: new(625.0)},
+			{ConID: 5151, Symbol: "SYNC", SecType: "STK", Action: rpc.OrderActionSell, PositionQuantity: 40, ReduceQuantity: 10, DollarDelta: 4000, RiskContributionCut: 1000, Notional: 1000, NotionalCurrency: "USD", NotionalBase: new(1000.0)},
+		}}
+}
+
 func goldenReducePortfolioSubmit() rpc.TradeProposalReducePortfolioResult {
 	res := goldenReducePortfolioPreview()
 	res.Accepted, res.EligibleCount, res.BlockedCount, res.TotalNotional, res.RequestRef = false, 1, 1, 1250, "desk-basket-7f3a"

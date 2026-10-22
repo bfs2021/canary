@@ -92,6 +92,11 @@ type mandateReductionInput struct {
 	// holds a reduction row behind any of them, and a conditional one may
 	// stand for good, so its line leaves the plan. Nil reads none.
 	WorkingOrder func(row rpc.PositionView, action string) (found, conditional bool)
+	// Locked reports a line on the owner's keep list; its leg leaves the
+	// batch. Nil reads none: an unreadable keep list never stops the
+	// reduction, which only ever lowers risk, so the worst case is a locked
+	// line trimmed while the store is down.
+	Locked func(conID int) bool
 	// Previous holds the mandate_reduction rows of the last generation in
 	// this scope, and Episode its breach episode.
 	Previous []rpc.TradeProposal
@@ -140,6 +145,13 @@ func (e *proposalEngine) mandateReductionInput(ctx context.Context, policy prote
 		in.OrderCapBase = limits.CapBase
 	}
 	if ctx != nil {
+		if locks, err := s.holdingLocks(ctx); err == nil {
+			in.Locked = locks.Locked
+		} else {
+			if s.logger != nil {
+				s.logger.Warnf("mandate reduction: locked holdings unreadable, no line is kept: %v", err)
+			}
+		}
 		if snapshot, inventoryScope, err := s.brokerOpenOrderInventory(ctx, false); err == nil && sameBrokerScope(inventoryScope, scope) {
 			in.WorkingOrder = func(row rpc.PositionView, action string) (bool, bool) {
 				secType := positionWireSecType(row.SecType)
@@ -596,6 +608,9 @@ func (e *proposalEngine) mandateCandidates(policy protectionPolicy, in mandateRe
 			continue
 		case option && (unitLegs[row.ConID] || ambiguous[normSym(row.Symbol)]):
 			leftOut = append(leftOut, name+" (a leg of a multi-leg unit; reduce it through the strategy workflow)")
+			continue
+		case in.Locked != nil && in.Locked(row.ConID):
+			leftOut = append(leftOut, name+" (locked: you keep it out of every reduction)")
 			continue
 		case in.Ignored != nil && in.Ignored(proposalKey(rpc.TradeProposalBucketMandateReduction, proposalContractFromPosition(row, positionWireSecType(row.SecType)), action)):
 			leftOut = append(leftOut, name+" (its row is ignored)")

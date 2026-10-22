@@ -231,6 +231,16 @@ func runProposalsReduce(ctx context.Context, env *Env, args []string) int {
 		}
 		return nil
 	})
+	mode := fs.String("mode", "", "with --portfolio: net (trim the unlocked book's net delta, the default), longs (the same share of every long), or all (every unlocked line, shorts bought back)")
+	var sectors []string
+	fs.Func("sector", "with --mode longs|all: only lines in this GICS sector (repeatable)", func(v string) error {
+		if v = strings.TrimSpace(v); v != "" {
+			sectors = append(sectors, v)
+		}
+		return nil
+	})
+	minBeta := fs.Float64("min-beta", 0, "with --mode longs|all: only lines whose beta to the index is at least this")
+	plan := fs.Bool("plan", false, "with --portfolio: size the legs and the index loss without broker previews; nothing can be submitted from a plan")
 	timeout := fs.Duration("timeout", 5*time.Second, "quote/WhatIf timeout")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
@@ -253,14 +263,21 @@ func runProposalsReduce(ctx context.Context, env *Env, args []string) int {
 	} else if *percent <= 0 || *percent > 100 {
 		return fail(env, "proposals reduce: --percent must be between 1 and 100 (the app offers 25/50/75/100)")
 	}
+	if !*portfolio && (set["mode"] || set["sector"] || set["min-beta"] || set["plan"]) {
+		return fail(env, "proposals reduce: --mode, --sector, --min-beta and --plan go with --portfolio")
+	}
 	if *portfolio {
 		if set["include-hedges"] {
-			return fail(env, "proposals reduce --portfolio excludes hedges structurally (opposite-sign-to-net positions are never selected); --include-hedges has no effect here, drop it")
+			return fail(env, "proposals reduce --portfolio never selects a locked holding (canary locks) and, in net mode, nothing opposite the net direction; --include-hedges has no effect here, drop it")
 		}
 		if fs.NArg() > 0 || *conID > 0 {
 			return fail(env, "proposals reduce --portfolio sweeps the whole book; do not pass SYMBOL or --con-id")
 		}
-		pparams := rpc.TradeProposalReducePortfolioParams{Percent: *percent, AdaptivePriority: *adaptive, TimeoutMs: int(timeout.Milliseconds())}
+		if *plan && *submit {
+			return fail(env, "proposals reduce: --plan only sizes the sweep; drop --submit")
+		}
+		pparams := rpc.TradeProposalReducePortfolioParams{Percent: *percent, AdaptivePriority: *adaptive, TimeoutMs: int(timeout.Milliseconds()),
+			Mode: strings.ToLower(strings.TrimSpace(*mode)), Sectors: sectors, MinBeta: *minBeta, PlanOnly: *plan}
 		method := rpc.MethodTradeProposalsReducePortfolioPreview
 		if *submit {
 			method = rpc.MethodTradeProposalsReducePortfolioSubmit
@@ -500,16 +517,42 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 	out := env.Stdout
 	fmt.Fprintln(out)
 	title := "Portfolio Reduce Preview"
+	if res.PlanOnly {
+		title = "Portfolio Reduce Plan"
+	}
 	if submitted {
 		title = "Portfolio Reduce Submit"
 	}
 	fmt.Fprintf(out, "%s  accepted=%v\n", title, res.Accepted)
-	statusRow(env, out, "Percent", fmt.Sprintf("%d%% of net delta", res.Percent))
+	switch res.Mode {
+	case rpc.ReduceModeLongs:
+		statusRow(env, out, "Percent", fmt.Sprintf("%d%% of every long", res.Percent))
+	case rpc.ReduceModeAll:
+		statusRow(env, out, "Percent", fmt.Sprintf("%d%% of every unlocked line", res.Percent))
+	default:
+		statusRow(env, out, "Percent", fmt.Sprintf("%d%% of net delta", res.Percent))
+	}
+	if res.IndexLossBeforeBase != nil && res.IndexLossAfterBase != nil {
+		statusRow(env, out, fmt.Sprintf("Index -%.0f%%", res.IndexShockPct), "loses "+formatProposalMoney(*res.IndexLossBeforeBase, res.BaseCurrency)+" now, "+formatProposalMoney(*res.IndexLossAfterBase, res.BaseCurrency)+" after")
+	} else if res.IndexLossUnknown != "" {
+		statusRow(env, out, "Index loss", "unknown: "+res.IndexLossUnknown)
+	}
+	if len(res.Kept) > 0 {
+		kept := make([]string, 0, len(res.Kept))
+		for _, k := range res.Kept {
+			kept = append(kept, k.Symbol+" ("+strings.ReplaceAll(k.Reason, "_", " ")+")")
+		}
+		statusRow(env, out, "Kept", strings.Join(kept, ", "))
+	}
 	verb := "eligible"
 	if submitted {
 		verb = "placed"
 	}
-	statusRow(env, out, "Legs", fmt.Sprintf("%d %s · %d blocked of %d", res.EligibleCount, verb, res.BlockedCount, res.LegCount))
+	if res.PlanOnly {
+		statusRow(env, out, "Legs", fmt.Sprintf("%d planned · %d blocked of %d", res.LegCount-res.BlockedCount, res.BlockedCount, res.LegCount))
+	} else {
+		statusRow(env, out, "Legs", fmt.Sprintf("%d %s · %d blocked of %d", res.EligibleCount, verb, res.BlockedCount, res.LegCount))
+	}
 	if res.TargetDollarDelta != 0 {
 		statusRow(env, out, "Net delta (before)", formatProposalMoney(res.NetDollarDeltaBefore, res.BaseCurrency))
 		statusRow(env, out, "Target removed", formatProposalMoney(res.TargetDollarDelta, res.BaseCurrency))
@@ -539,6 +582,8 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 	for _, leg := range res.Legs {
 		state := "eligible"
 		switch {
+		case res.PlanOnly && len(leg.Blockers) == 0:
+			state = "planned"
 		case submitted && leg.Placed:
 			state = "placed"
 		case submitted || !leg.SubmitEligible:

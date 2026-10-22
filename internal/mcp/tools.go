@@ -918,6 +918,7 @@ func sanitizeOrderStatusForMCP(res *rpc.OrderStatusResult) {
 // command without an MCP tool fails the gate unless the exclusion is recorded.
 var ExcludedCLI = map[string]string{
 	"watchlist": "owner-managed local preferences; typed read-only client and owner CLI, no model mutation tool",
+	"locks":     "owner keep list for bulk and automatic reductions; owner CLI and console only, no model tool",
 	"setups":    "owner-configured entry observations ship through CLI and the typed host client first; no model tool or automatic playbook activation",
 	"chains":    "research panel of recorded option chains: bulk CSV export and run coverage for the owner, not a decision input; read-only CLI and RPC only",
 	"version":   "info-only CLI verb; not useful as a tool call",

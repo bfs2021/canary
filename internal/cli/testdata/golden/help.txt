@@ -15,6 +15,7 @@ Account, positions, orders and risk
   strategies      View option strategies; close or reduce them as one order
   portfolio       Holdings by asset class and sector; review the next planned
                   action
+  locks           Keep holdings out of bulk and automatic reductions
   add             Plan a stock addition or opening and review it through
                   existing order confirmation
   stress          Check portfolio risks and the evidence behind them
@@ -92,6 +93,7 @@ Start: canary status — check the broker connection
   \x1b[36mstrategies      \x1b[0mView option strategies; close or reduce them as one order
   \x1b[36mportfolio       \x1b[0mHoldings by asset class and sector; review the next planned
                   action
+  \x1b[36mlocks           \x1b[0mKeep holdings out of bulk and automatic reductions
   \x1b[36madd             \x1b[0mPlan a stock addition or opening and review it through
                   existing order confirmation
   \x1b[36mstress          \x1b[0mCheck portfolio risks and the evidence behind them

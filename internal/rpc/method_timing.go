@@ -72,6 +72,8 @@ var methodTimings = []MethodTiming{
 	{Method: MethodStatusHealth, Lifetime: MethodLifetimeUnary, DaemonTimeout: 10 * time.Second},
 	{Method: MethodTradingStatus, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
 	{Method: MethodCashSweepPreferencesGet, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
+	{Method: MethodHoldingLocksList, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
+	{Method: MethodHoldingLocksReplace, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
 	{Method: MethodWatchlistList, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
 	{Method: MethodWatchlistReplace, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
 	{Method: MethodWatchlistAdd, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},

@@ -262,9 +262,23 @@ A reduction to budget is a discretionary-scale action, not a stop.
 
 `canary proposals reduce` is separate: a discretionary partial close you size
 yourself. It previews unless you pass `--submit`. Under `--portfolio` the
-percentage is the share of net delta-adjusted portfolio risk to remove rather
-than a flat per-position cut, and hedges are never selected, so
-`--include-hedges` is a hard error there instead of a silent no-op.
+mode says what is cut. `--mode net`, the default, removes that share of the
+book's net delta-adjusted risk, only on lines in the net direction. `--mode
+longs` sells the same share of every long-delta line and keeps every short
+and long put. `--mode all` cuts that share of every line, buying back shorts.
+`--sector` (repeatable, GICS names) and `--min-beta` narrow a longs or all
+sweep. `--plan` sizes the legs without broker previews and reports what the
+book would lose if the index fell 10% now and after, from the mandate's
+index stress; a plan cannot be submitted.
+
+No portfolio sweep, in any mode, selects a locked holding. `canary locks
+lock SYMBOL --con-id ID --role hedge|core` puts a line on the keep list:
+a hedge is a hedge because you say so, not because of its delta sign that
+day. Net mode reads the direction of the unlocked book. The mandate's
+automatic reduction leaves locked lines out too. A reviewed basket refuses,
+and sends nothing for, a leg locked after the review. A single-holding
+`proposals reduce SYMBOL` still works on a locked line. `--include-hedges` is
+a hard error under `--portfolio` instead of a silent no-op.
 
 A reduce preview returns, for each order it would place, a signed preview
 token and the exact terms that token binds (`terms`): the contract, side,

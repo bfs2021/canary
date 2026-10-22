@@ -1,0 +1,8 @@
+# canary locks · COLUMNS=80 · colour off
+Locked holdings · 2 · never selected by a bulk or automatic reduction
+SYNB	hedge	contract 700002
+SYNG	core	contract 4242
+# canary locks · COLUMNS=80 · colour on, ESC written as \x1b
+Locked holdings · 2 · never selected by a bulk or automatic reduction
+SYNB	hedge	contract 700002
+SYNG	core	contract 4242

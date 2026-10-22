@@ -377,6 +377,7 @@ type Server struct {
 	macroLoopWG      sync.WaitGroup
 	coreStore        *corestore.Store
 	watchlistMu      sync.Mutex
+	holdingLocksMu   sync.Mutex
 	coreStorePath    string
 	coreStorePathErr error
 	// productionStateDatabase distinguishes the XDG authority from isolated
@@ -3110,6 +3111,10 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleOpportunitiesSubmitExercise(ctx, req) })
 	case rpc.MethodOpportunitiesIgnore:
 		s.unary(req, enc, func() (any, error) { return s.handleOpportunitiesIgnore(req), nil })
+	case rpc.MethodHoldingLocksList:
+		s.unary(req, enc, func() (any, error) { return s.handleHoldingLocksList(ctx) })
+	case rpc.MethodHoldingLocksReplace:
+		s.unary(req, enc, func() (any, error) { return s.handleHoldingLocksReplace(ctx, req) })
 	case rpc.MethodWatchlistList:
 		s.unary(req, enc, func() (any, error) { return s.handleWatchlistList(ctx) })
 	case rpc.MethodWatchlistReplace, rpc.MethodWatchlistAdd, rpc.MethodWatchlistRemove:

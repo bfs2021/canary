@@ -690,7 +690,9 @@ func formatPositionQuantity(q float64) string {
 // all pass, places exactly the token's draft. The checks stop at the first
 // refusal; a refusal here sends nothing. pos is the positions read the
 // caller made once for the whole request.
-func (s *Server) reduceTokenLeg(ctx context.Context, token string, pos *rpc.PositionsResult, timeoutMs int, origin string) reduceTokenOutcome {
+// locked, when set, refuses a line the owner locked after the review: a bulk
+// basket never sells a locked holding.
+func (s *Server) reduceTokenLeg(ctx context.Context, token string, pos *rpc.PositionsResult, timeoutMs int, origin string, locked func(conID int) bool) reduceTokenOutcome {
 	var out reduceTokenOutcome
 	payload, blockers := s.reduceVerifyToken(token)
 	if len(blockers) > 0 {
@@ -698,6 +700,10 @@ func (s *Server) reduceTokenLeg(ctx context.Context, token string, pos *rpc.Posi
 		return out
 	}
 	out.payload, out.verified, out.tokenID = payload, true, payload.TokenID
+	if locked != nil && locked(payload.Draft.Contract.ConID) {
+		out.blockers = []rpc.TradingBlocker{{Code: "holding_locked", Message: fmt.Sprintf("%s was locked after the review; a bulk reduction never sells a locked holding", strings.ToUpper(strings.TrimSpace(payload.Draft.Contract.Symbol))), Action: "Unlock it first, or reduce it on its own; nothing was sent."}}
+		return out
+	}
 	row, blockers := reduceTokenPositionCheck(pos, payload.Draft)
 	out.row, out.rowFound = row, row.ConID != 0
 	if len(blockers) > 0 {
@@ -746,7 +752,7 @@ func (s *Server) reduceSubmitToken(ctx context.Context, p rpc.TradeProposalReduc
 		res.Blockers = []rpc.TradingBlocker{{Code: "positions_unavailable", Message: err.Error(), Action: "Retry once the daemon has refreshed positions; nothing was sent."}}
 		return res, nil
 	}
-	out := s.reduceTokenLeg(ctx, strings.TrimSpace(p.PreviewToken), pos, p.TimeoutMs, p.Origin)
+	out := s.reduceTokenLeg(ctx, strings.TrimSpace(p.PreviewToken), pos, p.TimeoutMs, p.Origin, nil)
 	reduceApplyTokenOutcome(res, out)
 	return res, nil
 }

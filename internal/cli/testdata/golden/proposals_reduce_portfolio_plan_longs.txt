@@ -1,0 +1,24 @@
+# canary proposals reduce --portfolio --mode longs --percent 25 --plan · COLUMNS=80 · colour off
+
+Portfolio Reduce Plan  accepted=false
+Percent        25% of every long
+Index -10%     loses $ 8,300.00 now, $ 5,100.00 after
+Kept           SYNB (locked), SYNS (short)
+Legs           2 planned · 0 blocked of 2
+  SELL 25 SYNA  [planned]
+  notional     $ 625.00
+  SELL 10 SYNC  [planned]
+  notional     $ 1,000.00
+
+# canary proposals reduce --portfolio --mode longs --percent 25 --plan · COLUMNS=80 · colour on, ESC written as \x1b
+
+Portfolio Reduce Plan  accepted=false
+\x1b[2mPercent       \x1b[0m 25% of every long
+\x1b[2mIndex -10%    \x1b[0m loses $ 8,300.00 now, $ 5,100.00 after
+\x1b[2mKept          \x1b[0m SYNB (locked), SYNS (short)
+\x1b[2mLegs          \x1b[0m 2 planned · 0 blocked of 2
+  SELL 25 SYNA  [planned]
+\x1b[2m  notional    \x1b[0m $ 625.00
+  SELL 10 SYNC  [planned]
+\x1b[2m  notional    \x1b[0m $ 1,000.00
+

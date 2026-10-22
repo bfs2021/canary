@@ -32,6 +32,9 @@ type reduceSweepCandidate struct {
 	qty              int
 	allocatedDollars float64
 	blockers         []rpc.TradingBlocker
+	// sector and beta are set by a scoped sweep: the facts it selected on.
+	sector string
+	beta   *float64
 }
 
 // netPortfolioDollarDelta measures the whole signed book in base currency.
@@ -196,6 +199,8 @@ func reduceLegBase(c reduceSweepCandidate) rpc.TradeProposalReduceLeg {
 		DollarDelta:           c.dollarDelta,
 		RiskContributionCut:   c.allocatedDollars,
 		PositionUnrealizedPnL: row.UnrealizedPnL,
+		Sector:                c.sector,
+		Beta:                  c.beta,
 	}
 	if row.UnrealizedPnLBase != nil {
 		v := *row.UnrealizedPnLBase
@@ -379,10 +384,7 @@ func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposal
 	if err != nil {
 		return nil, err
 	}
-	cands, netDelta, netComplete, target, blockers := reduceSweepCandidates(pos, p.Percent)
-	res.NetDollarDeltaBefore = netDelta
-	res.NetDeltaIncomplete = !netComplete
-	res.TargetDollarDelta = target
+	cands, blockers := s.reducePortfolioSelect(ctx, p, pos, res)
 	if len(blockers) > 0 {
 		res.Blockers = blockers
 		return res, nil
@@ -395,6 +397,10 @@ func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposal
 		res.BaseCurrency = pos.Portfolio.BaseCurrency
 	}
 	for _, c := range cands {
+		if p.PlanOnly {
+			res.Legs = append(res.Legs, reducePlanLeg(c))
+			continue
+		}
 		leg, preview := s.reduceLegPrepare(ctx, c, p.TimeoutMs, adaptive)
 		if preview != nil {
 			// The signed token leaves with the preview so the exact leg can
@@ -403,8 +409,48 @@ func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposal
 		}
 		res.Legs = append(res.Legs, leg)
 	}
+	s.reduceIndexLoss(res, reduceTradeChanges(res.Legs))
 	aggregateBasket(res, false)
+	if p.PlanOnly {
+		// A plan is never a basket to submit.
+		res.Accepted = false
+		res.EligibleCount = 0
+		for i := range res.Legs {
+			res.Legs[i].SubmitEligible = false
+		}
+	}
 	return res, nil
+}
+
+// reducePortfolioSelect reads the keep list, takes the locked lines out of
+// the book, and selects the legs for the requested mode. An unreadable keep
+// list blocks the sweep: it never runs as if nothing were locked.
+func (s *Server) reducePortfolioSelect(ctx context.Context, p rpc.TradeProposalReducePortfolioParams, pos *rpc.PositionsResult, res *rpc.TradeProposalReducePortfolioResult) ([]reduceSweepCandidate, []rpc.TradingBlocker) {
+	locks, err := s.holdingLocks(ctx)
+	if err != nil {
+		return nil, []rpc.TradingBlocker{{Code: "locks_unavailable", Message: "the locked holdings could not be read: " + err.Error(), Action: "Retry; nothing is reduced while the keep list is unknown."}}
+	}
+	book, kept := reduceUnlockedBook(pos, locks)
+	res.Mode = p.Mode
+	switch p.Mode {
+	case "", rpc.ReduceModeNet:
+		res.Mode = rpc.ReduceModeNet
+		if len(p.Sectors) > 0 || p.MinBeta > 0 {
+			return nil, []rpc.TradingBlocker{{Code: "bad_request", Message: "sectors and min_beta narrow a longs or all sweep, not a net one", Action: "Choose mode longs or all."}}
+		}
+		cands, netDelta, netComplete, target, blockers := reduceSweepCandidates(book, p.Percent)
+		res.NetDollarDeltaBefore, res.NetDeltaIncomplete, res.TargetDollarDelta, res.Kept = netDelta, !netComplete, target, kept
+		return cands, blockers
+	case rpc.ReduceModeLongs, rpc.ReduceModeAll:
+		if p.MinBeta < 0 {
+			return nil, []rpc.TradingBlocker{{Code: "bad_request", Message: "min_beta cannot be negative", Action: "Choose a beta of zero or more."}}
+		}
+		cands, scoped := reduceScopedCandidates(book, p, s.reduceScopeFacts(ctx, book, p))
+		res.Kept = append(kept, scoped...)
+		return cands, nil
+	default:
+		return nil, []rpc.TradingBlocker{{Code: "bad_request", Message: fmt.Sprintf("unknown reduce mode %q", p.Mode), Action: "Choose net, longs or all."}}
+	}
 }
 
 func (s *Server) reducePortfolioSubmit(ctx context.Context, p rpc.TradeProposalReducePortfolioParams) (*rpc.TradeProposalReducePortfolioResult, error) {
@@ -421,6 +467,10 @@ func (s *Server) reducePortfolioSubmit(ctx context.Context, p rpc.TradeProposalR
 		clone := *e.basket
 		clone.Replayed = true
 		return &clone, nil
+	}
+	if p.PlanOnly {
+		res.Blockers = []rpc.TradingBlocker{{Code: "bad_request", Message: "a plan is preview-only", Action: "Preview the basket, then submit its tokens; nothing was sent."}}
+		return res, nil
 	}
 	if len(p.PreviewTokens) > 0 {
 		// The tokens carry the legs' terms; the percent is a preview input.
@@ -439,10 +489,7 @@ func (s *Server) reducePortfolioSubmit(ctx context.Context, p rpc.TradeProposalR
 	if err != nil {
 		return nil, err
 	}
-	cands, netDelta, netComplete, target, blockers := reduceSweepCandidates(pos, p.Percent)
-	res.NetDollarDeltaBefore = netDelta
-	res.NetDeltaIncomplete = !netComplete
-	res.TargetDollarDelta = target
+	cands, blockers := s.reducePortfolioSelect(ctx, p, pos, res)
 	if len(blockers) > 0 {
 		res.Blockers = blockers
 		return res, nil
@@ -482,6 +529,11 @@ func (s *Server) reducePortfolioSubmitTokens(ctx context.Context, p rpc.TradePro
 	if pos != nil && pos.Portfolio != nil {
 		res.BaseCurrency = pos.Portfolio.BaseCurrency
 	}
+	locks, err := s.holdingLocks(ctx)
+	if err != nil {
+		res.Blockers = []rpc.TradingBlocker{{Code: "locks_unavailable", Message: "the locked holdings could not be read: " + err.Error(), Action: "Retry; nothing was sent."}}
+		return res, nil
+	}
 	seen := make(map[string]struct{}, len(p.PreviewTokens))
 	for _, token := range p.PreviewTokens {
 		token = strings.TrimSpace(token)
@@ -490,7 +542,7 @@ func (s *Server) reducePortfolioSubmitTokens(ctx context.Context, p rpc.TradePro
 			continue
 		}
 		seen[token] = struct{}{}
-		res.Legs = append(res.Legs, reduceLegFromTokenOutcome(s.reduceTokenLeg(ctx, token, pos, p.TimeoutMs, p.Origin)))
+		res.Legs = append(res.Legs, reduceLegFromTokenOutcome(s.reduceTokenLeg(ctx, token, pos, p.TimeoutMs, p.Origin, locks.Locked)))
 	}
 	aggregateBasket(res, true)
 	s.reduceRemember(p.RequestRef, reduceDedupeEntry{basket: res})
