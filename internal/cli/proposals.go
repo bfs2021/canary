@@ -445,16 +445,20 @@ func renderProposalReduceText(env *Env, res *rpc.TradeProposalReduceResult, subm
 }
 
 // renderReduceTerms prints the exact terms a reduce token binds: the order
-// as the broker will receive it, the algorithm, the market bound the submit
-// holds it to, and when the token expires.
+// as the broker will receive it, the algorithm, the worst price the submit
+// holds the market to, and when the token expires.
 func renderReduceTerms(env *Env, out io.Writer, indent string, terms *rpc.TradeProposalReduceTerms) {
 	if terms == nil {
 		return
 	}
 	statusRow(env, out, indent+"Terms", formatReduceTerms(terms))
 	b := terms.PriceBound
-	if b.ReferenceMid > 0 {
-		statusRow(env, out, indent+"Price bound", fmt.Sprintf("mid %s ±%.2f%% (%s to %s)", formatReducePrice(b.ReferenceMid), b.MaxMovePct, formatReducePrice(b.Low), formatReducePrice(b.High)))
+	if b.WorstPrice > 0 {
+		where, worse := "below", "lower"
+		if b.Side == "ask" {
+			where, worse = "above", "higher"
+		}
+		statusRow(env, out, indent+"Worst price", fmt.Sprintf("%s · %.2f%% %s the %s %s; not sent if the %s is %s", formatReducePrice(b.WorstPrice), b.AllowancePct, where, b.Side, formatReducePrice(b.Reference), b.Side, worse))
 	}
 	if !terms.ExpiresAt.IsZero() {
 		statusRow(env, out, indent+"Expires", terms.ExpiresAt.Format(time.RFC3339))

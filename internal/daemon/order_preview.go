@@ -471,9 +471,10 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	var limit, notionalPrice float64
 	var trail *rpc.OrderTrailSpec
 	var fxTerms *rpc.OrderFXTerms
+	var allowance *rpc.OrderAllowanceLimit
 	switch {
 	case fixedChild:
-		if p.LimitPrice != nil || p.Trail != nil || p.Bounded != nil {
+		if p.LimitPrice != nil || p.Trail != nil || p.Bounded != nil || p.Allowance != nil {
 			return nil, errBadRequest("attached stop replacement changes quantity only")
 		}
 		strategy = rpc.OrderStrategyBrokerTrail
@@ -488,6 +489,18 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 		strategy = rpc.OrderStrategyPatientLimit
 		limit, err = bondPatientLimitPrice(action, contract.MinTick, quote)
 		notionalPrice = limit
+	case p.Allowance != nil || strings.EqualFold(strings.TrimSpace(p.Strategy), rpc.OrderStrategyAllowanceLimit):
+		if orderType != rpc.OrderTypeLMT || p.Trail != nil || p.Bounded != nil {
+			err = errBadRequest("allowance-limit strategy prices LMT orders only")
+			break
+		}
+		strategy = rpc.OrderStrategyAllowanceLimit
+		var reference float64
+		limit, reference, err = allowanceLimitPrice(action, p.Allowance, p.LimitPrice, contract, quote)
+		notionalPrice = limit
+		if err == nil {
+			allowance = &rpc.OrderAllowanceLimit{Pct: p.Allowance.Pct, Reference: reference}
+		}
 	case p.Bounded == nil && !strings.EqualFold(strings.TrimSpace(p.Strategy), rpc.OrderStrategyBoundedLimit):
 		strategy, limit, trail, notionalPrice, err = previewOrderPricing(action, orderType, p.Strategy, p.LimitPrice, p.Trail, contract, quote)
 	case orderType != rpc.OrderTypeLMT || p.Trail != nil:
@@ -541,6 +554,7 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 		RegisterEntry:    p.RegisterEntry,
 		Bond:             bondTerms,
 		FX:               fxTerms,
+		Allowance:        allowance,
 	}
 	if fixedChild {
 		draft.EntryLink = replaceView.EntryLink
@@ -1606,6 +1620,61 @@ func boundedLimitPrice(action string, bound *rpc.OrderBoundedLimit, explicit *fl
 		return 0, errBadRequest("action must be buy or sell")
 	}
 	return limit, nil
+}
+
+// allowanceLimitPrice prices an allowance-limit draft from the live quote
+// (owner decision 2026-10-22 15:26 CEST): Pct below the bid for a sale,
+// above the ask for a purchase, rounded on the tick grid toward the touch
+// so the limit never goes beyond the allowance; an option goes at least
+// one tick beyond the touch. The limit is a worst price: a marketable limit
+// fills at the best price available, and Adaptive, where the order carries
+// it, works toward the mid first. It returns the limit and the touch it was
+// priced from. Only a percent reduction sets the allowance.
+func allowanceLimitPrice(action string, allowance *rpc.OrderAllowanceLimit, explicit *float64, contract rpc.ContractParams, quote rpc.OrderQuoteSnapshot) (float64, float64, error) {
+	switch {
+	case allowance == nil:
+		return 0, 0, errBadRequest("allowance-limit strategy is daemon-internal")
+	case explicit != nil:
+		return 0, 0, errBadRequest("allowance-limit strategy must not carry a limit price")
+	case !positiveFinite(allowance.Pct) || allowance.Pct >= 100:
+		return 0, 0, errBadRequest("allowance-limit allowance is invalid")
+	}
+	if err := requireFreshPreviewQuote(quote, "allowance-limit"); err != nil {
+		return 0, 0, err
+	}
+	if !rpc.IsLiveDataType(quote.DataType) {
+		return 0, 0, refusePreviewCode(previewQuoteNotLiveCode, errBadRequest("allowance-limit requires live bid/ask data"))
+	}
+	option := strings.EqualFold(strings.TrimSpace(contract.SecType), "OPT")
+	switch action {
+	case rpc.OrderActionSell:
+		if quote.Bid == nil || !positiveFinite(*quote.Bid) || (quote.Ask != nil && *quote.Ask <= *quote.Bid) {
+			return 0, 0, refusePreviewCode(previewQuoteNotTwoSidedCode, errBadRequest("allowance-limit requires a live bid to sell into"))
+		}
+		bid := *quote.Bid
+		tick := max(patientLimitTick(contract, quote, bid), contract.MinTick)
+		limit := min(ceilPriceToTick(bid*(1-allowance.Pct/100), tick), bid)
+		if option {
+			limit = min(limit, floorPriceToTick(bid-tick, tick))
+		}
+		if !positiveFinite(limit) {
+			return 0, 0, refusePreviewCode(previewQuoteNotTwoSidedCode, errBadRequest(fmt.Sprintf("allowance-limit leaves no positive price %.2f%% below the bid %.4f", allowance.Pct, bid)))
+		}
+		return roundPrice(limit), bid, nil
+	case rpc.OrderActionBuy:
+		if quote.Ask == nil || !positiveFinite(*quote.Ask) || (quote.Bid != nil && *quote.Ask <= *quote.Bid) {
+			return 0, 0, refusePreviewCode(previewQuoteNotTwoSidedCode, errBadRequest("allowance-limit requires a live ask to buy from"))
+		}
+		ask := *quote.Ask
+		tick := max(patientLimitTick(contract, quote, ask), contract.MinTick)
+		limit := max(floorPriceToTick(ask*(1+allowance.Pct/100), tick), ask)
+		if option {
+			limit = max(limit, ceilPriceToTick(ask+tick, tick))
+		}
+		return roundPrice(limit), ask, nil
+	default:
+		return 0, 0, errBadRequest("action must be buy or sell")
+	}
 }
 
 func requireFreshPreviewQuote(quote rpc.OrderQuoteSnapshot, useCase string) error {

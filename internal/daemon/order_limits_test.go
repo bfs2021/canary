@@ -246,6 +246,29 @@ func TestConstitutionMigrationWritesOrderLimitsFromConfig(t *testing.T) {
 	}
 }
 
+// A table complete before the reduce allowances existed gains exactly the
+// owner's two (2026-10-22 15:26 CEST: 1% for stocks and ETFs, 5% for
+// options) and a higher policy_version; every key it wrote keeps its value.
+func TestConstitutionMigrationAddsOnlyTheReduceAllowances(t *testing.T) {
+	without := strings.Replace(testOrderLimitsTOML, "reduce_allowance_pct = 1.0\nreduce_option_allowance_pct = 5.0\n", "", 1)
+	if without == testOrderLimitsTOML {
+		t.Fatal("the fixture no longer writes the allowances")
+	}
+	out, changes, _, err := migrateConstitutionPolicyFileFrom(config.Trading{}, true)([]byte(orderLimitsMigrationConstitution+without), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := decodeTestConstitution(t, out)
+	o := c.OrderLimits
+	if c.PolicyVersion != 6 || len(o.MissingKeys()) != 0 || *o.ReduceAllowancePct != 1 || *o.ReduceOptionAllowancePct != 5 || *o.MaxOrderFloorBase != 10000 || !*o.AllowStockShort {
+		t.Fatalf("migrated to v%d %+v", c.PolicyVersion, o)
+	}
+	if len(changes) != 3 || changes[0] != "write [order_limits].reduce_allowance_pct = 1.0 (owner decision 2026-10-22 15:26 CEST)" ||
+		changes[1] != "write [order_limits].reduce_option_allowance_pct = 5.0 (owner decision 2026-10-22 15:26 CEST)" {
+		t.Fatalf("changes = %q, want only the two allowances and the version raise", changes)
+	}
+}
+
 // A table complete before the bond maturity limit existed gains only that
 // key, with the owner's B2 value (2026-10-06 20:17 CEST, "30 years"), and a
 // higher policy_version; every key it wrote keeps its value.

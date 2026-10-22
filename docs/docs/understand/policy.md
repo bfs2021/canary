@@ -330,7 +330,10 @@ TWS included, an order Canary itself sent moments ago, and a working combo
 close on an option's underlying, which counts against every leg) must
 together stay within what you hold, read from the broker's complete
 open-order list, so two exits of one line cannot both pass and together flip
-it; when that list cannot be read, the cap applies and the refusal says so,
+it. Canary's own stop on the line does not count when the sale joins that
+stop's one-cancels-all group, because the broker then reduces the stop by
+the sale's fill (owner decision 2026-10-22 15:26 CEST); a stop the sale
+cannot join, a second stop and a hand order still count. When that list cannot be read, the cap applies and the refusal says so,
 for example `another working order already sells 700 of the 1,000 SYNB
 shares you hold; with this one, more would be sold than you hold. Cancel it
 first`. The refusal then says why,

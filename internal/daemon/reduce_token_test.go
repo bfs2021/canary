@@ -106,58 +106,56 @@ func TestReduceAdaptiveSupportedPerContract(t *testing.T) {
 
 func TestBuildPreparedReduceCarriesAdaptiveOnlyWhereSupported(t *testing.T) {
 	t.Parallel()
-	stock := buildPreparedReduce(reduceTestStockRow(100), 50, 0, "Normal")
+	stock := buildPreparedReduce(reduceTestStockRow(100), 50, 0, "Normal", 1)
 	if stock.params.AdaptivePriority != "Normal" || stock.algoNote != "" {
 		t.Fatalf("stock prepared = priority %q note %q, want Adaptive Normal with no note", stock.params.AdaptivePriority, stock.algoNote)
 	}
-	plain := buildPreparedReduce(reduceTestStockRow(100), 50, 0, "")
+	plain := buildPreparedReduce(reduceTestStockRow(100), 50, 0, "", 1)
 	if plain.params.AdaptivePriority != "" || plain.algoNote != "" {
 		t.Fatalf("plain prepared = priority %q note %q, want a plain limit with no note", plain.params.AdaptivePriority, plain.algoNote)
 	}
-	option := buildPreparedReduce(reduceTestOptionRow(5), 2, 0, "Normal")
+	option := buildPreparedReduce(reduceTestOptionRow(5), 2, 0, "Normal", 5)
 	if option.params.AdaptivePriority != "" || option.algoNote != reduceAdaptiveNote {
 		t.Fatalf("option prepared = priority %q note %q, want a plain limit that says Adaptive is not supported", option.params.AdaptivePriority, option.algoNote)
 	}
-	if option.params.Strategy != rpc.OrderStrategyPatientLimit || option.params.OrderType != rpc.OrderTypeLMT || option.params.TIF != rpc.OrderTIFDay {
-		t.Fatalf("option prepared order = %+v, want a patient LMT DAY at the mid", option.params)
+	if option.params.Strategy != rpc.OrderStrategyAllowanceLimit || option.params.Allowance == nil || option.params.Allowance.Pct != 5 || option.params.OrderType != rpc.OrderTypeLMT || option.params.TIF != rpc.OrderTIFDay {
+		t.Fatalf("option prepared order = %+v, want an LMT DAY priced 5%% beyond the touch", option.params)
 	}
 }
 
+// The reviewed limit is a worst price (owner decision 2026-10-22 15:26
+// CEST): the send refuses only when the market is already beyond it, never
+// because it moved the other way.
 func TestReducePriceBoundCheck(t *testing.T) {
 	t.Parallel()
 	quote := func(bid, ask float64) rpc.OrderQuoteSnapshot {
 		mid := (bid + ask) / 2
 		return rpc.OrderQuoteSnapshot{Bid: &bid, Ask: &ask, Midpoint: &mid}
 	}
-	reviewed := quote(99.9, 100.1)
-	bound, blockers := reducePriceBoundCheck(reviewed, quote(100.3, 100.5), "STK")
-	if len(blockers) != 0 || bound.ReferenceMid != 100 || bound.MaxMovePct != reducePriceBoundPct || math.Abs(bound.Low-99.5) > 1e-9 || math.Abs(bound.High-100.5) > 1e-9 {
-		t.Fatalf("a 0.4%% move: bound %+v blockers %+v, want admitted within 99.5 to 100.5", bound, blockers)
+	sale := rpc.OrderDraft{Action: rpc.OrderActionSell, LimitPrice: 99, Allowance: &rpc.OrderAllowanceLimit{Pct: 1, Reference: 100}}
+	reviewed := quote(100, 100.2)
+	bound, blockers := reducePriceBoundCheck(sale, reviewed, quote(99.2, 99.4))
+	if len(blockers) != 0 || bound.Side != "bid" || bound.Reference != 100 || bound.AllowancePct != 1 || bound.WorstPrice != 99 || math.Abs(bound.ReferenceMid-100.1) > 1e-9 {
+		t.Fatalf("a fall within the allowance: bound %+v blockers %+v, want admitted with the worst price 99", bound, blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(reviewed, quote(100.5, 100.7), "STK"); len(blockers) != 1 || blockers[0].Code != "price_moved" {
-		t.Fatalf("a 0.6%% move: blockers %+v, want price_moved", blockers)
+	if _, blockers := reducePriceBoundCheck(sale, reviewed, quote(110, 110.2)); len(blockers) != 0 {
+		t.Fatalf("a 10%% rise: blockers %+v, want admitted; the broker fills at the better price", blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(reviewed, quote(99.3, 99.5), "STK"); len(blockers) != 1 || blockers[0].Code != "price_moved" {
-		t.Fatalf("a 0.6%% move down: blockers %+v, want price_moved", blockers)
+	if _, blockers := reducePriceBoundCheck(sale, reviewed, quote(98.9, 99.1)); len(blockers) != 1 || blockers[0].Code != "beyond_worst_price" {
+		t.Fatalf("the bid below the worst price: blockers %+v, want beyond_worst_price", blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(reviewed, rpc.OrderQuoteSnapshot{}, "STK"); len(blockers) != 1 || blockers[0].Code != "quote_unavailable" {
+	if _, blockers := reducePriceBoundCheck(sale, reviewed, rpc.OrderQuoteSnapshot{}); len(blockers) != 1 || blockers[0].Code != "quote_unavailable" {
 		t.Fatalf("no current quote: blockers %+v, want quote_unavailable", blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(rpc.OrderQuoteSnapshot{}, quote(99.9, 100.1), "STK"); len(blockers) != 1 || blockers[0].Code != "price_bound_unavailable" {
-		t.Fatalf("no reviewed mid: blockers %+v, want price_bound_unavailable", blockers)
+	if _, blockers := reducePriceBoundCheck(rpc.OrderDraft{Action: rpc.OrderActionSell, LimitPrice: 25}, reviewed, quote(99.9, 100.1)); len(blockers) != 1 || blockers[0].Code != "price_bound_unavailable" {
+		t.Fatalf("a draft without an allowance: blockers %+v, want price_bound_unavailable", blockers)
 	}
-	// Options get the owner's 2% band (2026-10-13 06:59 CEST): a 1.5% move is
-	// admitted, a 2.5% move refused.
-	option := quote(4.95, 5.05)
-	bound, blockers = reducePriceBoundCheck(option, quote(5.03, 5.12), "OPT")
-	if len(blockers) != 0 || bound.MaxMovePct != reduceOptionPriceBoundPct || math.Abs(bound.Low-4.9) > 1e-9 || math.Abs(bound.High-5.1) > 1e-9 {
-		t.Fatalf("an option 1.5%% move: bound %+v blockers %+v, want admitted within 4.9 to 5.1", bound, blockers)
+	cover := rpc.OrderDraft{Action: rpc.OrderActionBuy, LimitPrice: 50.5, Allowance: &rpc.OrderAllowanceLimit{Pct: 1, Reference: 50}}
+	if bound, blockers := reducePriceBoundCheck(cover, quote(49.9, 50), quote(50.3, 50.5)); len(blockers) != 0 || bound.Side != "ask" {
+		t.Fatalf("a purchase with the ask at the worst price: bound %+v blockers %+v, want admitted", bound, blockers)
 	}
-	if _, blockers := reducePriceBoundCheck(option, quote(5.08, 5.17), "OPT"); len(blockers) != 1 || blockers[0].Code != "price_moved" {
-		t.Fatalf("an option 2.5%% move: blockers %+v, want price_moved", blockers)
-	}
-	if _, blockers := reducePriceBoundCheck(option, quote(5.03, 5.12), "STK"); len(blockers) != 1 || blockers[0].Code != "price_moved" {
-		t.Fatalf("a stock 1.5%% move: blockers %+v, want price_moved under the 0.5%% band", blockers)
+	if _, blockers := reducePriceBoundCheck(cover, quote(49.9, 50), quote(50.5, 50.6)); len(blockers) != 1 || blockers[0].Code != "beyond_worst_price" {
+		t.Fatalf("a purchase with the ask above the worst price: blockers %+v, want beyond_worst_price", blockers)
 	}
 }
 
@@ -205,12 +203,12 @@ func TestReducePreviewReturnsTokenAndExactTerms(t *testing.T) {
 	}
 	terms := res.Terms
 	if terms.Action != rpc.OrderActionSell || terms.Quantity != 50 || terms.OrderType != rpc.OrderTypeLMT || terms.TIF != rpc.OrderTIFDay ||
-		terms.LimitPrice != 25 || terms.Algo != "Adaptive" || terms.AdaptivePriority != "Normal" || terms.AlgoNote != "" ||
+		terms.LimitPrice != 24.66 || terms.Algo != "Adaptive" || terms.AdaptivePriority != "Normal" || terms.AlgoNote != "" ||
 		terms.Contract.ConID != reduceTestStockConID || terms.PreviewTokenID != res.PreviewTokenID || !terms.ExpiresAt.Equal(res.PreviewTokenExpiresAt) {
-		t.Fatalf("terms = %+v, want SELL 50 SYN LMT 25.00 DAY Adaptive Normal under token %s", terms, res.PreviewTokenID)
+		t.Fatalf("terms = %+v, want SELL 50 SYN LMT 24.66 (1%% below the 24.90 bid) DAY Adaptive Normal under token %s", terms, res.PreviewTokenID)
 	}
-	if terms.PriceBound.ReferenceMid != 25 || terms.PriceBound.MaxMovePct != reducePriceBoundPct || math.Abs(terms.PriceBound.Low-24.875) > 1e-9 || math.Abs(terms.PriceBound.High-25.125) > 1e-9 {
-		t.Fatalf("price bound = %+v, want the reviewed mid 25 ±%.2f%%", terms.PriceBound, reducePriceBoundPct)
+	if b := terms.PriceBound; b.Side != "bid" || b.AllowancePct != 1 || b.WorstPrice != terms.LimitPrice || !positiveFinite(b.Reference) || terms.LimitPrice >= b.Reference {
+		t.Fatalf("price bound = %+v, want the limit as the worst price, 1%% below the reviewed bid", b)
 	}
 	payload, err := srv.orderTokens.verify(res.PreviewToken)
 	if err != nil {
@@ -267,8 +265,8 @@ func TestReducePreviewOptionSendsPlainLimitAndSaysWhy(t *testing.T) {
 		t.Fatalf("option preview = %+v, want an accepted preview with a token", res)
 	}
 	terms := res.Terms
-	if terms.Algo != "" || terms.AdaptivePriority != "" || terms.AlgoNote != reduceAdaptiveNote || terms.Quantity != 2 || terms.OrderType != rpc.OrderTypeLMT || terms.LimitPrice != 2.5 || terms.Contract.SecType != "OPT" {
-		t.Fatalf("option terms = %+v, want a plain LMT 2.50 for 2 contracts noting %q", terms, reduceAdaptiveNote)
+	if terms.Algo != "" || terms.AdaptivePriority != "" || terms.AlgoNote != reduceAdaptiveNote || terms.Quantity != 2 || terms.OrderType != rpc.OrderTypeLMT || terms.LimitPrice != 2.28 || terms.Contract.SecType != "OPT" {
+		t.Fatalf("option terms = %+v, want a plain LMT 2.28 (5%% below the 2.40 bid) for 2 contracts noting %q", terms, reduceAdaptiveNote)
 	}
 	payload, err := srv.orderTokens.verify(res.PreviewToken)
 	if err != nil || payload.Draft.AdaptivePriority != "" {
@@ -318,5 +316,42 @@ func TestReduceTokenSubmitFailsClosedWithoutTheTradingBuild(t *testing.T) {
 	res, err := srv.tradeProposalReduceSubmit(t.Context(), rpc.TradeProposalReduceParams{PreviewToken: "ibkrp4.synthetic.token", RequestRef: "req-1"})
 	if err != nil || res.Accepted || len(res.Blockers) == 0 {
 		t.Fatalf("submit = %+v %v, want a refusal from the write gate", res, err)
+	}
+}
+
+// The allowance limit (owner decision 2026-10-22 15:26 CEST): the policy's
+// percent beyond the touch, rounded toward the touch so the allowance is
+// never exceeded, and an option at least one tick beyond it.
+func TestAllowanceLimitPrice(t *testing.T) {
+	t.Parallel()
+	quote := func(bid, ask float64) rpc.OrderQuoteSnapshot {
+		return rpc.OrderQuoteSnapshot{Bid: &bid, Ask: &ask, DataType: rpc.MarketDataLive}
+	}
+	stock := rpc.ContractParams{SecType: "STK"}
+	option := rpc.ContractParams{SecType: "OPT"}
+	for _, tc := range []struct {
+		name      string
+		action    string
+		contract  rpc.ContractParams
+		pct       float64
+		q         rpc.OrderQuoteSnapshot
+		limit     float64
+		reference float64
+	}{
+		{"a sale 1% below the bid, rounded up to the cent", rpc.OrderActionSell, stock, 1, quote(24.9, 25.1), 24.66, 24.9},
+		{"a purchase 1% above the ask, rounded down", rpc.OrderActionBuy, stock, 1, quote(49.9, 50.03), 50.53, 50.03},
+		{"an option sale 5% below the bid", rpc.OrderActionSell, option, 5, quote(2.4, 2.6), 2.28, 2.4},
+		{"a cheap option still a tick below the bid", rpc.OrderActionSell, option, 5, quote(0.1, 0.15), 0.09, 0.1},
+	} {
+		limit, reference, err := allowanceLimitPrice(tc.action, &rpc.OrderAllowanceLimit{Pct: tc.pct}, nil, tc.contract, tc.q)
+		if err != nil || math.Abs(limit-tc.limit) > 1e-9 || reference != tc.reference {
+			t.Errorf("%s: limit %v reference %v err %v, want %v from %v", tc.name, limit, reference, err, tc.limit, tc.reference)
+		}
+	}
+	if _, _, err := allowanceLimitPrice(rpc.OrderActionSell, nil, nil, stock, quote(24.9, 25.1)); err == nil {
+		t.Fatal("a request without the daemon's allowance was priced")
+	}
+	if _, _, err := allowanceLimitPrice(rpc.OrderActionSell, &rpc.OrderAllowanceLimit{Pct: 1}, nil, stock, rpc.OrderQuoteSnapshot{DataType: rpc.MarketDataLive}); err == nil {
+		t.Fatal("a sale without a bid was priced")
 	}
 }

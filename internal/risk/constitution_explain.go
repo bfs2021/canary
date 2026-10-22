@@ -251,6 +251,11 @@ func orderLimitRows(c *Constitution, cur string, get func(key, value, source, me
 	shortVal, shortSrc := str(o.AllowStockShort != nil, func() string { return strconv.FormatBool(*o.AllowStockShort) })
 	stoVal, stoSrc := str(o.AllowOptionSellToOpen != nil, func() string { return strconv.FormatBool(*o.AllowOptionSellToOpen) })
 	bondVal, bondSrc := str(o.MaxBondMaturityYears != nil, func() string { return strconv.Itoa(*o.MaxBondMaturityYears) + " years" })
+	pct := func(v *float64) (string, string) {
+		return str(v != nil, func() string { return strconv.FormatFloat(*v, 'f', -1, 64) + "%" })
+	}
+	reduceVal, reduceSrc := pct(o.ReduceAllowancePct)
+	reduceOptVal, reduceOptSrc := pct(o.ReduceOptionAllowancePct)
 	row := func(key, value, source, meaning string) ConstitutionLimit {
 		if source == "unapproved" {
 			meaning += " Not written: every order preview is refused until it is."
@@ -272,5 +277,9 @@ func orderLimitRows(c *Constitution, cur string, get func(key, value, source, me
 			"Whether an option order may sell to open."),
 		row(OrderLimitsTable+"."+OrderLimitMaxBondMaturityYears, bondVal, bondSrc,
 			"Longest time to maturity, in whole years from today, a bond or bill buy may have; a buy maturing later is refused. Sells are never limited by it."),
+		row(OrderLimitsTable+"."+OrderLimitReduceAllowancePct, reduceVal, reduceSrc,
+			"How far beyond the touch a percent reduction of a stock or ETF may trade: a sale's limit sits this far below the bid, a purchase's this far above the ask. The limit is the worst price; the broker fills at the best price available."),
+		row(OrderLimitsTable+"."+OrderLimitReduceOptionAllowance, reduceOptVal, reduceOptSrc,
+			"The same for an option, and at least one tick beyond the touch."),
 	}
 }

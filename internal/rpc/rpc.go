@@ -2602,6 +2602,11 @@ const (
 	// OrderBoundedLimit. It is daemon-internal: only the queued executor sets
 	// the bound, and a request that names it without one is refused.
 	OrderStrategyBoundedLimit = "bounded-limit"
+	// OrderStrategyAllowanceLimit prices a limit the policy's allowance
+	// beyond the touch: below the bid for a sale, above the ask for a
+	// purchase. It is daemon-internal: only a percent reduction sets the
+	// allowance, and a request that names it without one is refused.
+	OrderStrategyAllowanceLimit = "allowance-limit"
 
 	OrderTrailBasisInstrumentPrice = "instrument_price"
 	OrderTrailOffsetPercent        = "percent"
@@ -2778,6 +2783,9 @@ type OrderPreviewParams struct {
 	// Bounded is daemon-internal: the bound a bounded-limit strategy prices
 	// inside. No RPC caller can set it.
 	Bounded *OrderBoundedLimit `json:"-"`
+	// Allowance is daemon-internal: the allowance an allowance-limit
+	// strategy prices with. No RPC caller can set it.
+	Allowance *OrderAllowanceLimit `json:"-"`
 	// Bond is daemon-internal: a cash_sweep row's bill conventions, or the
 	// terms the daemon builds for BondOrder. No RPC caller can author bond
 	// terms.
@@ -2792,6 +2800,15 @@ type OrderPreviewParams struct {
 	// CASH preview without them is refused, so no RPC caller can preview a
 	// conversion.
 	FX *OrderFXTerms `json:"-"`
+}
+
+// OrderAllowanceLimit is an allowance-limit draft's pricing: Pct beyond the
+// touch, and the touch (the bid for a sale, the ask for a purchase) the
+// limit was priced from. A preview sets Reference; the signed draft carries
+// both, so the send and its receipt state the same terms.
+type OrderAllowanceLimit struct {
+	Pct       float64 `json:"pct"`
+	Reference float64 `json:"reference,omitempty"`
 }
 
 // OrderBoundedLimit bounds a limit priced from the live quote: Concession of
@@ -2882,6 +2899,9 @@ type OrderDraft struct {
 	// FX carries a CASH draft's conversion terms and the live bid and ask
 	// its limit was bounded from; nil otherwise.
 	FX *OrderFXTerms `json:"fx,omitempty"`
+	// Allowance carries an allowance-limit draft's allowance and the touch
+	// its limit was priced from; nil otherwise.
+	Allowance *OrderAllowanceLimit `json:"allowance,omitempty"`
 }
 
 // OrderTrailSpec is the canonical broker-side trailing-stop intent. Percent

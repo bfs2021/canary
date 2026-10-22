@@ -7,16 +7,16 @@ Total notional $ 1,250.00
 Request ref    desk-basket-7f3a
   SELL 50 SYNA  [placed]
   notional     $ 1,250.00
-  Terms        SELL 50 SYNA LMT 25.00 DAY · Adaptive Normal
-  Price bound  mid 25.00 ±0.50% (24.8750 to 25.1250)
+  Terms        SELL 50 SYNA LMT 24.66 DAY · Adaptive Normal
+  Worst price  24.66 · 1.00% below the bid 24.90; not sent if the bid is lower
   Expires      2026-09-05T12:10:00Z
   order ref    canary-20260905-140000
   OCA group    canary-oca-canary-20260905-120000 (type 2)
   SELL 2 SYNB  [blocked]
   notional     $ 500.00
-  Terms        SELL 2 SYNB 20261218 30.00C LMT 2.50 DAY · plain limit (Adaptive
+  Terms        SELL 2 SYNB 20261218 30.00C LMT 2.32 DAY · plain limit (Adaptive
                not supported for this contract)
-  Price bound  mid 2.50 ±0.50% (2.4875 to 2.5125)
+  Worst price  2.32 · 5.00% below the bid 2.45; not sent if the bid is lower
   Expires      2026-09-05T12:10:00Z
       - position_changed: SYNB is now 1 held; the reviewed reduction of 2 exceeds it
         action: Preview the reduction again at the current position; nothing was sent.
@@ -30,16 +30,16 @@ Portfolio Reduce Submit  accepted=false
 \x1b[2mRequest ref   \x1b[0m desk-basket-7f3a
   SELL 50 SYNA  [placed]
 \x1b[2m  notional    \x1b[0m $ 1,250.00
-\x1b[2m  Terms       \x1b[0m SELL 50 SYNA LMT 25.00 DAY · Adaptive Normal
-\x1b[2m  Price bound \x1b[0m mid 25.00 ±0.50% (24.8750 to 25.1250)
+\x1b[2m  Terms       \x1b[0m SELL 50 SYNA LMT 24.66 DAY · Adaptive Normal
+\x1b[2m  Worst price \x1b[0m 24.66 · 1.00% below the bid 24.90; not sent if the bid is lower
 \x1b[2m  Expires     \x1b[0m 2026-09-05T12:10:00Z
 \x1b[2m  order ref   \x1b[0m canary-20260905-140000
 \x1b[2m  OCA group   \x1b[0m canary-oca-canary-20260905-120000 (type 2)
   SELL 2 SYNB  [blocked]
 \x1b[2m  notional    \x1b[0m $ 500.00
-\x1b[2m  Terms       \x1b[0m SELL 2 SYNB 20261218 30.00C LMT 2.50 DAY · plain limit (Adaptive
+\x1b[2m  Terms       \x1b[0m SELL 2 SYNB 20261218 30.00C LMT 2.32 DAY · plain limit (Adaptive
                not supported for this contract)
-\x1b[2m  Price bound \x1b[0m mid 2.50 ±0.50% (2.4875 to 2.5125)
+\x1b[2m  Worst price \x1b[0m 2.32 · 5.00% below the bid 2.45; not sent if the bid is lower
 \x1b[2m  Expires     \x1b[0m 2026-09-05T12:10:00Z
       - position_changed: SYNB is now 1 held; the reviewed reduction of 2 exceeds it
         action: Preview the reduction again at the current position; nothing was sent.

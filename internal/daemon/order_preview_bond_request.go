@@ -74,7 +74,7 @@ func validatePreviewBondRequest(p rpc.OrderPreviewParams, replace bool) (preview
 		return previewBondRequest{}, errBadRequest("a bond order is a limit order")
 	case !strings.EqualFold(nonEmptyString(strings.TrimSpace(p.TIF), rpc.OrderTIFDay), rpc.OrderTIFDay):
 		return previewBondRequest{}, errBadRequest("a bond order is a DAY order")
-	case p.OutsideRTH || p.Trail != nil || p.LimitPrice != nil || p.Bounded != nil || p.ResolvedStrategy != nil || p.FX != nil || p.Bond != nil:
+	case p.OutsideRTH || p.Trail != nil || p.LimitPrice != nil || p.Bounded != nil || p.Allowance != nil || p.ResolvedStrategy != nil || p.FX != nil || p.Bond != nil:
 		return previewBondRequest{}, errBadRequest("a bond order is a patient limit in the bond's session: no limit price, trail or outside_rth")
 	case p.Strategy != "" && !strings.EqualFold(p.Strategy, rpc.OrderStrategyPatientLimit):
 		return previewBondRequest{}, errBadRequest("a bond order is priced as a patient limit")

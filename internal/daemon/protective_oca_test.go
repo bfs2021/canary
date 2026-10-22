@@ -145,3 +145,39 @@ func TestOCAMembershipSurvivesJournalReplay(t *testing.T) {
 		t.Fatalf("untracked view = %+v, want the hand order's group reported", view)
 	}
 }
+
+// A sale that joins Canary's own stop's group does not count that stop
+// against the held line for the cap exemptions (owner decision 2026-10-22
+// 15:26 CEST): the broker reduces the stop by the sale's fill. An
+// ungrouped stop, a second stop and a hand sale still count.
+func TestProtectiveExitInventoryLeavesOutTheLinkedStop(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	group := "canary-oca-ord-prot"
+	snap := func(orders ...ibkrlib.OrderLifecycleEvent) ibkrlib.OpenOrderSnapshot {
+		return ibkrlib.OpenOrderSnapshot{Complete: true, AsOf: now, Orders: orders}
+	}
+	sale := ocaTestSale(35)
+	position := rpc.OrderPositionImpact{Before: 70, After: 35, Effect: classifyPositionEffect(70, 35)}
+	journal := journalInventory{views: []rpc.OrderView{ocaTestStopView("ord-prot", 1002, 70, group, now.Add(-time.Hour))}}
+	stop := ocaTestStopOrder(1002, 70, group, ibkrlib.OcaTypeReduceWithBlock)
+
+	inv := protectiveExitInventoryFromSnapshot(snap(stop), journal, ocaTestScope, sale, orderPreviewReplaceTarget{})
+	if !inv.Current || inv.OtherWorkingSameSide != 0 || inv.LinkedStop != "ord-prot" || inv.otherWorkingSameSide(910001)+35 > position.Before {
+		t.Fatalf("beside a grouped full stop: %+v, want the stop left out, so the sale stays within the held line", inv)
+	}
+	hand := ocaTestStopOrder(0, 30, "", 0)
+	hand.ClientID, hand.OrderType, hand.PermID = 0, rpc.OrderTypeLMT, 8001
+	if inv := protectiveExitInventoryFromSnapshot(snap(stop, hand), journal, ocaTestScope, sale, orderPreviewReplaceTarget{}); inv.OtherWorkingSameSide != 30 {
+		t.Fatalf("with a hand sale of 30 beside it: %+v, want the hand sale's 30 competing", inv)
+	}
+	plain := journalInventory{views: []rpc.OrderView{ocaTestStopView("ord-prot", 1002, 70, "", now.Add(-time.Hour))}}
+	if inv := protectiveExitInventoryFromSnapshot(snap(ocaTestStopOrder(1002, 70, "", 0)), plain, ocaTestScope, sale, orderPreviewReplaceTarget{}); inv.OtherWorkingSameSide != 70 || inv.LinkedStop != "" {
+		t.Fatalf("beside an ungrouped stop: %+v, want the stop counted", inv)
+	}
+	two := journalInventory{views: []rpc.OrderView{journal.views[0], ocaTestStopView("ord-second", 1004, 20, "canary-oca-ord-second", now.Add(-time.Hour))}}
+	second := ocaTestStopOrder(1004, 20, "canary-oca-ord-second", ibkrlib.OcaTypeReduceWithBlock)
+	if inv := protectiveExitInventoryFromSnapshot(snap(stop, second), two, ocaTestScope, sale, orderPreviewReplaceTarget{}); inv.OtherWorkingSameSide != 90 || inv.LinkedStop != "" {
+		t.Fatalf("beside two stops: %+v, want both counted; the sale joins no group", inv)
+	}
+}

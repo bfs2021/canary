@@ -11,7 +11,38 @@ func ownerOrderLimits() *ConstitutionOrderLimits {
 	return &ConstitutionOrderLimits{
 		MaxOrderFloorBase: new(10000.0), MaxOrderPctNLV: new(5.0), MaxOrderCeilingBase: new(100000.0),
 		MaxOptionContracts: new(5), AllowStockShort: new(false), AllowOptionSellToOpen: new(false),
-		MaxBondMaturityYears: new(30),
+		MaxBondMaturityYears: new(30), ReduceAllowancePct: new(1.0), ReduceOptionAllowancePct: new(5.0),
+	}
+}
+
+// The reduce allowances (owner decision 2026-10-22 15:26 CEST) price percent
+// reductions only: a missing one never refuses another order, and the
+// reduction names the key it needs.
+func TestReduceAllowancesJudgeReductionsOnly(t *testing.T) {
+	table := ownerOrderLimits()
+	if pct, err := table.ReduceAllowancePctFor("STK"); err != nil || pct != 1 {
+		t.Fatalf("stock allowance = %v, %v; want 1", pct, err)
+	}
+	if pct, err := table.ReduceAllowancePctFor("OPT"); err != nil || pct != 5 {
+		t.Fatalf("option allowance = %v, %v; want 5", pct, err)
+	}
+	table.ReduceAllowancePct, table.ReduceOptionAllowancePct = nil, nil
+	got := EvaluateOrderLimits(table, "EUR", OrderLimitsNLV{Base: 240000, AsOf: time.Now()}, nil, "")
+	if !got.Complete || len(got.Missing) != 0 {
+		t.Fatalf("limits without the allowances = %+v, want complete for every other order", got)
+	}
+	if _, err := table.ReduceAllowancePctFor("ETF"); err == nil || !strings.Contains(err.Error(), "reduce_allowance_pct") {
+		t.Fatalf("an unset stock allowance: %v, want the key named", err)
+	}
+	if _, err := table.ReduceAllowancePctFor("OPT"); err == nil || !strings.Contains(err.Error(), "reduce_option_allowance_pct") {
+		t.Fatalf("an unset option allowance: %v, want the key named", err)
+	}
+	if keys := table.MissingKeys(); len(keys) != 2 {
+		t.Fatalf("the migration's list = %v, want both allowance keys", keys)
+	}
+	table.ReduceAllowancePct = new(0.0)
+	if err := table.validate(); err == nil {
+		t.Fatal("a zero allowance validated")
 	}
 }
 
@@ -58,7 +89,7 @@ func TestEvaluateOrderLimitsMissingKeyFailsClosed(t *testing.T) {
 		t.Fatalf("limits = %+v, want incomplete naming max_order_pct_nlv", got)
 	}
 	none := EvaluateOrderLimits(nil, "EUR", OrderLimitsNLV{}, nil, "no risk policy is loaded")
-	if none.Complete || len(none.Missing) != len(OrderLimitKeys())-1 || !none.BondMaturityUnset || !strings.HasPrefix(none.Summary, "no risk policy is loaded; every order preview is refused") {
+	if none.Complete || len(none.Missing) != len(OrderLimitKeys())-3 || !none.BondMaturityUnset || !strings.HasPrefix(none.Summary, "no risk policy is loaded; every order preview is refused") {
 		t.Fatalf("no table = %+v", none)
 	}
 }

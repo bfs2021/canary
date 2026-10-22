@@ -59,6 +59,11 @@ type protectiveExitInventory struct {
 	// stop on the same contract and whose new quantity is below the target's
 	// remaining quantity.
 	ReducesWorkingStop bool
+	// LinkedStop is the order reference of Canary's own stop whose
+	// one-cancels-all group the sale joins when it is sent
+	// (planProtectiveOCA): the first fill reduces the other at the broker,
+	// so the stop does not count against the held line. Empty otherwise.
+	LinkedStop string
 }
 
 // otherWorkingSameSide is the competing working quantity for one contract
@@ -279,6 +284,22 @@ func protectiveExitInventoryFromSnapshot(snapshot ibkrlib.OpenOrderSnapshot, jou
 	views := journal.views
 	working := brokerWorkingOrders(snapshot, views, scope)
 	hasTarget := target.ReservedOrderID > 0 || target.PermID > 0
+	// A sale that joins Canary's own stop's group cannot sell the same
+	// shares as that stop: the broker reduces the stop by the sale's fill
+	// (owner decision 2026-10-22 15:26 CEST, "a stop linked at the broker
+	// does not void the cap exemption"). The condition is planProtectiveOCA's
+	// own: exactly one such stop, its group echoed by the broker with the
+	// reduce-with-block type. Every other working order still counts.
+	var linked *protectiveOCAStop
+	if !hasTarget && protectiveOCACandidate(draft) {
+		if stops := canaryWorkingSellStops(views, &snapshot, scope, draft); len(stops) == 1 && stops[0].Group != "" && stops[0].Type == protectiveOCAType {
+			linked = &stops[0]
+			inv.LinkedStop = linked.View.OrderRef
+		}
+	}
+	isLinked := func(row brokerWorkingOrder) bool {
+		return linked != nil && row.Journal != nil && row.Journal.OrderRef == linked.View.OrderRef && row.Journal.ReservedOrderID == linked.View.ReservedOrderID
+	}
 	since := snapshot.AsOf.Add(-journalInventoryMargin)
 	var unseen []workingOrderIdentity
 	for i := range views {
@@ -298,7 +319,7 @@ func protectiveExitInventoryFromSnapshot(snapshot ibkrlib.OpenOrderSnapshot, jou
 	competing := func(contract rpc.ContractParams, action string) float64 {
 		total := 0.0
 		for _, row := range working {
-			if hasTarget && brokerOrderIsTarget(row.Order, target) {
+			if hasTarget && brokerOrderIsTarget(row.Order, target) || isLinked(row) {
 				continue
 			}
 			w := brokerOrderIdentity(row.Order)

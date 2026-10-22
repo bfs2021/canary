@@ -117,7 +117,7 @@ func validatePreviewFXParams(p rpc.OrderPreviewParams, replace bool) error {
 		return errBadRequest("a conversion is a limit order")
 	case !strings.EqualFold(nonEmptyString(strings.TrimSpace(p.TIF), rpc.OrderTIFDay), rpc.OrderTIFDay):
 		return errBadRequest("a conversion is a DAY order")
-	case p.OutsideRTH || p.Trail != nil || p.LimitPrice != nil || p.Bounded != nil || p.ResolvedStrategy != nil || p.Bond != nil:
+	case p.OutsideRTH || p.Trail != nil || p.LimitPrice != nil || p.Bounded != nil || p.Allowance != nil || p.ResolvedStrategy != nil || p.Bond != nil:
 		return errBadRequest("a conversion's limit comes from the live quote and its bound: no limit, trail, bound, bond terms or outside_rth")
 	}
 	return nil

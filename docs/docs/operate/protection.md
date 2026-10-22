@@ -259,7 +259,7 @@ than a flat per-position cut, and hedges are never selected, so
 A reduce preview returns, for each order it would place, a signed preview
 token and the exact terms that token binds (`terms`): the contract, side,
 quantity, order type, limit, time in force and algorithm the broker will
-receive, the token's expiry, and the price bound the submit will hold the
+receive, the token's expiry, and the worst price the submit will hold the
 market to. `canary proposals reduce --submit --preview-token TOKEN` places
 exactly those terms, nothing re-sized and nothing re-priced; under
 `--portfolio` pass one `--preview-token` per leg, and each leg is placed on
@@ -267,16 +267,22 @@ its own, so a refused leg never holds another. The daemon refuses, and sends
 nothing, when the token is stale or expired, when the position no longer
 holds the reviewed quantity on the reviewed side (a sale of at most the
 confirmed long is admitted; a smaller position refuses as `position_changed`
-rather than shrinking the order), when the current mid has left the reviewed
-bound (`price_moved`: the reviewed mid ±0.5% for stocks and ±2% for options (owner decision 2026-10-13 06:59 CEST), stated in every preview as
-`price_bound`), when the token was already submitted (`token_consumed`), or
+rather than shrinking the order), when the market is already beyond the
+reviewed worst price (`beyond_worst_price`: the bid below a sale's limit, or
+the ask above a purchase's; a market that moved the other way is no reason
+to refuse; stated in every preview as `price_bound`), when the token was already submitted (`token_consumed`), or
 when any order gate refuses, Canary's own stop on the line included (a reduce
 sale joins the stop's one-cancels-all group or waits for the stop to shrink,
 like any other sale). `--request-ref REF` names a submission: a retry with
 the same reference replays the recorded result and never sends twice.
 
-A reduction is a limit at the mid, rounded to the tick toward the
-counterparty, DAY. On a US stock or ETF routed SMART it carries IBKR's
+A reduction is a limit priced as a worst price, DAY (owner decision
+2026-10-22 15:26 CEST, which replaced the limit at the mid and its ±0.5%/2%
+band): a sale's limit sits `[order_limits].reduce_allowance_pct` below the
+bid (`reduce_option_allowance_pct`, and at least one tick, for an option), a
+purchase's that far above the ask, rounded toward the touch. The order can
+fill at once in a fast market, and the broker fills a marketable limit at
+the best price available. On a US stock or ETF routed SMART it carries IBKR's
 Adaptive algorithm at `Normal` priority unless `--adaptive-priority` asks
 for `Patient`, `Urgent` or `none` (a plain limit). On an option, a non-USD
 line or a directed route the order is a plain limit and the terms say

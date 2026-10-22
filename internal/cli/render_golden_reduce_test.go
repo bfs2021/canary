@@ -23,16 +23,16 @@ func goldenReduceStockContract() rpc.ContractParams {
 
 func goldenReduceTerms() *rpc.TradeProposalReduceTerms {
 	return &rpc.TradeProposalReduceTerms{PreviewTokenID: goldenReduceTokenID, ExpiresAt: time.Date(2026, 9, 5, 12, 10, 0, 0, time.UTC),
-		Contract: goldenReduceStockContract(), Action: rpc.OrderActionSell, Quantity: 50, OrderType: rpc.OrderTypeLMT, LimitPrice: 25, TIF: rpc.OrderTIFDay,
+		Contract: goldenReduceStockContract(), Action: rpc.OrderActionSell, Quantity: 50, OrderType: rpc.OrderTypeLMT, LimitPrice: 24.66, TIF: rpc.OrderTIFDay,
 		Algo: "Adaptive", AdaptivePriority: "Normal",
-		PriceBound: rpc.TradeProposalReducePriceBound{ReferenceMid: 25, MaxMovePct: 0.5, Low: 24.875, High: 25.125}}
+		PriceBound: rpc.TradeProposalReducePriceBound{Side: "bid", Reference: 24.9, ReferenceMid: 25, AllowancePct: 1, WorstPrice: 24.66}}
 }
 
 func goldenReduceOptionTerms() *rpc.TradeProposalReduceTerms {
 	return &rpc.TradeProposalReduceTerms{PreviewTokenID: goldenReduceTokenIDB, ExpiresAt: time.Date(2026, 9, 5, 12, 10, 0, 0, time.UTC),
 		Contract: rpc.ContractParams{ConID: goldenReduceOptionCon, Symbol: "SYNB", SecType: "OPT", Exchange: "SMART", Currency: "USD", Expiry: "20261218", Strike: 30, Right: "C", Multiplier: 100},
-		Action:   rpc.OrderActionSell, Quantity: 2, OrderType: rpc.OrderTypeLMT, LimitPrice: 2.5, TIF: rpc.OrderTIFDay, AlgoNote: "Adaptive not supported for this contract",
-		PriceBound: rpc.TradeProposalReducePriceBound{ReferenceMid: 2.5, MaxMovePct: 0.5, Low: 2.4875, High: 2.5125}}
+		Action:   rpc.OrderActionSell, Quantity: 2, OrderType: rpc.OrderTypeLMT, LimitPrice: 2.32, TIF: rpc.OrderTIFDay, AlgoNote: "Adaptive not supported for this contract",
+		PriceBound: rpc.TradeProposalReducePriceBound{Side: "bid", Reference: 2.45, ReferenceMid: 2.5, AllowancePct: 5, WorstPrice: 2.32}}
 }
 
 func goldenReducePreview() *rpc.TradeProposalOrderPreview {
@@ -40,8 +40,8 @@ func goldenReducePreview() *rpc.TradeProposalOrderPreview {
 	terms := goldenReduceTerms()
 	return &rpc.TradeProposalOrderPreview{PreviewTokenID: goldenReduceTokenID, PreviewTokenScope: rpc.OrderTokenScopePlace, PreviewTokenExpiresAt: terms.ExpiresAt,
 		TokenMinted: true, SubmitEligible: true, Mode: "paper", Account: "DU0000000", Endpoint: "127.0.0.1:4002", ClientID: 31,
-		Draft: rpc.OrderDraft{AdaptivePriority: "Normal", Action: rpc.OrderActionSell, Contract: goldenReduceStockContract(), Quantity: 50, OrderType: rpc.OrderTypeLMT, LimitPrice: 25,
-			TIF: rpc.OrderTIFDay, Strategy: rpc.OrderStrategyPatientLimit, OrderRef: "canary-20260905-140000", OpenClose: "C", Source: "manual_reduce"},
+		Draft: rpc.OrderDraft{AdaptivePriority: "Normal", Action: rpc.OrderActionSell, Contract: goldenReduceStockContract(), Quantity: 50, OrderType: rpc.OrderTypeLMT, LimitPrice: 24.66,
+			TIF: rpc.OrderTIFDay, Strategy: rpc.OrderStrategyAllowanceLimit, Allowance: &rpc.OrderAllowanceLimit{Pct: 1, Reference: 24.9}, OrderRef: "canary-20260905-140000", OpenClose: "C", Source: "manual_reduce"},
 		Quote:    rpc.OrderQuoteSnapshot{Symbol: "SYNA", Bid: &bid, Ask: &ask, Midpoint: &mid, DataType: rpc.MarketDataLive},
 		Position: rpc.OrderPositionImpact{Before: 100, After: 50, Effect: rpc.OrderPositionEffectReduce},
 		Notional: 1250, WhatIf: rpc.OrderWhatIfResult{Status: rpc.OrderWhatIfStatusAccepted, Available: true}, AsOf: goldenAt}

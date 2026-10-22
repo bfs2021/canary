@@ -36,6 +36,12 @@ const (
 	// of internal-docs/design/bond-orders.md (2026-10-06 20:17 CEST, "30
 	// years"): the longest maturity a bond or bill buy may have.
 	orderLimitsWriteBondMaturityYears = 30
+	// orderLimitsWriteReduceAllowancePct and
+	// orderLimitsWriteReduceOptionAllowancePct are the owner's allowances for
+	// a percent reduction (2026-10-22 15:26 CEST, "stocks and ETFs 1.0%
+	// below the bid, options 5% below the bid (at least one tick)").
+	orderLimitsWriteReduceAllowancePct       = 1.0
+	orderLimitsWriteReduceOptionAllowancePct = 5.0
 )
 
 // orderLimitsWriteValue is one [order_limits] key with the value policy
@@ -56,6 +62,7 @@ func orderLimitsWriteValues(src config.Trading, srcRead bool) []orderLimitsWrite
 	decided := "owner decision 2026-10-05 19:56 CEST"
 	pctDecided := decided + "; 10% since the owner decision 2026-10-07 08:30 CEST (the Balanced preset)"
 	bondDecided := "owner decision 2026-10-06 20:17 CEST"
+	reduceDecided := "owner decision 2026-10-22 15:26 CEST"
 
 	floor, floorFrom := orderLimitsWriteFloorBase, fmt.Sprintf(compiled, "max_notional")
 	if v := src.MaxNotional; v != nil && *v > 0 && !math.IsInf(*v, 0) && !math.IsNaN(*v) {
@@ -85,6 +92,8 @@ func orderLimitsWriteValues(src config.Trading, srcRead bool) []orderLimitsWrite
 		{risk.OrderLimitAllowStockShort, strconv.FormatBool(short), shortFrom},
 		{risk.OrderLimitAllowOptionSellToOpen, strconv.FormatBool(sto), stoFrom},
 		{risk.OrderLimitMaxBondMaturityYears, strconv.Itoa(orderLimitsWriteBondMaturityYears), bondDecided},
+		{risk.OrderLimitReduceAllowancePct, tomlFloat(orderLimitsWriteReduceAllowancePct), reduceDecided},
+		{risk.OrderLimitReduceOptionAllowance, tomlFloat(orderLimitsWriteReduceOptionAllowancePct), reduceDecided},
 	}
 }
 
@@ -98,6 +107,8 @@ var orderLimitsTableComment = []string{
 	"# `canary policy override --control order_limits.max_order_floor_base` lifts",
 	"# the floor to the ceiling until it expires. max_bond_maturity_years is the",
 	"# longest maturity, in whole years from today, a bond or bill buy may have.",
+	"# reduce_allowance_pct and reduce_option_allowance_pct price a percent",
+	"# reduction as a worst price that far beyond the bid (a sale) or the ask.",
 }
 
 // orderLimitsTemplateBlock renders the [order_limits] table of a new
@@ -173,5 +184,6 @@ func orderLimitsPreserved(before, after *risk.ConstitutionOrderLimits) bool {
 	return sameF(before.MaxOrderFloorBase, after.MaxOrderFloorBase) && sameF(before.MaxOrderPctNLV, after.MaxOrderPctNLV) &&
 		sameF(before.MaxOrderCeilingBase, after.MaxOrderCeilingBase) && sameI(before.MaxOptionContracts, after.MaxOptionContracts) &&
 		sameB(before.AllowStockShort, after.AllowStockShort) && sameB(before.AllowOptionSellToOpen, after.AllowOptionSellToOpen) &&
-		sameI(before.MaxBondMaturityYears, after.MaxBondMaturityYears)
+		sameI(before.MaxBondMaturityYears, after.MaxBondMaturityYears) &&
+		sameF(before.ReduceAllowancePct, after.ReduceAllowancePct) && sameF(before.ReduceOptionAllowancePct, after.ReduceOptionAllowancePct)
 }

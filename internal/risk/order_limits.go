@@ -21,6 +21,14 @@ import (
 // max_bond_maturity_years (owner decision 2026-10-06 20:17 CEST, decision B2
 // of internal-docs/design/bond-orders.md) is the longest time to maturity a
 // bond or bill buy may have; 30 years is the value written.
+//
+// reduce_allowance_pct and reduce_option_allowance_pct (owner decision
+// 2026-10-22 15:26 CEST: "stocks and ETFs 1.0% below the bid, options 5%
+// below the bid (at least one tick)") price a percent reduction as a worst
+// price: a sale's limit sits that far below the bid, a purchase's that far
+// above the ask, so the order can fill at once in a fast market while the
+// broker still fills it at the best price available. A missing key refuses
+// percent reductions only.
 
 // Order-limit keys as the constitution file spells them.
 const (
@@ -31,6 +39,8 @@ const (
 	OrderLimitAllowStockShort       = "allow_stock_short"
 	OrderLimitAllowOptionSellToOpen = "allow_option_sell_to_open"
 	OrderLimitMaxBondMaturityYears  = "max_bond_maturity_years"
+	OrderLimitReduceAllowancePct    = "reduce_allowance_pct"
+	OrderLimitReduceOptionAllowance = "reduce_option_allowance_pct"
 )
 
 // OrderLimitsTable is the constitution table the order limits live in.
@@ -75,12 +85,21 @@ type ConstitutionOrderLimits struct {
 	// The JSON tag omits it while unset so a policy written before the key
 	// existed keeps its fingerprint until the key is written.
 	MaxBondMaturityYears *int `toml:"max_bond_maturity_years" json:"max_bond_maturity_years,omitempty"`
+	// ReduceAllowancePct is how far, in percent, a percent reduction of a
+	// stock or ETF may trade beyond the touch: a sale's limit below the bid,
+	// a purchase's above the ask. Omitted from JSON while unset, like the
+	// bond limit, so an older file keeps its fingerprint until written.
+	ReduceAllowancePct *float64 `toml:"reduce_allowance_pct" json:"reduce_allowance_pct,omitempty"`
+	// ReduceOptionAllowancePct is the same for an option, which also moves
+	// at least one tick beyond the touch.
+	ReduceOptionAllowancePct *float64 `toml:"reduce_option_allowance_pct" json:"reduce_option_allowance_pct,omitempty"`
 }
 
 // OrderLimitKeys lists the table's keys in file order.
 func OrderLimitKeys() []string {
 	return []string{OrderLimitMaxOrderFloorBase, OrderLimitMaxOrderPctNLV, OrderLimitMaxOrderCeilingBase,
-		OrderLimitMaxOptionContracts, OrderLimitAllowStockShort, OrderLimitAllowOptionSellToOpen, OrderLimitMaxBondMaturityYears}
+		OrderLimitMaxOptionContracts, OrderLimitAllowStockShort, OrderLimitAllowOptionSellToOpen, OrderLimitMaxBondMaturityYears,
+		OrderLimitReduceAllowancePct, OrderLimitReduceOptionAllowance}
 }
 
 // MissingKeys names, as order_limits.KEY, every key the table does not write;
@@ -98,6 +117,8 @@ func (o *ConstitutionOrderLimits) MissingKeys() []string {
 		OrderLimitAllowStockShort:       have.AllowStockShort != nil,
 		OrderLimitAllowOptionSellToOpen: have.AllowOptionSellToOpen != nil,
 		OrderLimitMaxBondMaturityYears:  have.MaxBondMaturityYears != nil,
+		OrderLimitReduceAllowancePct:    have.ReduceAllowancePct != nil,
+		OrderLimitReduceOptionAllowance: have.ReduceOptionAllowancePct != nil,
 	}
 	var out []string
 	for _, k := range OrderLimitKeys() {
@@ -108,18 +129,40 @@ func (o *ConstitutionOrderLimits) MissingKeys() []string {
 	return out
 }
 
-// MissingKeysForEveryOrder is MissingKeys without max_bond_maturity_years:
-// the keys whose absence refuses every order preview. A missing bond
-// maturity limit refuses bond buys only (owner decision 2026-10-07 08:27
-// CEST), so it never blocks an exit, a stop or any other order.
+// MissingKeysForEveryOrder is MissingKeys without the keys that judge one
+// kind of order: the keys whose absence refuses every order preview. A
+// missing bond maturity limit refuses bond buys only (owner decision
+// 2026-10-07 08:27 CEST), a missing reduce allowance percent reductions
+// only, so neither ever blocks an exit, a stop or any other order.
 func (o *ConstitutionOrderLimits) MissingKeysForEveryOrder() []string {
 	var out []string
 	for _, k := range o.MissingKeys() {
-		if k != OrderLimitsTable+"."+OrderLimitMaxBondMaturityYears {
+		switch strings.TrimPrefix(k, OrderLimitsTable+".") {
+		case OrderLimitMaxBondMaturityYears, OrderLimitReduceAllowancePct, OrderLimitReduceOptionAllowance:
+		default:
 			out = append(out, k)
 		}
 	}
 	return out
+}
+
+// ReduceAllowancePctFor is the allowance a percent reduction of secType is
+// priced with, or the key that is not written.
+func (o *ConstitutionOrderLimits) ReduceAllowancePctFor(secType string) (float64, error) {
+	key, v := OrderLimitReduceAllowancePct, (*float64)(nil)
+	if o != nil {
+		v = o.ReduceAllowancePct
+	}
+	if strings.EqualFold(strings.TrimSpace(secType), "OPT") {
+		key, v = OrderLimitReduceOptionAllowance, nil
+		if o != nil {
+			v = o.ReduceOptionAllowancePct
+		}
+	}
+	if v == nil {
+		return 0, fmt.Errorf("risk-policy.toml [%s] does not write %s, so a percent reduction cannot be priced; Canary writes it at its next start", OrderLimitsTable, key)
+	}
+	return *v, nil
 }
 
 // validate rejects written values no cap can be built from; it never fills a
@@ -146,6 +189,12 @@ func (o *ConstitutionOrderLimits) validate() error {
 	}
 	if v := o.MaxBondMaturityYears; v != nil && (*v <= 0 || *v > 100) {
 		return fmt.Errorf("order_limits.max_bond_maturity_years must be in [1, 100]")
+	}
+	if v := o.ReduceAllowancePct; v != nil && (!finite(*v) || *v <= 0 || *v > 20) {
+		return fmt.Errorf("order_limits.reduce_allowance_pct must be in (0, 20]")
+	}
+	if v := o.ReduceOptionAllowancePct; v != nil && (!finite(*v) || *v <= 0 || *v > 50) {
+		return fmt.Errorf("order_limits.reduce_option_allowance_pct must be in (0, 50]")
 	}
 	return nil
 }

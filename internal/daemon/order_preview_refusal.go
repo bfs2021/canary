@@ -105,7 +105,7 @@ func previewNeedsOpenSession(orderType, strategy string, limit *float64, trail *
 	switch strings.ToUpper(strings.TrimSpace(orderType)) {
 	case "", rpc.OrderTypeLMT:
 		switch normalizePreviewStrategy(strategy, limit) {
-		case rpc.OrderStrategyPatientLimit, rpc.OrderStrategyBoundedLimit:
+		case rpc.OrderStrategyPatientLimit, rpc.OrderStrategyBoundedLimit, rpc.OrderStrategyAllowanceLimit:
 			return true
 		}
 		return false

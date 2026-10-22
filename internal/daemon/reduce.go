@@ -8,31 +8,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
 // reduceOrderSource tags the order journal so a discretionary percentage trim
 const reduceOrderSource = "manual_reduce"
 
-// reducePriceBoundPct is how far, in percent of the reviewed mid, the market
-// may have moved before a tokened reduce submit refuses to send the reviewed
-// limit (price_moved). The limit itself never moves: the owner confirmed it.
-// Every preview discloses the bound it will be held to (terms.price_bound).
-// Owner decision 2026-10-13 06:59 CEST ("0.5% stocks 2% options"): stocks,
-// ETFs and every other contract 0.5%; options 2%, because an option's mid
-// moves several tenths of a percent within seconds.
-const (
-	reducePriceBoundPct       = 0.5
-	reduceOptionPriceBoundPct = 2.0
-)
-
-// reducePriceBoundPctFor is the owner's band for the contract's security type.
-func reducePriceBoundPctFor(secType string) float64 {
-	if strings.EqualFold(strings.TrimSpace(secType), "OPT") {
-		return reduceOptionPriceBoundPct
-	}
-	return reducePriceBoundPct
-}
+// A percent reduction is priced as a worst price (owner decision 2026-10-22
+// 15:26 CEST, which replaces the ±0.5%/2% band around the reviewed mid of
+// 2026-10-13): its limit sits the policy's allowance beyond the touch
+// (risk-policy.toml [order_limits] reduce_allowance_pct, and
+// reduce_option_allowance_pct with at least one tick), so it can fill at once
+// in a fast market while the broker fills it at the best price available
+// and Adaptive, where the order carries it, works toward the mid first. The
+// limit the owner confirmed never moves. A tokened submit refuses only when
+// the market is already beyond it (beyond_worst_price); a market that moved
+// the other way is no reason to refuse.
 
 // reduceAdaptiveNote is the terms' plain statement when a reduction asked for
 // or would default to Adaptive on a contract the broker layer does not send
@@ -210,8 +202,30 @@ func (s *Server) prepareReduce(ctx context.Context, p rpc.TradeProposalReducePar
 	if len(blockers) > 0 {
 		return preparedReduce{}, blockers, nil
 	}
-	prep, blockers := prepareReduceForRow(row, p)
+	prep, blockers := prepareReduceForRow(row, p, s.reduceOrderLimits())
 	return prep, blockers, nil
+}
+
+// reduceOrderLimits is the loaded policy's [order_limits] table, nil when no
+// policy is loaded; a reduction then cannot be priced and says so.
+func (s *Server) reduceOrderLimits() *risk.ConstitutionOrderLimits {
+	if s == nil {
+		return nil
+	}
+	if snap := s.riskPolicies.snapshot(); snap.policy != nil {
+		return snap.policy.OrderLimits
+	}
+	return nil
+}
+
+// reduceAllowanceFor is the policy's allowance for the holding's security
+// type, or the blocker naming the key that is not written.
+func reduceAllowanceFor(limits *risk.ConstitutionOrderLimits, row rpc.PositionView) (float64, []rpc.TradingBlocker) {
+	pct, err := limits.ReduceAllowancePctFor(positionWireSecType(row.SecType))
+	if err != nil {
+		return 0, []rpc.TradingBlocker{{Code: "reduce_allowance_unset", Message: err.Error(), Action: "Restart Canary so it writes the owner's allowances, then preview again; nothing was sent."}}
+	}
+	return pct, nil
 }
 
 // reducePositions is the one positions read behind a reduce preview, sweep
@@ -228,7 +242,7 @@ func (s *Server) reducePositions(ctx context.Context) (*rpc.PositionsResult, err
 // single-position trim's primitive: it never reads positions or writes to the
 // broker. Terminal blockers (not_reducible, hedge_excluded, percent_too_small,
 // ...) come back with the row echoed so callers can disclose what was acted on.
-func prepareReduceForRow(row rpc.PositionView, p rpc.TradeProposalReduceParams) (preparedReduce, []rpc.TradingBlocker) {
+func prepareReduceForRow(row rpc.PositionView, p rpc.TradeProposalReduceParams, limits *risk.ConstitutionOrderLimits) (preparedReduce, []rpc.TradingBlocker) {
 	hedge := isProtectiveShort(row)
 	if !reduceEligible(row) {
 		return preparedReduce{row: row, hedge: hedge}, []rpc.TradingBlocker{{Code: "not_reducible", Message: fmt.Sprintf("%s %s is not eligible for a percentage reduce", row.Symbol, positionWireSecType(row.SecType)), Action: "The reduce action covers stocks/ETFs and long options."}}
@@ -244,7 +258,11 @@ func prepareReduceForRow(row rpc.PositionView, p rpc.TradeProposalReduceParams) 
 	if len(blockers) > 0 {
 		return preparedReduce{row: row, hedge: hedge}, blockers
 	}
-	prep := buildPreparedReduce(row, qty, p.TimeoutMs, adaptive)
+	allowance, blockers := reduceAllowanceFor(limits, row)
+	if len(blockers) > 0 {
+		return preparedReduce{row: row, hedge: hedge}, blockers
+	}
+	prep := buildPreparedReduce(row, qty, p.TimeoutMs, adaptive, allowance)
 	prep.hedge = hedge
 	return prep, nil
 }
@@ -255,7 +273,8 @@ func prepareReduceForRow(row rpc.PositionView, p rpc.TradeProposalReduceParams) 
 // the shared tail both sizing paths converge on. adaptive is the resolved
 // priority ("" for a plain limit); it rides on the draft only where the
 // contract supports Adaptive, otherwise the terms carry reduceAdaptiveNote.
-func buildPreparedReduce(row rpc.PositionView, qty int, timeoutMs int, adaptive string) preparedReduce {
+// allowance is the policy's percent beyond the touch the limit is priced at.
+func buildPreparedReduce(row rpc.PositionView, qty int, timeoutMs int, adaptive string, allowance float64) preparedReduce {
 	secType := positionWireSecType(row.SecType)
 	action := rpc.OrderActionSell
 	if row.Quantity < 0 {
@@ -267,7 +286,8 @@ func buildPreparedReduce(row rpc.PositionView, qty int, timeoutMs int, adaptive 
 		Contract:  contract,
 		Quantity:  qty,
 		OrderType: rpc.OrderTypeLMT,
-		Strategy:  rpc.OrderStrategyPatientLimit,
+		Strategy:  rpc.OrderStrategyAllowanceLimit,
+		Allowance: &rpc.OrderAllowanceLimit{Pct: allowance},
 		TIF:       rpc.OrderTIFDay,
 		TimeoutMs: timeoutMs,
 		Source:    reduceOrderSource,
@@ -285,14 +305,18 @@ func buildPreparedReduce(row rpc.PositionView, qty int, timeoutMs int, adaptive 
 
 // preparedReduceWithQty is the portfolio sweep's entry point: qty is already
 // caller should never offer an out-of-scope row or a zero qty) before
-func preparedReduceWithQty(row rpc.PositionView, qty int, timeoutMs int, adaptive string) (preparedReduce, []rpc.TradingBlocker) {
+func preparedReduceWithQty(row rpc.PositionView, qty int, timeoutMs int, adaptive string, limits *risk.ConstitutionOrderLimits) (preparedReduce, []rpc.TradingBlocker) {
 	if !reduceEligible(row) {
 		return preparedReduce{row: row}, []rpc.TradingBlocker{{Code: "not_reducible", Message: fmt.Sprintf("%s %s is not eligible for a portfolio trim", row.Symbol, positionWireSecType(row.SecType)), Action: "The sweep covers stocks/ETFs and long options."}}
 	}
 	if qty < 1 {
 		return preparedReduce{row: row}, []rpc.TradingBlocker{{Code: "qty_zero", Message: "this holding's allocated risk share rounded to less than one unit", Action: "Nothing to trim at this percentage; choose a larger percentage."}}
 	}
-	return buildPreparedReduce(row, qty, timeoutMs, adaptive), nil
+	allowance, blockers := reduceAllowanceFor(limits, row)
+	if len(blockers) > 0 {
+		return preparedReduce{row: row}, blockers
+	}
+	return buildPreparedReduce(row, qty, timeoutMs, adaptive, allowance), nil
 }
 
 // reduceClock returns the daemon clock, honoring the test override.
@@ -322,7 +346,7 @@ func reduceResultBase(prep preparedReduce, percent int, now time.Time) rpc.Trade
 	}
 }
 
-// reduceQuoteMid is the mid a reduce prices and bounds from: the quote's own
+// reduceQuoteMid is the mid of a quote, for the review: the quote's own
 // midpoint, else the bid-ask mid.
 func reduceQuoteMid(quote rpc.OrderQuoteSnapshot) (float64, bool) {
 	if quote.Midpoint != nil && *quote.Midpoint > 0 && !math.IsInf(*quote.Midpoint, 0) {
@@ -334,32 +358,44 @@ func reduceQuoteMid(quote rpc.OrderQuoteSnapshot) (float64, bool) {
 	return 0, false
 }
 
-// reducePriceBound states the band the reviewed mid admits for the
-// contract's security type: ±reducePriceBoundPctFor(secType).
-func reducePriceBound(reviewed rpc.OrderQuoteSnapshot, secType string) (rpc.TradeProposalReducePriceBound, bool) {
-	mid, ok := reduceQuoteMid(reviewed)
-	if !ok {
+// reducePriceBound states the worst price the signed draft trades at: its
+// limit, the allowance and the touch it was priced from, and the mid of the
+// reviewed quote. A draft without an allowance (a token from before the
+// worst-price rule) has none.
+func reducePriceBound(draft rpc.OrderDraft, reviewed rpc.OrderQuoteSnapshot) (rpc.TradeProposalReducePriceBound, bool) {
+	a := draft.Allowance
+	if a == nil || !positiveFinite(a.Pct) || !positiveFinite(a.Reference) || !positiveFinite(draft.LimitPrice) {
 		return rpc.TradeProposalReducePriceBound{}, false
 	}
-	pct := reducePriceBoundPctFor(secType)
-	span := mid * pct / 100
-	return rpc.TradeProposalReducePriceBound{ReferenceMid: mid, MaxMovePct: pct, Low: mid - span, High: mid + span}, true
+	side := "bid"
+	if strings.EqualFold(draft.Action, rpc.OrderActionBuy) {
+		side = "ask"
+	}
+	mid, _ := reduceQuoteMid(reviewed)
+	return rpc.TradeProposalReducePriceBound{Side: side, Reference: a.Reference, ReferenceMid: mid, AllowancePct: a.Pct, WorstPrice: draft.LimitPrice}, true
 }
 
-// reducePriceBoundCheck holds the current mid to the reviewed bound. The
-// reviewed limit is never re-priced: a mid outside the band refuses the
-// submit and asks for a new preview.
-func reducePriceBoundCheck(reviewed, current rpc.OrderQuoteSnapshot, secType string) (rpc.TradeProposalReducePriceBound, []rpc.TradingBlocker) {
-	bound, ok := reducePriceBound(reviewed, secType)
+// reducePriceBoundCheck holds the market to the reviewed worst price: a sale
+// is refused when the current bid is already below its limit, a purchase
+// when the ask is above it. The reviewed limit is never re-priced.
+func reducePriceBoundCheck(draft rpc.OrderDraft, reviewed, current rpc.OrderQuoteSnapshot) (rpc.TradeProposalReducePriceBound, []rpc.TradingBlocker) {
+	bound, ok := reducePriceBound(draft, reviewed)
 	if !ok {
-		return bound, []rpc.TradingBlocker{{Code: "price_bound_unavailable", Message: "the reviewed quote has no mid to bound the market move by", Action: "Preview again with a live bid and ask."}}
+		return bound, []rpc.TradingBlocker{{Code: "price_bound_unavailable", Message: "the reviewed terms state no worst price", Action: "Preview again; nothing was sent."}}
 	}
-	mid, ok := reduceQuoteMid(current)
-	if !ok {
-		return bound, []rpc.TradingBlocker{{Code: "quote_unavailable", Message: "no current bid and ask to check the reviewed terms against", Action: "Preview again once a live quote is available; nothing was sent."}}
+	touch := current.Bid
+	if bound.Side == "ask" {
+		touch = current.Ask
 	}
-	if mid < bound.Low-1e-9 || mid > bound.High+1e-9 {
-		return bound, []rpc.TradingBlocker{{Code: "price_moved", Message: fmt.Sprintf("the mid moved to %.4f, outside the reviewed %.4f ±%.2f%% (%.4f to %.4f)", mid, bound.ReferenceMid, bound.MaxMovePct, bound.Low, bound.High), Action: "Preview again at the current market; the reviewed limit was not sent."}}
+	if touch == nil || !positiveFinite(*touch) {
+		return bound, []rpc.TradingBlocker{{Code: "quote_unavailable", Message: "no current " + bound.Side + " to check the reviewed worst price against", Action: "Preview again once a live quote is available; nothing was sent."}}
+	}
+	if (bound.Side == "bid" && *touch < bound.WorstPrice-1e-9) || (bound.Side == "ask" && *touch > bound.WorstPrice+1e-9) {
+		where := "below"
+		if bound.Side == "ask" {
+			where = "above"
+		}
+		return bound, []rpc.TradingBlocker{{Code: "beyond_worst_price", Message: fmt.Sprintf("the %s is %.4f, %s the reviewed worst price %.4f (%.2f%% beyond the reviewed %s %.4f)", bound.Side, *touch, where, bound.WorstPrice, bound.AllowancePct, bound.Side, bound.Reference), Action: "Preview again at the current market; the reviewed limit was not sent."}}
 	}
 	return bound, nil
 }
@@ -391,7 +427,7 @@ func reduceTermsFor(draft rpc.OrderDraft, quote rpc.OrderQuoteSnapshot, tokenID 
 	if draft.AdaptivePriority != "" {
 		terms.Algo = "Adaptive"
 	}
-	terms.PriceBound, _ = reducePriceBound(quote, draft.Contract.SecType)
+	terms.PriceBound, _ = reducePriceBound(draft, quote)
 	return terms
 }
 
@@ -593,7 +629,7 @@ func (s *Server) reduceTokenLeg(ctx context.Context, token string, pos *rpc.Posi
 		out.blockers = []rpc.TradingBlocker{{Code: "quote_unavailable", Message: err.Error(), Action: "Preview again once a live quote is available; nothing was sent."}}
 		return out
 	}
-	out.bound, blockers = reducePriceBoundCheck(payload.Quote, quote, payload.Draft.Contract.SecType)
+	out.bound, blockers = reducePriceBoundCheck(payload.Draft, payload.Quote, quote)
 	if len(blockers) > 0 {
 		out.blockers = blockers
 		return out

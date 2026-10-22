@@ -109,19 +109,21 @@ Desk's per-position Reduce menu and its Reduce book basket ride on
 `trade_proposals.reduce_preview` and `reduce_portfolio_preview`, which
 return a signed preview token per order with `terms`: the exact contract,
 side, quantity, order type, limit, TIF and algorithm, the expiry, and the
-`price_bound` the submit holds the market to. The owner confirms those
+`price_bound` (the worst price) the submit holds the market to. The owner confirms those
 terms; `reduce_submit` with `preview_token` and `reduce_portfolio_submit`
 with `preview_tokens` place them verbatim, each basket leg on its own. The
 daemon never re-sizes or re-prices a tokened reduction: it refuses with
 `token_expired`, `token_invalid`, `token_consumed`, `position_changed`
 (the reviewed quantity exceeds the confirmed position, or the side changed),
-`price_moved` (the current mid is outside the reviewed mid ±0.5% for stocks or ±2% for options (owner 2026-10-13 06:59 CEST), the
-disclosed default pending the owner's own figure), or the order gate's own
+`beyond_worst_price` (the bid is already below a sale's reviewed limit, or
+the ask above a purchase's; since the owner's decision of 2026-10-22 15:26
+CEST, which replaced the ±0.5%/2% band around the reviewed mid), or the order gate's own
 reason, and the place path's admission is unchanged: Canary's own stop on
 the line is joined or shrunk first. `request_ref` names one submission;
 a retry with the same reference replays the recorded result (90 s) and
 nothing is sent twice. Reductions default to IBKR Adaptive `Normal` on a
-limit at the mid where the broker layer sends Adaptive (a US stock or ETF
+limit the policy's allowance beyond the touch
+(`[order_limits].reduce_allowance_pct`, `reduce_option_allowance_pct`) where the broker layer sends Adaptive (a US stock or ETF
 routed SMART); elsewhere the terms say "Adaptive not supported for this
 contract" and the order is a plain limit. The un-tokened `--submit`, which
 previews at the live book and places in one call, remains the hand path

@@ -10,12 +10,13 @@ import (
 
 // testOrderLimitsTable is a complete [order_limits] table: the given floor,
 // 5% of NLV, a ceiling of at least 100,000, five option contracts, no
-// shorts or sell-to-open, and bonds maturing within 30 years.
+// shorts or sell-to-open, bonds maturing within 30 years, and the reduce
+// allowances of 1% (stocks) and 5% (options).
 func testOrderLimitsTable(floor float64) *risk.ConstitutionOrderLimits {
 	return &risk.ConstitutionOrderLimits{
 		MaxOrderFloorBase: new(floor), MaxOrderPctNLV: new(5.0), MaxOrderCeilingBase: new(max(floor, 100000.0)),
 		MaxOptionContracts: new(5), AllowStockShort: new(false), AllowOptionSellToOpen: new(false),
-		MaxBondMaturityYears: new(30),
+		MaxBondMaturityYears: new(30), ReduceAllowancePct: new(1.0), ReduceOptionAllowancePct: new(5.0),
 	}
 }
 
@@ -90,4 +91,6 @@ max_option_contracts = 5
 allow_stock_short = true
 allow_option_sell_to_open = false
 max_bond_maturity_years = 30
+reduce_allowance_pct = 1.0
+reduce_option_allowance_pct = 5.0
 `

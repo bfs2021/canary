@@ -4,8 +4,8 @@ Reduce Submit  accepted=false submit_eligible=true
 Holding        SYNA (conID 700001)
 Reduce         SELL 50 of 100 sh (50%)
 Token ID       cmVkdWNlLXRva2VuLTE
-Terms          SELL 50 SYNA LMT 25.00 DAY · Adaptive Normal
-Price bound    mid 25.00 ±0.50% (24.8750 to 25.1250)
+Terms          SELL 50 SYNA LMT 24.66 DAY · Adaptive Normal
+Worst price    24.66 · 1.00% below the bid 24.90; not sent if the bid is lower
 Expires        2026-09-05T12:10:00Z
 Request ref    desk-7f3a
   - price_moved: the mid moved to 25.4000, outside the reviewed 25.0000 ±0.50% (24.8750 to 25.1250)
@@ -17,8 +17,8 @@ Reduce Submit  accepted=false submit_eligible=true
 \x1b[2mHolding       \x1b[0m SYNA (conID 700001)
 \x1b[2mReduce        \x1b[0m SELL 50 of 100 sh (50%)
 \x1b[2mToken ID      \x1b[0m cmVkdWNlLXRva2VuLTE
-\x1b[2mTerms         \x1b[0m SELL 50 SYNA LMT 25.00 DAY · Adaptive Normal
-\x1b[2mPrice bound   \x1b[0m mid 25.00 ±0.50% (24.8750 to 25.1250)
+\x1b[2mTerms         \x1b[0m SELL 50 SYNA LMT 24.66 DAY · Adaptive Normal
+\x1b[2mWorst price   \x1b[0m 24.66 · 1.00% below the bid 24.90; not sent if the bid is lower
 \x1b[2mExpires       \x1b[0m 2026-09-05T12:10:00Z
 \x1b[2mRequest ref   \x1b[0m desk-7f3a
   - price_moved: the mid moved to 25.4000, outside the reviewed 25.0000 ±0.50% (24.8750 to 25.1250)

@@ -148,9 +148,9 @@ func TestReduceTokenRoundTripPlacesExactlyTheReviewedTerms(t *testing.T) {
 		t.Fatalf("sends = %d, want one", len(sent))
 	}
 	o := sent[0]
-	if o.Action != rpc.OrderActionSell || o.TotalQty != 50 || o.LmtPrice != preview.Terms.LimitPrice || o.LmtPrice != 25 ||
+	if o.Action != rpc.OrderActionSell || o.TotalQty != 50 || o.LmtPrice != preview.Terms.LimitPrice || o.LmtPrice != 24.66 ||
 		o.OrderType != rpc.OrderTypeLMT || o.TIF != rpc.OrderTIFDay || o.AdaptivePriority != "Normal" || o.OutsideRth {
-		t.Fatalf("broker order = %+v, want SELL 50 LMT 25.00 DAY Adaptive Normal as reviewed", o)
+		t.Fatalf("broker order = %+v, want SELL 50 LMT 24.66 DAY Adaptive Normal as reviewed", o)
 	}
 	if res.Terms == nil || *res.Terms != *preview.Terms || res.PreviewTokenID != preview.PreviewTokenID || res.ReduceQuantity != 50 || res.PositionQuantity != 100 {
 		t.Fatalf("submit terms = %+v, want the preview's own (%+v)", res.Terms, preview.Terms)
@@ -158,7 +158,7 @@ func TestReduceTokenRoundTripPlacesExactlyTheReviewedTerms(t *testing.T) {
 	if res.PreviewToken != "" {
 		t.Fatal("a submit handed the token back out")
 	}
-	if res.Place.Draft.Quantity != 50 || res.Place.Draft.LimitPrice != 25 || res.Place.OCAGroup != "" {
+	if res.Place.Draft.Quantity != 50 || res.Place.Draft.LimitPrice != 24.66 || res.Place.OCAGroup != "" {
 		t.Fatalf("place = %+v, want the reviewed draft sent plain (no stop of Canary's own on the line)", res.Place)
 	}
 }
@@ -196,21 +196,22 @@ func TestReduceTokenRefusesWhenThePositionShrank(t *testing.T) {
 	}
 }
 
-// The reviewed limit is held to the bound the preview stated: a mid outside
-// it refuses, a mid inside it sends the reviewed limit, not a new one.
-func TestReduceTokenHoldsTheMarketToTheReviewedBound(t *testing.T) {
+// The reviewed limit is a worst price (owner decision 2026-10-22 15:26
+// CEST): a bid already below it refuses and sends nothing; a bid above it,
+// however far the market rose, sends the reviewed limit unchanged.
+func TestReduceTokenHoldsTheMarketToTheReviewedWorstPrice(t *testing.T) {
 	t.Parallel()
 	r := newReduceTokenRig(t, reduceTestStockRow(100))
 	preview := r.preview(reduceTestStockConID, 50)
-	r.quote(25.4, 25.6) // mid 25.5: 2% above the reviewed 25
-	res := r.submit(preview.PreviewToken, "req-moved")
-	if res.Accepted || firstBlockerCode(res.Blockers) != "price_moved" || len(r.sends()) != 0 {
-		t.Fatalf("submit after a 2%% move = %+v sends %d, want price_moved and nothing sent", res, len(r.sends()))
+	r.quote(24.6, 24.8) // the bid fell below the reviewed 24.66
+	res := r.submit(preview.PreviewToken, "req-below")
+	if res.Accepted || firstBlockerCode(res.Blockers) != "beyond_worst_price" || len(r.sends()) != 0 {
+		t.Fatalf("submit with the bid below the worst price = %+v sends %d, want beyond_worst_price and nothing sent", res, len(r.sends()))
 	}
-	r.quote(25.0, 25.2) // mid 25.1: 0.4% above, inside ±0.5%
-	res = r.submit(preview.PreviewToken, "req-inside")
-	if !res.Accepted || len(r.sends()) != 1 || r.sends()[0].LmtPrice != 25 {
-		t.Fatalf("submit inside the bound = %+v sends %+v, want the reviewed 25.00 limit sent unchanged", res, r.sends())
+	r.quote(26.0, 26.2) // 4% higher: no reason to refuse
+	res = r.submit(preview.PreviewToken, "req-above")
+	if !res.Accepted || len(r.sends()) != 1 || r.sends()[0].LmtPrice != 24.66 {
+		t.Fatalf("submit after a rise = %+v sends %+v, want the reviewed 24.66 limit sent unchanged", res, r.sends())
 	}
 }
 
@@ -273,8 +274,8 @@ func TestReduceBasketPlacesEachLegOnItsOwn(t *testing.T) {
 		t.Fatalf("SYNB leg = %+v, want position_changed with the reviewed 100 and the current 50 disclosed", synb)
 	}
 	sent := r.sends()
-	if len(sent) != 1 || sent[0].TotalQty != 50 || sent[0].LmtPrice != 25 || sent[0].AdaptivePriority != "Normal" {
-		t.Fatalf("sends = %+v, want SYN's reviewed 50 at 25.00 alone", sent)
+	if len(sent) != 1 || sent[0].TotalQty != 50 || sent[0].LmtPrice != 24.66 || sent[0].AdaptivePriority != "Normal" {
+		t.Fatalf("sends = %+v, want SYN's reviewed 50 at 24.66 alone", sent)
 	}
 	again, err := r.srv.reducePortfolioSubmit(t.Context(), rpc.TradeProposalReducePortfolioParams{PreviewTokens: tokens, RequestRef: "basket-1"})
 	if err != nil {
@@ -309,8 +310,8 @@ func TestReduceTokenAdaptivePerSecurityType(t *testing.T) {
 		t.Fatalf("option submit = %+v", res)
 	}
 	sent := r.sends()
-	if len(sent) != 2 || sent[0].AdaptivePriority != "Normal" || sent[0].TotalQty != 25 || sent[1].AdaptivePriority != "" || sent[1].TotalQty != 2 || sent[1].LmtPrice != 2.5 {
-		t.Fatalf("sends = %+v, want the stock Adaptive Normal and the option a plain LMT 2.50 for 2 contracts", sent)
+	if len(sent) != 2 || sent[0].AdaptivePriority != "Normal" || sent[0].TotalQty != 25 || sent[1].AdaptivePriority != "" || sent[1].TotalQty != 2 || sent[1].LmtPrice != 2.28 {
+		t.Fatalf("sends = %+v, want the stock Adaptive Normal and the option a plain LMT 2.28 for 2 contracts", sent)
 	}
 }
 

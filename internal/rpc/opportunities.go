@@ -1619,14 +1619,20 @@ type TradeProposalReduceTerms struct {
 	PriceBound       TradeProposalReducePriceBound `json:"price_bound"`
 }
 
-// TradeProposalReducePriceBound states how far the market may move from the
-// reviewed mid before a tokened submit refuses to send the reviewed limit:
-// the current mid must satisfy Low <= mid <= High.
+// TradeProposalReducePriceBound is the worst price a reduction trades at
+// (owner decision 2026-10-22 15:26 CEST): the limit sits AllowancePct beyond
+// the touch it was priced from (Side "bid" for a sale, "ask" for a
+// purchase), and a tokened submit refuses to send it when the current bid
+// is already below it (a sale) or the ask above it (a purchase). A market
+// that moved the other way is no reason to refuse: the broker fills a
+// marketable limit at the best price available. ReferenceMid is the mid at
+// preview, for the review.
 type TradeProposalReducePriceBound struct {
+	Side         string  `json:"side"`
+	Reference    float64 `json:"reference"`
 	ReferenceMid float64 `json:"reference_mid"`
-	MaxMovePct   float64 `json:"max_move_pct"`
-	Low          float64 `json:"low"`
-	High         float64 `json:"high"`
+	AllowancePct float64 `json:"allowance_pct"`
+	WorstPrice   float64 `json:"worst_price"`
 }
 
 // TradeProposalReduceResult is returned by both reduce_preview and

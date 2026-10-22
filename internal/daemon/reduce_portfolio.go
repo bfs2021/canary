@@ -211,7 +211,7 @@ func (s *Server) reduceLegPrepare(ctx context.Context, c reduceSweepCandidate, t
 		leg.Blockers = c.blockers
 		return leg, nil
 	}
-	prep, blockers := preparedReduceWithQty(c.row, c.qty, timeoutMs, adaptive)
+	prep, blockers := preparedReduceWithQty(c.row, c.qty, timeoutMs, adaptive, s.reduceOrderLimits())
 	if len(blockers) > 0 {
 		leg.Blockers = blockers
 		return leg, nil
