@@ -301,7 +301,9 @@ func runReconShow(ctx context.Context, env *Env, args []string) int {
 	if res.Equity != nil {
 		fmt.Fprintf(env.Stdout, "\n  equity check: statement %s %.2f", res.Equity.StatementDate.Format("2006-01-02"), res.Equity.StatementTotalBase)
 		if res.Equity.DivergencePct != nil {
-			fmt.Fprintf(env.Stdout, "  vs runtime %+.2f%%", *res.Equity.DivergencePct)
+			fmt.Fprintf(env.Stdout, "  vs runtime at statement closing prices and FX %+.2f%%", *res.Equity.DivergencePct)
+		} else if res.Equity.SameDay {
+			fmt.Fprint(env.Stdout, "  comparison pending: closing-price and FX evidence incomplete")
 		} else if !res.Equity.SameDay {
 			fmt.Fprint(env.Stdout, "  same-day runtime sample unavailable")
 		}

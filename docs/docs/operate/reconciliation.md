@@ -136,7 +136,8 @@ fresh equity, approved policy and current reconciliation evidence.
 Under risk-policy v3 a clean report extends the reconcile clock by itself. The
 conditions are checked rather than assumed: the policy active, the report free
 of unresolved exceptions, the statement fresher than `max_report_age_days`, and
-a same-day statement-versus-runtime equity comparison inside
+a statement-versus-runtime equity comparison at the same closing prices and FX
+rates inside
 `max_equity_divergence_pct`. When that holds, the extension is journaled against
 the report id and `canary recon` says the clock was extended automatically. When
 it does not hold, the report says the automatic extension was not recorded and
@@ -157,6 +158,14 @@ sanctioned path is a one-shot, expiring, journaled override on
 `capital.max_unreconciled_days`, which keeps the outage visible instead of
 quiet. If the clock does run out, capital evaluation reports the ledger as past
 its reconcile horizon with no current automatic extension or human sign-off.
+
+The comparison retains the original account value, its observation time, native
+currency values, prices and FX. It revalues the independent runtime sample at
+the statement's closing prices and FX before applying the existing divergence
+limit. The raw difference remains available in JSON as diagnostic evidence.
+A matching date alone is insufficient. Missing historical evidence or changed
+holdings leave the comparison unverified, and the clock does not extend.
+Each evaluated comparison is retained in the daemon's governance journal.
 
 The equity comparison itself is a data-quality reading about the runtime
 sampler, not an exception to clear. [Trading policy](../understand/policy.md)

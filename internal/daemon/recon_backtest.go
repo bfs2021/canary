@@ -210,6 +210,13 @@ func buildCapitalReplay(merged retainedStatementMerge, ctx capitalReplayContext,
 	replay := &rpc.ReconBacktestReplay{
 		Notes: []string{backtestEODNote, backtestGenesisNote},
 	}
+	comparable := map[string]*rpc.ReconEquityCheck{}
+	for key, row := range merged.equityByDay {
+		day := row.ReportDate.UTC().Format("2006-01-02")
+		if sample, ok := ctx.DailyValuation[day]; ok {
+			comparable[day] = compareReconValuation(row, merged.statementByDay[key], sample)
+		}
+	}
 	var days []flexstmt.EquityRow
 	for _, row := range merged.equityByDay {
 		if ctx.GenesisAt.IsZero() || !utcDateBefore(row.ReportDate, ctx.GenesisAt) {
@@ -266,6 +273,13 @@ func buildCapitalReplay(merged retainedStatementMerge, ctx capitalReplayContext,
 		}
 		if sample, ok := ctx.DailyEquity[day]; ok && row.TotalBase != 0 {
 			div := (sample - row.TotalBase) / math.Abs(row.TotalBase) * 100
+			replay.RawSameDayComparisons++
+			if replay.MaxRawSameDayDivergencePct == nil || math.Abs(div) > math.Abs(*replay.MaxRawSameDayDivergencePct) {
+				replay.MaxRawSameDayDivergencePct = &div
+			}
+		}
+		if check := comparable[day]; check != nil && check.DivergencePct != nil {
+			div := *check.DivergencePct
 			replay.SameDayComparisons++
 			if replay.MaxSameDayDivergencePct == nil || math.Abs(div) > math.Abs(*replay.MaxSameDayDivergencePct) {
 				replay.MaxSameDayDivergencePct = &div

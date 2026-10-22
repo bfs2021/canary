@@ -71,6 +71,11 @@ func (s *Server) evaluateRiskPolicyV3Reconciliation() (extended bool) {
 	if s.now != nil {
 		now = s.now()
 	}
+	if err := s.riskCapital.retainReconValuation(rep, mutationScope); err != nil {
+		s.warnf("risk-policy reconciliation valuation evidence could not be retained: %v", err)
+		s.reconEvaluations.record(rep.ReportID, "the comparison evidence could not be retained")
+		return false
+	}
 	if hold, held := autoExtendHoldFor(mgr.status, pol, rep, now); held {
 		s.reconEvaluations.record(rep.ReportID, "")
 		s.debugf("risk-policy v3 report %s not extended: %s", rep.ReportID, hold.Detail)
@@ -179,12 +184,12 @@ func autoExtendHoldFor(policyStatus string, pol *risk.Constitution, rep *rpc.Rec
 	switch {
 	case now.Sub(rep.StatementAsOf) > maxAge:
 		return attention(rpc.ReconEvaluationReasonReportStale, "the newest statement is older than recon.max_report_age_days; the clock extends when a fresher one lands (report.next_attempt)")
-	case rep.Equity == nil || !rep.Equity.SameDay || rep.Equity.DivergencePct == nil:
-		return waiting(rpc.ReconEvaluationReasonAccountValuePending, "no statement day has an account equity reading of the same day yet")
+	case rep.Equity == nil || rep.Equity.Comparability != "comparable" || !rep.Equity.SameDay || rep.Equity.DivergencePct == nil || !reconFinite(*rep.Equity.DivergencePct):
+		return waiting(rpc.ReconEvaluationReasonAccountValuePending, "the account reading cannot yet be compared on the statement’s closing prices and FX rates; complete valuation evidence is required")
 	case rep.Equity.StatementDate.IsZero() || now.Sub(rep.Equity.StatementDate) > maxAge:
 		return attention(rpc.ReconEvaluationReasonReportStale, "the statement day the account equity pairs with is older than recon.max_report_age_days; the clock extends when a fresher statement lands (report.next_attempt)")
 	case math.Abs(*rep.Equity.DivergencePct) > *pol.Recon.MaxEquityDivergencePct:
-		return attention(rpc.ReconEvaluationReasonAccountValueMismatch, "the statement equity and the account reading of the same day differ by more than recon.max_equity_divergence_pct")
+		return attention(rpc.ReconEvaluationReasonAccountValueMismatch, "the statement equity and the account reading, valued at the same closing prices and FX rates, differ by more than recon.max_equity_divergence_pct")
 	}
 	return autoExtendHold{}, false
 }

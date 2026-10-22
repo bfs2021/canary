@@ -251,10 +251,14 @@ func (s *Server) buildAccountSummaryWithAuthority(ctx context.Context, observe b
 			// cache is judged at the clock of this read, not at the
 			// snapshot's parse time: a frame that lands during the read's
 			// own waits is evidence, not the future (refuter, 2026-10-19).
-			if raw, health, err := s.readOrderIntegrityCachedPositions(ctx); err == nil && cachedPositionsMatchBrokerScope(raw, scope) && classifyPortfolioStreamHealth(scope, health, s.nowUTC()) == orderIntegrityHealthCurrent {
-				pnl.PositionsKey = mandatePositionsKey(raw)
+			var valuation *rpc.ReconRuntimeValuation
+			if positions, health, err := s.readOrderIntegrityCachedPositions(ctx); err == nil && cachedPositionsMatchBrokerScope(positions, scope) && classifyPortfolioStreamHealth(scope, health, s.nowUTC()) == orderIntegrityHealthCurrent {
+				pnl.PositionsKey = mandatePositionsKey(positions)
+				if currentPortfolioAuthority(res.Authority) && provenance == ibkrlib.AccountSummaryProvenanceRequest {
+					valuation = captureReconValuation(raw, positions, res.AsOf)
+				}
 			}
-			if firstDailyObservation := s.riskCapital.ObserveWithPnL(res.NetLiquidation, pnl, res.AsOf, pol, capitalScope, recoveryAllowed); firstDailyObservation {
+			if firstDailyObservation := s.riskCapital.observeWithValuation(res.NetLiquidation, pnl, res.AsOf, pol, capitalScope, recoveryAllowed, valuation); firstDailyObservation {
 				// Re-evaluate when today's first runtime account observation arrives.
 				s.evaluateRiskPolicyV3Reconciliation()
 			}

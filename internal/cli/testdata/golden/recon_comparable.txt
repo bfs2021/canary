@@ -1,0 +1,10 @@
+# canary recon show · COLUMNS=80 · colour off
+Reconciliation — 2026-09-05 14:00 TZ  status active
+  fetch: [flex] is not configured (set enabled, query_id, and the token file)
+
+  equity check: statement 2026-09-05 100000.00  vs runtime at statement closing prices and FX +0.00%
+# canary recon show · COLUMNS=80 · colour on, ESC written as \x1b
+Reconciliation — 2026-09-05 14:00 TZ  status active
+  fetch: [flex] is not configured (set enabled, query_id, and the token file)
+
+  equity check: statement 2026-09-05 100000.00  vs runtime at statement closing prices and FX +0.00%

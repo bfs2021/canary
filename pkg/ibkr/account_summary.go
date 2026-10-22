@@ -115,6 +115,8 @@ var accountBaseCurrencyValueTags = []string{
 // are denominated in that row's currency, not converted to the account base
 // value; the wire format does not preserve that distinction here.
 type CurrencyLedger struct {
+	NetLiquidationObserved   bool
+	ExchangeRateObserved     bool
 	NetLiquidationByCurrency float64
 	CashBalance              float64
 	StockMarketValue         float64
@@ -689,7 +691,7 @@ func assignCurrencyLedgerValue(ledger map[string]*CurrencyLedger, field, ccy, va
 	}
 	switch field {
 	case "NetLiquidationByCurrency":
-		row.NetLiquidationByCurrency = parsed
+		row.NetLiquidationByCurrency, row.NetLiquidationObserved = parsed, true
 	case "CashBalance":
 		row.CashBalance = parsed
 	case "SettledCash":
@@ -703,7 +705,7 @@ func assignCurrencyLedgerValue(ledger map[string]*CurrencyLedger, field, ccy, va
 	case "RealizedPnL":
 		row.RealizedPnL = parsed
 	case "ExchangeRate":
-		row.ExchangeRate = parsed
+		row.ExchangeRate, row.ExchangeRateObserved = parsed, true
 	}
 }
 

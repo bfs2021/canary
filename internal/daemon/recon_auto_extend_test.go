@@ -17,7 +17,7 @@ func cleanReconReport(now time.Time) *rpc.ReconResult {
 	return &rpc.ReconResult{
 		AsOf: now, Status: rpc.ReconStatusActive, ReportID: "report-1",
 		StatementAsOf: now.Add(-time.Hour), CoverageTo: utcDate(now.Year(), now.Month(), now.Day()),
-		Equity:      &rpc.ReconEquityCheck{StatementDate: utcDate(now.Year(), now.Month(), now.Day()), SameDay: true, DivergencePct: &div},
+		Equity:      &rpc.ReconEquityCheck{StatementDate: utcDate(now.Year(), now.Month(), now.Day()), SameDay: true, Comparability: "comparable", DivergencePct: &div},
 		InputHealth: []rpc.SourceHealth{{Source: "statements", Status: "ok"}},
 		Fetch:       rpc.ReconFetchStatus{Configured: true, State: rpc.ReconReportStateCurrent},
 	}
@@ -75,7 +75,7 @@ func TestReconAutomationStatusNamesTheHold(t *testing.T) {
 		check(t, rep, rpc.ReconEvaluationStateAttentionRequired, rpc.ReconEvaluationReasonExceptionsNeedReview, "2 unresolved exceptions")
 		rep = cleanReconReport(now)
 		rep.Equity.SameDay = false
-		check(t, rep, rpc.ReconEvaluationStateWaiting, rpc.ReconEvaluationReasonAccountValuePending, "same day")
+		check(t, rep, rpc.ReconEvaluationStateWaiting, rpc.ReconEvaluationReasonAccountValuePending, "valuation evidence")
 		rep = cleanReconReport(now)
 		far := *pol.Recon.MaxEquityDivergencePct + 1
 		rep.Equity.DivergencePct = &far

@@ -181,7 +181,7 @@ Every ingest regenerates the recon report over the coverage window:
 **The reconcile verb after 3a:** `canary policy capital-event reconcile
 --report <id>` requires a report that exists, covers through the approved
 max age, and has zero unresolved exceptions. Human-only, as today. Since
-risk-policy v3 (2026-07-18) a clean, fresh report with a same-day equity
+risk-policy v3 (2026-07-18) a clean, fresh report with a common-valuation equity
 check inside `recon.max_equity_divergence_pct` extends the clock
 automatically (journaled as origin `daemon-auto` with the report id); the
 verb remains for exception-bearing reports and deliberate sign-offs, and a
@@ -210,6 +210,37 @@ and a statement past `recon.max_report_age_days` reads `report_stale`
 (waiting), both bare `evaluation_failed` before 2026-10-18. The daemon judges
 a report again when a revised policy is adopted and after a dismissal, since
 either gives it a new id.
+
+### Comparable equity evidence
+
+Recorded owner instruction, 2026-10-22 13:56 CEST: compare on the same valuation and FX
+basis, retain the evidence, and keep policy limits unchanged.
+
+A calendar date is not a valuation basis. The daemon retains the independent
+runtime NLV, its observation time, native currency NLVs and broker FX rates,
+and exact positions with their observed market values. Display-repaired FX
+never enters this evidence. The scoped capital document keeps the existing
+rolling sample window; the governance journal retains each evaluated comparison,
+including held comparisons, independently of that window. A report ID binds
+these inputs as well as the statement generation and fingerprint.
+
+For the latest statement day, the comparator revalues that runtime sample at
+the statement's closing marks and FX. It adds the native NLV FX adjustment and
+the positions' market-value adjustment to the original runtime NLV. It does
+not substitute statement balances for runtime balances: the original aggregate
+residual remains in the comparison. The unchanged policy divergence limit
+applies to this normalized difference. Original amounts and raw divergence
+remain separate diagnostic evidence; backtests distinguish raw date pairs from
+comparable pairs.
+
+Both position streams must describe the same marked book at monetary precision;
+statement and runtime quantities, contract identity, currency and multiplier
+must match. The initial valuation bridge supports stocks and options. Missing
+rates, incomplete statement closing components, unsupported instruments,
+changed inventory, another account/base currency/date, and historical samples
+without retained basis produce an unverified comparison and extend no clock.
+This does not reconstruct intraday transactions or turn price/FX adjustments
+into evidence about the timing of cash movements.
 
 ## Rückbau
 

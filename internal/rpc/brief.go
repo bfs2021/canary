@@ -1237,16 +1237,63 @@ type ReconException struct {
 	DismissReason string `json:"dismiss_reason,omitempty"`
 }
 
-// ReconEquityCheck compares the statement equity series with the runtime
-// is computed only from a same-day pair; when SameDay is false,
-// only and DivergencePct is absent.
+// ReconEquityCheck retains the original observations and compares an independent
+// runtime book only after repricing it at the statement's closing marks and FX.
+// SameDay alone is diagnostic, never proof of a common valuation basis.
 type ReconEquityCheck struct {
-	StatementDate      time.Time `json:"statement_date,omitzero"`
-	StatementTotalBase float64   `json:"statement_total_base"`
-	RuntimeEquityBase  *float64  `json:"runtime_equity_base,omitempty"`
-	RuntimeAsOf        time.Time `json:"runtime_as_of,omitzero"`
-	DivergencePct      *float64  `json:"divergence_pct,omitempty"`
-	SameDay            bool      `json:"same_day"`
+	StatementDate       time.Time               `json:"statement_date,omitzero"`
+	StatementTotalBase  float64                 `json:"statement_total_base"`
+	RuntimeEquityBase   *float64                `json:"runtime_equity_base,omitempty"`
+	RuntimeAsOf         time.Time               `json:"runtime_as_of,omitzero"`
+	DivergencePct       *float64                `json:"divergence_pct,omitempty"`
+	SameDay             bool                    `json:"same_day"`
+	Comparability       string                  `json:"comparability,omitempty"`
+	ComparedRuntimeBase *float64                `json:"compared_runtime_base,omitempty"`
+	RawDivergencePct    *float64                `json:"raw_divergence_pct,omitempty"`
+	Evidence            *ReconValuationEvidence `json:"evidence,omitempty"`
+}
+
+// ReconRuntimeValuation is the retained broker observation, before any repair
+// of missing FX rates for display. Scope is supplied by its capital document.
+type ReconRuntimeValuation struct {
+	AsOf         time.Time                       `json:"as_of"`
+	BaseCurrency string                          `json:"base_currency"`
+	EquityBase   float64                         `json:"equity_base"`
+	Reason       string                          `json:"reason,omitempty"`
+	Currencies   map[string]ReconNativeValuation `json:"currencies"`
+	Positions    []ReconPositionValuation        `json:"positions"`
+}
+
+// ReconNativeValuation preserves one observed native NLV and its broker FX rate.
+type ReconNativeValuation struct {
+	Equity float64 `json:"equity"`
+	FXRate float64 `json:"fx_rate"`
+}
+
+// ReconPositionValuation identifies a marked exact-contract position.
+type ReconPositionValuation struct {
+	ConID       int64     `json:"con_id"`
+	Currency    string    `json:"currency"`
+	AssetClass  string    `json:"asset_class"`
+	Quantity    float64   `json:"quantity"`
+	Multiplier  float64   `json:"multiplier"`
+	MarketValue float64   `json:"market_value"`
+	Mark        float64   `json:"mark"`
+	ObservedAt  time.Time `json:"observed_at"`
+}
+
+// ReconValuationEvidence contains the reproducible inputs and adjustments.
+// No policy threshold or guessed exchange rate is introduced by normalization.
+type ReconValuationEvidence struct {
+	Basis                  string                   `json:"basis"`
+	Runtime                ReconRuntimeValuation    `json:"runtime"`
+	StatementGeneratedAt   time.Time                `json:"statement_generated_at"`
+	StatementFingerprint   string                   `json:"statement_fingerprint"`
+	StatementRates         map[string]float64       `json:"statement_rates"`
+	StatementPositions     []ReconPositionValuation `json:"statement_positions"`
+	FXAdjustmentBase       float64                  `json:"fx_adjustment_base"`
+	MarketAdjustmentBase   float64                  `json:"market_adjustment_base"`
+	UnallocatedRuntimeBase float64                  `json:"unallocated_runtime_base"`
 }
 
 // ReconBacktestFlow labels one statement flow for the operator's full-window
@@ -1272,18 +1319,20 @@ type ReconBacktestCrossing struct {
 
 // ReconBacktestReplay is the capital-ladder replay over broker statement EOD
 type ReconBacktestReplay struct {
-	Days                    int                     `json:"days"`
-	FirstDay                time.Time               `json:"first_day,omitzero"`
-	LastDay                 time.Time               `json:"last_day,omitzero"`
-	ReplayedPeakBase        float64                 `json:"replayed_peak_base"`
-	ReplayedPeakAt          time.Time               `json:"replayed_peak_at,omitzero"`
-	RuntimePeakBase         *float64                `json:"runtime_peak_base,omitempty"`
-	RuntimePeakAt           time.Time               `json:"runtime_peak_at,omitzero"`
-	PeakDivergencePct       *float64                `json:"peak_divergence_pct,omitempty"`
-	Crossings               []ReconBacktestCrossing `json:"crossings,omitempty"`
-	SameDayComparisons      int                     `json:"same_day_comparisons"`
-	MaxSameDayDivergencePct *float64                `json:"max_same_day_divergence_pct,omitempty"`
-	Notes                   []string                `json:"notes,omitempty"`
+	Days                       int                     `json:"days"`
+	FirstDay                   time.Time               `json:"first_day,omitzero"`
+	LastDay                    time.Time               `json:"last_day,omitzero"`
+	ReplayedPeakBase           float64                 `json:"replayed_peak_base"`
+	ReplayedPeakAt             time.Time               `json:"replayed_peak_at,omitzero"`
+	RuntimePeakBase            *float64                `json:"runtime_peak_base,omitempty"`
+	RuntimePeakAt              time.Time               `json:"runtime_peak_at,omitzero"`
+	PeakDivergencePct          *float64                `json:"peak_divergence_pct,omitempty"`
+	Crossings                  []ReconBacktestCrossing `json:"crossings,omitempty"`
+	RawSameDayComparisons      int                     `json:"raw_same_day_comparisons"`
+	MaxRawSameDayDivergencePct *float64                `json:"max_raw_same_day_divergence_pct,omitempty"`
+	SameDayComparisons         int                     `json:"same_day_comparisons"`
+	MaxSameDayDivergencePct    *float64                `json:"max_same_day_divergence_pct,omitempty"`
+	Notes                      []string                `json:"notes,omitempty"`
 }
 
 // ReconBacktestResult is the full-window recon backtest payload. It is

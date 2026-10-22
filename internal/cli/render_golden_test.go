@@ -225,6 +225,8 @@ func renderGoldenCases() []renderGoldenCase {
 	diagnosticHealth.GatewaySetup = &rpc.GatewaySetupHealth{State: rpc.GatewaySetupAttention, AsOf: goldenAt.Add(-119 * time.Minute),
 		Notes: []string{"Master API client ID is not 7: orders and fills from TWS or other apps stay unseen."}}
 	return []renderGoldenCase{
+		{name: "recon_comparable", argv: []string{"recon", "show"}, conn: goldenConn{"recon.snapshot": &rpc.ReconResult{AsOf: goldenAt, Status: rpc.ReconStatusActive, Equity: &rpc.ReconEquityCheck{StatementDate: goldenAt, StatementTotalBase: 100000, RuntimeEquityBase: new(98000.0), SameDay: true, Comparability: "comparable", DivergencePct: new(0.0)}}}},
+		{name: "recon_basis_pending", argv: []string{"recon", "show"}, conn: goldenConn{"recon.snapshot": &rpc.ReconResult{AsOf: goldenAt, Status: rpc.ReconStatusActive, Equity: &rpc.ReconEquityCheck{StatementDate: goldenAt, StatementTotalBase: 100000, RuntimeEquityBase: new(98000.0), SameDay: true, Comparability: "runtime_basis_missing"}}}},
 		{name: "update-trading-refusal", argv: []string{"update"}, render: func(env *Env) { renderTradingUpdateRefusal(env.Stdout) }},
 		{name: "help", argv: []string{"help"}, render: renderUsage},
 		{name: "help_order", argv: []string{"order", "--help"}},

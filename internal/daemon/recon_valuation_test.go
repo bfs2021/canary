@@ -1,0 +1,230 @@
+package daemon
+
+import (
+	"encoding/json"
+	"math"
+	"testing"
+	"time"
+
+	"github.com/osauer/canary/v2/internal/flexstmt"
+	"github.com/osauer/canary/v2/internal/rpc"
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
+)
+
+func TestReconLegacySampleNeedsValuationBasis(t *testing.T) {
+	s := newReconV3TestServer(t)
+	now := time.Now().UTC()
+	scope := brokerStateScope{Account: "U1234567", Mode: rpc.AccountModeLive}
+	s.riskCapital.Observe(98000, now, s.riskPolicies.snapshot().policy, scope, true)
+	day := utcDate(now.Year(), now.Month(), now.Day())
+	got := s.reconEquityCheck(retainedStatementMerge{equityByDay: map[string]flexstmt.EquityRow{"day": {ReportDate: day, TotalBase: 100000}}}, scope)
+	if got.DivergencePct != nil {
+		t.Fatalf("date-only sample produced a policy divergence: %v; valuation and FX basis are unproved", *got.DivergencePct)
+	}
+	if got.RuntimeEquityBase == nil || *got.RuntimeEquityBase != 98000 {
+		t.Fatal("the original runtime observation must remain available as evidence")
+	}
+}
+
+func reconValuationFixture() (flexstmt.EquityRow, flexstmt.Statement, rpc.ReconRuntimeValuation) {
+	day := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
+	row := flexstmt.EquityRow{ReportDate: day, TotalBase: 100000}
+	st := flexstmt.Statement{AccountID: "U1234567", FromDate: day, ToDate: day, WhenGenerated: day.Add(30 * time.Hour), Equity: []flexstmt.EquityRow{row},
+		FX:        &flexstmt.FXSnapshot{Day: "2026-09-23", SingleDay: true, BaseCurrency: "EUR", NAV: 100000, Book: map[string]float64{"EUR": 50000, "USD": 50000}, Rates: map[string]float64{"EUR": 1, "USD": 1}},
+		Positions: []flexstmt.OpenPosition{{ConID: 101, AccountID: "U1234567", Currency: "USD", AssetClass: "STK", ReportDate: day, LevelOfDetail: "SUMMARY", Quantity: new(100.0), Multiplier: new(1.0), MarkPrice: new(100.0)}},
+	}
+	sample := rpc.ReconRuntimeValuation{AsOf: day.Add(22 * time.Hour), BaseCurrency: "EUR", EquityBase: 98000,
+		Currencies: map[string]rpc.ReconNativeValuation{"EUR": {Equity: 50000, FXRate: 1}, "USD": {Equity: 50000, FXRate: .96}},
+		Positions:  []rpc.ReconPositionValuation{{ConID: 101, Currency: "USD", AssetClass: "STK", Quantity: 100, Multiplier: 1, MarketValue: 10000, Mark: 100, ObservedAt: day.Add(22 * time.Hour)}},
+	}
+	return row, st, sample
+}
+
+func TestReconCommonValuationBasis(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		price, fx, residual float64
+	}{
+		{"FX alone", 100, .96, 0}, {"marks alone", 90, 1, 0}, {"FX and marks", 90, .96, 0}, {"real residual retained", 90, .96, -2000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row, st, sample := reconValuationFixture()
+			sample.Positions[0].Mark, sample.Positions[0].MarketValue = tc.price, 100*tc.price
+			native := 40000 + 100*tc.price
+			sample.Currencies["USD"] = rpc.ReconNativeValuation{Equity: native, FXRate: tc.fx}
+			sample.EquityBase = 50000 + native*tc.fx + tc.residual
+			got := compareReconValuation(row, st, sample)
+			if got.Comparability != "comparable" || got.DivergencePct == nil || math.Abs(*got.DivergencePct-tc.residual/1000) > 1e-10 {
+				t.Fatalf("comparison=%+v", got)
+			}
+			if got.Evidence == nil || got.Evidence.UnallocatedRuntimeBase != tc.residual || got.RuntimeAsOf != sample.AsOf || *got.RuntimeEquityBase != sample.EquityBase {
+				t.Fatalf("lost original evidence: %+v", got)
+			}
+			pol := newReconV3TestServer(t).riskPolicies.snapshot().policy
+			originalLimit := *pol.Recon.MaxEquityDivergencePct
+			rep := cleanReconReport(sample.AsOf)
+			rep.Equity = got
+			if autoExtendEligible(rpc.RiskPolicyStatusActive, pol, rep, sample.AsOf) != (tc.residual == 0) {
+				t.Fatal("normalization hid a real breach or rejected a valuation-only difference")
+			}
+			if *pol.Recon.MaxEquityDivergencePct != originalLimit {
+				t.Fatal("changed policy limit")
+			}
+		})
+	}
+}
+
+func TestReconMissingOrChangedBasisCannotPass(t *testing.T) {
+	cases := map[string]func(*flexstmt.Statement, *rpc.ReconRuntimeValuation){
+		"FX missing": func(st *flexstmt.Statement, _ *rpc.ReconRuntimeValuation) { delete(st.FX.Rates, "USD") },
+		"runtime FX missing": func(_ *flexstmt.Statement, v *rpc.ReconRuntimeValuation) {
+			v.Currencies["USD"] = rpc.ReconNativeValuation{Equity: 50000}
+		},
+		"native currency absent":  func(_ *flexstmt.Statement, v *rpc.ReconRuntimeValuation) { delete(v.Currencies, "USD") },
+		"different base currency": func(_ *flexstmt.Statement, v *rpc.ReconRuntimeValuation) { v.BaseCurrency = "USD" },
+		"different date":          func(_ *flexstmt.Statement, v *rpc.ReconRuntimeValuation) { v.AsOf = v.AsOf.Add(-24 * time.Hour) },
+		"different quantity":      func(_ *flexstmt.Statement, v *rpc.ReconRuntimeValuation) { v.Positions[0].Quantity = 99 },
+		"missing position":        func(_ *flexstmt.Statement, v *rpc.ReconRuntimeValuation) { v.Positions = nil },
+		"incomplete closing book": func(st *flexstmt.Statement, _ *rpc.ReconRuntimeValuation) {
+			st.FX.Reason = "native_cash_balances_missing"
+		},
+		"incoherent runtime":     func(_ *flexstmt.Statement, v *rpc.ReconRuntimeValuation) { v.Reason = "runtime_valuation_incoherent" },
+		"unsupported instrument": func(st *flexstmt.Statement, _ *rpc.ReconRuntimeValuation) { st.Positions[0].AssetClass = "FUT" },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			row, st, v := reconValuationFixture()
+			mutate(&st, &v)
+			got := compareReconValuation(row, st, v)
+			if got.DivergencePct != nil || got.Comparability == "comparable" || got.Evidence == nil {
+				t.Fatalf("unproved basis passed or evidence lost: %+v", got)
+			}
+		})
+	}
+}
+
+func TestReconValuationEvidenceSurvivesRestartAndIsScoped(t *testing.T) {
+	store, pol, now := recoveryStore(t)
+	row, statement, sample := reconValuationFixture()
+	*now = sample.AsOf
+	store.observeWithValuation(sample.EquityBase, mandatePnLReading{}, sample.AsOf, pol, testLiveObserveScope, true, &sample)
+	check := compareReconValuation(row, statement, sample)
+	rep := &rpc.ReconResult{ReportID: "recon-test-evidence", Equity: check}
+	if err := store.retainReconValuation(rep, testLiveObserveScope); err != nil {
+		t.Fatal(err)
+	}
+	// The caller's maps must not mutate retained evidence.
+	sample.Currencies["USD"] = rpc.ReconNativeValuation{Equity: 1, FXRate: 1}
+	restarted := &riskCapitalStore{now: store.now}
+	if err := restarted.bindCore(t.Context(), store.core); err != nil {
+		t.Fatal(err)
+	}
+	ctx, err := restarted.ReplayContextForScope(testLiveObserveScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, ok := ctx.DailyValuation["2026-09-23"]
+	if !ok || retained.Currencies["USD"].Equity != 50000 || retained.AsOf != *now {
+		t.Fatalf("retained=%+v", retained)
+	}
+	other := testLiveObserveScope
+	other.Account = "U7654321"
+	ctx, err = restarted.ReplayContextForScope(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ctx.DailyValuation) != 0 {
+		t.Fatal("valuation leaked across account scopes")
+	}
+	payloads, err := restarted.GovernanceEventPayloadsForScope(t.Context(), testLiveObserveScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range payloads {
+		var event struct {
+			Kind   string                `json:"kind"`
+			Equity *rpc.ReconEquityCheck `json:"equity"`
+		}
+		if json.Unmarshal(p, &event) == nil && event.Kind == "recon_valuation_evaluated" {
+			found = event.Equity != nil && event.Equity.Evidence != nil && event.Equity.Evidence.Runtime.Currencies["USD"].Equity == 50000
+		}
+	}
+	if !found {
+		t.Fatal("reproducible comparison absent from durable journal")
+	}
+}
+
+func TestReconReportIdentityPinsValuationEvidence(t *testing.T) {
+	row, st, sample := reconValuationFixture()
+	pol := newReconV3TestServer(t).riskPolicies.snapshot().policy
+	id := func(check *rpc.ReconEquityCheck) string {
+		return reconReportID(nil, nil, nil, nil, nil, st.FromDate, st.ToDate, st.WhenGenerated, pol, "scope", check)
+	}
+	first := id(compareReconValuation(row, st, sample))
+	sample.Currencies["USD"] = rpc.ReconNativeValuation{Equity: 50000, FXRate: .97}
+	if id(compareReconValuation(row, st, sample)) == first {
+		t.Fatal("changed FX evidence reused a report identity")
+	}
+}
+
+func TestReconCapturesBrokerBasisWithoutInventingMissingRates(t *testing.T) {
+	_, _, sample := reconValuationFixture()
+	raw := &ibkrlib.RawAccountSummary{BaseCurrency: "EUR", BaseCurrencyProvenance: ibkrlib.AccountBaseCurrencyExplicitTag, NetLiquidation: new(sample.EquityBase), CurrencyLedger: map[string]ibkrlib.CurrencyLedger{
+		"EUR": {NetLiquidationByCurrency: 50000, NetLiquidationObserved: true},
+		"USD": {NetLiquidationByCurrency: 50000, NetLiquidationObserved: true, StockMarketValue: 10000, ExchangeRate: .96, ExchangeRateObserved: true},
+	}}
+	positions := []*ibkrlib.RawPosition{{ValuationAt: sample.AsOf, Contract: ibkrlib.Contract{ConID: 101, SecType: "STK", Currency: "USD"}, Position: 100, MarketPrice: 100, MarketValue: 10000}}
+	got := captureReconValuation(raw, positions, sample.AsOf)
+	if got == nil || got.Reason != "" || got.Currencies["USD"].FXRate != .96 {
+		t.Fatalf("capture=%+v", got)
+	}
+	row := raw.CurrencyLedger["USD"]
+	row.ExchangeRateObserved = false
+	raw.CurrencyLedger["USD"] = row
+	if got = captureReconValuation(raw, positions, sample.AsOf); got == nil || got.Reason == "" {
+		t.Fatal("unobserved FX rate was accepted")
+	}
+	row.ExchangeRateObserved = true
+	raw.CurrencyLedger["USD"] = row
+	positions[0].MarketValue = 9999
+	if got = captureReconValuation(raw, positions, sample.AsOf); got == nil || got.Reason != "runtime_valuation_incoherent" {
+		t.Fatal("mixed book snapshots were accepted")
+	}
+	positions[0].MarketValue = math.NaN()
+	got = captureReconValuation(raw, positions, sample.AsOf)
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatal("invalid broker value poisoned durable state", err)
+	}
+}
+
+func TestReconBacktestSeparatesRawFromComparableDifference(t *testing.T) {
+	row, st, sample := reconValuationFixture()
+	merged := mergeRetainedStatements([]flexstmt.Statement{st})
+	ctx := capitalReplayContext{DailyEquity: map[string]float64{"2026-09-23": sample.EquityBase}, DailyValuation: map[string]rpc.ReconRuntimeValuation{"2026-09-23": sample}}
+	got := buildCapitalReplay(merged, ctx, 10, 20, 100000, time.Time{})
+	if got.SameDayComparisons != 1 || got.MaxSameDayDivergencePct == nil || *got.MaxSameDayDivergencePct != 0 || got.MaxRawSameDayDivergencePct == nil || *got.MaxRawSameDayDivergencePct != -2 {
+		t.Fatalf("replay=%+v", got)
+	}
+	delete(ctx.DailyValuation, row.ReportDate.Format("2006-01-02"))
+	got = buildCapitalReplay(merged, ctx, 10, 20, 100000, time.Time{})
+	if got.SameDayComparisons != 0 || got.MaxSameDayDivergencePct != nil || got.RawSameDayComparisons != 1 {
+		t.Fatal("legacy replay counted an unproved pair")
+	}
+}
+
+func TestReconLatestStatementCannotBorrowOlderComparableEvidence(t *testing.T) {
+	s := newReconV3TestServer(t)
+	row, statement, sample := reconValuationFixture()
+	now := sample.AsOf.Add(24 * time.Hour)
+	s.riskCapital.now = func() time.Time { return now }
+	scope := brokerStateScope{Account: "U1234567", Mode: rpc.AccountModeLive}
+	s.riskCapital.observeWithValuation(sample.EquityBase, mandatePnLReading{}, sample.AsOf, s.riskPolicies.snapshot().policy, scope, true, &sample)
+	latest := row
+	latest.ReportDate = latest.ReportDate.Add(24 * time.Hour)
+	merged := mergeRetainedStatements([]flexstmt.Statement{statement, {AccountID: statement.AccountID, WhenGenerated: statement.WhenGenerated.Add(24 * time.Hour), Equity: []flexstmt.EquityRow{latest}}})
+	got := s.reconEquityCheck(merged, scope)
+	if !got.StatementDate.Equal(latest.ReportDate) || got.DivergencePct != nil {
+		t.Fatalf("borrowed older pair: %+v", got)
+	}
+}

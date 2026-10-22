@@ -37,6 +37,7 @@ type retainedStatementMerge struct {
 	flows            []reconFlow
 	exceptions       []rpc.ReconException
 	equityByDay      map[string]flexstmt.EquityRow
+	statementByDay   map[string]flexstmt.Statement
 	classifiedCounts map[string]int
 	statementAsOf    time.Time
 	coverageFrom     time.Time
@@ -215,8 +216,8 @@ func (s *Server) buildReconReportWithSnapshotContext(ctx context.Context) (*rpc.
 	if pol.Semantics().StatementReconciliation {
 		res.StatementCumFlowsBase = &statementFlows
 	}
-	res.Equity = s.reconEquityCheck(merged.equityByDay, scope)
-	res.ReportID = reconReportID(exceptions, baseline, confirmed, matchableFlows, bridgeEvents, res.CoverageFrom, res.CoverageTo, res.StatementAsOf, pol, reconScopeIdentity(scope))
+	res.Equity = s.reconEquityCheck(merged, scope)
+	res.ReportID = reconReportID(exceptions, baseline, confirmed, matchableFlows, bridgeEvents, res.CoverageFrom, res.CoverageTo, res.StatementAsOf, pol, reconScopeIdentity(scope), res.Equity)
 	res.InputHealth = health
 	snapshot := &statementCapitalSnapshot{
 		Scope:           scope,
@@ -314,6 +315,7 @@ func mergeRetainedStatements(statements []flexstmt.Statement) retainedStatementM
 	})
 	merged := retainedStatementMerge{
 		equityByDay:      make(map[string]flexstmt.EquityRow),
+		statementByDay:   make(map[string]flexstmt.Statement),
 		classifiedCounts: make(map[string]int),
 	}
 	seenLine := make(map[string]bool)
@@ -369,6 +371,7 @@ func mergeRetainedStatements(statements []flexstmt.Statement) retainedStatementM
 			key := strings.ToUpper(strings.TrimSpace(st.AccountID)) + "\x00" + e.ReportDate.Format("2006-01-02")
 			if _, ok := merged.equityByDay[key]; !ok {
 				merged.equityByDay[key] = e
+				merged.statementByDay[key] = st
 			}
 		}
 	}
@@ -660,41 +663,37 @@ func applyReconDismissalsContext(ctx context.Context, exceptions []rpc.ReconExce
 	return nil
 }
 
-func (s *Server) reconEquityCheck(equityByDay map[string]flexstmt.EquityRow, scope brokerStateScope) *rpc.ReconEquityCheck {
+func (s *Server) reconEquityCheck(merged retainedStatementMerge, scope brokerStateScope) *rpc.ReconEquityCheck {
+	var newestKey string
 	var newest flexstmt.EquityRow
-	for _, row := range equityByDay {
+	for key, row := range merged.equityByDay {
 		if row.ReportDate.After(newest.ReportDate) {
-			newest = row
+			newest, newestKey = row, key
 		}
 	}
 	if newest.ReportDate.IsZero() {
 		return nil
 	}
-	check := &rpc.ReconEquityCheck{StatementDate: newest.ReportDate, StatementTotalBase: newest.TotalBase}
-	if s.riskCapital != nil {
-		paired := newest
-		var pairedEquity float64
-		var pairedOK bool
-		for _, row := range equityByDay {
-			day := row.ReportDate.UTC().Format("2006-01-02")
-			if equity, ok := s.riskCapital.DailySampleForScope(day, scope); ok && (!pairedOK || row.ReportDate.After(paired.ReportDate)) {
-				paired, pairedEquity, pairedOK = row, equity, true
-			}
+	// Never replace the latest statement with an older, more convenient pair.
+	check := &rpc.ReconEquityCheck{StatementDate: newest.ReportDate, StatementTotalBase: newest.TotalBase, Comparability: "runtime_basis_missing"}
+	if s.riskCapital == nil {
+		return check
+	}
+	ctx, err := s.riskCapital.ReplayContextForScope(scope)
+	if err != nil {
+		return check
+	}
+	day := newest.ReportDate.UTC().Format("2006-01-02")
+	if sample, ok := ctx.DailyValuation[day]; ok {
+		return compareReconValuation(newest, merged.statementByDay[newestKey], sample)
+	}
+	if equity, ok := ctx.DailyEquity[day]; ok {
+		check.RuntimeEquityBase, check.SameDay = &equity, true
+		if newest.TotalBase != 0 {
+			check.RawDivergencePct = new((equity - newest.TotalBase) / math.Abs(newest.TotalBase) * 100)
 		}
-		if pairedOK {
-			check.StatementDate = paired.ReportDate
-			check.StatementTotalBase = paired.TotalBase
-			equity := pairedEquity
-			check.RuntimeEquityBase = &equity
-			check.SameDay = true
-			if paired.TotalBase != 0 {
-				div := (equity - paired.TotalBase) / math.Abs(paired.TotalBase) * 100
-				check.DivergencePct = &div
-			}
-		} else if equity, asOf := s.riskCapital.LastEquityForScope(scope); equity > 0 {
-			check.RuntimeEquityBase = &equity
-			check.RuntimeAsOf = asOf
-		}
+	} else if equity, asOf := s.riskCapital.LastEquityForScope(scope); equity > 0 {
+		check.RuntimeEquityBase, check.RuntimeAsOf = &equity, asOf
 	}
 	return check
 }
@@ -702,7 +701,7 @@ func (s *Server) reconEquityCheck(equityByDay map[string]flexstmt.EquityRow, sco
 // reconReportID pins the classified content, coverage, statement freshness,
 // and policy identity. The v2 projection stays byte-identical; v3 additionally
 // pins full row content so a confirmed restatement cannot reuse an id.
-func reconReportID(exceptions, baseline, confirmed []rpc.ReconException, statementFlows []reconFlow, bridgeEvents []capitalEventV1, from, to, stmtAsOf time.Time, pol *risk.Constitution, scopeIdentity string) string {
+func reconReportID(exceptions, baseline, confirmed []rpc.ReconException, statementFlows []reconFlow, bridgeEvents []capitalEventV1, from, to, stmtAsOf time.Time, pol *risk.Constitution, scopeIdentity string, equity *rpc.ReconEquityCheck) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s|%s|%s|%s|", scopeIdentity, from.UTC().Format(time.RFC3339), to.UTC().Format(time.RFC3339), stmtAsOf.UTC().Format(time.RFC3339))
 	if pol != nil {
@@ -716,6 +715,8 @@ func reconReportID(exceptions, baseline, confirmed []rpc.ReconException, stateme
 			fmt.Fprintf(h, "%s|%s|%t\n", row.LineID, rpc.ReconBaseline, false)
 		}
 	} else {
+		raw, _ := json.Marshal(equity)
+		h.Write(raw)
 		flows := append([]reconFlow(nil), statementFlows...)
 		sort.Slice(flows, func(i, j int) bool { return flows[i].id < flows[j].id })
 		for _, flow := range flows {

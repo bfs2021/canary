@@ -53,18 +53,20 @@ type riskCapitalStateFileV1 struct {
 	// SQLite gives every account/mode its own document; the legacy file helper
 	// A non-live observation can never write a live peak
 	// state dir ratcheted the live peak with the paper account's equity).
-	AccountID        string             `json:"account_id,omitempty"`
-	AccountMode      string             `json:"account_mode,omitempty"`
-	AdjustedPeakBase float64            `json:"adjusted_peak_base"`
-	PeakAsOf         time.Time          `json:"peak_as_of,omitzero"`
-	LastEquityBase   float64            `json:"last_equity_base"`
-	LastEquityAsOf   time.Time          `json:"last_equity_as_of,omitzero"`
-	DailyEquity      map[string]float64 `json:"daily_equity,omitempty"`
-	LastTier         string             `json:"last_tier,omitempty"`
-	BlockLatched     bool               `json:"block_latched"`
-	LatchedAt        time.Time          `json:"latched_at,omitzero"`
-	LatchEpisodeSeq  uint64             `json:"latch_episode_seq,omitempty"`
-	LatchConsumedPct float64            `json:"latch_consumed_pct,omitempty"`
+	AccountID             string                               `json:"account_id,omitempty"`
+	AccountMode           string                               `json:"account_mode,omitempty"`
+	AdjustedPeakBase      float64                              `json:"adjusted_peak_base"`
+	PeakAsOf              time.Time                            `json:"peak_as_of,omitzero"`
+	LastEquityBase        float64                              `json:"last_equity_base"`
+	LastEquityAsOf        time.Time                            `json:"last_equity_as_of,omitzero"`
+	DailyEquity           map[string]float64                   `json:"daily_equity,omitempty"`
+	DailyValuation        map[string]rpc.ReconRuntimeValuation `json:"daily_valuation,omitempty"`
+	LastValuationReportID string                               `json:"last_valuation_report_id,omitempty"`
+	LastTier              string                               `json:"last_tier,omitempty"`
+	BlockLatched          bool                                 `json:"block_latched"`
+	LatchedAt             time.Time                            `json:"latched_at,omitzero"`
+	LatchEpisodeSeq       uint64                               `json:"latch_episode_seq,omitempty"`
+	LatchConsumedPct      float64                              `json:"latch_consumed_pct,omitempty"`
 	// LatchProvisional marks a latch the statement window covering its day
 	// has not yet decided; absent on pre-two-stage latches, which therefore
 	// stay durable. LatchEquityBase freezes the engagement equity so the
@@ -242,7 +244,7 @@ func riskCapitalScopeKey(scope brokerStateScope) (string, error) {
 func riskCapitalAuthorityHasSafetyContinuity(doc riskCapitalSQLiteDocument, events []capitalEventV1) bool {
 	s := doc.State
 	return len(events) > 0 || s.Seeded || s.BlockLatched || s.AdjustedPeakBase != 0 || s.LastEquityBase != 0 ||
-		!s.GenesisAt.IsZero() || !s.PeakAsOf.IsZero() || !s.LastEquityAsOf.IsZero() || len(s.DailyEquity) > 0 ||
+		!s.GenesisAt.IsZero() || !s.PeakAsOf.IsZero() || !s.LastEquityAsOf.IsZero() || len(s.DailyEquity) > 0 || len(s.DailyValuation) > 0 || s.LastValuationReportID != "" ||
 		len(s.Overrides) > 0 || s.StatementAuthorityActive || s.StatementFlowsBase != 0 ||
 		!s.StatementCoverageTo.IsZero() || len(s.IncorporatedStatementLineIDs) > 0 || len(s.AppliedStatementPeakCorrectionIDs) > 0
 }
@@ -730,6 +732,10 @@ func (st *riskCapitalStore) Observe(equityBase float64, asOf time.Time, c *risk.
 // which the mandate's flow check sets against the equity move
 // (mandate_capital.go).
 func (st *riskCapitalStore) ObserveWithPnL(equityBase float64, pnl mandatePnLReading, asOf time.Time, c *risk.Constitution, scope brokerStateScope, recoveryAllowed bool) bool {
+	return st.observeWithValuation(equityBase, pnl, asOf, c, scope, recoveryAllowed, nil)
+}
+
+func (st *riskCapitalStore) observeWithValuation(equityBase float64, pnl mandatePnLReading, asOf time.Time, c *risk.Constitution, scope brokerStateScope, recoveryAllowed bool, valuation *rpc.ReconRuntimeValuation) bool {
 	if st == nil || equityBase <= 0 || math.IsNaN(equityBase) || math.IsInf(equityBase, 0) || asOf.IsZero() {
 		return false
 	}
@@ -779,12 +785,19 @@ func (st *riskCapitalStore) ObserveWithPnL(equityBase float64, pnl mandatePnLRea
 	dayKey := asOf.UTC().Format("2006-01-02")
 	_, alreadyObservedToday := st.state.DailyEquity[dayKey]
 	st.state.DailyEquity[dayKey] = equityBase
+	if valuation != nil && valuation.AsOf.Equal(asOf) && valuation.EquityBase == equityBase {
+		if st.state.DailyValuation == nil {
+			st.state.DailyValuation = map[string]rpc.ReconRuntimeValuation{}
+		}
+		st.state.DailyValuation[dayKey] = cloneReconValuation(*valuation)
+	}
 	cutoff := now.UTC().Add(-riskCapitalDailySampleKeep)
 	cutoff = time.Date(cutoff.Year(), cutoff.Month(), cutoff.Day(), 0, 0, 0, 0, time.UTC)
 	for day := range st.state.DailyEquity {
 		parsed, err := time.Parse("2006-01-02", day)
 		if err != nil || parsed.Before(cutoff) {
 			delete(st.state.DailyEquity, day)
+			delete(st.state.DailyValuation, day)
 		}
 	}
 
@@ -1755,7 +1768,8 @@ type capitalReplayContext struct {
 	PeakAsOf         time.Time
 	LatchedAt        time.Time
 	CumFlowsBase     float64
-	DailyEquity      map[string]float64 // copy
+	DailyEquity      map[string]float64                   // copy
+	DailyValuation   map[string]rpc.ReconRuntimeValuation // deep copy
 }
 
 // ReplayContext returns an isolated copy of the runtime facts used by the
@@ -1788,6 +1802,10 @@ func (st *riskCapitalStore) ReplayContextForScope(scope brokerStateScope) (capit
 	if len(st.state.DailyEquity) > 0 {
 		ctx.DailyEquity = make(map[string]float64, len(st.state.DailyEquity))
 		maps.Copy(ctx.DailyEquity, st.state.DailyEquity)
+	}
+	ctx.DailyValuation = make(map[string]rpc.ReconRuntimeValuation, len(st.state.DailyValuation))
+	for day, sample := range st.state.DailyValuation {
+		ctx.DailyValuation[day] = cloneReconValuation(sample)
 	}
 	return ctx, nil
 }
