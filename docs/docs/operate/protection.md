@@ -286,6 +286,18 @@ sale joins the stop's one-cancels-all group or waits for the stop to shrink,
 like any other sale). `--request-ref REF` names a submission: a retry with
 the same reference replays the recorded result and never sends twice.
 
+Two reductions of one line never together sell more than is held (owner
+instruction 2026-10-22 17:45 CEST): a reduction sizes its percentage from
+what Canary's own working orders on the line leave unsold (stops aside,
+which their one-cancels-all group and the stop guard keep within the line)
+and states that quantity as `committed_quantity`; the send refuses
+(`reduce_already_working`) when another of Canary's sales went out in
+between. Hand orders in TWS do not count. A send that may have reached the
+broker is `submit_unclear`, never `submit_failed`. Under `--portfolio`, a
+stock the broker reports as having no market and values at zero counts as
+no exposure and is listed as left out (`defunct_holding`) instead of
+blocking the book.
+
 A reduction is a limit priced as a worst price, DAY (owner decision
 2026-10-22 15:26 CEST, which replaced the limit at the mid and its ±0.5%/2%
 band): a sale's limit sits `[order_limits].reduce_allowance_pct` below the

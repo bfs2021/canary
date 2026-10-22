@@ -1642,14 +1642,17 @@ type TradeProposalReducePriceBound struct {
 // hedge the caller has not opted into, Blockers carries hedge_excluded and
 // no token is minted.
 type TradeProposalReduceResult struct {
-	Accepted              bool                       `json:"accepted"`
-	ConID                 int                        `json:"con_id,omitempty"`
-	Symbol                string                     `json:"symbol,omitempty"`
-	SecType               string                     `json:"sec_type,omitempty"`
-	Action                string                     `json:"action,omitempty"`
-	Percent               int                        `json:"percent"`
-	PositionQuantity      float64                    `json:"position_quantity"`
-	ReduceQuantity        int                        `json:"reduce_quantity"`
+	Accepted         bool    `json:"accepted"`
+	ConID            int     `json:"con_id,omitempty"`
+	Symbol           string  `json:"symbol,omitempty"`
+	SecType          string  `json:"sec_type,omitempty"`
+	Action           string  `json:"action,omitempty"`
+	Percent          int     `json:"percent"`
+	PositionQuantity float64 `json:"position_quantity"`
+	ReduceQuantity   int     `json:"reduce_quantity"`
+	// CommittedQuantity is what Canary's own working orders already sell of
+	// the holding; the percentage applied to the rest.
+	CommittedQuantity     float64                    `json:"committed_quantity,omitempty"`
 	HedgeLike             bool                       `json:"hedge_like,omitempty"`
 	PreviewToken          string                     `json:"preview_token,omitempty"`
 	PreviewTokenID        string                     `json:"preview_token_id,omitempty"`
@@ -1685,12 +1688,15 @@ type TradeProposalReducePortfolioParams struct {
 // TradeProposalReduceLeg is one position's slice of a portfolio sweep. On
 // is basis context only — annotation, never an input to sizing or selection.
 type TradeProposalReduceLeg struct {
-	ConID                     int                        `json:"con_id,omitempty"`
-	Symbol                    string                     `json:"symbol,omitempty"`
-	SecType                   string                     `json:"sec_type,omitempty"`
-	Action                    string                     `json:"action,omitempty"`
-	PositionQuantity          float64                    `json:"position_quantity"`
-	ReduceQuantity            int                        `json:"reduce_quantity"`
+	ConID            int     `json:"con_id,omitempty"`
+	Symbol           string  `json:"symbol,omitempty"`
+	SecType          string  `json:"sec_type,omitempty"`
+	Action           string  `json:"action,omitempty"`
+	PositionQuantity float64 `json:"position_quantity"`
+	ReduceQuantity   int     `json:"reduce_quantity"`
+	// CommittedQuantity is what Canary's own working orders already sell of
+	// the holding; the leg sells at most the rest.
+	CommittedQuantity         float64                    `json:"committed_quantity,omitempty"`
 	DollarDelta               float64                    `json:"dollar_delta,omitempty"`
 	RiskContributionCut       float64                    `json:"risk_contribution_cut,omitempty"`
 	Notional                  float64                    `json:"notional,omitempty"`

@@ -46,6 +46,9 @@ func netPortfolioDollarDelta(pos *rpc.PositionsResult) (net float64, complete bo
 	}
 	complete = true
 	add := func(row rpc.PositionView, isOption bool) {
+		if !isOption && defunctHolding(row) {
+			return // no market and no value: no exposure to measure
+		}
 		if row.Stale {
 			complete = false
 			return
@@ -74,6 +77,16 @@ func netPortfolioDollarDelta(pos *rpc.PositionsResult) (net float64, complete bo
 		add(st, false)
 	}
 	return net, complete
+}
+
+// defunctHolding is a stock the broker reports as having no market
+// (terminal non-reporting) and values at zero: it carries no exposure, so it
+// neither blocks the book's reduction nor is reduced (review 2026-10-22,
+// owner instruction 17:45 CEST). A zero mark without that verdict is still
+// unknown exposure and blocks.
+func defunctHolding(row rpc.PositionView) bool {
+	return positionWireSecType(row.SecType) != "OPT" && row.QuoteExpectation == rpc.QuoteExpectationNone &&
+		row.QuoteExpectationReason == rpc.QuoteExpectationReasonTerminal && row.MarketValue == 0 && (row.MarketValueBase == nil || *row.MarketValueBase == 0)
 }
 
 // reduceSweepMaterialityFloor scales the net-delta materiality floor off net
@@ -117,6 +130,10 @@ func reduceSweepCandidates(pos *rpc.PositionsResult, percent int) (cands []reduc
 	}
 	var raw []rawCandidate
 	for _, row := range rows {
+		if defunctHolding(row) {
+			cands = append(cands, reduceSweepCandidate{row: row, blockers: []rpc.TradingBlocker{{Code: "defunct_holding", Message: fmt.Sprintf("%s has no market and the broker values it at zero, so it carries no exposure to reduce", strings.ToUpper(strings.TrimSpace(row.Symbol))), Action: "Nothing to reduce; reconcile the holding with the broker's records."}}})
+			continue
+		}
 		if row.Stale || !reduceEligible(row) {
 			continue
 		}
@@ -211,7 +228,28 @@ func (s *Server) reduceLegPrepare(ctx context.Context, c reduceSweepCandidate, t
 		leg.Blockers = c.blockers
 		return leg, nil
 	}
-	prep, blockers := preparedReduceWithQty(c.row, c.qty, timeoutMs, adaptive, s.reduceOrderLimits())
+	// A leg never sells beyond what Canary's own working orders leave of the
+	// line (review 2026-10-22, finding 2).
+	qty := c.qty
+	if reduceEligible(c.row) {
+		action := rpc.OrderActionSell
+		if c.row.Quantity < 0 {
+			action = rpc.OrderActionBuy
+		}
+		committed, blockers := s.reduceCommittedSales(proposalContractFromPosition(c.row, positionWireSecType(c.row.SecType)), action)
+		var free float64
+		if len(blockers) == 0 {
+			free, blockers = reduceFreeQuantity(c.row.Quantity, committed, c.row.Symbol)
+		}
+		if len(blockers) > 0 {
+			leg.Blockers = blockers
+			return leg, nil
+		}
+		freeAbs, _ := closeReduceQuantity(free)
+		qty = min(qty, freeAbs)
+		leg.CommittedQuantity = committed
+	}
+	prep, blockers := preparedReduceWithQty(c.row, qty, timeoutMs, adaptive, s.reduceOrderLimits())
 	if len(blockers) > 0 {
 		leg.Blockers = blockers
 		return leg, nil
@@ -255,7 +293,7 @@ func (s *Server) reduceLegSubmit(ctx context.Context, c reduceSweepCandidate, ti
 	defer cancel()
 	place, err := s.proposalPlaceOrder(legCtx, rpc.OrderPlaceParams{PreviewToken: preview.PreviewToken, TimeoutMs: timeoutMs, Origin: origin})
 	if err != nil {
-		leg.Blockers = []rpc.TradingBlocker{{Code: "submit_failed", Message: err.Error(), Action: "Reconcile this leg before retrying the sweep."}}
+		leg.Blockers = []rpc.TradingBlocker{reducePlaceBlocker(err)}
 		return leg
 	}
 	leg.Placed = place.Accepted

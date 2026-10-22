@@ -115,10 +115,10 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 		if journalErr := s.appendOrderSendError(draft, status, payload.TokenID, reservedOrderID, attemptID, corestore.ActionPlace, err); journalErr != nil {
 			err = errors.Join(err, journalErr)
 		}
-		return nil, fmt.Errorf("%s order transmit: %w", auth.Route, err)
+		return nil, &orderTransmitError{err: fmt.Errorf("%s order transmit: %w", auth.Route, err)}
 	}
 	if err := s.appendOrderSendCompleted(draft, status, payload.TokenID, reservedOrderID, attemptID, corestore.ActionPlace); err != nil {
-		return nil, fmt.Errorf("%s order transmit outcome: %w", auth.Route, ibkrlib.WithSendDisposition(err, ibkrlib.SendDispositionMayHaveWritten))
+		return nil, &orderTransmitError{err: fmt.Errorf("%s order transmit outcome: %w", auth.Route, ibkrlib.WithSendDisposition(err, ibkrlib.SendDispositionMayHaveWritten))}
 	}
 
 	return &rpc.OrderPlaceResult{

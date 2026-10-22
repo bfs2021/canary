@@ -10,6 +10,7 @@ import (
 
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 // reduceOrderSource tags the order journal so a discretionary percentage trim
@@ -188,6 +189,9 @@ type preparedReduce struct {
 	qty      int
 	hedge    bool
 	algoNote string
+	// committed is what Canary's own working orders already sell of the
+	// line, disclosed beside the size.
+	committed float64
 }
 
 // prepareReduce resolves the holding for a single-position trim and delegates to
@@ -202,7 +206,22 @@ func (s *Server) prepareReduce(ctx context.Context, p rpc.TradeProposalReducePar
 	if len(blockers) > 0 {
 		return preparedReduce{}, blockers, nil
 	}
-	prep, blockers := prepareReduceForRow(row, p, s.reduceOrderLimits())
+	free := row.Quantity
+	if reduceEligible(row) {
+		action := rpc.OrderActionSell
+		if row.Quantity < 0 {
+			action = rpc.OrderActionBuy
+		}
+		committed, blockers := s.reduceCommittedSales(proposalContractFromPosition(row, positionWireSecType(row.SecType)), action)
+		if len(blockers) == 0 {
+			free, blockers = reduceFreeQuantity(row.Quantity, committed, row.Symbol)
+		}
+		if len(blockers) > 0 {
+			return preparedReduce{row: row, hedge: isProtectiveShort(row)}, blockers, nil
+		}
+	}
+	prep, blockers := prepareReduceForRow(row, p, s.reduceOrderLimits(), free)
+	prep.committed = math.Abs(row.Quantity) - math.Abs(free)
 	return prep, blockers, nil
 }
 
@@ -242,7 +261,9 @@ func (s *Server) reducePositions(ctx context.Context) (*rpc.PositionsResult, err
 // single-position trim's primitive: it never reads positions or writes to the
 // broker. Terminal blockers (not_reducible, hedge_excluded, percent_too_small,
 // ...) come back with the row echoed so callers can disclose what was acted on.
-func prepareReduceForRow(row rpc.PositionView, p rpc.TradeProposalReduceParams, limits *risk.ConstitutionOrderLimits) (preparedReduce, []rpc.TradingBlocker) {
+// free is the part of the line Canary's own working orders do not already
+// sell; the percentage applies to it.
+func prepareReduceForRow(row rpc.PositionView, p rpc.TradeProposalReduceParams, limits *risk.ConstitutionOrderLimits, free float64) (preparedReduce, []rpc.TradingBlocker) {
 	hedge := isProtectiveShort(row)
 	if !reduceEligible(row) {
 		return preparedReduce{row: row, hedge: hedge}, []rpc.TradingBlocker{{Code: "not_reducible", Message: fmt.Sprintf("%s %s is not eligible for a percentage reduce", row.Symbol, positionWireSecType(row.SecType)), Action: "The reduce action covers stocks/ETFs and long options."}}
@@ -254,7 +275,7 @@ func prepareReduceForRow(row rpc.PositionView, p rpc.TradeProposalReduceParams, 
 	if len(blockers) > 0 {
 		return preparedReduce{row: row, hedge: hedge}, blockers
 	}
-	qty, blockers := reduceQuantityForPercent(row.Quantity, p.Percent)
+	qty, blockers := reduceQuantityForPercent(free, p.Percent)
 	if len(blockers) > 0 {
 		return preparedReduce{row: row, hedge: hedge}, blockers
 	}
@@ -327,6 +348,66 @@ func (s *Server) reduceClock() time.Time {
 	return time.Now().UTC()
 }
 
+// orderTransmitError is a place error raised after the attempt was journaled
+// and the transmit began: unless the transport proves nothing was written,
+// the order may be at the broker.
+type orderTransmitError struct{ err error }
+
+func (e *orderTransmitError) Error() string { return e.err.Error() }
+func (e *orderTransmitError) Unwrap() error { return e.err }
+
+// reducePlaceBlocker is a reduction's refusal for a place error (review
+// 2026-10-22, finding 4): a transmit that may have reached the broker is
+// submit_unclear, never a refusal that reads as "nothing was sent"; a
+// consumed token and every error before the transmit keep their codes.
+func reducePlaceBlocker(err error) rpc.TradingBlocker {
+	if errors.Is(err, errOrderPreviewTokenAlreadyUsed) {
+		return rpc.TradingBlocker{Code: "token_consumed", Message: err.Error(), Action: "This token was already submitted; check open orders, then preview again for a further reduction."}
+	}
+	if _, ok := errors.AsType[*orderTransmitError](err); ok && ibkrlib.SendDispositionOf(err) != ibkrlib.SendDispositionDefinitelyUnsent {
+		return rpc.TradingBlocker{Code: "submit_unclear", Message: err.Error(), Action: "The order may have reached the broker; check open orders before another reduction."}
+	}
+	return rpc.TradingBlocker{Code: "submit_failed", Message: err.Error(), Action: "Reconcile open orders before retrying."}
+}
+
+// reduceCommittedSales is what Canary's own working orders already sell (or
+// buy, for a short) of the holding: the remaining quantity of every open
+// order Canary placed on the exact contract in the reduction's direction,
+// its own stops aside, which the one-cancels-all link and the stop guard
+// keep within the line (review 2026-10-22, finding 2; owner instruction
+// 2026-10-22 17:45 CEST). Hand orders in TWS are the owner's and do not
+// count (owner decision 2026-10-12 19:55 CEST).
+func (s *Server) reduceCommittedSales(contract rpc.ContractParams, action string) (float64, []rpc.TradingBlocker) {
+	views, _, err := s.loadOrderViews()
+	if err != nil {
+		return 0, []rpc.TradingBlocker{{Code: "orders_unavailable", Message: "Canary's order journal cannot be read, so its working reductions of this holding are unknown: " + err.Error(), Action: "Retry once the journal reads; nothing was sent."}}
+	}
+	scope := s.currentBrokerStateScope()
+	committed := 0.0
+	for i := range views {
+		v := &views[i]
+		if !protectiveStopGuardCanaryPlaced(v, scope) || !strings.EqualFold(strings.TrimSpace(v.Action), action) || isProtectiveStopOrderType(v.OrderType) ||
+			!journalOrderIdentity(*v).sameContract(contract) {
+			continue
+		}
+		committed += orderViewRemainingQuantity(*v)
+	}
+	return committed, nil
+}
+
+// reduceFreeQuantity is the part of a held line Canary's own working orders
+// do not already sell, or the blocker when nothing is left.
+func reduceFreeQuantity(held float64, committed float64, symbol string) (float64, []rpc.TradingBlocker) {
+	free := math.Abs(held) - committed
+	if math.Floor(free+1e-9) < 1 {
+		return 0, []rpc.TradingBlocker{{Code: "reduce_already_working", Message: fmt.Sprintf("Canary's working orders already sell %s of the %s held of %s", formatPositionQuantity(committed), formatPositionQuantity(math.Abs(held)), strings.ToUpper(strings.TrimSpace(symbol))), Action: "Wait for the working reduction, or cancel it in Orders and reduce again; nothing was sent."}}
+	}
+	if held < 0 {
+		return -free, nil
+	}
+	return free, nil
+}
+
 // reduceResultBase seeds the result with the resolved disclosure fields shared
 func reduceResultBase(prep preparedReduce, percent int, now time.Time) rpc.TradeProposalReduceResult {
 	secType := prep.secType
@@ -334,15 +415,16 @@ func reduceResultBase(prep preparedReduce, percent int, now time.Time) rpc.Trade
 		secType = positionWireSecType(prep.row.SecType)
 	}
 	return rpc.TradeProposalReduceResult{
-		ConID:            prep.row.ConID,
-		Symbol:           strings.ToUpper(strings.TrimSpace(prep.row.Symbol)),
-		SecType:          secType,
-		Action:           prep.action,
-		Percent:          percent,
-		PositionQuantity: prep.row.Quantity,
-		ReduceQuantity:   prep.qty,
-		HedgeLike:        prep.hedge,
-		AsOf:             now,
+		ConID:             prep.row.ConID,
+		Symbol:            strings.ToUpper(strings.TrimSpace(prep.row.Symbol)),
+		SecType:           secType,
+		Action:            prep.action,
+		Percent:           percent,
+		PositionQuantity:  prep.row.Quantity,
+		ReduceQuantity:    prep.qty,
+		CommittedQuantity: prep.committed,
+		HedgeLike:         prep.hedge,
+		AsOf:              now,
 	}
 }
 
@@ -524,7 +606,7 @@ func (s *Server) tradeProposalReduceSubmit(ctx context.Context, p rpc.TradePropo
 	}
 	place, err := s.proposalPlaceOrder(ctx, rpc.OrderPlaceParams{PreviewToken: preview.PreviewToken, TimeoutMs: p.TimeoutMs, Origin: p.Origin})
 	if err != nil {
-		res.Blockers = []rpc.TradingBlocker{{Code: "submit_failed", Message: err.Error(), Action: "Reconcile open orders before retrying."}}
+		res.Blockers = []rpc.TradingBlocker{reducePlaceBlocker(err)}
 		return &res, nil
 	}
 	res.Accepted = place.Accepted
@@ -622,6 +704,19 @@ func (s *Server) reduceTokenLeg(ctx context.Context, token string, pos *rpc.Posi
 		out.blockers = blockers
 		return out
 	}
+	// Another of Canary's sales may have gone out since the review: the
+	// reviewed size must still fit what they leave unsold.
+	committed, blockers := s.reduceCommittedSales(payload.Draft.Contract, payload.Draft.Action)
+	if len(blockers) == 0 {
+		var free float64
+		if free, blockers = reduceFreeQuantity(row.Quantity, committed, row.Symbol); len(blockers) == 0 && float64(payload.Draft.Quantity) > math.Abs(free)+1e-9 {
+			blockers = []rpc.TradingBlocker{{Code: "reduce_already_working", Message: fmt.Sprintf("Canary's working orders already sell %s of the %s held of %s; the reviewed %d would sell beyond the line", formatPositionQuantity(committed), formatPositionQuantity(math.Abs(row.Quantity)), strings.ToUpper(strings.TrimSpace(row.Symbol)), payload.Draft.Quantity), Action: "Preview again for what is left; nothing was sent."}}
+		}
+	}
+	if len(blockers) > 0 {
+		out.blockers = blockers
+		return out
+	}
 	legCtx, cancel := legContext(ctx, timeoutMs)
 	defer cancel()
 	quote, err := s.fetchPreviewQuoteBound(legCtx, payload.Draft.Contract, orderPreviewTimeout(timeoutMs), nil)
@@ -636,12 +731,7 @@ func (s *Server) reduceTokenLeg(ctx context.Context, token string, pos *rpc.Posi
 	}
 	place, err := s.proposalPlaceOrder(legCtx, rpc.OrderPlaceParams{PreviewToken: token, TimeoutMs: timeoutMs, Origin: origin})
 	if err != nil {
-		code := "submit_failed"
-		action := "Reconcile open orders before retrying."
-		if errors.Is(err, errOrderPreviewTokenAlreadyUsed) {
-			code, action = "token_consumed", "This token was already submitted; check open orders, then preview again for a further reduction."
-		}
-		out.blockers = []rpc.TradingBlocker{{Code: code, Message: err.Error(), Action: action}}
+		out.blockers = []rpc.TradingBlocker{reducePlaceBlocker(err)}
 		return out
 	}
 	out.place = place

@@ -57,3 +57,31 @@ func TestReduceSweepCompleteHedgedBookReducesNetExposure(t *testing.T) {
 		t.Fatalf("expected covering 50 short shares, got %+v", cands)
 	}
 }
+
+// A holding the broker reports as having no market (terminal non-reporting)
+// at zero value carries no exposure: it no longer blocks the book's
+// reduction, and the basket names it as left out (review finding,
+// 2026-10-22). A zero mark without that verdict still blocks.
+func TestReduceSweepCountsADefunctHoldingAsZero(t *testing.T) {
+	defunct := rpc.PositionView{Symbol: "DEFQ", SecType: "STOCK", ConID: 9, Currency: "USD", Quantity: 20000, Stale: true,
+		QuoteExpectation: rpc.QuoteExpectationNone, QuoteExpectationReason: rpc.QuoteExpectationReasonTerminal}
+	pos := reduceTestPortfolio([]rpc.PositionView{{Symbol: "LONG", SecType: "STOCK", ConID: 1, Currency: "USD", Quantity: 100, Mark: 100}, defunct}, nil)
+	cands, net, complete, _, blockers := reduceSweepCandidates(pos, 50)
+	if !complete || net != 10000 || len(blockers) != 0 {
+		t.Fatalf("a defunct holding blocked the book: complete=%v net=%v blockers=%+v", complete, net, blockers)
+	}
+	var left bool
+	for _, c := range cands {
+		if c.row.ConID == 9 {
+			left = c.qty == 0 && len(c.blockers) == 1 && c.blockers[0].Code == "defunct_holding"
+		}
+	}
+	if !left {
+		t.Fatalf("candidates %+v, want the defunct holding left out and named", cands)
+	}
+	defunct.QuoteExpectation = ""
+	pos = reduceTestPortfolio([]rpc.PositionView{{Symbol: "LONG", SecType: "STOCK", ConID: 1, Currency: "USD", Quantity: 100, Mark: 100}, defunct}, nil)
+	if _, _, complete, _, _ := reduceSweepCandidates(pos, 50); complete {
+		t.Fatal("a stale zero-mark holding without the broker's verdict counted as zero")
+	}
+}
