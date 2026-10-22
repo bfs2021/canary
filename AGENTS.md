@@ -46,6 +46,13 @@ Live smoke is for affected broker integration, not routine docs/UI work.
 After primary-tree daemon/CLI changes, use `make restart-daemon` and verify
 redacted status plus the changed command.
 
+A session that creates a worktree removes it in the same session, once its
+branch has landed on local main or its install is verified:
+`git worktree remove <dir>` (never `--force`), then `git branch -d <branch>`,
+or `-D` only after `git cherry main <branch>` shows the work on main. Leave
+other sessions' worktrees alone (owner, 2026-10-22 12:09 CEST; 79 landed
+worktrees had piled up).
+
 For releases, follow [the release procedure](.agents/docs/release-procedure.md).
 Use only `make release RELEASE_VERSION=vX.Y.Z` or `make release-resume`;
 never bypass gates or publish tags/releases directly. Review every outgoing
