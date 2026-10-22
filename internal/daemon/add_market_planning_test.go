@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,7 +82,7 @@ func TestAddPlanningPricesFromTheBrokerQuoteReceipt(t *testing.T) {
 		{"missing", &rpc.SetupOptionQuote{Status: rpc.SetupQuoteMissing}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			planning := addPlanningObservation(tc.quote)
+			planning := addPlanningObservation(tc.quote, nil)
 			if tc.want == nil {
 				if planning.Price != nil || planning.PriceSource != "" {
 					t.Fatalf("priced an incomplete quote: %+v", planning)
@@ -99,16 +100,19 @@ func TestAddPlanningPricesFromTheBrokerQuoteReceipt(t *testing.T) {
 func TestAddPlanningSkipsKnownOutOfRangeAndKeepsMissingDeltaUnqualified(t *testing.T) {
 	calls := []ibkr.ResolvedOrderContract{{Contract: ibkr.Contract{Strike: 100}}, {Contract: ibkr.Contract{Strike: 105}}, {Contract: ibkr.Contract{Strike: 110}}}
 	var quoted []float64
+	var mu sync.Mutex
 	got := selectAddCall(calls, 105, func(exact ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
 		strike := exact.Contract.Strike
+		mu.Lock()
 		quoted = append(quoted, strike)
+		mu.Unlock()
 		q := &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, Bid: new(1.0), Ask: new(1.2), DataType: rpc.MarketDataFrozen, AsOf: time.Now()}
 		if strike == 105 {
 			q.Delta = new(.49)
 		}
-		return rpc.AddCallCandidate{Contract: &rpc.ContractParams{ConID: 10000 + int(strike), Strike: strike}, Quote: q, Planning: addPlanningObservation(q)}
+		return rpc.AddCallCandidate{Contract: &rpc.ContractParams{ConID: 10000 + int(strike), Strike: strike}, Quote: q, Planning: addPlanningObservation(q, nil)}
 	})
-	if got.Contract == nil || got.Contract.Strike != 100 || !reflect.DeepEqual(quoted, []float64{105, 100, 110}) || got.Planning == nil || got.Planning.DeltaStatus != "unavailable" || eligibleAddCall(got, time.Now()) {
+	if got.Contract == nil || got.Contract.Strike != 100 || !reflect.DeepEqual(sortedStrikes(quoted), []float64{100, 105, 110}) || got.Planning == nil || got.Planning.DeltaStatus != "unavailable" || eligibleAddCall(got, time.Now()) {
 		t.Fatalf("planning invented qualification or retained known out-of-range delta: %+v quoted=%v", got, quoted)
 	}
 	// The same frozen observation outside the explicit planning path remains
@@ -122,16 +126,19 @@ func TestAddPlanningSkipsKnownOutOfRangeAndKeepsMissingDeltaUnqualified(t *testi
 func TestAddPlanningPrefersKnownInRangeDeltaOverNearerUnknown(t *testing.T) {
 	calls := []ibkr.ResolvedOrderContract{{Contract: ibkr.Contract{Strike: 100}}, {Contract: ibkr.Contract{Strike: 105}}, {Contract: ibkr.Contract{Strike: 110}}}
 	var quoted []float64
+	var mu sync.Mutex
 	got := selectAddCall(calls, 105, func(exact ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
 		strike := exact.Contract.Strike
+		mu.Lock()
 		quoted = append(quoted, strike)
+		mu.Unlock()
 		q := &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, Bid: new(1.0), Ask: new(1.2), DataType: rpc.MarketDataFrozen, AsOf: time.Now()}
 		if strike == 100 {
 			q.Delta = new(.6)
 		}
-		return rpc.AddCallCandidate{Contract: &rpc.ContractParams{ConID: 10000 + int(strike), Strike: strike}, Quote: q, Planning: addPlanningObservation(q)}
+		return rpc.AddCallCandidate{Contract: &rpc.ContractParams{ConID: 10000 + int(strike), Strike: strike}, Quote: q, Planning: addPlanningObservation(q, nil)}
 	})
-	if got.Contract == nil || got.Contract.Strike != 100 || got.Planning.DeltaStatus != "in_range" || !reflect.DeepEqual(quoted, []float64{105, 100}) {
+	if got.Contract == nil || got.Contract.Strike != 100 || got.Planning.DeltaStatus != "in_range" || !reflect.DeepEqual(sortedStrikes(quoted), []float64{100, 105, 110}) {
 		t.Fatalf("nearer unqualified contract hid an in-range call: %+v quoted=%v", got, quoted)
 	}
 }

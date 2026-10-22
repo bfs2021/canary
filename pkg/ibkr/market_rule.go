@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
+
+type marketRuleKey struct {
+	epoch uint64
+	id    int
+}
 
 // PriceIncrement is one broker-supplied price band for an exact route.
 type PriceIncrement struct {
@@ -76,6 +82,14 @@ func (c *Connector) OrderPriceIncrements(ctx context.Context, binding ConnectorS
 	if err != nil {
 		return nil, err
 	}
+	// Rules are static within a broker session; a reconnect starts afresh.
+	key := marketRuleKey{epoch: binding.epoch, id: id}
+	c.marketRulesMu.Lock()
+	cached, ok := c.marketRules[key]
+	c.marketRulesMu.Unlock()
+	if ok {
+		return slices.Clone(cached), nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	type result struct {
@@ -106,6 +120,14 @@ func (c *Connector) OrderPriceIncrements(ctx context.Context, binding ConnectorS
 	case out := <-done:
 		if !c.SessionCurrent(binding) {
 			return nil, fmt.Errorf("broker session changed during price rule read")
+		}
+		if out.err == nil {
+			c.marketRulesMu.Lock()
+			if c.marketRules == nil {
+				c.marketRules = map[marketRuleKey][]PriceIncrement{}
+			}
+			c.marketRules[key] = slices.Clone(out.rows)
+			c.marketRulesMu.Unlock()
 		}
 		return out.rows, out.err
 	}

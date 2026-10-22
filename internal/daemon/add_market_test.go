@@ -6,6 +6,8 @@ import (
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkr "github.com/osauer/canary/v2/pkg/ibkr"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,13 +17,18 @@ func TestAddCallSelectionUsesActualExpiryInventory(t *testing.T) {
 	// only five-dollar strikes exist. The former three nearest probes all
 	// failed; 770 is valid and in range after 775's delta proves too low.
 	now := time.Now()
+	// A 14-day expiry keeps the 0.50–0.70 range these deltas are drawn for.
+	expiry := now.AddDate(0, 0, 14).Format("20060102")
 	call := func(k float64) ibkr.ResolvedOrderContract {
-		return ibkr.ResolvedOrderContract{UnderConID: 17, MinTick: .01, ValidExchanges: "SMART", MarketRuleIDs: "27", Contract: ibkr.Contract{ConID: 10000 + int(k), Symbol: "SYNTH", SecType: "OPT", Expiry: "20270219", Strike: k, Right: "C", Multiplier: 100, Currency: "USD", Exchange: "SMART", TradingClass: "SYNTH", LocalSymbol: "SYNTH call"}}
+		return ibkr.ResolvedOrderContract{UnderConID: 17, MinTick: .01, ValidExchanges: "SMART", MarketRuleIDs: "27", Contract: ibkr.Contract{ConID: 10000 + int(k), Symbol: "SYNTH", SecType: "OPT", Expiry: expiry, Strike: k, Right: "C", Multiplier: 100, Currency: "USD", Exchange: "SMART", TradingClass: "SYNTH", LocalSymbol: "SYNTH call"}}
 	}
 	var quoted []float64
+	var mu sync.Mutex
 	quote := func(exact ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
 		k := exact.Contract.Strike
+		mu.Lock()
 		quoted = append(quoted, k)
+		mu.Unlock()
 		if k != 765 && k != 770 && k != 775 && k != 780 {
 			return rpc.AddCallCandidate{Unavailable: "No exact contract"}
 		}
@@ -34,13 +41,13 @@ func TestAddCallSelectionUsesActualExpiryInventory(t *testing.T) {
 	}
 	union := []ibkr.ResolvedOrderContract{call(765), call(770), call(772), call(773), call(774), call(775), call(780)}
 	before := selectAddCall(union, 772.94, quote)
-	if before.Contract != nil || !reflect.DeepEqual(quoted, []float64{773, 772, 774}) {
+	if before.Contract != nil || !reflect.DeepEqual(sortedStrikes(quoted), []float64{772, 773, 774}) {
 		t.Fatalf("fixture did not reproduce the old union probe failure: %+v %v", before, quoted)
 	}
 	quoted = nil
 	actual := []ibkr.ResolvedOrderContract{call(765), call(770), call(775), call(780)}
 	after := selectAddCall(actual, 772.94, quote)
-	if after.Contract == nil || after.Contract.Strike != 770 || !reflect.DeepEqual(quoted, []float64{775, 770}) {
+	if after.Contract == nil || after.Contract.Strike != 770 || !reflect.DeepEqual(sortedStrikes(quoted), []float64{770, 775, 780}) {
 		t.Fatalf("valid expiry call not selected: %+v %v", after, quoted)
 	}
 }
@@ -52,9 +59,9 @@ func TestAddCallSelectionKeepsQuoteBoundAndEligibility(t *testing.T) {
 			for i := range calls {
 				calls[i].Contract.Strike = 100 + float64(i)
 			}
-			count := 0
+			var count atomic.Int32
 			got := selectAddCall(calls, 100, func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
-				count++
+				count.Add(1)
 				now := time.Now()
 				q := &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, DataType: rpc.MarketDataLive, ModelDataType: rpc.MarketDataLive, AsOf: now, ModelAsOf: now, IV: new(.2), Delta: new(.6)}
 				row := rpc.AddCallCandidate{Contract: &rpc.ContractParams{ConID: 10001}, Quote: q, PriceIncrements: []rpc.SetupOptionPriceIncrement{{LowEdge: 0, Increment: .01}}}
@@ -74,8 +81,8 @@ func TestAddCallSelectionKeepsQuoteBoundAndEligibility(t *testing.T) {
 				}
 				return row
 			})
-			if count != 3 || got.Contract != nil || got.Unavailable == "" {
-				t.Fatalf("quote bound or eligibility lost: %d %+v", count, got)
+			if count.Load() != 3 || got.Contract != nil || got.Unavailable == "" {
+				t.Fatalf("quote bound or eligibility lost: %d %+v", count.Load(), got)
 			}
 		})
 	}

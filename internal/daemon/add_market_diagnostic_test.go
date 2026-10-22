@@ -103,7 +103,8 @@ func runAddInventoryDiagnostic(t *testing.T, mode string) {
 					send(10, addSnapshotContractFields(f[2], "STK", "", "", "17")...)
 					send(52, "1", f[2])
 				} else if mode != "broker-rejection" {
-					if f[3] == "0" {
+					// Only a lookup without contract id and strike lists the expiry.
+					if f[3] == "0" && (f[7] == "" || f[7] == "0") {
 						inventoryRequests.Add(1)
 						if mode == "slow-complete" {
 							time.Sleep(9 * time.Second)
