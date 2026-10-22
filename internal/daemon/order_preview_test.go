@@ -395,11 +395,7 @@ func testOrderAuthorityPath(path string) string {
 
 func newTestOrderJournalStore(t *testing.T, path string) *orderJournalStore {
 	t.Helper()
-	dbPath := testOrderAuthorityPath(path)
-	store, err := corestore.Open(context.Background(), corestore.Options{Path: dbPath})
-	if err != nil {
-		t.Fatalf("open test order authority: %v", err)
-	}
+	store := openTestCoreStore(t, testOrderAuthorityPath(path))
 	t.Cleanup(func() { _ = store.Close() })
 	journal := newOrderJournalStore(path)
 	if err := journal.UseCoreStore(store); err != nil {

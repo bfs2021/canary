@@ -111,7 +111,7 @@ reduction-metrics-check: ## Verify the locked v3 reduction baseline remains repr
 	@./scripts/reduction-metrics.sh --verify-baseline c3ec1d81c8537c8b982791e6fdc78f3da4e2c28e >/dev/null
 
 regression-spine-check: ## Reintroduce selected historical bugs and prove the compact current tests kill them
-	@./scripts/test-regression-spine.sh
+	@$(LEG) regression-spine ./scripts/test-regression-spine.sh
 
 regression-spine-contract-check: ## Verify the historical-regression manifest still names present focused tests
 	@bash -n scripts/test-regression-spine.sh
@@ -265,7 +265,7 @@ app-smoke-read-only: ## GET-only app/browser/status/static/listener/provenance s
 		--require-ready=$(APP_SMOKE_REQUIRE_READY)
 
 app-render-check: ## Hermetic production-app render with synthetic pairing/reload/auth recovery; never reads desk account data
-	PLAYWRIGHT_NODE_MODULES="$(CURDIR)/web/app/node_modules" node scripts/app-browser-smoke.mjs \
+	PLAYWRIGHT_NODE_MODULES="$(CURDIR)/web/app/node_modules" $(LEG) app-render node scripts/app-browser-smoke.mjs \
 		--browser $(APP_SMOKE_BROWSER) \
 		--round4-synthetic=true
 
@@ -273,21 +273,39 @@ uninstall: ## Remove Canary and any pre-upgrade executable residue from $(PREFIX
 	rm -f "$(PREFIX)/bin/canary" "$(PREFIX)/bin/ibkr" "$(PREFIX)/bin/canary.bak" "$(PREFIX)/bin/ibkr.bak"
 	@echo "Removed Canary executables and pre-upgrade residue from $(PREFIX)/bin"
 
-TEST_JOBS ?= 3
+TEST_JOBS ?= 5
 TEST_MAKEFLAGS = $(if $(filter 0,$(MAKELEVEL)),-j$(TEST_JOBS),)
-.PHONY: build-space-check build-space-contract-check
+# Every gate leg runs under the timer, which prints its elapsed and CPU time
+# and passes its exit status through unchanged.
+LEG = ./scripts/timed-leg.sh
+.PHONY: build-space-check build-space-contract-check timed-leg-contract-check
 build-space-check: ## Below 8 GiB on a build filesystem, trim the Go build cache (least recently used first); never refuses
 	@./scripts/check-build-space.sh
 
 build-space-contract-check: ## Exercise the capacity trim with synthetic filesystem responses
 	@./scripts/check-build-space_test.sh
 
+timed-leg-contract-check: ## Prove the gate timer passes leg exit status through and records CPU time
+	@./scripts/timed-leg_test.sh
+
 # Keep the guard ahead of every major entrypoint, including independently run
 # race legs. No cache is removed and no service is changed by this prerequisite.
-build check test test-pkg test-support test-internal test-daemon test-daemon-default test-daemon-trading test-integration test-integration-live regression-spine-check: build-space-check
+build check test test-pkg test-support test-internal test-daemon test-daemon-default test-daemon-trading test-integration test-integration-live regression-spine-check trading-package-scope-check: build-space-check
 
-test: ## Full gate: check + render + historical regressions + pkg, support, and daemon/integration tests (-race), overlapped
-	$(MAKE) $(TEST_MAKEFLAGS) check app-render-check test-pkg test-support test-daemon regression-spine-check
+# The daemon legs come first: they are the longest, and make starts
+# prerequisites in order as job slots free. The timing summary prints on
+# failure too, so a slow or failing leg is named either way.
+#
+# regression-spine-check is not part of this gate (2026-10-22, owner
+# instruction to cut steps that do not verify the candidate). It mutates
+# committed HEAD, so before a commit it re-proves the previous commit's
+# tests, never the tree under test. It stays binding where HEAD is the
+# candidate: CI's test-internal job on every pushed SHA, which the release
+# waits for, and by hand before deleting a safety test (AGENTS.md).
+test: ## Full gate: check + render + pkg, support, and daemon/integration tests (-race), overlapped
+	@start=$$(date +%s); timing=$$(mktemp "$${TMPDIR:-/tmp}/canary-gate-timing.XXXXXX") || exit 1; \
+	GATE_TIMING_FILE="$$timing" $(MAKE) $(TEST_MAKEFLAGS) test-daemon check app-render-check test-pkg test-support; \
+	status=$$?; $(LEG) --summary "$$timing" "$$start"; rm -f "$$timing"; exit $$status
 	$(call gate-stamp,test)
 
 # A gate that passes ends with one line naming the tree it proved, for the
@@ -317,10 +335,10 @@ commit-check: check ## Compatibility alias for the canonical repository gate
 CHECK_DEPS ?= plugin-check parity-check
 CHECK_JOBS ?= 8
 CHECK_TARGETS = $(CHECK_DEPS) agent-config-check reduction-metrics-check regression-spine-contract-check go-dependencies-check modernize-check docs-check docs-html-check changelog-check account-data-check product-identity-check release-packaging-check smoke-contract-check app-log-contract-check scheduled-monitor-check app-contract-check app-syntax-check app-browser-helper-check app-auth-check app-behavior-check app-service-worker-check remote-relay-check go-doc-check gofmt-check vet-check staticcheck-check govulncheck-check
-CHECK_TARGETS += build-space-contract-check
+CHECK_TARGETS += build-space-contract-check timed-leg-contract-check
 CHECK_MAKEFLAGS = $(if $(filter 0,$(MAKELEVEL)),-j$(CHECK_JOBS),)
 check: ## agent config/hooks + Go docs/format/vet/staticcheck/vulns + modernize/plugin/parity/docs/changelog/account/app checks (binding pre-commit gate)
-	$(MAKE) $(CHECK_MAKEFLAGS) $(CHECK_TARGETS)
+	$(LEG) check $(MAKE) $(CHECK_MAKEFLAGS) $(CHECK_TARGETS)
 	$(call gate-stamp,check)
 
 product-identity-check: ## Reject retired product/module/site/CLI/MCP identities outside reviewed continuity exceptions
@@ -640,8 +658,9 @@ fmt: ## Apply gofmt -w to every tracked / non-gitignored .go file
 # inputs, so nothing green is taken on faith — a flake reruns on any
 # input change. test/integration keeps -count=1 below because gateway
 # state is invisible to the cache key.
-test-pkg: ## Run pkg/ibkr/... tests under -race (TWS protocol library; cached when unchanged)
-	go test -race -timeout=180s ./pkg/ibkr/...
+test-pkg: trading-package-scope-check ## Run pkg/ibkr/... tests under -race in both build modes (TWS protocol library; cached when unchanged)
+	$(LEG) pkg go test -race -timeout=180s ./pkg/ibkr/...
+	$(LEG) pkg-trading go test -race -timeout=180s -tags trading $(TRADING_PKG_TESTS)
 
 # Command entrypoints, the public Go client (the root package and its fake
 # daemon in canarytest) and the hermetic registry metadata helper are shipped
@@ -649,13 +668,12 @@ test-pkg: ## Run pkg/ibkr/... tests under -race (TWS protocol library; cached wh
 # `make test` and CI exercise them without depending on package discovery
 # elsewhere in the matrix.
 test-support: ## Run command, Go client and CI/release support tests under -race
-	go test -race -timeout=180s ./cmd/...
-	go test -race -timeout=60s . ./canarytest
-	go test -race -timeout=60s ./scripts/release-registry-server
-	go test -race -timeout=60s ./scripts/release-ci-wait
+	$(LEG) support-cmd go test -race -timeout=180s ./cmd/...
+	$(LEG) support-client go test -race -timeout=60s . ./canarytest
+	$(LEG) support-scripts go test -race -timeout=60s ./scripts/release-registry-server ./scripts/release-ci-wait ./scripts/release-sign-ed25519
 
 test-integration: ## Run hermetic CLI/daemon lifecycle integration tests; never probes a live Gateway
-	INTEGRATION_TEST_MODE=hermetic go test -race -count=1 -timeout=420s -run '^TestLifecycle_' ./test/integration/...
+	INTEGRATION_TEST_MODE=hermetic $(LEG) integration go test -race -count=1 -timeout=420s -run '^TestLifecycle_' ./test/integration/...
 
 test-integration-live: ## Require and exercise a live Gateway; absence or failed handshake is an error
 	./scripts/with-gateway-lock.sh env INTEGRATION_TEST_MODE=live go test -v -race -count=1 -timeout=420s -skip '^TestLifecycle_' ./test/integration/...
@@ -668,40 +686,63 @@ test-integration-live: ## Require and exercise a live Gateway; absence or failed
 # The integration leg is serialized across sessions via with-gateway-lock:
 # its client IDs and daemon spawns hit the shared TWS gateway, and two
 # overlapping runs used to flake with error 326 and force a full re-run.
+#
+# Packages whose source or test files differ under the trading build tag run
+# their tests in both modes. Importing a tagged package from a trading test
+# does not run that package's own tests, so each one is listed here, in the
+# leg that runs it. The scope check compares every tracked package's file
+# lists across the two modes with these lists and fails on any difference,
+# so a newly tagged file cannot fall outside the matrix.
+TRADING_PKG_TESTS = ./pkg/ibkr
+TRADING_INTERNAL_TESTS = ./internal/cli ./internal/mcp
+TRADING_DAEMON_TESTS = ./internal/daemon
 trading-package-scope-check:
 	@set -eu; \
-		unexpected="$$(find internal/daemon -mindepth 2 -type f -name '*.go' -exec sh -c \
-			'for file do if grep -q "^//go:build .*trading" "$$file"; then printf "%s\n" "$$file"; fi; done; exit 0' sh {} +)"; \
-		if [ -n "$$unexpected" ]; then \
-			echo "trading-package-scope-check: a daemon subpackage now has trading-tagged source:" >&2; \
-			printf '%s\n' "$$unexpected" >&2; \
-			echo "add that exact package to the trading test matrix before proceeding" >&2; \
+		inputs='{{.ImportPath}} {{.GoFiles}} {{.CgoFiles}} {{.EmbedFiles}} {{.TestGoFiles}} {{.XTestGoFiles}}'; \
+		pkgs="$$( { ./scripts/go-tracked-packages.sh ./...; ./scripts/go-tracked-packages.sh -tags trading ./...; } | sort -u)"; \
+		differs="$$( { go list -e -f "$$inputs" $$pkgs; go list -e -tags trading -f "$$inputs" $$pkgs; } | sort | uniq -u | cut -d' ' -f1 | sort -u)"; \
+		listed="$$(go list $(TRADING_PKG_TESTS) $(TRADING_INTERNAL_TESTS) $(TRADING_DAEMON_TESTS) | sort -u)"; \
+		if [ "$$differs" != "$$listed" ]; then \
+			echo "trading-package-scope-check: packages whose files differ under -tags trading:" >&2; \
+			printf '  %s\n' $$differs >&2; \
+			echo "trading test matrix (TRADING_*_TESTS in the Makefile):" >&2; \
+			printf '  %s\n' $$listed >&2; \
+			echo "make the matrix list exactly the differing packages before proceeding" >&2; \
 			exit 1; \
 		fi
 
-test-internal: ## Run internal/... under -race excluding the daemon root
+test-internal: trading-package-scope-check ## Run internal/... under -race excluding the daemon root, tagged packages in both modes
 	@set -eu; \
 		daemon_pkg="$$(go list ./internal/daemon)"; \
 		all_internal="$$(go list ./internal/...)"; \
 		internal_pkgs="$$(printf '%s\n' "$$all_internal" | awk -v omit="$$daemon_pkg" '$$0 != omit')"; \
 		if [ -n "$$internal_pkgs" ]; then \
-			go test -race -timeout=240s $$internal_pkgs; \
+			$(LEG) internal go test -race -timeout=240s $$internal_pkgs; \
 		fi
+	$(LEG) internal-trading go test -race -timeout=240s -tags trading $(TRADING_INTERNAL_TESTS)
 
 # The daemon root's two build modes are separate CI jobs since 2026-08-04:
 # together they were the ubuntu test job's 7.5-minute tail, and they share
 # nothing but the scope check, so they parallelize cleanly.
-test-daemon-default: trading-package-scope-check ## Daemon root default build + hermetic lifecycle integration
-	go test -race -timeout=600s ./internal/daemon
+#
+# Each mode runs sharded: one -race binary, its tests dealt to DAEMON_SHARDS
+# processes with private HOME/XDG directories, accepted only when every
+# listed test reported once. Within one process the ~1,240 non-parallel
+# tests ran one after another and were the whole wall-clock cost.
+DAEMON_SHARDS = 6
+test-daemon-default: trading-package-scope-check ## Daemon root default build (sharded) + hermetic lifecycle integration
+	$(LEG) daemon-default ./scripts/sharded-go-test.sh -shards $(DAEMON_SHARDS) -timeout 600s ./internal/daemon
 	$(MAKE) test-integration
 
-test-daemon-trading: trading-package-scope-check ## Daemon root trading build (write path)
-	go test -race -timeout=600s -tags trading ./internal/daemon
+test-daemon-trading: trading-package-scope-check ## Daemon root trading build (write path, sharded)
+	$(LEG) daemon-trading ./scripts/sharded-go-test.sh -tags trading -shards $(DAEMON_SHARDS) -timeout 600s $(TRADING_DAEMON_TESTS)
 
+# The three legs are make prerequisites of one sub-make, not three recipe
+# lines, so they share the caller's job slots and run side by side. Until
+# 2026-10-22 they ran one after another, which put both daemon modes (about
+# 17 minutes together) on the critical path of `make test`.
 test-daemon: trading-package-scope-check ## Run internal/... and hermetic integration under -race in both build modes
-	$(MAKE) test-internal
-	$(MAKE) test-daemon-default
-	$(MAKE) test-daemon-trading
+	$(MAKE) $(TEST_MAKEFLAGS) test-daemon-trading test-daemon-default test-internal
 
 # Install the standalone skill bundle under the Codex skill root. Claude Code
 # gets the same SKILL.md from the plugin, so no Claude copy is installed.

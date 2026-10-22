@@ -93,7 +93,8 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 				writeErr = writeTWSFrame(conn, append(body, strings.Join(fields, "\x00")+"\x00"...))
 			}
 		}
-		send(9, "1", "1") // nextValidId
+		send(9, "1", "1")          // nextValidId
+		send(15, "1", "DU1234567") // managedAccounts: no one-second startup grace
 		for writeErr == nil {
 			frame, err := readTWSFrame(r)
 			if err != nil {

@@ -64,6 +64,7 @@ func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
 			}
 		}
 		send(9, "1", "1")
+		send(15, "1", "DU1234567") // managedAccounts: no one-second startup grace
 		for writeErr == nil {
 			frame, err := readTWSFrame(r)
 			if err != nil {

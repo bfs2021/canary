@@ -161,9 +161,10 @@ func TestCashSweepRedemptionFreshPriceCannotExceedTheBucketCap(t *testing.T) {
 				if finished.State != rpc.TradeProposalAutomaticFailed || !strings.Contains(finished.Reason, "above max_order_notional") {
 					t.Fatalf("automatic over-cap verdict = %s (%s)", finished.State, finished.Reason)
 				}
-				blockers = []rpc.TradingBlocker{{Code: "cash_sweep_above_max_order_notional"}}
 			}
-			if !hasTradingBlocker(blockers, "cash_sweep_above_max_order_notional") || broker.count() != 0 {
+			// The automatic path reports through the record's state and reason,
+			// checked above; it returns no blockers to check here.
+			if (path != "automatic" && !hasTradingBlocker(blockers, "cash_sweep_above_max_order_notional")) || broker.count() != 0 {
 				t.Fatalf("over-cap redemption reached broker: blockers %v calls %d", blockers, broker.count())
 			}
 		})

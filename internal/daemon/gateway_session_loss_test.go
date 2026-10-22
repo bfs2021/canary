@@ -38,7 +38,8 @@ type fakeTWS struct {
 	accepted          atomic.Int32
 	openOrderRequests atomic.Int32
 	answerOpenOrders  func(session, nth int) bool
-	// account, when set, is sent as managedAccounts after nextValidId.
+	// account is sent as managedAccounts after nextValidId. Without it the
+	// connector waits out its one-second startup grace for the list.
 	account string
 }
 
@@ -48,7 +49,7 @@ func startFakeTWS(t *testing.T) *fakeTWS {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeTWS{ln: ln}
+	f := &fakeTWS{ln: ln, account: "DU1234567"}
 	go f.accept()
 	t.Cleanup(func() {
 		_ = ln.Close()
@@ -169,6 +170,7 @@ func sessionLossServerWith(t *testing.T, f *fakeTWS, at string, configure func(*
 	s := newTestServer(t)
 	s.cfg.Gateway.Port = new(f.port())
 	s.cfg.Gateway.TLS = new(false)
+	s.cfg.Gateway.Account = f.account
 	s.cfg.Daemon = config.Daemon{LogCalendarMode: "scheduled", LogMarkets: []string{"us_equity"}, LogBeforeOpenMinutes: new(120), LogAfterCloseMinutes: new(90)}
 	s.logger = NewLogger(out, "debug")
 	s.now = func() time.Time { return now }
