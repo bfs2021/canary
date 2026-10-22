@@ -475,7 +475,14 @@ func addPlanningCloseFailureReason(err error) string {
 	}
 	if historical, ok := errors.AsType[*ibkr.HistoricalRequestError](err); ok {
 		if historical.Code > 0 {
-			return "broker_" + strconv.Itoa(historical.Code)
+			// The bare code left a same-day 162 undiagnosable: missing data,
+			// a missing entitlement and pacing need different fixes.
+			reason := "broker_" + strconv.Itoa(historical.Code)
+			switch category := historical.FailureCategory(); category {
+			case ibkr.HistoricalFailureNoData, ibkr.HistoricalFailureNotEntitled, ibkr.HistoricalFailurePacing:
+				reason += "_" + category
+			}
+			return reason
 		}
 		switch historical.Category {
 		case ibkr.HistoricalFailureInvalidPayload:

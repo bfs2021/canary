@@ -251,6 +251,9 @@ func TestAddPlanningCloseDiagnosticNeverLogsRawErrors(t *testing.T) {
 	}{
 		{"timeout", "timeout", fmt.Errorf(privateText+": %w", context.DeadlineExceeded)},
 		{"historical rejection", "broker_162", &ibkr.HistoricalRequestError{Code: 162, Message: privateText}},
+		{"broker no data", "broker_162_no_data", &ibkr.HistoricalRequestError{Code: 162, Message: "HMDS query returned no data: " + privateText}},
+		{"broker permission", "broker_162_not_entitled", &ibkr.HistoricalRequestError{Code: 162, Message: "No market data permissions for " + privateText}},
+		{"broker pacing", "broker_162_pacing", &ibkr.HistoricalRequestError{Code: 162, Message: "Historical data request pacing violation " + privateText}},
 		{"invalid bars", "invalid_history", &ibkr.HistoricalDataValidationError{Reason: privateText}},
 		{"invalid payload", "invalid_history", &ibkr.HistoricalRequestError{Category: ibkr.HistoricalFailureInvalidPayload, Message: privateText}},
 		{"no last bar", "no_last_session_bar", errors.New("add planning last-session bar unavailable")},
