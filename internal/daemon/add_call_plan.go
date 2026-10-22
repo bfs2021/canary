@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkr "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 func (s *Server) handleAddCallPlan(ctx context.Context, req *rpc.Request) (*rpc.AddCallPlanResult, error) {
@@ -19,7 +20,8 @@ func (s *Server) handleAddCallPlan(ctx context.Context, req *rpc.Request) (*rpc.
 	if err != nil || !date.After(time.Now().Add(7*24*time.Hour)) || c.ConID <= 0 || c.SecType != "OPT" || c.Currency != "USD" || c.Exchange != "SMART" || c.Right != "C" || c.Multiplier != 100 || c.TradingClass == "" || !positiveFinite(p.Budget) || p.Budget > 1e9 || !positiveFinite(p.LimitPrice) {
 		return nil, errBadRequest("Choose an exact long call, entry limit and positive budget")
 	}
-	if addOptionsCalendar(s.orderNow()).mode != "live" {
+	windows, hoursOK := s.addCallHours(ctx, c)
+	if !addCallSessionLive(windows, hoursOK, s.orderNow()) {
 		return nil, errBadRequest("Options session must be open to plan a call")
 	}
 	plan, err := planCallQuantity(ctx, p, s.previewOrder)
@@ -28,10 +30,32 @@ func (s *Server) handleAddCallPlan(ctx context.Context, req *rpc.Request) (*rpc.
 	}
 	// A preview can straddle the close. A completed plan must still belong
 	// to the open options session; broker data_type alone is not authority.
-	if addOptionsCalendar(s.orderNow()).mode != "live" {
+	if !addCallSessionLive(windows, hoursOK, s.orderNow()) {
 		return nil, errBadRequest("Options session must be open to plan a call")
 	}
 	return plan, nil
+}
+
+// addCallHours reads the call's class hours. Without them the class closes
+// with the stock market, the earlier close, so a failed read never extends it.
+func (s *Server) addCallHours(ctx context.Context, call rpc.ContractParams) ([]ibkr.TradingWindow, bool) {
+	c := s.gatewayConnector()
+	if c == nil {
+		return nil, false
+	}
+	binding, ok := c.CaptureSession()
+	if !ok {
+		return nil, false
+	}
+	exact, err := c.ResolveOrderContractForSession(ctx, binding, *previewIBKRContract(call), 5*time.Second)
+	if err != nil || exact.Contract.ConID != call.ConID {
+		return nil, false
+	}
+	return exact.SessionWindows()
+}
+
+func addCallSessionLive(windows []ibkr.TradingWindow, hoursOK bool, now time.Time) bool {
+	return addClassOptionsCalendar(addOptionsCalendar(now), windows, hoursOK, now).mode == "live"
 }
 
 // Every candidate, including a rounded-up lot, receives its own exact broker

@@ -225,14 +225,21 @@ const (
 // the zone is unknown, or the list does not parse; a list that says CLOSED
 // for every day it names parses to no windows.
 func (d BondContractDetails) SessionWindows() (windows []TradingWindow, source string, ok bool) {
-	if !d.Complete || strings.TrimSpace(d.TimeZoneID) == "" {
+	if !d.Complete {
 		return nil, "", false
 	}
-	for _, candidate := range []struct{ source, hours string }{{BondHoursLiquid, d.LiquidHours}, {BondHoursTrading, d.TradingHours}} {
+	return sessionWindows(d.TimeZoneID, d.LiquidHours, d.TradingHours)
+}
+
+func sessionWindows(tz, liquid, trading string) (windows []TradingWindow, source string, ok bool) {
+	if strings.TrimSpace(tz) == "" {
+		return nil, "", false
+	}
+	for _, candidate := range []struct{ source, hours string }{{BondHoursLiquid, liquid}, {BondHoursTrading, trading}} {
 		if strings.TrimSpace(candidate.hours) == "" {
 			continue
 		}
-		windows, err := ParseTradingHours(d.TimeZoneID, candidate.hours)
+		windows, err := ParseTradingHours(tz, candidate.hours)
 		if err != nil {
 			return nil, "", false
 		}

@@ -59,7 +59,9 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	if exact.Contract.Symbol != u.Symbol || exact.Contract.SecType != "STK" || exact.Contract.Currency != u.Currency || u.ConID > 0 && exact.Contract.ConID != u.ConID {
 		return nil, errBadRequest("underlying identity changed")
 	}
-	session := addOptionsCalendar(s.orderNow())
+	now := s.orderNow()
+	session := addOptionsCalendar(now)
+	class := &addClassSession{calendar: session, now: now}
 	// Keep the exact underlying's shared read subscription alive while metadata
 	// loads and TWS computes option models. The snapshot below consumes this same
 	// cache; a private exact-session quote line would leave it waiting on a second
@@ -97,7 +99,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 		if !validAddCallSelection(requested, u.Symbol) {
 			return nil, errBadRequest("choose an exact standard call")
 		}
-		row := s.addCallMarket(ctx, c, binding, exact.Contract, requested.Expiry, requested.Strike, session)
+		row := s.addCallMarket(ctx, c, binding, exact.Contract, requested.Expiry, requested.Strike, class)
 		if row.Contract != nil && !sameAddCall(*row.Contract, requested) {
 			return nil, errBadRequest("selected call identity changed")
 		}
@@ -107,7 +109,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 		out.Calls = make([]rpc.AddCallCandidate, len(p.Refresh))
 		addParallel(len(p.Refresh), func(i int) {
 			item := p.Refresh[i]
-			row := s.addCallMarket(ctx, c, binding, exact.Contract, item.Contract.Expiry, item.Contract.Strike, session)
+			row := s.addCallMarket(ctx, c, binding, exact.Contract, item.Contract.Expiry, item.Contract.Strike, class)
 			if row.Contract != nil && !sameAddCall(*row.Contract, item.Contract) {
 				row = rpc.AddCallCandidate{Unavailable: "Call identity changed"}
 			}
@@ -132,7 +134,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 				calls, err := c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 30*time.Second)
 				if err == nil {
 					row = selectAddCall(calls, *spot, func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
-						return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, session)
+						return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, class.of(call))
 					})
 					row.Horizon, row.DTE = target, dte
 				} else {
@@ -146,6 +148,8 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	if !c.HistoricalSessionCurrent(binding) || !s.orderPreviewBrokerAuthorityCurrent(authority) {
 		return nil, fmt.Errorf("broker session changed during Add discovery")
 	}
+	settled := class.result()
+	out.OptionsSession, out.OptionsLastSession, out.OptionMode = settled.current, settled.last, settled.mode
 	out.AsOf = time.Now()
 	return out, nil
 }
@@ -266,9 +270,9 @@ func addPriceRules(ctx context.Context, c *ibkr.Connector, binding ibkr.Connecto
 	}
 	return out
 }
-func (s *Server) addCallMarket(ctx context.Context, c *ibkr.Connector, binding ibkr.ConnectorSessionBinding, under ibkr.Contract, expiry string, strike float64, session addOptionsCalendarState) rpc.AddCallCandidate {
+func (s *Server) addCallMarket(ctx context.Context, c *ibkr.Connector, binding ibkr.ConnectorSessionBinding, under ibkr.Contract, expiry string, strike float64, class *addClassSession) rpc.AddCallCandidate {
 	row := rpc.AddCallCandidate{Unavailable: "Exact call evidence unavailable"}
-	if session.mode == "unavailable" {
+	if class.calendar.mode == "unavailable" {
 		return rpc.AddCallCandidate{Unavailable: "Options calendar unavailable"}
 	}
 	parsed, err := time.Parse("20060102", expiry)
@@ -280,7 +284,7 @@ func (s *Server) addCallMarket(ctx context.Context, c *ibkr.Connector, binding i
 	if err != nil || ibkr.ValidateSetupCallResolution(exact, under, expiry, strike) != nil {
 		return row
 	}
-	row = s.addResolvedCallForSession(ctx, c, binding, under, exact, session)
+	row = s.addResolvedCallForSession(ctx, c, binding, under, exact, class.of(exact))
 	if row.Planning != nil && !selectableAddPlanningCall(row) {
 		return rpc.AddCallCandidate{Unavailable: "Call delta outside 0.50–0.70"}
 	}
@@ -330,6 +334,89 @@ func addOptionsCalendar(now time.Time) addOptionsCalendarState {
 		out.last = &last
 	}
 	return out
+}
+
+// addClassSession settles one Add read's options session from the first
+// resolved call, so every row and the reported session share one class close.
+type addClassSession struct {
+	calendar addOptionsCalendarState
+	now      time.Time
+	once     sync.Once
+	settled  *addOptionsCalendarState
+}
+
+func (a *addClassSession) of(call ibkr.ResolvedOrderContract) addOptionsCalendarState {
+	a.once.Do(func() {
+		windows, ok := call.SessionWindows()
+		settled := addClassOptionsCalendar(a.calendar, windows, ok, a.now)
+		a.settled = &settled
+	})
+	return *a.settled
+}
+
+// result is read after every row has finished; a read without a resolved
+// call reports the calendar.
+func (a *addClassSession) result() addOptionsCalendarState {
+	if a.settled == nil {
+		return a.calendar
+	}
+	return *a.settled
+}
+
+// addClassOptionsCalendar narrows the calendar's open options session to one
+// option class's close. The calendar closes at the late 16:15 New York close
+// of SPY-style classes, while single-stock options close with the stock
+// market. The class's broker hours decide, never later than the calendar;
+// without a broker window for the session, the stock market's close does.
+func addClassOptionsCalendar(calendar addOptionsCalendarState, windows []ibkr.TradingWindow, hoursOK bool, now time.Time) addOptionsCalendarState {
+	if calendar.mode != "live" {
+		return calendar
+	}
+	session := calendar.current
+	closeAt, found := time.Time{}, false
+	for _, w := range windows {
+		if hoursOK && w.Open.Before(session.Close) && w.Close.After(session.Open) && (!found || w.Close.After(closeAt)) {
+			closeAt, found = w.Close, true
+		}
+	}
+	if !found {
+		closeAt = session.Close.Add(-15 * time.Minute)
+		if stock, err := marketcal.NewWithClock(func() time.Time { return now }).SessionAt(marketcal.MarketUSEquity, now); err == nil && stock.Date == session.Date && !stock.Close.IsZero() && !stock.Close.After(session.Close) {
+			closeAt = stock.Close
+		}
+	}
+	if closeAt.After(session.Close) {
+		return calendar
+	}
+	if now.Before(closeAt) {
+		calendar.current = addSessionClosingAt(session, closeAt)
+		return calendar
+	}
+	// Read the calendar as it stands after the latest class close: the session
+	// is complete and reopens at the next one; only its close is the class's.
+	closed := addOptionsCalendar(session.Close)
+	if closed.mode != "planning" || closed.current.Date != session.Date || closed.last == nil || closed.last.Date != session.Date {
+		return addOptionsCalendarState{current: calendar.current, mode: "unavailable"}
+	}
+	closed.current = addSessionClosingAt(closed.current, closeAt)
+	last := addSessionClosingAt(*closed.last, closeAt)
+	closed.last = &last
+	return closed
+}
+
+func addSessionClosingAt(session rpc.MarketSession, closeAt time.Time) rpc.MarketSession {
+	session.Close = closeAt
+	windows := make([]rpc.MarketWindow, 0, len(session.Windows))
+	for _, w := range session.Windows {
+		if w.Open.Before(closeAt) {
+			if w.Close.After(closeAt) {
+				w.Close = closeAt
+			}
+			windows = append(windows, w)
+		}
+	}
+	session.Windows = windows
+	return session
 }
 
 // A missing delta retains a provisional near-ATM planning row. A known delta

@@ -35,6 +35,16 @@ func TestAddClosedPlanningPricesFromALateClosingQuoteWithoutHistory(t *testing.T
 	runAddSnapshotScenario(t, "planning")
 }
 
+// At 16:05 New York the calendar's options session is still open, but a
+// single-stock class closed at 16:00 while a late class trades to 16:15.
+func TestAddClosedStockClassReportsPlanningBeforeTheCalendarClose(t *testing.T) {
+	runAddSnapshotScenario(t, "class-closed")
+}
+
+func TestAddLateClassStaysLiveUntilItsBrokerClose(t *testing.T) {
+	runAddSnapshotScenario(t, "late-class")
+}
+
 func runAddSnapshotScenario(t *testing.T, scenario string) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -55,6 +65,16 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 	}
 	if scenario == "planning" {
 		calendarAt = time.Date(2026, 10, 22, 23, 0, 0, 0, time.UTC)
+	}
+	if scenario == "class-closed" || scenario == "late-class" {
+		calendarAt = time.Date(2026, 10, 22, 20, 5, 0, 0, time.UTC)
+	}
+	optionFields := func(id, strike, conID string) []string {
+		fields := addSnapshotContractFields(id, "OPT", expiry, strike, conID)
+		if scenario == "late-class" {
+			fields[25], fields[27] = "US/Central", "20261022:0830-20261022:1515"
+		}
+		return fields
 	}
 	lastSession := addOptionsCalendar(calendarAt).last
 	lastDate := "20261022"
@@ -113,10 +133,10 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 				if f[5] == "STK" {
 					send(10, addSnapshotContractFields(id, "STK", "", "", "17")...)
 				} else if f[3] != "0" {
-					send(10, addSnapshotContractFields(id, "OPT", expiry, f[7], f[3])...)
+					send(10, optionFields(id, f[7], f[3])...)
 				} else {
 					for _, strike := range []string{"100", "110", "120"} {
-						send(10, addSnapshotContractFields(id, "OPT", expiry, strike, "10"+strike)...)
+						send(10, optionFields(id, strike, "10"+strike)...)
 					}
 				}
 				send(52, "1", id)
@@ -140,7 +160,7 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 				}
 				if f[5] == "OPT" {
 					feed := "1"
-					if scenario == "planning" {
+					if scenario == "planning" || scenario == "class-closed" {
 						feed = "2"
 					}
 					send(58, "1", id, feed)
@@ -149,6 +169,8 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 					}
 					send(1, "6", id, "1", "1.00", "100", "0")
 					send(1, "6", id, "2", "1.02", "100", "0")
+					send(2, "6", id, "0", "100")
+					send(2, "6", id, "3", "100")
 					send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
 				}
 			case "78":
@@ -216,6 +238,21 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 			if row.Contract != nil || row.Unavailable != "Options calendar unavailable" {
 				t.Fatalf("unknown calendar suggested a call: %+v", row)
 			}
+		}
+		return
+	}
+	if scenario == "class-closed" || scenario == "late-class" {
+		row, mode, closeAt := got.Calls[1], "planning", time.Date(2026, 10, 22, 20, 0, 0, 0, time.UTC)
+		if scenario == "late-class" {
+			mode, closeAt = "live", time.Date(2026, 10, 22, 20, 15, 0, 0, time.UTC)
+		}
+		// A live row's eligibility reads the wall clock, which this fixed
+		// session clock cannot satisfy; the late class must simply not plan.
+		if got.OptionMode != mode || !got.OptionsSession.Close.Equal(closeAt) || row.Planning != nil && mode == "live" || mode == "planning" && (row.Contract == nil || row.Contract.Strike != 110 || row.Planning == nil) {
+			t.Fatalf("class close not applied: mode=%s session=%+v row=%+v", got.OptionMode, got.OptionsSession, row)
+		}
+		if mode == "planning" && (got.OptionsLastSession == nil || got.OptionsLastSession.Date != "2026-10-22" || !got.OptionsLastSession.Close.Equal(closeAt)) {
+			t.Fatalf("closed class lost today's completed session: %+v", got.OptionsLastSession)
 		}
 		return
 	}

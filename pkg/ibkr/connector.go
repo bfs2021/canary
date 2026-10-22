@@ -3015,6 +3015,16 @@ type ResolvedOrderContract struct {
 	Contract       Contract
 	MinTick        float64
 	TimeZoneID     string
+	// TradingHours and LiquidHours are the broker's hours lists in TimeZoneID;
+	// Add reads an option class's own close from them.
+	TradingHours string
+	LiquidHours  string
+}
+
+// SessionWindows reads the contract's liquid hours, else its trading hours.
+func (r ResolvedOrderContract) SessionWindows() ([]TradingWindow, bool) {
+	windows, _, ok := sessionWindows(r.TimeZoneID, r.LiquidHours, r.TradingHours)
+	return windows, ok
 }
 
 // ResolveOrderContractForSession resolves a symbol/option description to one
@@ -3193,7 +3203,7 @@ func exactOrderContract(request Contract, details []ContractDetailsLite) (Resolv
 	if selected.TradingClass != "" {
 		resolved.TradingClass = selected.TradingClass
 	}
-	return ResolvedOrderContract{ValidExchanges: selected.ValidExchanges, MarketRuleIDs: selected.MarketRuleIDs, Contract: resolved, UnderConID: selected.UnderConID, MinTick: selected.MinTick, TimeZoneID: selected.TimeZoneID, Industry: selected.Industry, Category: selected.Category, StockType: selected.StockType}, nil
+	return ResolvedOrderContract{ValidExchanges: selected.ValidExchanges, MarketRuleIDs: selected.MarketRuleIDs, Contract: resolved, UnderConID: selected.UnderConID, MinTick: selected.MinTick, TimeZoneID: selected.TimeZoneID, TradingHours: selected.TradingHours, LiquidHours: selected.LiquidHours, Industry: selected.Industry, Category: selected.Category, StockType: selected.StockType}, nil
 }
 
 // exactOrderContractRouteMatches applies caller-supplied routing as an
