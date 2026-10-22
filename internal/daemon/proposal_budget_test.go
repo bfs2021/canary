@@ -101,7 +101,7 @@ func assertBudgetRowsReduceOnly(t *testing.T, rows []rpc.TradeProposal, pos *rpc
 func TestBudgetReductionPerLineThenTotalLargestLossFirst(t *testing.T) {
 	// Total cap 20% = 10,000. Per line first: AAA keeps 3 (7,500/2,000) and
 	// sells 3; BBB keeps 3 (7,500/2,500) and sells 1; CCC is within its cap.
-	// Projected 6,000 + 7,500 + 6,000 = 19,500 leaves 9,500 over the total:
+	// The three projected lines together still exceed the total cap:
 	// BBB (largest loss) sells its remaining 3 (7,500), then AAA sells 1
 	// (2,000) and the excess is covered; CCC (a gain) is never reached.
 	policy := budgetTestPolicy(rpc.BudgetReductionModeShadow, 20, 15)
