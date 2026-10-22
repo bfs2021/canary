@@ -224,7 +224,14 @@ The ordinary protection guard still requires fresh evidence and all write gates.
 `add market --json` reads JSON on standard input and returns a resolved stock
 in its trading currency. For USD underlyings it also offers four standard
 long-call horizons, targeting 14/30/60/120 days, always more
-than seven days, delta 0.50–0.70. Exact contract refresh never substitutes a
+than seven days. Live delta ranges follow days to expiry: 0.50–0.70 to 21 days,
+0.35–0.50 to 45 days, 0.25–0.40 beyond, and each row carries its `delta_band`
+(owner, 2026-10-22 20:34 CEST: "max 0.5 for 30 days, 0.4 for 60 and 120 days").
+Long horizons aim at the cap: when the strikes nearest spot are above it, a
+second search starts at the strike the observed volatility puts at the cap.
+Each expiry resolves the eight listed strikes nearest its aim as single
+contracts and quotes the three nearest at once; all four horizons run
+together, and the complete expiry inventory remains the fallback. Exact contract refresh never substitutes a
 contract. Prices, sizes, IV/delta and their evidence clocks remain distinct.
 `add call-plan --json` reads JSON on standard input and computes exact fee-inclusive sizing and previews
 at most four candidates. Optional nearest-five rounding retains one/two contracts

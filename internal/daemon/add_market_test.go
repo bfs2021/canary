@@ -17,8 +17,10 @@ func TestAddCallSelectionUsesActualExpiryInventory(t *testing.T) {
 	// only five-dollar strikes exist. The former three nearest probes all
 	// failed; 770 is valid and in range after 775's delta proves too low.
 	now := time.Now()
+	// A 14-day expiry keeps the 0.50–0.70 range these deltas are drawn for.
+	expiry := now.AddDate(0, 0, 14).Format("20060102")
 	call := func(k float64) ibkr.ResolvedOrderContract {
-		return ibkr.ResolvedOrderContract{UnderConID: 17, MinTick: .01, ValidExchanges: "SMART", MarketRuleIDs: "27", Contract: ibkr.Contract{ConID: 10000 + int(k), Symbol: "SYNTH", SecType: "OPT", Expiry: "20270219", Strike: k, Right: "C", Multiplier: 100, Currency: "USD", Exchange: "SMART", TradingClass: "SYNTH", LocalSymbol: "SYNTH call"}}
+		return ibkr.ResolvedOrderContract{UnderConID: 17, MinTick: .01, ValidExchanges: "SMART", MarketRuleIDs: "27", Contract: ibkr.Contract{ConID: 10000 + int(k), Symbol: "SYNTH", SecType: "OPT", Expiry: expiry, Strike: k, Right: "C", Multiplier: 100, Currency: "USD", Exchange: "SMART", TradingClass: "SYNTH", LocalSymbol: "SYNTH call"}}
 	}
 	var quoted []float64
 	var mu sync.Mutex

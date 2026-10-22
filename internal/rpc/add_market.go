@@ -28,6 +28,15 @@ type AddCallCandidate struct {
 	PriceIncrements []SetupOptionPriceIncrement `json:"price_increments,omitempty"`
 	Unavailable     string                      `json:"unavailable,omitempty"`
 	Planning        *AddCallPlanning            `json:"planning,omitempty"`
+	// DeltaBand is the owner's delta range for this horizon; Desk reads it
+	// rather than keeping its own copy.
+	DeltaBand *AddDeltaBand `json:"delta_band,omitempty"`
+}
+
+// AddDeltaBand bounds a suggested call's live delta, inclusive.
+type AddDeltaBand struct {
+	Min float64 `json:"min"`
+	Max float64 `json:"max"`
 }
 
 // AddCallPlanning is closed-session context, never live selection or order

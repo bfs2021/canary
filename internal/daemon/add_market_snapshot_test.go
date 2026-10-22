@@ -182,7 +182,7 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 							feed = "2"
 						}
 						if scenario == "model-before-notice" {
-							send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+							send(21, id, "13", "0", "0.2", "0.45", "1.01", "0", "0.01", "0.1", "-0.1", "110")
 						}
 						send(58, "1", id, feed)
 						if scenario == "planning" {
@@ -195,7 +195,7 @@ func runAddSnapshotScenario(t *testing.T, scenario string) {
 						if scenario == "model-before-notice" {
 							time.Sleep(300 * time.Millisecond)
 						}
-						send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+						send(21, id, "13", "0", "0.2", "0.45", "1.01", "0", "0.01", "0.1", "-0.1", "110")
 					}()
 				}
 			case "78":

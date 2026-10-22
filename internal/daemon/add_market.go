@@ -116,6 +116,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			}
 			row.Horizon = item.Horizon
 			_, row.DTE = addHorizonExpiry([]rpc.SetupOptionExpiry{{Date: item.Contract.Expiry}}, item.Horizon, 8, 150, time.Now())
+			row.DeltaBand = addDeltaBandFor(&item.Contract).rpc()
 			out.Calls[i] = row
 		})
 	}
@@ -140,14 +141,28 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 					calls, err = c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 30*time.Second)
 				}
 				if err == nil {
-					row = selectAddCall(calls, *spot, func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
+					quote := func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
 						return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, class.of(call))
-					})
+					}
+					var iv float64
+					row, iv = selectAddCallNear(calls, *spot, quote)
+					// Long horizons aim below the at-the-money delta: when the
+					// strikes near spot are all outside the band, search again
+					// around the strike the observed volatility puts at target.
+					if band := addDeltaBandForDTE(dte); row.Contract == nil && iv > 0 && band.Target < .5 {
+						aim := addAimStrike(*spot, iv, dte, band.Target)
+						if near := s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, aim); len(near) > 0 {
+							row, _ = selectAddCallNear(near, aim, quote)
+						}
+					}
 					row.Horizon, row.DTE = target, dte
 				} else {
 					s.warnAddInventoryFailure(u.Symbol, date, target, time.Since(started), err)
 					row.Unavailable = "Call contracts unavailable"
 				}
+			}
+			if dte > 0 {
+				row.DeltaBand = addDeltaBandForDTE(dte).rpc()
 			}
 			out.Calls[i] = row
 		})
@@ -213,35 +228,95 @@ func addInventoryFailureReason(err error) string {
 // Quote only the nearest actual contracts for this expiry. The broker's
 // separate SecDef expiry/strike sets must never consume these three slots.
 func selectAddCall(calls []ibkr.ResolvedOrderContract, spot float64, quote func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate) rpc.AddCallCandidate {
+	row, _ := selectAddCallNear(calls, spot, quote)
+	return row
+}
+
+// selectAddCallNear quotes the three actual contracts nearest ref at once and
+// keeps the in-band call whose delta is closest to its band's target. It also
+// returns an implied volatility it observed, to aim a second search.
+func selectAddCallNear(calls []ibkr.ResolvedOrderContract, ref float64, quote func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate) (rpc.AddCallCandidate, float64) {
 	calls = slices.Clone(calls)
 	slices.SortFunc(calls, func(a, b ibkr.ResolvedOrderContract) int {
-		return compareDistance(a.Contract.Strike, b.Contract.Strike, spot)
+		return compareDistance(a.Contract.Strike, b.Contract.Strike, ref)
 	})
-	var unqualified *rpc.AddCallCandidate
-	// The three nearest are quoted at once and judged nearest first.
 	candidates := make([]rpc.AddCallCandidate, min(3, len(calls)))
 	var wg sync.WaitGroup
 	for i := range candidates {
 		wg.Go(func() { candidates[i] = quote(calls[i]) })
 	}
 	wg.Wait()
-	for _, candidate := range candidates {
-		if eligibleAddCall(candidate, time.Now()) {
-			return candidate
+	var best, unqualified *rpc.AddCallCandidate
+	iv := 0.0
+	closer := func(a, b *rpc.AddCallCandidate) bool {
+		target := addDeltaBandFor(a.Contract).Target
+		return b == nil || math.Abs(*a.Quote.Delta-target) < math.Abs(*b.Quote.Delta-target)
+	}
+	for i := range candidates {
+		c := &candidates[i]
+		if q := c.Quote; iv == 0 && q != nil && q.IV != nil && positiveFinite(*q.IV) {
+			iv = *q.IV
 		}
-		if selectableAddPlanningCall(candidate) {
-			if candidate.Planning.DeltaStatus == "in_range" {
-				return candidate
+		switch {
+		case eligibleAddCall(*c, time.Now()):
+			if best == nil || best.Planning != nil || closer(c, best) {
+				best = c
 			}
-			if unqualified == nil {
-				unqualified = &candidate
+		case selectableAddPlanningCall(*c) && c.Planning.DeltaStatus == "in_range":
+			if best == nil || best.Planning != nil && closer(c, best) {
+				best = c
 			}
+		case selectableAddPlanningCall(*c) && unqualified == nil:
+			unqualified = c
 		}
 	}
-	if unqualified != nil {
-		return *unqualified
+	if best == nil {
+		best = unqualified
 	}
-	return rpc.AddCallCandidate{Unavailable: "No eligible call"}
+	if best == nil {
+		return rpc.AddCallCandidate{Unavailable: "No eligible call"}, iv
+	}
+	return *best, iv
+}
+
+// addDeltaBand is the owner's call delta range by days to expiry.
+// Owner, 2026-10-22 20:34 CEST: "decrease delta for longer run times. we can
+// try max 0.5 for 30 days, 0.4 for 60 and 120 days." The 14-day range keeps
+// 0.50–0.70; the floors are 0.15 under each cap. Target is where selection
+// aims: the cap for the longer horizons, at the money for 14 days.
+type addDeltaBand struct{ Min, Max, Target float64 }
+
+func addDeltaBandForDTE(dte int) addDeltaBand {
+	switch {
+	case dte <= 21:
+		return addDeltaBand{.5, .7, .5}
+	case dte <= 45:
+		return addDeltaBand{.35, .5, .5}
+	default:
+		return addDeltaBand{.25, .4, .4}
+	}
+}
+
+// addDeltaBandFor reads a contract's band from its expiry. A contract
+// without a readable expiry keeps the original, highest range.
+func addDeltaBandFor(c *rpc.ContractParams) addDeltaBand {
+	if c == nil {
+		return addDeltaBandForDTE(0)
+	}
+	_, dte := addHorizonExpiry([]rpc.SetupOptionExpiry{{Date: c.Expiry}}, 0, 0, 10000, time.Now())
+	return addDeltaBandForDTE(dte)
+}
+
+func (b addDeltaBand) holds(delta float64) bool { return delta >= b.Min && delta <= b.Max }
+
+func (b addDeltaBand) rpc() *rpc.AddDeltaBand { return &rpc.AddDeltaBand{Min: b.Min, Max: b.Max} }
+
+// addAimStrike estimates the strike whose call delta is the target, from
+// Black-Scholes with zero rates: delta = N(d1).
+func addAimStrike(spot, iv float64, dte int, delta float64) float64 {
+	t := float64(max(dte, 1)) / 365
+	d1 := math.Sqrt2 * math.Erfinv(2*delta-1)
+	return spot * math.Exp(-d1*iv*math.Sqrt(t)+iv*iv*t/2)
 }
 
 func compareDistance(a, b, spot float64) int {
@@ -299,7 +374,7 @@ func (s *Server) addCallMarket(ctx context.Context, c *ibkr.Connector, binding i
 	}
 	row = s.addResolvedCallForSession(ctx, c, binding, under, exact, class.of(exact))
 	if row.Planning != nil && !selectableAddPlanningCall(row) {
-		return rpc.AddCallCandidate{Unavailable: "Call delta outside 0.50–0.70"}
+		return rpc.AddCallCandidate{Unavailable: "Call delta outside its range"}
 	}
 	return row
 }
@@ -323,7 +398,7 @@ func (s *Server) addResolvedCallMarket(ctx context.Context, c *ibkr.Connector, b
 }
 func eligibleAddCall(row rpc.AddCallCandidate, now time.Time) bool {
 	q := row.Quote
-	return row.Planning == nil && row.Contract != nil && len(row.PriceIncrements) > 0 && q != nil && q.Status == rpc.SetupQuoteQuoted && q.DataType == rpc.MarketDataLive && q.ModelDataType == rpc.MarketDataLive && q.Delta != nil && *q.Delta >= .5 && *q.Delta <= .7 && q.IV != nil && *q.IV > 0 && !q.AsOf.IsZero() && !q.ModelAsOf.IsZero() && !q.AsOf.After(now.Add(time.Second)) && !q.ModelAsOf.After(now.Add(time.Second)) && now.Sub(q.AsOf) <= 15*time.Second && now.Sub(q.ModelAsOf) <= 15*time.Second
+	return row.Planning == nil && row.Contract != nil && len(row.PriceIncrements) > 0 && q != nil && q.Status == rpc.SetupQuoteQuoted && q.DataType == rpc.MarketDataLive && q.ModelDataType == rpc.MarketDataLive && q.Delta != nil && addDeltaBandFor(row.Contract).holds(*q.Delta) && q.IV != nil && *q.IV > 0 && !q.AsOf.IsZero() && !q.ModelAsOf.IsZero() && !q.AsOf.After(now.Add(time.Second)) && !q.ModelAsOf.After(now.Add(time.Second)) && now.Sub(q.AsOf) <= 15*time.Second && now.Sub(q.ModelAsOf) <= 15*time.Second
 }
 
 type addOptionsCalendarState struct {
@@ -438,14 +513,14 @@ func selectableAddPlanningCall(row rpc.AddCallCandidate) bool {
 	return row.Contract != nil && row.Planning != nil && (row.Planning.DeltaStatus == "in_range" || row.Planning.DeltaStatus == "unavailable")
 }
 
-func addPlanningObservation(q *rpc.SetupOptionQuote) *rpc.AddCallPlanning {
+func addPlanningObservation(q *rpc.SetupOptionQuote, call *rpc.ContractParams) *rpc.AddCallPlanning {
 	p := &rpc.AddCallPlanning{DeltaStatus: "unavailable"}
 	if q == nil {
 		return p
 	}
 	if q.Delta != nil {
 		p.DeltaStatus = "out_of_range"
-		if *q.Delta >= .5 && *q.Delta <= .7 {
+		if addDeltaBandFor(call).holds(*q.Delta) {
 			p.DeltaStatus = "in_range"
 		}
 	}
@@ -468,7 +543,7 @@ func (s *Server) addResolvedCallForSession(ctx context.Context, c *ibkr.Connecto
 	contract.MinTick = exact.MinTick
 	row := rpc.AddCallCandidate{Contract: &contract, PriceIncrements: addPriceRules(ctx, c, binding, exact)}
 	row.Quote = s.addPlanningCallQuote(ctx, c, binding, contract)
-	row.Planning = addPlanningObservation(row.Quote)
+	row.Planning = addPlanningObservation(row.Quote, row.Contract)
 	if row.Planning.Price == nil {
 		row.Unavailable = "Planning price unavailable"
 	}
