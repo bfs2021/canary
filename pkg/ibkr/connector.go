@@ -1107,12 +1107,6 @@ func (e *HistoricalRequestError) Error() string {
 	return fmt.Sprintf("historical data error %d", e.Code)
 }
 
-// FailureCategory classifies the failure into the closed historical
-// vocabulary, so callers can report why without carrying broker prose.
-func (e *HistoricalRequestError) FailureCategory() string {
-	return classifyHistoricalRequestFailure(e)
-}
-
 // Is reports a code-200 history rejection as [ErrContractNoDefinition]: the
 // broker cannot define the contract as described, the same verdict a
 // contract-details miss carries, so callers classify both alike. The code
