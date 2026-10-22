@@ -2850,7 +2850,13 @@ func (s *Server) serveConn(ctx context.Context, conn net.Conn) {
 			s.handleDisplaySubscribe(connCtx, &req, conn, r)
 			return
 		}
-		if terminal := s.dispatch(connCtx, &req, enc, r); terminal {
+		reqCtx, stop := connCtx, func() {}
+		if cancelOnPeerCloseMethods[req.Method] {
+			reqCtx, stop = cancelOnPeerClose(connCtx, conn, r)
+		}
+		terminal := s.dispatch(reqCtx, &req, enc, r)
+		stop()
+		if terminal {
 			return
 		}
 	}
