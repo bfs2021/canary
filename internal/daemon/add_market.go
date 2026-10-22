@@ -154,21 +154,11 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 					quote := func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
 						return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, class.of(call))
 					}
-					var iv float64
-					quoted := time.Now()
-					row, iv = selectAddCallNear(calls, *spot, quote)
-					timing[i] = fmt.Sprintf("%d:resolve=%d,quote=%d", target, resolved.Milliseconds(), time.Since(quoted).Milliseconds())
-					// Long horizons aim below the at-the-money delta: when the
-					// strikes near spot are all outside the band, search again
-					// around the strike the observed volatility puts at target.
-					if band := addDeltaBandForDTE(dte); row.Contract == nil && iv > 0 && band.Target < .5 {
-						aimed := time.Now()
-						aim := addAimStrike(*spot, iv, dte, band.Target)
-						if near := s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, aim); len(near) > 0 {
-							row, _ = selectAddCallNear(near, aim, quote)
-						}
-						timing[i] += fmt.Sprintf(",aim=%d", time.Since(aimed).Milliseconds())
-					}
+					var spent string
+					row, spent = selectAddCallAimed(calls, *spot, dte, quote, func(aim float64) []ibkr.ResolvedOrderContract {
+						return s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, aim)
+					})
+					timing[i] = fmt.Sprintf("%d:resolve=%d,%s", target, resolved.Milliseconds(), spent)
 					row.Horizon, row.DTE = target, dte
 				} else {
 					s.warnAddInventoryFailure(u.Symbol, date, target, time.Since(started), err)
@@ -181,7 +171,10 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			out.Calls[i] = row
 		})
 		lap("horizons")
-		s.infof("add.timing symbol=%s underlying_ms=%d rules_ms=%d listing_ms=%d spot_ms=%d horizons_ms=%d %s total_ms=%d", u.Symbol, phase["underlying"].Milliseconds(), phase["rules"].Milliseconds(), phase["listing"].Milliseconds(), phase["spot"].Milliseconds(), phase["horizons"].Milliseconds(), strings.Join(timing, " "), time.Since(started).Milliseconds())
+		// The default log keeps warnings only; a slow discovery is one.
+		if time.Since(started) > 8*time.Second {
+			s.warnf("add.slow symbol=%s underlying_ms=%d rules_ms=%d listing_ms=%d spot_ms=%d horizons_ms=%d %s total_ms=%d", u.Symbol, phase["underlying"].Milliseconds(), phase["rules"].Milliseconds(), phase["listing"].Milliseconds(), phase["spot"].Milliseconds(), phase["horizons"].Milliseconds(), strings.Join(timing, " "), time.Since(started).Milliseconds())
+		}
 	}
 	if !c.HistoricalSessionCurrent(binding) || !s.orderPreviewBrokerAuthorityCurrent(authority) {
 		return nil, fmt.Errorf("broker session changed during Add discovery")
@@ -293,6 +286,24 @@ func selectAddCallNear(calls []ibkr.ResolvedOrderContract, ref float64, quote fu
 		return rpc.AddCallCandidate{Unavailable: "No eligible call"}, iv
 	}
 	return *best, iv
+}
+
+// selectAddCallAimed picks from the calls nearest spot and, when none is in
+// its range, searches again around the strike the observed volatility puts at
+// the range's target. It also says, in milliseconds, what each round took.
+func selectAddCallAimed(calls []ibkr.ResolvedOrderContract, spot float64, dte int, quote func(ibkr.ResolvedOrderContract) rpc.AddCallCandidate, near func(float64) []ibkr.ResolvedOrderContract) (rpc.AddCallCandidate, string) {
+	started := time.Now()
+	row, iv := selectAddCallNear(calls, spot, quote)
+	spent := fmt.Sprintf("quote=%d", time.Since(started).Milliseconds())
+	if row.Contract != nil || iv <= 0 {
+		return row, spent
+	}
+	started = time.Now()
+	aim := addAimStrike(spot, iv, dte, addDeltaBandForDTE(dte).Target)
+	if calls := near(aim); len(calls) > 0 {
+		row, _ = selectAddCallNear(calls, aim, quote)
+	}
+	return row, spent + fmt.Sprintf(",aim=%d", time.Since(started).Milliseconds())
 }
 
 // addDeltaBand is the owner's call delta range by days to expiry.

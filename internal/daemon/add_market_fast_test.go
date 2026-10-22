@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,5 +122,32 @@ func TestAddLongHorizonPicksTheDeltaNearestItsCap(t *testing.T) {
 	}
 	if row, _ := selectAddCallNear(calls, aim, quote); row.Contract == nil || row.Contract.Strike != 355 {
 		t.Fatalf("picked %+v, want 355 (0.39, nearest the cap)", row.Contract)
+	}
+}
+
+// Spot moved so all three calls near it sit above 0.50: the 30-day row must
+// aim again, not come back empty (seen live 2026-10-22 21:03 CEST).
+func TestAddThirtyDayRowAimsBelowItsCapWhenSpotStrikesAreAbove(t *testing.T) {
+	expiry := time.Now().AddDate(0, 0, 29).Format("20060102")
+	deltas := map[float64]float64{320: .57, 322.5: .54, 325: .515, 327.5: .49, 330: .465}
+	all := []ibkr.ResolvedOrderContract{}
+	for k := range deltas {
+		all = append(all, ibkr.ResolvedOrderContract{Contract: ibkr.Contract{ConID: int(k * 10), Strike: k, Expiry: expiry}})
+	}
+	now := time.Now()
+	quote := func(exact ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
+		contract := setupOptionContract(exact.Contract)
+		return rpc.AddCallCandidate{Contract: &contract, PriceIncrements: []rpc.SetupOptionPriceIncrement{{LowEdge: 0, Increment: .01}}, Quote: &rpc.SetupOptionQuote{Status: rpc.SetupQuoteQuoted, DataType: rpc.MarketDataLive, ModelDataType: rpc.MarketDataLive, AsOf: now, ModelAsOf: now, IV: new(.42), Delta: new(deltas[exact.Contract.Strike])}}
+	}
+	nearSpot := []ibkr.ResolvedOrderContract{all[0], all[1], all[2]}
+	for i, c := range all {
+		switch c.Contract.Strike {
+		case 320, 322.5, 325:
+			nearSpot[map[float64]int{320: 0, 322.5: 1, 325: 2}[c.Contract.Strike]] = all[i]
+		}
+	}
+	row, spent := selectAddCallAimed(nearSpot, 322.6, 29, quote, func(float64) []ibkr.ResolvedOrderContract { return all })
+	if row.Contract == nil || row.Contract.Strike != 327.5 || !strings.Contains(spent, "aim=") {
+		t.Fatalf("picked %+v (%s), want 327.5 at 0.49 after aiming", row.Contract, spent)
 	}
 }
