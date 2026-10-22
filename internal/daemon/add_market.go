@@ -52,7 +52,12 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	if authority == nil {
 		return nil, s.gatewayUnavailableError()
 	}
+	// One log line per discovery says where its time went.
+	started, mark := time.Now(), time.Now()
+	phase := map[string]time.Duration{}
+	lap := func(name string) { phase[name], mark = time.Since(mark), time.Now() }
 	exact, err := c.ResolveOrderContractForSession(ctx, binding, ibkr.Contract{ConID: u.ConID, Symbol: u.Symbol, SecType: "STK", Currency: u.Currency, Exchange: "SMART"}, 8*time.Second)
+	lap("underlying")
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +84,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	}
 	out := &rpc.AddMarketResult{Version: 1, Underlying: setupOptionContract(exact.Contract), OptionsSession: session.current, OptionsLastSession: session.last, OptionMode: session.mode}
 	out.PriceIncrements = addPriceRules(ctx, c, binding, exact)
+	lap("rules")
 	var expiries []rpc.SetupOptionExpiry
 	var listing map[string][]ibkr.ExpiryClassedStrikes
 	if p.Discover && session.mode != "unavailable" {
@@ -88,10 +94,12 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 		}
 		expiries, _ = setupOptionExpiries(listing, time.Now())
 	}
+	lap("listing")
 	// Read after metadata so callbacks received during those broker round trips
 	// reach strike ranking instead of retaining an earlier empty snapshot.
 	raw, _ := json.Marshal(rpc.QuoteSnapshotParams{Contract: out.Underlying, TimeoutMs: 3000})
 	out.Quote, err = s.handleQuoteSnapshot(ctx, &rpc.Request{Params: raw})
+	lap("spot")
 	if err != nil {
 		return nil, err
 	}
@@ -123,6 +131,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	if p.Discover {
 		spot, _ := quoteCurrentPrice(out.Quote)
 		out.Calls = make([]rpc.AddCallCandidate, 4)
+		timing := make([]string, 4)
 		addParallel(4, addHorizonSlots, func(i int) {
 			target := []int{14, 30, 60, 120}[i]
 			bounds := [][2]int{{8, 21}, {22, 45}, {46, 90}, {91, 150}}[i]
@@ -134,6 +143,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			if date != "" && spot != nil && *spot > 0 {
 				started := time.Now()
 				calls := s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, *spot)
+				resolved := time.Since(started)
 				var err error
 				if len(calls) < 3 {
 					// Too few listed strikes resolved for this expiry: take the
@@ -145,15 +155,19 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 						return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, class.of(call))
 					}
 					var iv float64
+					quoted := time.Now()
 					row, iv = selectAddCallNear(calls, *spot, quote)
+					timing[i] = fmt.Sprintf("%d:resolve=%d,quote=%d", target, resolved.Milliseconds(), time.Since(quoted).Milliseconds())
 					// Long horizons aim below the at-the-money delta: when the
 					// strikes near spot are all outside the band, search again
 					// around the strike the observed volatility puts at target.
 					if band := addDeltaBandForDTE(dte); row.Contract == nil && iv > 0 && band.Target < .5 {
+						aimed := time.Now()
 						aim := addAimStrike(*spot, iv, dte, band.Target)
 						if near := s.addNearestExpiryCalls(ctx, c, binding, exact.Contract, listing, date, aim); len(near) > 0 {
 							row, _ = selectAddCallNear(near, aim, quote)
 						}
+						timing[i] += fmt.Sprintf(",aim=%d", time.Since(aimed).Milliseconds())
 					}
 					row.Horizon, row.DTE = target, dte
 				} else {
@@ -166,6 +180,8 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			}
 			out.Calls[i] = row
 		})
+		lap("horizons")
+		s.infof("add.timing symbol=%s underlying_ms=%d rules_ms=%d listing_ms=%d spot_ms=%d horizons_ms=%d %s total_ms=%d", u.Symbol, phase["underlying"].Milliseconds(), phase["rules"].Milliseconds(), phase["listing"].Milliseconds(), phase["spot"].Milliseconds(), phase["horizons"].Milliseconds(), strings.Join(timing, " "), time.Since(started).Milliseconds())
 	}
 	if !c.HistoricalSessionCurrent(binding) || !s.orderPreviewBrokerAuthorityCurrent(authority) {
 		return nil, fmt.Errorf("broker session changed during Add discovery")
