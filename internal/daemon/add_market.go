@@ -45,6 +45,10 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	if !ok {
 		return nil, s.gatewayUnavailableError()
 	}
+	authority := s.setupQuoteAuthority(c, binding)
+	if authority == nil {
+		return nil, s.gatewayUnavailableError()
+	}
 	exact, err := c.ResolveOrderContractForSession(ctx, binding, ibkr.Contract{ConID: u.ConID, Symbol: u.Symbol, SecType: "STK", Currency: u.Currency, Exchange: "SMART"}, 8*time.Second)
 	if err != nil {
 		return nil, err
@@ -52,25 +56,38 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 	if exact.Contract.Symbol != u.Symbol || exact.Contract.SecType != "STK" || exact.Contract.Currency != u.Currency || u.ConID > 0 && exact.Contract.ConID != u.ConID {
 		return nil, errBadRequest("underlying identity changed")
 	}
-	// Keep the exact underlying subscription alive while TWS computes option models.
+	// Keep the exact underlying's shared read subscription alive while metadata
+	// loads and TWS computes option models. The snapshot below consumes this same
+	// cache; a private exact-session quote line would leave it waiting on a second
+	// subscription. Option quote/model evidence remains independently session-bound.
 	if p.Discover || p.Selected != nil || len(p.Refresh) > 0 {
-		key, err := c.SubscribeMarketDataWithContractForSession(ctx, binding, exact.Contract, defaultGenericTicks)
+		_, release, err := s.subs.HoldContract(ctx, exact.Contract)
 		if err != nil {
 			return nil, err
 		}
 		defer func() {
 			cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			_ = c.UnsubscribeMarketDataForSession(cleanup, binding, key)
+			release(cleanup)
 		}()
 	}
 	out := &rpc.AddMarketResult{Version: 1, Underlying: setupOptionContract(exact.Contract)}
+	out.PriceIncrements = addPriceRules(ctx, c, binding, exact)
+	var expiries []rpc.SetupOptionExpiry
+	if p.Discover {
+		listing, err := c.FetchSetupOptionStrikes(ctx, binding, exact.Contract, 10*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		expiries, _ = setupOptionExpiries(listing, time.Now())
+	}
+	// Read after metadata so callbacks received during those broker round trips
+	// reach strike ranking instead of retaining an earlier empty snapshot.
 	raw, _ := json.Marshal(rpc.QuoteSnapshotParams{Contract: out.Underlying, TimeoutMs: 3000})
 	out.Quote, err = s.handleQuoteSnapshot(ctx, &rpc.Request{Params: raw})
 	if err != nil {
 		return nil, err
 	}
-	out.PriceIncrements = addPriceRules(ctx, c, binding, exact)
 	if p.Selected != nil {
 		requested := *p.Selected
 		if !validAddCallSelection(requested, u.Symbol) {
@@ -96,11 +113,6 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 		})
 	}
 	if p.Discover {
-		listing, err := c.FetchSetupOptionStrikes(ctx, binding, exact.Contract, 10*time.Second)
-		if err != nil {
-			return nil, err
-		}
-		expiries, _ := setupOptionExpiries(listing, time.Now())
 		spot, _ := quoteCurrentPrice(out.Quote)
 		out.Calls = make([]rpc.AddCallCandidate, 4)
 		addParallel(4, func(i int) {
@@ -122,7 +134,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			out.Calls[i] = row
 		})
 	}
-	if !c.HistoricalSessionCurrent(binding) {
+	if !c.HistoricalSessionCurrent(binding) || !s.orderPreviewBrokerAuthorityCurrent(authority) {
 		return nil, fmt.Errorf("broker session changed during Add discovery")
 	}
 	out.AsOf = time.Now()
