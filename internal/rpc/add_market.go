@@ -27,15 +27,31 @@ type AddCallCandidate struct {
 	Quote           *SetupOptionQuote           `json:"quote,omitempty"`
 	PriceIncrements []SetupOptionPriceIncrement `json:"price_increments,omitempty"`
 	Unavailable     string                      `json:"unavailable,omitempty"`
+	Planning        *AddCallPlanning            `json:"planning,omitempty"`
+}
+
+// AddCallPlanning is closed-session context, never live selection or order
+// evidence. ObservedAt is when the source was received, not an exchange time.
+// SessionDate is present only for an actual dated bar from that completed
+// session. Broker midpoint receipts never acquire a session date by inference.
+type AddCallPlanning struct {
+	Price       *float64  `json:"price,omitempty"`
+	PriceSource string    `json:"price_source,omitempty"` // last_session_close | broker_midpoint
+	SessionDate string    `json:"session_date,omitempty"`
+	ObservedAt  time.Time `json:"observed_at,omitzero"`
+	DeltaStatus string    `json:"delta_status"` // in_range | unavailable | out_of_range
 }
 
 // AddMarketResult contains observations, never order authority or risk capacity.
 type AddMarketResult struct {
-	Version         int                         `json:"version"`
-	Underlying      ContractParams              `json:"underlying"`
-	Quote           *Quote                      `json:"quote,omitempty"`
-	PriceIncrements []SetupOptionPriceIncrement `json:"price_increments,omitempty"`
-	Calls           []AddCallCandidate          `json:"calls,omitempty"`
-	Selected        *AddCallCandidate           `json:"selected,omitempty"`
-	AsOf            time.Time                   `json:"as_of"`
+	Version            int                         `json:"version"`
+	Underlying         ContractParams              `json:"underlying"`
+	Quote              *Quote                      `json:"quote,omitempty"`
+	PriceIncrements    []SetupOptionPriceIncrement `json:"price_increments,omitempty"`
+	Calls              []AddCallCandidate          `json:"calls,omitempty"`
+	Selected           *AddCallCandidate           `json:"selected,omitempty"`
+	AsOf               time.Time                   `json:"as_of"`
+	OptionsSession     MarketSession               `json:"options_session"`
+	OptionsLastSession *MarketSession              `json:"options_last_session,omitempty"`
+	OptionMode         string                      `json:"option_mode"` // live | planning | unavailable
 }

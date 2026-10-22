@@ -22,6 +22,18 @@ import (
 // quote line or retaining the earlier empty snapshot. This uses the production
 // connector, decoder, subscription manager and quote path throughout.
 func TestAddDiscoveryUsesUnderlyingQuoteArrivingDuringMetadata(t *testing.T) {
+	runAddSnapshotScenario(t, "cache")
+}
+
+func TestAddUnknownCalendarSkipsOptionAcquisition(t *testing.T) {
+	runAddSnapshotScenario(t, "unknown")
+}
+
+func TestAddClosedPlanningRetainsDatedHistoryWithoutGreeks(t *testing.T) {
+	runAddSnapshotScenario(t, "planning")
+}
+
+func runAddSnapshotScenario(t *testing.T, scenario string) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +43,22 @@ func TestAddDiscoveryUsesUnderlyingQuoteArrivingDuringMetadata(t *testing.T) {
 	var mu sync.Mutex
 	var stockRequests []string
 	var optionStrikes []string
+	var listingRequests, optionHistoryRequests int
+	// Explicit calendar scenarios use the existing server clock. The cache
+	// regression is valid both live and in planning: its exact contract and
+	// shared-subscription assertions do not depend on execution eligibility.
+	calendarAt := time.Date(2026, 10, 22, 16, 0, 0, 0, time.UTC)
+	if scenario == "unknown" {
+		calendarAt = time.Date(2029, 1, 2, 16, 0, 0, 0, time.UTC)
+	}
+	if scenario == "planning" {
+		calendarAt = time.Date(2026, 10, 22, 23, 0, 0, 0, time.UTC)
+	}
+	lastSession := addOptionsCalendar(calendarAt).last
+	lastDate := "20261022"
+	if lastSession != nil {
+		lastDate = strings.ReplaceAll(lastSession.Date, "-", "")
+	}
 	done := make(chan error, 1)
 	go func() {
 		conn, err := ln.Accept()
@@ -81,6 +109,8 @@ func TestAddDiscoveryUsesUnderlyingQuoteArrivingDuringMetadata(t *testing.T) {
 				id := f[2]
 				if f[5] == "STK" {
 					send(10, addSnapshotContractFields(id, "STK", "", "", "17")...)
+				} else if f[3] != "0" {
+					send(10, addSnapshotContractFields(id, "OPT", expiry, f[7], f[3])...)
 				} else {
 					for _, strike := range []string{"100", "110", "120"} {
 						send(10, addSnapshotContractFields(id, "OPT", expiry, strike, "10"+strike)...)
@@ -98,14 +128,28 @@ func TestAddDiscoveryUsesUnderlyingQuoteArrivingDuringMetadata(t *testing.T) {
 					optionStrikes = append(optionStrikes, f[7])
 				}
 				mu.Unlock()
-				if f[5] == "OPT" {
+				if f[5] == "STK" && scenario == "unknown" {
 					send(58, "1", id, "1")
+					send(1, "6", id, "1", "109.99", "100", "0")
+					send(1, "6", id, "2", "110.01", "100", "0")
+					send(1, "6", id, "4", "110", "100", "0")
+					send(1, "6", id, "9", "109", "100", "0")
+				}
+				if f[5] == "OPT" {
+					feed := "1"
+					if scenario == "planning" {
+						feed = "2"
+					}
+					send(58, "1", id, feed)
 					send(1, "6", id, "1", "1.00", "100", "0")
 					send(1, "6", id, "2", "1.02", "100", "0")
-					send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+					if scenario != "planning" {
+						send(21, id, "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+					}
 				}
 			case "78":
 				mu.Lock()
+				listingRequests++
 				for _, id := range stockRequests {
 					send(58, "1", id, "1")
 					send(1, "6", id, "1", "109.99", "100", "0")
@@ -116,8 +160,16 @@ func TestAddDiscoveryUsesUnderlyingQuoteArrivingDuringMetadata(t *testing.T) {
 				mu.Unlock()
 				send(75, f[1], "SMART", "17", "SYNTH", "100", "1", expiry, "3", "100", "110", "120")
 				send(76, f[1])
-			case "20": // historical context is deliberately unavailable
-				send(17, f[1], "", "", "0")
+			case "20":
+				if scenario == "planning" && f[4] == "OPT" {
+					mu.Lock()
+					optionHistoryRequests++
+					mu.Unlock()
+					send(17, f[1], "1", lastDate, "1.0", "1.1", "0.9", "1.07", "100", "1.02", "4")
+					send(108, f[1], lastDate, lastDate)
+				} else {
+					send(17, f[1], "", "", "0")
+				}
 			}
 		}
 		done <- writeErr
@@ -138,6 +190,9 @@ func TestAddDiscoveryUsesUnderlyingQuoteArrivingDuringMetadata(t *testing.T) {
 	})
 	s := newTestServer(t)
 	s.connector = c
+	if scenario != "cache" {
+		s.now = func() time.Time { return calendarAt }
+	}
 	params, _ := json.Marshal(rpc.AddMarketParams{Underlying: rpc.ContractParams{ConID: 17, Symbol: "SYNTH", SecType: "STK", Exchange: "SMART", Currency: "USD"}, Discover: true})
 	got, err := s.handleAddMarket(ctx, &rpc.Request{Params: params})
 	if err != nil {
@@ -147,13 +202,35 @@ func TestAddDiscoveryUsesUnderlyingQuoteArrivingDuringMetadata(t *testing.T) {
 	if spot == nil || *spot != 110 {
 		t.Fatalf("metadata-time callback was not consumed from the held stock cache: spot=%v", spot)
 	}
+	if scenario == "unknown" {
+		mu.Lock()
+		defer mu.Unlock()
+		if got.OptionMode != "unavailable" || got.OptionsSession.State != "unknown" || len(got.Calls) != 4 || listingRequests != 0 || len(optionStrikes) != 0 || len(stockRequests) != 1 {
+			t.Fatalf("unknown calendar acquired options: mode=%s listings=%d options=%v stock=%d", got.OptionMode, listingRequests, optionStrikes, len(stockRequests))
+		}
+		for _, row := range got.Calls {
+			if row.Contract != nil || row.Unavailable != "Options calendar unavailable" {
+				t.Fatalf("unknown calendar suggested a call: %+v", row)
+			}
+		}
+		return
+	}
 	if len(got.Calls) != 4 || got.Calls[1].Contract == nil || got.Calls[1].Contract.Strike != 110 || got.Calls[1].Unavailable != "" {
 		t.Fatalf("late underlying price did not select the nearest eligible call: %+v", got.Calls)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(stockRequests) != 1 || len(optionStrikes) != 1 || optionStrikes[0] != "110" {
-		t.Fatalf("held cache was not reused or strike ranking changed: stock lines=%d option strikes=%v", len(stockRequests), optionStrikes)
+	if scenario == "planning" {
+		row := got.Calls[1]
+		p := row.Planning
+		if got.OptionMode != "planning" || p == nil || p.Price == nil || *p.Price != 1.07 || p.PriceSource != "last_session_close" || p.SessionDate != lastSession.Date || p.DeltaStatus != "unavailable" || eligibleAddCall(row, time.Now()) || optionHistoryRequests != 1 || len(optionStrikes) != 3 {
+			t.Fatalf("closed read lost dated history or invented eligibility: row=%+v planning=%+v history=%d strikes=%v", row, p, optionHistoryRequests, optionStrikes)
+		}
+	} else if len(optionStrikes) != 1 || optionStrikes[0] != "110" {
+		t.Fatalf("strike ranking changed: %v", optionStrikes)
+	}
+	if len(stockRequests) != 1 {
+		t.Fatalf("held cache was not reused: stock lines=%d", len(stockRequests))
 	}
 }
 
