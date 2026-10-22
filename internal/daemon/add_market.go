@@ -129,7 +129,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			}
 			if date != "" && spot != nil && *spot > 0 {
 				started := time.Now()
-				calls, err := c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 8*time.Second)
+				calls, err := c.FetchSetupExpiryCalls(ctx, binding, exact.Contract, date, 30*time.Second)
 				if err == nil {
 					row = selectAddCall(calls, *spot, func(call ibkr.ResolvedOrderContract) rpc.AddCallCandidate {
 						return s.addResolvedCallForSession(ctx, c, binding, exact.Contract, call, session)
@@ -406,34 +406,99 @@ func (s *Server) fillAddPlanningClose(ctx context.Context, c *ibkr.Connector, bi
 	if row.Contract == nil || row.Planning == nil {
 		return
 	}
-	if session.last != nil && c.SessionCurrent(binding) {
-		// Two concurrent historical reads can each wait for a token from the
-		// shared 0.1/sec pacing bucket. Allow two refills plus a response; the
-		// outer request deadline still bounds the entire four-horizon read.
-		const historyBudget = 25 * time.Second
-		historyCtx, cancel := context.WithTimeout(ctx, historyBudget)
-		series, err := c.FetchChartBars(historyCtx, *previewIBKRContract(*row.Contract), 10, "1 day", historyBudget)
-		cancel()
-		if err == nil && c.SessionCurrent(binding) && series.WhatToShow == "TRADES" && sameAddCall(setupOptionContract(series.Contract), *row.Contract) {
-			applyAddPlanningClose(row.Planning, series.Bars, *session.last, s.orderNow())
+
+	started := time.Now()
+	var failure error
+	sessionDate := ""
+	if session.last == nil {
+		failure = errors.New("add planning last-session bar unavailable")
+	} else {
+		sessionDate = session.last.Date
+		if !c.SessionCurrent(binding) {
+			failure = errors.New("add planning session changed")
+		} else {
+			// Two concurrent historical reads can each wait for a token from the
+			// shared 0.1/sec pacing bucket. Allow two refills plus a response; the
+			// outer request deadline still bounds the entire four-horizon read.
+			const historyBudget = 25 * time.Second
+			historyCtx, cancel := context.WithTimeout(ctx, historyBudget)
+			series, err := c.FetchChartBars(historyCtx, *previewIBKRContract(*row.Contract), 10, "1 day", historyBudget)
+			cancel()
+			switch {
+			case !c.SessionCurrent(binding):
+				failure = errors.New("add planning session changed")
+			case err != nil:
+				failure = err
+			case series.WhatToShow != "TRADES":
+				failure = errors.New("add planning invalid history")
+			case !sameAddCall(setupOptionContract(series.Contract), *row.Contract):
+				failure = errors.New("add planning history identity mismatch")
+			case !applyAddPlanningClose(row.Planning, series.Bars, *session.last, s.orderNow()):
+				failure = errors.New("add planning last-session bar unavailable")
+			}
 		}
+	}
+	if failure != nil {
+		s.warnAddPlanningCloseFailure(*row.Contract, sessionDate, time.Since(started), failure)
 	}
 	if row.Planning.Price == nil {
 		row.Unavailable = "Planning price unavailable"
 	}
 }
 
-func applyAddPlanningClose(p *rpc.AddCallPlanning, bars []ibkr.HistoricalBar, session rpc.MarketSession, observedAt time.Time) {
+func applyAddPlanningClose(p *rpc.AddCallPlanning, bars []ibkr.HistoricalBar, session rpc.MarketSession, observedAt time.Time) bool {
 	if p == nil || session.Close.IsZero() || session.Close.After(observedAt) {
-		return
+		return false
 	}
 	for _, bar := range bars {
 		date, err := time.Parse("20060102", bar.Date)
 		if err == nil && !bar.Time.IsZero() && date.Format("2006-01-02") == session.Date && bar.Time.Format("2006-01-02") == session.Date && positiveFinite(bar.Close) {
 			p.Price, p.PriceSource, p.SessionDate, p.ObservedAt = new(bar.Close), "last_session_close", session.Date, observedAt
-			return
+			return true
 		}
 	}
+	return false
+}
+
+func (s *Server) warnAddPlanningCloseFailure(contract rpc.ContractParams, sessionDate string, elapsed time.Duration, err error) {
+	s.warnf("add.planning_close symbol=%s expiry=%s strike=%g session_date=%s elapsed_ms=%d reason=%s", contract.Symbol, contract.Expiry, contract.Strike, sessionDate, elapsed.Milliseconds(), addPlanningCloseFailureReason(err))
+}
+
+// HistoricalRequestError carries untrusted broker prose. Only a numeric code
+// or this closed local vocabulary may leave the historical read boundary.
+func addPlanningCloseFailureReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if _, ok := errors.AsType[*ibkr.HistoricalDataValidationError](err); ok {
+		return "invalid_history"
+	}
+	if historical, ok := errors.AsType[*ibkr.HistoricalRequestError](err); ok {
+		if historical.Code > 0 {
+			return "broker_" + strconv.Itoa(historical.Code)
+		}
+		switch historical.Category {
+		case ibkr.HistoricalFailureInvalidPayload:
+			return "invalid_history"
+		case ibkr.HistoricalFailureGatewayUnavailable:
+			return "session_changed"
+		case ibkr.HistoricalFailureNoData:
+			return "no_last_session_bar"
+		}
+	}
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		switch cause.Error() {
+		case "add planning last-session bar unavailable":
+			return "no_last_session_bar"
+		case "add planning session changed", "broker session unavailable", "broker session changed", "broker session changed during history":
+			return "session_changed"
+		case "add planning history identity mismatch":
+			return "identity_mismatch"
+		case "add planning invalid history":
+			return "invalid_history"
+		}
+	}
+	return "read_failed"
 }
 
 // Two active reads bound TWS subscription pressure while refreshing the comparison.

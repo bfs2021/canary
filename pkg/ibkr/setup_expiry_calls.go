@@ -21,8 +21,11 @@ func (c *Connector) FetchSetupExpiryCalls(ctx context.Context, binding Connector
 	if underlying.ConID <= 0 || underlying.Symbol == "" || underlying.SecType != "STK" || underlying.Currency != "USD" || underlying.Exchange != "SMART" || dateErr != nil || date.Format("20060102") != expiry || !c.SessionCurrent(binding) {
 		return nil, fmt.Errorf("exact US stock session and expiry required")
 	}
-	if timeout <= 0 || timeout > 8*time.Second {
-		timeout = 8 * time.Second
+	// Match the existing full-expiry prewarm budget. A short snapshot budget
+	// can discard a valid inventory before its required end receipt arrives.
+	// Caller cancellation, response count and exact-session fences still bound it.
+	if timeout <= 0 || timeout > 30*time.Second {
+		timeout = 30 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
