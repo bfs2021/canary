@@ -11,6 +11,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +23,20 @@ import (
 // routine option-definition rejection is debug-only in the library, so the
 // existing normal log cannot explain this failed horizon without Add's warning.
 func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
+	runAddInventoryDiagnostic(t, "broker-rejection")
+}
+
+// A complete exact inventory arriving after the old eight-second budget must
+// still reach selection on the same request, without retries or partial data.
+func TestAddInventoryRetainsSlowCompleteReply(t *testing.T) {
+	runAddInventoryDiagnostic(t, "slow-complete")
+}
+
+func TestAddPlanningCloseFailureLogsSanitizedBrokerVerdict(t *testing.T) {
+	runAddInventoryDiagnostic(t, "history-rejection")
+}
+
+func runAddInventoryDiagnostic(t *testing.T, mode string) {
 	const privateText = "private-marker-do-not-log"
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -30,6 +45,7 @@ func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close() })
 	expiry := time.Now().AddDate(0, 0, 30).Format("20060102")
 	done := make(chan error, 1)
+	var inventoryRequests atomic.Int64
 	go func() {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -37,7 +53,7 @@ func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		_ = conn.SetDeadline(time.Now().Add(12 * time.Second))
+		_ = conn.SetDeadline(time.Now().Add(25 * time.Second))
 		r := bufio.NewReader(conn)
 		prefix := make([]byte, 4)
 		if _, err := io.ReadFull(r, prefix); err != nil {
@@ -63,6 +79,16 @@ func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
 				writeErr = writeTWSFrame(conn, append(body, strings.Join(fields, "\x00")+"\x00"...))
 			}
 		}
+		sendError := func(idText string, code int, message string) {
+			id, _ := strconv.Atoi(idText)
+			body := binary.BigEndian.AppendUint32(nil, 204)
+			body = binary.AppendUvarint(append(body, 8), uint64(id))
+			body = binary.AppendUvarint(append(body, 24), uint64(code))
+			body = binary.AppendUvarint(append(body, 34), uint64(len(message)))
+			if writeErr == nil {
+				writeErr = writeTWSFrame(conn, append(body, message...))
+			}
+		}
 		send(9, "1", "1")
 		for writeErr == nil {
 			frame, err := readTWSFrame(r)
@@ -79,19 +105,28 @@ func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
 				if f[5] == "STK" {
 					send(10, addSnapshotContractFields(f[2], "STK", "", "", "17")...)
 					send(52, "1", f[2])
+				} else if mode != "broker-rejection" {
+					if f[3] == "0" {
+						inventoryRequests.Add(1)
+						if mode == "slow-complete" {
+							time.Sleep(9 * time.Second)
+						}
+					}
+					send(10, addSnapshotContractFields(f[2], "OPT", expiry, "110", "10110")...)
+					send(52, "1", f[2])
 				} else {
-					// msg204 is protobuf: reqID, error code, then untrusted text.
-					id, _ := strconv.Atoi(f[2])
-					body := binary.BigEndian.AppendUint32(nil, 204)
-					body = binary.AppendUvarint(append(body, 8), uint64(id))
-					body = binary.AppendUvarint(append(body, 24), 200)
-					message := "No security definition has been found for the request: " + privateText
-					body = binary.AppendUvarint(append(body, 34), uint64(len(message)))
-					writeErr = writeTWSFrame(conn, append(body, message...))
+					sendError(f[2], 200, "No security definition has been found for the request: "+privateText)
 				}
 			case "91":
 				send(93, f[1], "1", "0", "0.01")
 			case "1":
+				if f[5] == "OPT" {
+					send(58, "1", f[2], "1")
+					send(1, "6", f[2], "1", "1.00", "100", "0")
+					send(1, "6", f[2], "2", "1.02", "100", "0")
+					send(21, f[2], "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+					continue
+				}
 				send(58, "1", f[2], "1")
 				send(1, "6", f[2], "1", "109.99", "100", "0")
 				send(1, "6", f[2], "2", "110.01", "100", "0")
@@ -101,7 +136,11 @@ func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
 				send(75, f[1], "SMART", "17", "SYNTH", "100", "1", expiry, "1", "110")
 				send(76, f[1])
 			case "20":
-				send(17, f[1], "", "", "0")
+				if mode == "history-rejection" && f[4] == "OPT" {
+					sendError(f[1], 162, privateText)
+				} else {
+					send(17, f[1], "", "", "0")
+				}
 			}
 		}
 		done <- writeErr
@@ -109,7 +148,7 @@ func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
 	cfg := ibkr.DefaultConfig()
 	cfg.Host, cfg.Port, cfg.ClientID, cfg.AutoReconnect = "127.0.0.1", ln.Addr().(*net.TCPAddr).Port, 72, false
 	c := ibkr.NewConnector(&ibkr.ConnectorConfig{BaseConfig: cfg})
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	if err := c.Start(ctx); err != nil || !c.IsReady() {
 		t.Fatalf("fake broker not ready: %v %s", err, c.LastError())
@@ -123,9 +162,41 @@ func TestAddInventoryFailureLogsSanitizedBrokerVerdict(t *testing.T) {
 	s := newTestServer(t)
 	logs := &lockedBuffer{}
 	s.connector, s.logger = c, NewLogger(logs, "warn")
-	s.now = func() time.Time { return time.Date(2026, 10, 22, 16, 0, 0, 0, time.UTC) }
+	if mode == "broker-rejection" {
+		s.now = func() time.Time { return time.Date(2026, 10, 22, 16, 0, 0, 0, time.UTC) }
+	}
+	if mode != "broker-rejection" {
+		// Selection remains planning-only even when this transport regression
+		// runs during market hours or beyond the embedded calendar's coverage.
+		s.now = func() time.Time { return time.Date(2026, 10, 22, 23, 0, 0, 0, time.UTC) }
+	}
 	params, _ := json.Marshal(rpc.AddMarketParams{Underlying: rpc.ContractParams{ConID: 17, Symbol: "SYNTH", SecType: "STK", Exchange: "SMART", Currency: "USD"}, Discover: true})
 	got, err := s.handleAddMarket(ctx, &rpc.Request{Params: params})
+	if mode != "broker-rejection" {
+		if err != nil || got == nil || len(got.Calls) != 4 {
+			t.Fatalf("Add read failed: got=%+v err=%v", got, err)
+		}
+		row := got.Calls[1]
+		if row.Contract == nil || row.Contract.ConID != 10110 || inventoryRequests.Load() != 1 {
+			t.Fatalf("complete inventory was discarded or retried: row=%+v requests=%d log=%s", row, inventoryRequests.Load(), logs.String())
+		}
+		if mode == "slow-complete" {
+			if strings.Contains(logs.String(), "add.inventory") {
+				t.Fatalf("complete inventory was reported failed: %s", logs.String())
+			}
+		} else {
+			logged := logs.String()
+			for _, want := range []string{"level=WARN", "add.planning_close", "symbol=SYNTH", "expiry=" + expiry, "reason=broker_162"} {
+				if !strings.Contains(logged, want) {
+					t.Fatalf("missing normal-log planning evidence %q: %s", want, logged)
+				}
+			}
+			if strings.Contains(logged, privateText) || strings.Count(logged, "add.planning_close") != 1 {
+				t.Fatalf("planning diagnostic leaked raw text or repeated: %s", logged)
+			}
+		}
+		return
+	}
 	if err != nil || got == nil || len(got.Calls) != 4 || got.Calls[1].Unavailable != "Call contracts unavailable" {
 		t.Fatalf("fixture did not reach the inventory error boundary: result=%+v err=%v", got, err)
 	}
@@ -166,6 +237,40 @@ func TestAddInventoryDiagnosticNeverLogsRawErrors(t *testing.T) {
 			logged := logs.String()
 			if !strings.Contains(logged, "level=WARN") || !strings.Contains(logged, "elapsed_ms=1250 reason="+tc.reason+"\"") || strings.Contains(logged, privateText) || strings.Count(logged, "add.inventory") != 1 {
 				t.Fatalf("diagnostic did not retain safe context and classification: %s", logged)
+			}
+		})
+	}
+}
+
+func TestAddPlanningCloseDiagnosticNeverLogsRawErrors(t *testing.T) {
+	const privateText = "private-marker-do-not-log"
+	for _, tc := range []struct {
+		name, reason string
+		err          error
+	}{
+		{"timeout", "timeout", fmt.Errorf(privateText+": %w", context.DeadlineExceeded)},
+		{"historical rejection", "broker_162", &ibkr.HistoricalRequestError{Code: 162, Message: privateText}},
+		{"invalid bars", "invalid_history", &ibkr.HistoricalDataValidationError{Reason: privateText}},
+		{"invalid payload", "invalid_history", &ibkr.HistoricalRequestError{Category: ibkr.HistoricalFailureInvalidPayload, Message: privateText}},
+		{"no last bar", "no_last_session_bar", errors.New("add planning last-session bar unavailable")},
+		{"no data", "no_last_session_bar", &ibkr.HistoricalRequestError{Category: ibkr.HistoricalFailureNoData, Message: privateText}},
+		{"session", "session_changed", fmt.Errorf(privateText+": %w", errors.New("broker session changed during history"))},
+		{"gateway", "session_changed", &ibkr.HistoricalRequestError{Category: ibkr.HistoricalFailureGatewayUnavailable, Message: privateText}},
+		{"identity", "identity_mismatch", errors.New("add planning history identity mismatch")},
+		{"unknown", "read_failed", errors.New(privateText)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			s := &Server{logger: NewLogger(logs, "warn")}
+			s.warnAddPlanningCloseFailure(rpc.ContractParams{Symbol: "SYNTH", Expiry: "20270219", Strike: 110}, "2026-10-22", 1250*time.Millisecond, tc.err)
+			logged := logs.String()
+			for _, want := range []string{"level=WARN", "add.planning_close", "symbol=SYNTH", "expiry=20270219", "strike=110", "session_date=2026-10-22", "elapsed_ms=1250", "reason=" + tc.reason + "\""} {
+				if !strings.Contains(logged, want) {
+					t.Fatalf("missing sanitized diagnostic %q: %s", want, logged)
+				}
+			}
+			if strings.Contains(logged, privateText) || strings.Count(logged, "add.planning_close") != 1 {
+				t.Fatalf("raw error leaked or repeated: %s", logged)
 			}
 		})
 	}
