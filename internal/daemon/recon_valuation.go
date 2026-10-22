@@ -8,6 +8,8 @@ import (
 	"maps"
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/flexstmt"
@@ -36,7 +38,7 @@ func captureReconValuation(raw *ibkrlib.RawAccountSummary, positions []*ibkrlib.
 			v.Reason = "runtime_currency_basis_missing"
 			continue
 		}
-		v.Currencies[c] = rpc.ReconNativeValuation{Equity: row.NetLiquidationByCurrency, FXRate: rate}
+		v.Currencies[c] = rpc.ReconNativeValuation{Equity: row.NetLiquidationByCurrency, FXRate: rate, StockValueReported: row.StockMarketValueText, OptionValueReported: row.OptionMarketValueText}
 		if !row.NetLiquidationObserved || (c != v.BaseCurrency && !row.ExchangeRateObserved) || rate <= 0 || !reconFinite(rate) || !reconFinite(row.NetLiquidationByCurrency) {
 			v.Reason = "runtime_currency_basis_missing"
 		}
@@ -81,12 +83,30 @@ func captureReconValuation(raw *ibkrlib.RawAccountSummary, positions []*ibkrlib.
 	// Both broker streams must describe the same marked book at the published
 	// monetary precision. This is an accounting identity, not a risk tolerance.
 	for c, row := range raw.CurrencyLedger {
-		if math.Round(stocks[c]*100) != math.Round(row.StockMarketValue*100) || math.Round(options[c]*100) != math.Round(row.OptionMarketValue*100) {
+		if !reconPublishedValueMatches(stocks[c], row.StockMarketValueText) || !reconPublishedValueMatches(options[c], row.OptionMarketValueText) {
 			return fail("runtime_valuation_incoherent")
 		}
 	}
 	slices.SortFunc(v.Positions, func(a, b rpc.ReconPositionValuation) int { return cmp.Compare(a.ConID, b.ConID) })
 	return v
+}
+
+// Account-summary amounts may be whole units while portfolio rows carry cents.
+// Use the numeric precision actually supplied by the broker, not a new tolerance.
+func reconPublishedValueMatches(total float64, reported string) bool {
+	if reported == "" {
+		return total == 0
+	}
+	if strings.ContainsAny(reported, "eE") {
+		return false
+	}
+	value, err := strconv.ParseFloat(reported, 64)
+	if err != nil || !reconFinite(value) || !reconFinite(total) {
+		return false
+	}
+	_, fraction, _ := strings.Cut(reported, ".")
+	quantum := math.Pow10(-len(fraction))
+	return quantum > 0 && reconFinite(total/quantum) && reconFinite(value/quantum) && math.Round(total/quantum) == math.Round(value/quantum)
 }
 
 func cloneReconValuation(v rpc.ReconRuntimeValuation) rpc.ReconRuntimeValuation {

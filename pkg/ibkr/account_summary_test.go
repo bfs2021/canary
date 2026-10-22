@@ -713,3 +713,14 @@ func TestResolveOrderContractForSessionEndsOnDefinitionRejection(t *testing.T) {
 		t.Fatal("resolution burned its timeout after the broker rejected it")
 	}
 }
+
+func TestCurrencyLedgerRetainsReportedMarketValuePrecision(t *testing.T) {
+	ledger := extractCurrencyLedger(map[string]string{
+		"$LEDGER:StockMarketValue_USD":  "10000",
+		"$LEDGER:OptionMarketValue_USD": "5000.00",
+	})
+	row := ledger["USD"]
+	if row.StockMarketValueText != "10000" || row.OptionMarketValueText != "5000.00" {
+		t.Fatalf("lost broker precision: %+v", row)
+	}
+}

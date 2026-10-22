@@ -119,6 +119,8 @@ type CurrencyLedger struct {
 	ExchangeRateObserved     bool
 	NetLiquidationByCurrency float64
 	CashBalance              float64
+	StockMarketValueText     string
+	OptionMarketValueText    string
 	StockMarketValue         float64
 	OptionMarketValue        float64
 	UnrealizedPnL            float64
@@ -697,9 +699,9 @@ func assignCurrencyLedgerValue(ledger map[string]*CurrencyLedger, field, ccy, va
 	case "SettledCash":
 		row.SettledCash, row.SettledCashObserved = parsed, true
 	case "StockMarketValue":
-		row.StockMarketValue = parsed
+		row.StockMarketValue, row.StockMarketValueText = parsed, strings.TrimSpace(val)
 	case "OptionMarketValue":
-		row.OptionMarketValue = parsed
+		row.OptionMarketValue, row.OptionMarketValueText = parsed, strings.TrimSpace(val)
 	case "UnrealizedPnL":
 		row.UnrealizedPnL = parsed
 	case "RealizedPnL":

@@ -172,7 +172,7 @@ func TestReconCapturesBrokerBasisWithoutInventingMissingRates(t *testing.T) {
 	_, _, sample := reconValuationFixture()
 	raw := &ibkrlib.RawAccountSummary{BaseCurrency: "EUR", BaseCurrencyProvenance: ibkrlib.AccountBaseCurrencyExplicitTag, NetLiquidation: new(sample.EquityBase), CurrencyLedger: map[string]ibkrlib.CurrencyLedger{
 		"EUR": {NetLiquidationByCurrency: 50000, NetLiquidationObserved: true},
-		"USD": {NetLiquidationByCurrency: 50000, NetLiquidationObserved: true, StockMarketValue: 10000, ExchangeRate: .96, ExchangeRateObserved: true},
+		"USD": {NetLiquidationByCurrency: 50000, NetLiquidationObserved: true, StockMarketValue: 10000, StockMarketValueText: "10000", ExchangeRate: .96, ExchangeRateObserved: true},
 	}}
 	positions := []*ibkrlib.RawPosition{{ValuationAt: sample.AsOf, Contract: ibkrlib.Contract{ConID: 101, SecType: "STK", Currency: "USD"}, Position: 100, MarketPrice: 100, MarketValue: 10000}}
 	got := captureReconValuation(raw, positions, sample.AsOf)
@@ -226,5 +226,34 @@ func TestReconLatestStatementCannotBorrowOlderComparableEvidence(t *testing.T) {
 	got := s.reconEquityCheck(merged, scope)
 	if !got.StatementDate.Equal(latest.ReportDate) || got.DivergencePct != nil {
 		t.Fatalf("borrowed older pair: %+v", got)
+	}
+}
+
+func TestReconCaptureRespectsPublishedWholeUnitPrecision(t *testing.T) {
+	_, _, sample := reconValuationFixture()
+	raw := &ibkrlib.RawAccountSummary{BaseCurrency: "EUR", BaseCurrencyProvenance: ibkrlib.AccountBaseCurrencyExplicitTag, NetLiquidation: new(sample.EquityBase), Raw: map[string]string{"$LEDGER:StockMarketValue_USD": "10000"}, CurrencyLedger: map[string]ibkrlib.CurrencyLedger{
+		"EUR": {NetLiquidationByCurrency: 50000, NetLiquidationObserved: true},
+		"USD": {NetLiquidationByCurrency: 50000, NetLiquidationObserved: true, StockMarketValue: 10000, StockMarketValueText: "10000", ExchangeRate: .96, ExchangeRateObserved: true},
+	}}
+	positions := []*ibkrlib.RawPosition{{ValuationAt: sample.AsOf, Contract: ibkrlib.Contract{ConID: 101, SecType: "STK", Currency: "USD"}, Position: 100, MarketPrice: 100.002, MarketValue: 10000.20}}
+	got := captureReconValuation(raw, positions, sample.AsOf)
+	if got == nil || got.Reason != "" {
+		t.Fatalf("a book agreeing at the published whole-unit precision was rejected: %+v", got)
+	}
+}
+
+func TestReconPublishedPrecisionIsEvidenceNotTolerance(t *testing.T) {
+	for _, tc := range []struct {
+		total    float64
+		reported string
+		matches  bool
+	}{
+		{10000.20, "10000", true}, {10000.20, "10000.00", false},
+		{10001, "10000", false}, {-10000.20, "-10000", true},
+		{10000, "", false}, {0, "", true}, {10000, "1e4", false}, {0, "NaN", false},
+	} {
+		if got := reconPublishedValueMatches(tc.total, tc.reported); got != tc.matches {
+			t.Errorf("%v vs %q: %t", tc.total, tc.reported, got)
+		}
 	}
 }

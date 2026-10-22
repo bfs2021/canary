@@ -1266,8 +1266,10 @@ type ReconRuntimeValuation struct {
 
 // ReconNativeValuation preserves one observed native NLV and its broker FX rate.
 type ReconNativeValuation struct {
-	Equity float64 `json:"equity"`
-	FXRate float64 `json:"fx_rate"`
+	StockValueReported  string  `json:"stock_value_reported,omitempty"`
+	OptionValueReported string  `json:"option_value_reported,omitempty"`
+	Equity              float64 `json:"equity"`
+	FXRate              float64 `json:"fx_rate"`
 }
 
 // ReconPositionValuation identifies a marked exact-contract position.
