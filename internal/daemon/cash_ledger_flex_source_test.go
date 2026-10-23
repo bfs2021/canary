@@ -37,7 +37,7 @@ func flexCashSourceTestServer(t *testing.T) (*Server, brokerStateScope, time.Tim
 
 func acceptSyntheticFlexCash(t *testing.T, s *Server, raw []byte) string {
 	t.Helper()
-	out, err := s.retainFlexStatementForQuery(t.Context(), raw, s.configuredFlexQueryFingerprint())
+	out, err := s.retainFlexStatementForQuery(t.Context(), raw, s.configuredFlexQueryFingerprint(), false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -224,7 +224,13 @@ func QuerySchemaFingerprint(statements []Statement) string {
 	for _, section := range QueryRequirementEvidence(statements) {
 		fields := append([]string(nil), section.MissingFields...)
 		sort.Strings(fields)
-		fmt.Fprintf(&canonical, "%s|%s|%s\n", section.Key, section.Status, strings.Join(fields, ","))
+		// Whether a selected section had rows is activity, not schema: an
+		// empty section contradicts no field, so it reads as observed.
+		status := section.Status
+		if status == QueryRequirementEmpty {
+			status = QueryRequirementObserved
+		}
+		fmt.Fprintf(&canonical, "%s|%s|%s\n", section.Key, status, strings.Join(fields, ","))
 	}
 	digest := sha256.Sum256([]byte(canonical.String()))
 	return fmt.Sprintf("flex_schema_%x", digest[:8])

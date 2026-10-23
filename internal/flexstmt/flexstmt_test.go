@@ -200,6 +200,35 @@ func TestQuerySchemaFingerprintContainsNoStatementValues(t *testing.T) {
 	}
 }
 
+// A day without option events is activity, not a query edit. The nightly
+// one-day report and the 35-day window differed only so, and the flip reset
+// Edge's monthly statement acquisition every night (live, 2026-10-23).
+func TestQuerySchemaFingerprintIgnoresWhetherSectionsHadRows(t *testing.T) {
+	t.Parallel()
+
+	var fields []string
+	for _, section := range canonicalManifest {
+		if section.Key == "option_events" {
+			fields = section.RequiredFields
+		}
+	}
+	report := func(coverage SectionCoverage) []Statement {
+		coverage.Key = "option_events"
+		return []Statement{{AccountID: "synthetic", Coverage: []SectionCoverage{coverage}}}
+	}
+	quiet := QuerySchemaFingerprint(report(SectionCoverage{Present: true}))
+	active := QuerySchemaFingerprint(report(SectionCoverage{Present: true, RowCount: 2, ObservedFields: fields}))
+	if quiet == "" || quiet != active {
+		t.Fatalf("empty and observed section fingerprints differ: %q, %q", quiet, active)
+	}
+	if missing := QuerySchemaFingerprint(report(SectionCoverage{Present: true, RowCount: 2, ObservedFields: fields[1:]})); missing == active {
+		t.Fatal("a dropped field left the schema fingerprint unchanged")
+	}
+	if absent := QuerySchemaFingerprint(report(SectionCoverage{})); absent == active {
+		t.Fatal("a dropped section left the schema fingerprint unchanged")
+	}
+}
+
 func TestParseEquityRequiresAmountOnEveryRow(t *testing.T) {
 	t.Parallel()
 	for _, attr := range []string{"", `total=""`, `total=" "`, `total="NaN"`, `total="Inf"`, `total="0"`} {

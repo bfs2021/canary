@@ -49,7 +49,7 @@ func TestFlexQueryRotationKeepsRetiredEvidenceOutOfActiveProjection(t *testing.T
 	if len(legacyRecords) != 0 {
 		t.Fatalf("unknown-provenance legacy evidence entered configured projection: %d record(s)", len(legacyRecords))
 	}
-	if _, err := srv.retainFlexStatementForQuery(t.Context(), flexGenerationFixture(true), oldSelection.ActiveQueryFingerprint); err != nil {
+	if _, err := srv.retainFlexStatementForQuery(t.Context(), flexGenerationFixture(true), oldSelection.ActiveQueryFingerprint, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := srv.refreshStatementProjection(t.Context()); err != nil {
@@ -75,7 +75,7 @@ func TestFlexQueryRotationKeepsRetiredEvidenceOutOfActiveProjection(t *testing.T
 
 	srv.cfg.Flex.QueryID = "222"
 	newFingerprint := flexQueryFingerprint("222")
-	if _, err := srv.retainFlexStatementForQuery(t.Context(), flexGenerationFixture(false), newFingerprint); err != nil {
+	if _, err := srv.retainFlexStatementForQuery(t.Context(), flexGenerationFixture(false), newFingerprint, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := srv.refreshStatementProjection(t.Context()); err != nil {

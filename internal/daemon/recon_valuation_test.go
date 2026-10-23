@@ -155,6 +155,47 @@ func TestReconValuationEvidenceSurvivesRestartAndIsScoped(t *testing.T) {
 	}
 }
 
+// A read just before UTC midnight can catch a portfolio frame stamped after
+// it. That incomplete last sample must not displace the day's complete one,
+// or the day's statement can never be compared (live, 2026-10-22).
+func TestReconIncompleteLaterSampleKeepsDayComparable(t *testing.T) {
+	store, pol, now := recoveryStore(t)
+	row, statement, complete := reconValuationFixture()
+	observe := func(sample rpc.ReconRuntimeValuation) {
+		*now = sample.AsOf
+		store.observeWithValuation(sample.EquityBase, mandatePnLReading{}, sample.AsOf, pol, testLiveObserveScope, true, &sample)
+	}
+	kept := func() rpc.ReconRuntimeValuation {
+		ctx, err := store.ReplayContextForScope(testLiveObserveScope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ctx.DailyValuation["2026-09-23"]
+	}
+	observe(complete)
+
+	late := cloneReconValuation(complete)
+	late.AsOf = complete.AsOf.Add(time.Hour + 59*time.Minute + 53*time.Second)
+	late.Positions[0].ObservedAt = late.AsOf.Add(10 * time.Second)
+	late.Reason = "runtime_position_basis_missing"
+	observe(late)
+	if got := kept(); got.Reason != "" || !got.AsOf.Equal(complete.AsOf) {
+		t.Fatalf("incomplete late sample displaced the complete one: %+v", got)
+	}
+	if got := compareReconValuation(row, statement, kept()); got.Comparability != "comparable" {
+		t.Fatalf("comparison=%+v", got)
+	}
+
+	// A later complete sample is better evidence and replaces the earlier one.
+	later := cloneReconValuation(complete)
+	later.AsOf = late.AsOf.Add(time.Second)
+	later.Positions[0].ObservedAt = later.AsOf
+	observe(later)
+	if got := kept(); !got.AsOf.Equal(later.AsOf) {
+		t.Fatalf("later complete sample was not kept: %+v", got)
+	}
+}
+
 func TestReconReportIdentityPinsValuationEvidence(t *testing.T) {
 	row, st, sample := reconValuationFixture()
 	pol := newReconV3TestServer(t).riskPolicies.snapshot().policy

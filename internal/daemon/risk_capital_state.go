@@ -789,7 +789,12 @@ func (st *riskCapitalStore) observeWithValuation(equityBase float64, pnl mandate
 		if st.state.DailyValuation == nil {
 			st.state.DailyValuation = map[string]rpc.ReconRuntimeValuation{}
 		}
-		st.state.DailyValuation[dayKey] = cloneReconValuation(*valuation)
+		// The latest complete sample is the day's evidence. An incomplete one
+		// (a frame stamped after the read, near midnight) replaces only another
+		// incomplete one; otherwise the day's statement could never compare.
+		if previous, ok := st.state.DailyValuation[dayKey]; !ok || valuation.Reason == "" || previous.Reason != "" {
+			st.state.DailyValuation[dayKey] = cloneReconValuation(*valuation)
+		}
 	}
 	cutoff := now.UTC().Add(-riskCapitalDailySampleKeep)
 	cutoff = time.Date(cutoff.Year(), cutoff.Month(), cutoff.Day(), 0, 0, 0, 0, time.UTC)

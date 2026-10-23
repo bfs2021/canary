@@ -33,7 +33,7 @@ func TestActiveFlexRetentionRemainsInsideBrokerLaneAndPreservesReturnedRange(t *
 		retainInsideLane = true
 		return retainFlexStatement(data)
 	}
-	outcome, err := srv.fetchFlexDateRangeWithPollAttempts(t.Context(), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), 1)
+	outcome, err := srv.fetchFlexDateRangeWithPollAttempts(t.Context(), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestReportingCandidateAndActiveFetchSerialize(t *testing.T) {
 	<-candidateEntered
 	activeDone := make(chan error, 1)
 	go func() {
-		_, err := srv.fetchFlexDateRangeWithPollAttempts(t.Context(), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), 1)
+		_, err := srv.fetchFlexDateRangeWithPollAttempts(t.Context(), time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), 1, false)
 		activeDone <- err
 	}()
 	select {

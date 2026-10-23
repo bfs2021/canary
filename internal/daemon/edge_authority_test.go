@@ -243,6 +243,53 @@ func TestEdgeFlexAcquisitionResumesDurablyOnePacedChunkAtATime(t *testing.T) {
 	}
 }
 
+// IBKR serves a cached generation for a historical range it already built. A
+// chunk re-requested after a newer daily report is still evidence of its own
+// range, as in historical FX backfill (live, 2026-10-23: chunk 0 generated
+// 00:27:51 was refused against the 00:33:43 daily report, every 30 minutes).
+func TestEdgeFlexChunkAcceptsCachedGenerationOfItsOwnRange(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	store, err := corestore.Open(t.Context(), corestore.Options{Path: filepath.Join(privateTestDir(t), "daemon.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	now := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	srv := &Server{
+		cfg:       &config.Resolved{Flex: config.Flex{Enabled: true, QueryID: "synthetic-query", TokenPath: "/unused"}},
+		coreStore: store,
+		now:       func() time.Time { return now },
+	}
+	report := func(from, to time.Time, generated string) []byte {
+		raw := string(reportingFlexFixture(from.Format("20060102"), to.Format("20060102")))
+		raw = strings.ReplaceAll(raw, `reportDate="20260824"`, `reportDate="`+to.Format("20060102")+`"`)
+		return []byte(strings.ReplaceAll(raw, "20260824;120000", generated))
+	}
+	anchor := latestCompletedFlexDate(now)
+	daily := report(anchor.AddDate(0, 0, -(edgeDailyLookbackDays-1)), anchor, "20260825;003343")
+	if _, err := retainFlexStatementSelected(t.Context(), daily, srv.flexEvidenceSelection()); err != nil {
+		t.Fatal(err)
+	}
+	first := edgeFlexRanges(anchor)[0]
+	srv.flexRawDateRangeLockedFn = func(context.Context, time.Time, time.Time, int, string, string) ([]byte, error) {
+		return report(first.From, first.To, "20260825;002751"), nil
+	}
+	srv.flexProjectionFn = func(context.Context) error { return nil }
+	srv.edgeScheduleRebuildFn = func(time.Duration) {}
+
+	if _, err := srv.advanceEdgeFlexAcquisition(t.Context(), "scope_test"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := srv.loadEdgeFlexAcquisition(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.NextChunk != 1 || state.LastReason != "" {
+		t.Fatalf("cached chunk generation refused: next=%d reason=%q", state.NextChunk, state.LastReason)
+	}
+}
+
 func TestEdgeFlexAcquisitionDoesNotAdvanceWithoutReturnedRangeProof(t *testing.T) {
 	store, err := corestore.Open(t.Context(), corestore.Options{Path: filepath.Join(privateTestDir(t), "daemon.db")})
 	if err != nil {

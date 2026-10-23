@@ -516,10 +516,12 @@ func (s *Server) fetchFlexOnce(ctx context.Context, target time.Time) (flexFetch
 // fetchFlexDateRange requests one explicit inclusive window. The caller owns
 // scheduling; this method owns the single broker lane and the fixed endpoint.
 func (s *Server) fetchFlexDateRange(ctx context.Context, from, to time.Time) (flexFetchOutcome, error) {
-	return s.fetchFlexDateRangeWithPollAttempts(ctx, from, to, flexPollAttempts)
+	return s.fetchFlexDateRangeWithPollAttempts(ctx, from, to, flexPollAttempts, false)
 }
 
-func (s *Server) fetchFlexDateRangeWithPollAttempts(ctx context.Context, from, to time.Time, pollAttempts int) (flexFetchOutcome, error) {
+// historical scopes the generation guard to the requested date range; see
+// retainFlexStatementWithGenerationPolicy.
+func (s *Server) fetchFlexDateRangeWithPollAttempts(ctx context.Context, from, to time.Time, pollAttempts int, historical bool) (flexFetchOutcome, error) {
 	from, to = dateOnlyUTC(from), dateOnlyUTC(to)
 	if from.IsZero() || to.IsZero() || from.After(to) || int(to.Sub(from)/(24*time.Hour))+1 > 365 || pollAttempts < 1 {
 		return flexFetchOutcome{}, &flexFetchFailure{reason: rpc.ReconReportReasonQueryInvalid, detail: "Flex date range is invalid"}
@@ -548,7 +550,7 @@ func (s *Server) fetchFlexDateRangeWithPollAttempts(ctx context.Context, from, t
 	if s.flexRetainRawFn != nil {
 		return s.flexRetainRawFn(raw)
 	}
-	return s.retainFlexStatementForQuery(ctx, raw, flexQueryFingerprint(queryID))
+	return s.retainFlexStatementForQuery(ctx, raw, flexQueryFingerprint(queryID), historical)
 }
 
 // fetchFlexRawDateRangeWithCredentialsLocked performs only the broker
@@ -628,12 +630,12 @@ func retainFlexStatement(raw []byte) (flexFetchOutcome, error) {
 	return retainFlexStatementSelected(context.Background(), raw, flexEvidenceSelection{IncludeAll: true})
 }
 
-func (s *Server) retainFlexStatementForQuery(ctx context.Context, raw []byte, queryFingerprint string) (flexFetchOutcome, error) {
+func (s *Server) retainFlexStatementForQuery(ctx context.Context, raw []byte, queryFingerprint string, historical bool) (flexFetchOutcome, error) {
 	selection := s.flexEvidenceSelection()
 	if !validFlexQueryFingerprint(queryFingerprint) || selection.ActiveQueryFingerprint != queryFingerprint {
 		return flexFetchOutcome{}, &flexFetchFailure{reason: rpc.ReconReportReasonAuthorityUnavailable, retryable: true, detail: "Flex query generation changed during retention"}
 	}
-	return retainFlexStatementSelected(ctx, raw, selection)
+	return retainFlexStatementWithGenerationPolicy(ctx, raw, selection, historical)
 }
 
 func retainFlexStatementSelected(ctx context.Context, raw []byte, selection flexEvidenceSelection) (flexFetchOutcome, error) {
@@ -643,7 +645,8 @@ func retainFlexStatementSelected(ctx context.Context, raw []byte, selection flex
 // Historical reports may be broker-cached before a newly generated
 // annual report. Their generation must advance their own account/date-range scope,
 // not the generation of an unrelated date range. Ordinary fetches retain the
-// global freshness guard. Only authenticated historical FX acquisition uses this.
+// global freshness guard. Historical FX acquisition and Edge's statement
+// chunks use this: IBKR can re-serve a range's earlier generation.
 func retainFlexStatementWithGenerationPolicy(ctx context.Context, raw []byte, selection flexEvidenceSelection, historical bool) (flexFetchOutcome, error) {
 	statements, err := flexstmt.ParseContext(ctx, raw)
 	if err != nil {

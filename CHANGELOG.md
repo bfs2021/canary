@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.27.2 — Unreleased
+
+### Fixed
+
+- Statement reconciliation keeps the day's last complete account reading. A reading taken just before midnight that caught a later price can no longer leave the day's statement uncomparable.
+- Edge no longer restarts its monthly statement download every night. A section without rows that day is no longer read as a change to the Flex query.
+- Edge accepts IBKR's stored copy of a statement period it already built, instead of retrying every 30 minutes because a newer daily report exists.
+
 ## v3.27.1 — 2026-10-23 12:16 WEST
 
 ### What's new

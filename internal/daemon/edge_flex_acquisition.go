@@ -136,7 +136,7 @@ func (s *Server) advanceEdgeFlexAcquisition(ctx context.Context, scopeFingerprin
 	if s.edgeFlexFetchRangeFn != nil {
 		outcome, err = s.edgeFlexFetchRangeFn(ctx, current.From, current.To)
 	} else {
-		outcome, err = s.fetchFlexDateRangeWithPollAttempts(ctx, current.From, current.To, edgeFlexPollAttempts)
+		outcome, err = s.fetchFlexDateRangeWithPollAttempts(ctx, current.From, current.To, edgeFlexPollAttempts, true)
 	}
 	if err == nil && !flexOutcomeCoversRange(outcome, current) {
 		err = &flexFetchFailure{reason: rpc.ReconReportReasonReportNotReady, retryable: true, detail: "IBKR Flex response did not prove the requested date range"}
