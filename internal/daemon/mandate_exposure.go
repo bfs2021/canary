@@ -141,7 +141,10 @@ func mandateExposureName(g rpc.PositionGroup, base string, betas map[string]mand
 		row.Unknown = append(row.Unknown, what+": "+why)
 	}
 	var stockSpot float64
-	if st := g.Stock; st != nil && st.Quantity != 0 {
+	// A holding the broker reports as terminal and values at zero carries no
+	// exposure (defunctHolding, the shared verdict): it is not a row and does
+	// not blank the book (owner review 2026-10-23 22:15 CEST).
+	if st := g.Stock; st != nil && st.Quantity != 0 && !defunctHolding(*st) {
 		row.Legs++
 		desc := st.Symbol + " shares"
 		switch {
