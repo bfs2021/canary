@@ -16,7 +16,12 @@ assumed-hours, gross-redemption and pending-fee limitations below. On 2026-10-02
 the owner simplified fee review: one fixed-quantity broker preview, cash
 accounting including fees, and advisory purchase benefit without a profitability
 gate or repeated fee-driven resizing. These source changes add no activation
-or calibrated portfolio stress reserve.
+or calibrated portfolio stress reserve. On 2026-10-23 13:16 CEST the owner
+added one floor: a buy whose conservative benefit over the cash it replaces,
+after the entry spread, the fee and the interest forgone, is at or below zero
+is blocked (`cash_sweep_no_net_gain`); an unavailable estimate and
+`min_net_gain` stay advisory. The first live Bubill sweep (50,000 EUR face,
+47 days, 2.246% at the ask against 1.976% on cash) estimated −11.96 EUR.
 
 This record follows `.agents/docs/risk-policy-contract.md`. It records the
 owner's decisions of 2026-09-30 09:10 CEST (S1–S6), the reviewer's decisions

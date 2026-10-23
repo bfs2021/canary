@@ -55,6 +55,16 @@ func cashSweepEconomicsBlockers(prop rpc.TradeProposal, preview *rpc.OrderPrevie
 		}
 		return nil
 	}
+	// A buy that earns nothing over the cash it replaces is not swept: its
+	// conservative estimate after the entry spread, the fee reserve and the
+	// cash interest forgone must be above zero (owner decision 2026-10-23
+	// 13:16 CEST). An unavailable estimate stays advisory; min_net_gain
+	// stays an advisory benchmark above this floor.
+	if e := cashSweepEconomicsAdvisory(prop, preview); e != nil && e.IncrementalGainBase != nil && *e.IncrementalGainBase <= 0 {
+		return []rpc.TradingBlocker{{Code: rpc.CashSweepBlockerNoNetGain,
+			Message: fmt.Sprintf("the bill earns %.2f %s against keeping the cash, after the entry spread, the broker fee and the interest forgone; a sweep must earn more than the cash", *e.IncrementalGainBase, e.BaseCurrency),
+			Action:  "Nothing to do: the sweep proposes again when a bill pays more than the cash."}}
+	}
 	return nil
 }
 

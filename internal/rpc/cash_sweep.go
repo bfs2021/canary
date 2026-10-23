@@ -105,6 +105,9 @@ const (
 	// wrong. It holds every submit of the currency's instrument until a
 	// preview checks clean.
 	CashSweepBlockerBillUnitMismatch = "bill_unit_mismatch"
+	// CashSweepBlockerNoNetGain: the buy's conservative benefit over the
+	// cash it replaces is at or below zero (owner decision 2026-10-23).
+	CashSweepBlockerNoNetGain = "cash_sweep_no_net_gain"
 	// CashSweepBlockerCurrencyBorrowed is on every invest row, in every
 	// currency, while no_buy_while_borrowed is true and a currency's cash is
 	// negative beyond CashSweepBorrowedToleranceUnits (owner decision
