@@ -390,7 +390,10 @@ and name the covering row in `covered_by`.
 Two rules settle the cases where the largest would be wrong (owner decisions,
 2026-09-28):
 
-- An immediate sale goes before a trailing stop, whatever the sizes, unless
+- Owner, 2026-10-19 16:50 WEST: an unapproved stock sale must not suppress
+  stock protection. Both proposals remain available until an actual order
+  or confirmed intent invokes the existing duplicate-order checks.
+- Otherwise, an immediate sale goes before a trailing stop, whatever the sizes, unless
   the stop is pre-authorised (below). The stop is conditional and would hide
   the sale. It is covered until the sale fills or is cancelled, then
   re-proposes for what is left.

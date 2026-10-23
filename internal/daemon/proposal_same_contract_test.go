@@ -503,3 +503,25 @@ func TestSameContractBriefCountsCoveredRowsApart(t *testing.T) {
 		t.Fatalf("brief row = %+v", row)
 	}
 }
+
+// Owner, 2026-10-19: an unapproved sale must not suppress stock protection.
+func TestSameContractUnapprovedSaleKeepsStockProtection(t *testing.T) {
+	for _, security := range []string{"STK", "STOCK", "ETF"} {
+		for _, size := range []int{3, 10} {
+			t.Run(security+strconv.Itoa(size), func(t *testing.T) {
+				stop := sameContractRow(rpc.TradeProposalBucketTrailingStop, 7, 10, rpc.OrderTypeTRAIL)
+				sale := sameContractRow(rpc.TradeProposalBucketMandateReduction, 7, size, rpc.OrderTypeLMT)
+				stop.SecType, stop.Contract.SecType = security, security
+				sale.SecType, sale.Contract.SecType = security, security
+				rows := []rpc.TradeProposal{stop, sale}
+				mergeSameContractProposals(rows, nil)
+				if rows[0].State != rpc.TradeProposalStateGenerated || rows[0].CoveredBy != "" || len(rows[0].Blockers) != 0 || len(rows[1].Covers) != 0 {
+					t.Fatalf("unapproved sale suppressed stock protection: stop=%+v sale=%+v", rows[0], rows[1])
+				}
+				if len(approvableFor(rows, 7)) != 2 {
+					t.Fatal("both owner choices must remain available")
+				}
+			})
+		}
+	}
+}

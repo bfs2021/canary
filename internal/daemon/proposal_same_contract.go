@@ -28,7 +28,9 @@ import (
 // largest meets them all. The owner settled two exceptions on 2026-09-28:
 //   - An immediate sale goes before a trailing stop, whatever the sizes. The
 //     stop is conditional and would hide the trim; it re-proposes for what
-//     is left once the sale fills or is cancelled.
+//     is left once the sale fills or is cancelled. Exception, owner
+//     2026-10-19 16:50 WEST: an unapproved stock sale no longer covers
+//     a stock stop; both remain available for review.
 //   - A pre-authorised row Canary will still place is never covered by a
 //     row that needs approval. Unless it already meets the larger
 //     requirement, Canary places it beside the row the owner approves, and
@@ -268,6 +270,13 @@ func mergeSameContractProposalsLatched(proposals []rpc.TradeProposal, channel fu
 		}
 		for _, i := range manual {
 			if i != m {
+				// Owner, 2026-10-19 16:50 WEST: an unapproved sale must
+				// not suppress stock protection. Keep both choices; actual
+				// working orders and unconfirmed sends still fence dispatch.
+				if !sameContractStanding(proposals[m]) && sameContractStanding(proposals[i]) &&
+					sameContractSecFamily(nonEmptyString(proposals[i].Contract.SecType, proposals[i].SecType)) == "STK" {
+					continue
+				}
 				coverSameContract(&proposals[m], &proposals[i])
 			}
 		}
