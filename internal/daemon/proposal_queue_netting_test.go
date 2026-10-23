@@ -91,7 +91,7 @@ func stagedJournalOrder(t *testing.T, srv *Server, ref string, conID int, symbol
 }
 
 func TestSameContractNettingSeesAnOrderCanarySentBeforeTheBrokerListsIt(t *testing.T) {
-	_, policy, pos, now := budgetThetaFixture()
+	_, policy, pos, now := budgetThetaFixture(t)
 	for name, tc := range map[string]struct {
 		conID     int
 		action    string
@@ -106,6 +106,7 @@ func TestSameContractNettingSeesAnOrderCanarySentBeforeTheBrokerListsIt(t *testi
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv := newOrderReconcileTestServer(t, now)
+			_, srv.coreStore, _ = watchlistServer(t)
 			srv.openOrderInventoryForTest = sameContractInventory() // the broker lists nothing yet
 			stagedJournalOrder(t, srv, "synthetic-staged", tc.conID, "AAA", tc.action, tc.sendState, now.Add(-time.Second))
 			engine := &proposalEngine{server: srv, now: func() time.Time { return now },

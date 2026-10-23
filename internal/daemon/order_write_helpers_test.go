@@ -97,12 +97,17 @@ func TestModifyPreviewWhatIfNamesTheOrderItChanges(t *testing.T) {
 	draft := rpc.OrderDraft{Action: rpc.OrderActionSell, Quantity: 50, OrderType: rpc.OrderTypeTRAIL, TIF: rpc.OrderTIFGTC,
 		Contract: rpc.ContractParams{ConID: 910001, Symbol: "SYW", SecType: "STK", Exchange: "SMART", Currency: "USD"}}
 	status := rpc.TradingStatus{Account: "DU1234567", ClientID: 31}
-	order := modifyPreviewWhatIfOrder(view, draft, status)
+	order, err := modifyPreviewWhatIfOrder(view, draft, status)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if order.Changes == nil || *order.Changes != (ibkrlib.OrderChangeIdentity{PermID: 790001, Account: "DU1234567", OrderRef: "ord-prot"}) {
 		t.Fatalf("what-if names %+v, want the row's permanent ID, account and reference", order.Changes)
 	}
 	view.PermID = 0
-	if order := modifyPreviewWhatIfOrder(view, draft, status); order.Changes != nil {
+	if order, err := modifyPreviewWhatIfOrder(view, draft, status); err != nil {
+		t.Fatal(err)
+	} else if order.Changes != nil {
 		t.Fatalf("what-if of a row without a permanent ID names %+v, want none", order.Changes)
 	}
 }

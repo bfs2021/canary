@@ -75,9 +75,7 @@ func (s *Server) previewStrategyOrder(ctx context.Context, p rpc.StrategyPreview
 		Legs:            make([]rpc.StrategyOrderLeg, 0, len(group.Legs)),
 	}
 	currency := ""
-	var aggregateBid, aggregateAsk, grossNotional float64
-	var quoteAt time.Time
-	dataType := ""
+	quotes := make([]rpc.OrderQuoteSnapshot, 0, len(group.Legs))
 	for _, held := range group.Legs {
 		resolved, timeZone, err := s.resolveStrategyLeg(ctx, previewAuthority, held.Contract, min(timeout, previewMinTickTimeout))
 		if err != nil {
@@ -111,43 +109,14 @@ func (s *Server) previewStrategyOrder(ctx context.Context, p rpc.StrategyPreview
 		if err != nil {
 			return nil, err
 		}
-		if quote.Bid == nil || quote.Ask == nil || !positiveFinite(*quote.Bid) || !positiveFinite(*quote.Ask) || *quote.Ask < *quote.Bid {
-			return nil, fmt.Errorf("%w: complete bid/ask evidence is unavailable for strategy leg %d", ErrTradingDisabled, resolved.ConID)
-		}
-		ratio := float64(absOrderRatio(held.Ratio))
-		if held.Ratio > 0 {
-			aggregateBid += ratio * *quote.Bid
-			aggregateAsk += ratio * *quote.Ask
-		} else {
-			aggregateBid -= ratio * *quote.Ask
-			aggregateAsk -= ratio * *quote.Bid
-		}
-		mid := (*quote.Bid + *quote.Ask) / 2
-		grossNotional += ratio * float64(units) * mid * float64(contractMultiplier(resolved))
-		if quote.AsOf.After(quoteAt) {
-			quoteAt = quote.AsOf
-		}
-		if dataType == "" {
-			dataType = quote.DataType
-		} else if dataType != quote.DataType {
-			dataType = "mixed"
-		}
+		quotes = append(quotes, quote)
 	}
-	if len(draftGroup.Legs) < 2 || currency == "" || !positiveFinite(grossNotional) {
+	quote, limit, grossNotional, err := strategyPriceQuote(group.Underlying, draftGroup.Legs, quotes, p.LimitPrice)
+	if err != nil {
+		return nil, err
+	}
+	if currency == "" {
 		return nil, errBadRequest("strategy has incomplete executable leg evidence")
-	}
-
-	limit := roundPrice((aggregateBid + aggregateAsk) / 2)
-	if p.LimitPrice != nil {
-		if math.IsNaN(*p.LimitPrice) || math.IsInf(*p.LimitPrice, 0) {
-			return nil, errBadRequest("strategy limit price must be finite")
-		}
-		limit = roundPrice(*p.LimitPrice)
-	}
-	midpoint := roundPrice((aggregateBid + aggregateAsk) / 2)
-	quote := rpc.OrderQuoteSnapshot{
-		Symbol: group.Underlying, Bid: new(roundPrice(aggregateBid)), Ask: new(roundPrice(aggregateAsk)),
-		Midpoint: &midpoint, DataType: dataType, QuoteQuality: "strategy_legs", AsOf: quoteAt,
 	}
 
 	now := s.orderNow()
@@ -219,6 +188,84 @@ func (s *Server) previewStrategyOrder(ctx context.Context, p rpc.StrategyPreview
 		FXEvidenceAt: notionalAuthority.EvidenceAt, FXDataType: notionalAuthority.DataType, FXSource: notionalAuthority.Source,
 		MaxNotional: limits.CapBase, WhatIf: whatIf, Warnings: warnings, AsOf: now,
 	}, nil
+}
+
+// strategyPriceQuote combines the exact leg observations used for the combo's
+// price and risk notional, before a broker WhatIf or preview token is requested.
+func strategyPriceQuote(symbol string, legs []rpc.StrategyOrderLeg, quotes []rpc.OrderQuoteSnapshot, explicit *float64) (rpc.OrderQuoteSnapshot, float64, float64, error) {
+	var aggregateBid, aggregateAsk, grossNotional float64
+	aggregate := rpc.OrderQuoteSnapshot{Symbol: symbol}
+	var staleReasons []string
+	if len(legs) < 2 || len(legs) != len(quotes) {
+		return rpc.OrderQuoteSnapshot{}, 0, 0, errBadRequest("strategy has incomplete executable leg evidence")
+	}
+	for i, leg := range legs {
+		quote := quotes[i]
+		if explicit == nil {
+			if err := requireFreshPreviewQuote(quote, "strategy automatic limit"); err != nil {
+				return rpc.OrderQuoteSnapshot{}, 0, 0, err
+			}
+			if quote.DataType != rpc.MarketDataLive {
+				return rpc.OrderQuoteSnapshot{}, 0, 0, refusePreviewCode(previewQuoteNotLiveCode, errBadRequest("strategy automatic limit requires live bid/ask data for every leg; use --limit for an explicit price"))
+			}
+		}
+		if quote.Bid == nil || quote.Ask == nil || !positiveFinite(*quote.Bid) || !positiveFinite(*quote.Ask) || *quote.Ask < *quote.Bid {
+			return rpc.OrderQuoteSnapshot{}, 0, 0, fmt.Errorf("%w: complete bid/ask evidence is unavailable for strategy leg %d", ErrTradingDisabled, leg.Contract.ConID)
+		}
+		ratio := float64(absOrderRatio(leg.Ratio))
+		if leg.Ratio > 0 {
+			aggregateBid += ratio * *quote.Bid
+			aggregateAsk += ratio * *quote.Ask
+		} else {
+			aggregateBid -= ratio * *quote.Ask
+			aggregateAsk -= ratio * *quote.Bid
+		}
+		mid := (*quote.Bid + *quote.Ask) / 2
+		grossNotional += float64(leg.Quantity) * mid * float64(contractMultiplier(leg.Contract))
+		// The oldest observation bounds a multi-leg quote; one fresh leg must
+		// never make an older or qualified leg look current.
+		if i == 0 || quote.AsOf.Before(aggregate.AsOf) {
+			aggregate.AsOf = quote.AsOf
+		}
+		if i == 0 || quote.PriceAt.Before(aggregate.PriceAt) {
+			aggregate.PriceAt, aggregate.PriceAsOf = quote.PriceAt, quote.PriceAsOf
+		}
+		if i == 0 {
+			aggregate.DataType, aggregate.QuoteQuality = quote.DataType, quote.QuoteQuality
+			aggregate.SessionContext = quote.SessionContext
+		} else {
+			if aggregate.DataType != quote.DataType {
+				aggregate.DataType = "mixed"
+			}
+			if aggregate.QuoteQuality != quote.QuoteQuality {
+				aggregate.QuoteQuality = "mixed"
+			}
+			if quote.SessionContext == nil || aggregate.SessionContext == nil {
+				aggregate.SessionContext = nil
+			} else if !quote.SessionContext.IsOpen {
+				aggregate.SessionContext = quote.SessionContext
+			}
+		}
+		if quote.Stale {
+			aggregate.Stale = true
+			staleReasons = append(staleReasons, fmt.Sprintf("leg %d: %s", leg.Contract.ConID, quote.StaleReason))
+		}
+		aggregate.Warnings = append(aggregate.Warnings, quote.Warnings...)
+	}
+	if !positiveFinite(grossNotional) {
+		return rpc.OrderQuoteSnapshot{}, 0, 0, errBadRequest("strategy has incomplete executable leg evidence")
+	}
+	limit := roundPrice((aggregateBid + aggregateAsk) / 2)
+	if explicit != nil {
+		if math.IsNaN(*explicit) || math.IsInf(*explicit, 0) {
+			return rpc.OrderQuoteSnapshot{}, 0, 0, errBadRequest("strategy limit price must be finite")
+		}
+		limit = roundPrice(*explicit)
+	}
+	midpoint := roundPrice((aggregateBid + aggregateAsk) / 2)
+	aggregate.StaleReason = strings.Join(staleReasons, "; ")
+	aggregate.Bid, aggregate.Ask, aggregate.Midpoint = new(roundPrice(aggregateBid)), new(roundPrice(aggregateAsk)), &midpoint
+	return aggregate, limit, grossNotional, nil
 }
 
 func currentStrategyForPreview(groups []rpc.PositionStrategy, id string, expectedRevision int64) (rpc.PositionStrategy, error) {

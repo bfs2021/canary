@@ -3109,6 +3109,10 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handleTradeProposalsReducePortfolioPreview(ctx, req) })
 	case rpc.MethodTradeProposalsReducePortfolioSubmit:
 		s.unary(req, enc, func() (any, error) { return s.handleTradeProposalsReducePortfolioSubmit(ctx, req) })
+	case rpc.MethodOpportunitiesExercises:
+		s.unary(req, enc, func() (any, error) { return s.handleOpportunitiesExercises(ctx) })
+	case rpc.MethodOpportunitiesReconcileExercise:
+		s.unary(req, enc, func() (any, error) { return s.handleOpportunitiesReconcileExercise(ctx, req) })
 	case rpc.MethodOpportunitiesStatus:
 		s.unary(req, enc, func() (any, error) { return s.handleOpportunitiesStatus(), nil })
 	case rpc.MethodOpportunitiesSnapshot:

@@ -42,6 +42,10 @@ func (s *Server) protectiveOCABeforePlace(ctx context.Context, status rpc.Tradin
 	}
 	cancel()
 	plan := planProtectiveOCA(draft, held, canaryWorkingSellStops(views, snapshot, scope, draft))
+	if plan.Refusal != "" {
+		s.recordProtectiveOCADecision("refuse", decisionRefused, status, draft.OrderRef, plan.Refusal)
+		return protectiveOCALink{}, fmt.Errorf("%w: %s", ErrTradingDisabled, plan.Refusal)
+	}
 	for _, step := range plan.Steps {
 		if err := s.protectiveOCAStep(ctx, status, step, draft); err != nil {
 			reason := fmt.Sprintf("Canary's own stop %s %v; the sale %s was not sent", step.View.OrderRef, err, draft.OrderRef)

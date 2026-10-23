@@ -1,0 +1,4 @@
+# canary opportunities exercises · COLUMNS=80 · colour off
+No pending exercise requests.
+# canary opportunities exercises · COLUMNS=80 · colour on, ESC written as \x1b
+No pending exercise requests.

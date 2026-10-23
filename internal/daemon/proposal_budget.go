@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"math"
 	"slices"
@@ -61,6 +62,8 @@ type budgetGovernorInput struct {
 	// Ignored reports a governor row key the owner ignored: the plan passes
 	// over that line to the next candidate.
 	Ignored func(key string) bool
+	// Locked leaves the holding in measured exposure but outside every sale.
+	Locked func(conID int) bool
 }
 
 // resolveBudgetInput honours the test seam, else reads the daemon's own
@@ -142,6 +145,7 @@ type budgetLine struct {
 	timeValuePct *float64
 	rank         int
 	ignored      bool
+	locked       bool
 }
 
 // budgetRelief is one open Rulebook rule a sale of the line relieves, with
@@ -297,7 +301,7 @@ func budgetMeasurePlan(policy protectionPolicy, input budgetGovernorInput, pos *
 			continue
 		}
 		overLine = true
-		if line.ignored {
+		if line.ignored || line.locked {
 			continue
 		}
 		keep := max(int(math.Floor(plan.perLineCap/line.unitBase+1e-9)), 0)
@@ -408,6 +412,7 @@ func budgetAnnotateLines(lines []budgetLine, input budgetGovernorInput, st *rpc.
 		line.relief = budgetLineRelief(rules, input.Rulebook, line.row)
 		line.timeValuePct = budgetTimeValuePct(line.row)
 		line.ignored = input.Ignored != nil && input.Ignored(budgetRowKey(line.row))
+		line.locked = input.Locked != nil && input.Locked(line.row.ConID)
 	}
 }
 
@@ -467,7 +472,7 @@ func budgetRowKey(row rpc.PositionView) string {
 func budgetRank(lines []budgetLine, unit func(budgetLine) float64) []int {
 	var order []int
 	for i, line := range lines {
-		if !line.ignored && unit(line) > 0 {
+		if !line.ignored && !line.locked && unit(line) > 0 {
 			order = append(order, i)
 		}
 	}
@@ -585,7 +590,7 @@ func budgetRulebookPlan(policy protectionPolicy, input budgetGovernorInput, pos 
 			continue
 		}
 		overLine = true
-		if line.ignored {
+		if line.ignored || line.locked {
 			continue
 		}
 		unitRisk := budgetLineUnitAtRisk(*line)
@@ -666,8 +671,17 @@ func (e *proposalEngine) budgetReductionProposals(policy protectionPolicy, statu
 	if e != nil && input.Ignored == nil {
 		input.Ignored = func(key string) bool { return e.isIgnored(scope, key) }
 	}
+	var locksErr error
+	if e != nil && e.server != nil {
+		var locks rpc.HoldingLocks
+		locks, locksErr = e.server.holdingLocks(context.Background())
+		input.Locked = func(conID int) bool { return locksErr != nil || locks.Locked(conID) }
+	}
 	plan := budgetReductionPlan(policy, input, pos, now)
 	st := plan.status
+	if locksErr != nil {
+		st.Reason = strings.TrimSpace(st.Reason + " The locked holdings list cannot be confirmed; budget reductions are held.")
+	}
 	var out []rpc.TradeProposal
 	for _, line := range plan.lines {
 		cut := line.perLineCut + line.totalCut
@@ -1119,4 +1133,25 @@ func formatBudgetMoney(value float64, currency string) string {
 		return fmt.Sprintf("%.0f", value)
 	}
 	return fmt.Sprintf("%.0f %s", value, currency)
+}
+
+// budgetHoldingLockBlockers guards automatic budget sales independently of
+// the generated snapshot. A keep-list change may follow a proposal's notice.
+// Protective exits and explicit single-holding reductions keep their own
+// authority; this check applies only to the discretionary budget sweep.
+func (e *proposalEngine) budgetHoldingLockBlockers(ctx context.Context, p rpc.TradeProposal) []rpc.TradingBlocker {
+	if p.Bucket != rpc.TradeProposalBucketBudgetReduction {
+		return nil
+	}
+	if e == nil || e.server == nil {
+		return []rpc.TradingBlocker{{Code: "holding_locks_unavailable", Message: "The locked holdings list cannot be confirmed; budget reductions are held."}}
+	}
+	locks, err := e.server.holdingLocks(ctx)
+	if err != nil {
+		return []rpc.TradingBlocker{{Code: "holding_locks_unavailable", Message: "The locked holdings list cannot be confirmed; budget reductions are held."}}
+	}
+	if locks.Locked(p.Contract.ConID) {
+		return []rpc.TradingBlocker{{Code: "holding_locked", Message: "This holding is locked; the budget sweep cannot sell it.", Action: "Unlock it first, or reduce it on its own."}}
+	}
+	return nil
 }

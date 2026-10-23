@@ -266,7 +266,7 @@ func init() {
 		{"recon", "Post-trade reconciliation: broker statement flows vs the declared capital ledger", "canary recon show [--refresh] [--json] | canary recon backtest [--refresh] [--json] | canary recon equity [--since YYYY-MM-DD|RFC3339] [--until YYYY-MM-DD|RFC3339] [--limit N] [--json] | canary recon dismiss --line ID --reason S", runRecon},
 		{"reporting", "IBKR statement reporting status, performance series and execution costs for Recon and Edge", "canary reporting status|performance|fx|costs [--json]", runReporting},
 		{"proposals", "Review proposals to close or reduce positions", "canary proposals status|refresh|list|preview|prepare|prepared-status|prepare-bundle|submit-bundle|bundle-status|submit|reduce|request-stop|ignore|veto|queue [--json]", runProposals},
-		{"opportunities", "Review option exercise opportunities", "canary opportunities status|refresh|list|preview|exercise|ignore [--json]", runOpportunities},
+		{"opportunities", "Review option exercise opportunities", "canary opportunities status|refresh|list|preview|exercise|exercises|reconcile-exercise|ignore [--json]", runOpportunities},
 		{"trading", "Check trading permissions and what blocks orders", "canary trading status [--json]", runTrading},
 		{"settings", "View settings and change supported preferences", "canary settings show [--json] | canary settings set <supported-key>=<value> [--json]", runSettings},
 		{"orders", "Read current-context local order lifecycle state without transmitting orders", "canary orders open [--json] | canary orders history [--since YYYY-MM-DD|RFC3339] [--until YYYY-MM-DD|RFC3339] [--limit N] [--event-limit N] [--json]", runOrders},

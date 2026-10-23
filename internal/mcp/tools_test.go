@@ -93,7 +93,7 @@ func TestNoToolReachesPreviewOrExecution(t *testing.T) {
 	for _, method := range []string{
 		rpc.MethodOrderPreview, rpc.MethodOrderPlace, rpc.MethodOrderModify, rpc.MethodOrderCancel,
 		rpc.MethodOrderTWSCancel, rpc.MethodOrderTWSModify, rpc.MethodStrategyPreview, rpc.MethodAddPreview,
-		rpc.MethodOpportunitiesPreviewExercise, rpc.MethodOpportunitiesSubmitExercise,
+		rpc.MethodOpportunitiesPreviewExercise, rpc.MethodOpportunitiesSubmitExercise, rpc.MethodOpportunitiesReconcileExercise,
 		rpc.MethodTradeProposalsPreview, rpc.MethodTradeProposalsSubmit, rpc.MethodTradeProposalsVeto,
 		rpc.MethodTradeProposalsReducePreview, rpc.MethodTradeProposalsReduceSubmit,
 		rpc.MethodTradeProposalsReducePortfolioPreview, rpc.MethodTradeProposalsReducePortfolioSubmit,

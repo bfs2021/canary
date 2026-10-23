@@ -92,7 +92,7 @@ func lossExitThetaFixture(t *testing.T) (*proposalEngine, protectionPolicy, *rpc
 // days from expiry and out of the money, against 50,000 EUR declared risk
 // capital with a 15% per-line cap. The governor sells 2 to keep 3; theta
 // hygiene closes all 5. The broker has no working order.
-func budgetThetaFixture() (*proposalEngine, protectionPolicy, *rpc.PositionsResult, time.Time) {
+func budgetThetaFixture(t *testing.T) (*proposalEngine, protectionPolicy, *rpc.PositionsResult, time.Time) {
 	now := optionExitTestTime()
 	leg := budgetOptionLeg("AAA", 601, "C", 5, 2000, -1000)
 	leg.Expiry = now.AddDate(0, 0, 18).Format("20060102")
@@ -102,7 +102,9 @@ func budgetThetaFixture() (*proposalEngine, protectionPolicy, *rpc.PositionsResu
 	pos := &rpc.PositionsResult{Portfolio: &rpc.PositionsPortfolio{BaseCurrency: "EUR"}, Options: []rpc.PositionView{leg}}
 	policy := budgetTestPolicy(rpc.BudgetReductionModeActive, 40, 15)
 	policy.Buckets.ThetaHygiene.Enabled = true
-	engine := &proposalEngine{server: withTestOrderLimits(&Server{openOrderInventoryForTest: sameContractInventory()}), now: func() time.Time { return now },
+	srv, _, _ := watchlistServer(t)
+	srv.openOrderInventoryForTest = sameContractInventory()
+	engine := &proposalEngine{server: withTestOrderLimits(srv), now: func() time.Time { return now },
 		budgetInput: func(*rpc.AccountResult, time.Time) budgetGovernorInput { return budgetLatchedInput() }}
 	return engine, policy, pos, now
 }
@@ -142,7 +144,7 @@ func TestSameContractLossExitAndThetaShowOneCandidate(t *testing.T) {
 }
 
 func TestSameContractSizeIsTheLargestRequirementNeverTheSum(t *testing.T) {
-	engine, policy, pos, now := budgetThetaFixture()
+	engine, policy, pos, now := budgetThetaFixture(t)
 	rows := generateSameContract(t, engine, policy, pos, now)
 	by := rowsByBucket(t, rows, rpc.TradeProposalBucketBudgetReduction, rpc.TradeProposalBucketThetaHygiene)
 	budget, theta := by[rpc.TradeProposalBucketBudgetReduction], by[rpc.TradeProposalBucketThetaHygiene]
@@ -225,7 +227,7 @@ func TestSameContractAuthorisingTheCandidateLeavesNoSecondApprovableRow(t *testi
 		}
 	})
 	t.Run("theta and the budget governor", func(t *testing.T) {
-		engine, policy, pos, now := budgetThetaFixture()
+		engine, policy, pos, now := budgetThetaFixture(t)
 		before := rowsByBucket(t, generateSameContract(t, engine, policy, pos, now), rpc.TradeProposalBucketBudgetReduction, rpc.TradeProposalBucketThetaHygiene)
 		engine.server.openOrderInventoryForTest = sameContractInventory(workingOrder(601, "OPT", rpc.OrderActionSell, 5, rpc.OrderTypeLMT))
 		rows := generateSameContract(t, engine, policy, pos, now)
@@ -244,7 +246,7 @@ func TestSameContractAuthorisingTheCandidateLeavesNoSecondApprovableRow(t *testi
 }
 
 func TestSameContractWorkingOrderBlocksReductionRows(t *testing.T) {
-	engine, policy, pos, now := budgetThetaFixture()
+	engine, policy, pos, now := budgetThetaFixture(t)
 	other := workingOrder(602, "OPT", rpc.OrderActionSell, 5, rpc.OrderTypeLMT)
 	unknown := workingOrder(0, "OPT", rpc.OrderActionSell, 1, rpc.OrderTypeLMT)
 	unknown.Symbol = "AAA"

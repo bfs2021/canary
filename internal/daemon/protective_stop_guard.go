@@ -479,6 +479,9 @@ func (s *Server) protectiveStopGuardGrantCovers(origin, kind string, view rpc.Or
 	if origin != rpc.OrderOriginDaemonProtectiveGuard {
 		return nil
 	}
+	if view.EntryLink != nil && view.EntryState != "active" {
+		return fmt.Errorf("%w: attached entry stop activation is unconfirmed; automatic changes wait for the pair to resolve", ErrTradingDisabled)
+	}
 	grant := s.protectiveStopGuardGrant.Load()
 	if kind == protectiveStopGuardShrink && grant != nil && grant.Kind == protectiveStopGuardResize {
 		if s.fullPositionResizeGranted(view, quantity) {

@@ -224,6 +224,7 @@ func testOptionExerciseOpportunity() rpc.Opportunity {
 		ExerciseAction:      rpc.ExerciseActionExercise,
 		Quantity:            1,
 		MaxQuantity:         1,
+		PositionQuantity:    1,
 		PositionEffect:      rpc.ExercisePositionEffectClose,
 		PortfolioGeneration: 7,
 		PortfolioAccount:    "DU1234567",
@@ -248,6 +249,7 @@ func testOptionExerciseOpportunity() rpc.Opportunity {
 
 func testOptionExercisePayload(t *testing.T, srv *Server, opp rpc.Opportunity, tokenID string) orderPreviewTokenPayload {
 	t.Helper()
+	installExerciseSnapshotFixture(srv, opp)
 	head, err := srv.orderJournal.AuthorityHead()
 	if err != nil {
 		t.Fatalf("authority head: %v", err)

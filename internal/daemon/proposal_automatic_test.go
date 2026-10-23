@@ -87,6 +87,7 @@ func newAutomaticTestRig(t *testing.T, authority string) *automaticTestRig {
 	}
 	rig := &automaticTestRig{t: t, core: core, now: time.Date(2026, 9, 21, 14, 0, 0, 0, time.UTC), scope: brokerStateScope{Account: "DU1234567", Mode: "paper"}}
 	srv := newTestServer(t)
+	srv.coreStore = core
 	srv.now = func() time.Time { return rig.now }
 	rig.installInventory(srv)
 	srv.protectionPolicies = writePreAuthPolicy(t, preAuthPolicyTOML(authority, 1))

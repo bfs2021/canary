@@ -915,12 +915,12 @@ canary proposals status|refresh|list|preview|prepare|prepared-status|prepare-bun
 
 Review option exercise opportunities.
 
-Opportunity detection is advisory. Only `exercise` reaches the broker; it needs an explicit human instruction for that exact action, and the standard build refuses it.
+Opportunity detection is advisory. Only `exercise` reaches the broker; it needs an explicit human instruction for that exact action, and the standard build refuses it. `exercises` reads pending requests, revisions and available IBKR evidence. `reconcile-exercise REQUEST_REF REVISION --evidence EVIDENCE_ID --confirm-complete` records a human confirmation backed by matching broker records and sends no broker instruction. It requires an interactive human terminal; agents and MCP cannot confirm completion. Uncertain or partial requests stay blocked. See [Exercise reconciliation](../operate/orders.md#exercise-reconciliation).
 
-Guard `confirm`. Also available as an MCP tool.
+Guard `confirm`. MCP exposes advisory opportunity snapshots and discovery refresh only; exercise reconciliation is CLI only.
 
 ```text
-canary opportunities status|refresh|list|preview|exercise|ignore [--json]
+canary opportunities status|refresh|list|preview|exercise|exercises|reconcile-exercise|ignore [--json]
 ```
 
 **Subcommands**
@@ -932,6 +932,8 @@ canary opportunities status|refresh|list|preview|exercise|ignore [--json]
 | `list` | `read-only` |
 | `preview` | `read-only` |
 | `exercise` | `confirm` |
+| `exercises` | `read-only` |
+| `reconcile-exercise` | `confirm` |
 | `ignore` | `local` |
 
 **Flags**
@@ -942,6 +944,8 @@ canary opportunities status|refresh|list|preview|exercise|ignore [--json]
 | `--timeout` | yes | - |
 | `--reason` | yes | - |
 | `--preview-token` | yes | - |
+| `--evidence` | yes | - |
+| `--confirm-complete` | no | - |
 | `--json` | no | - |
 
 ## `canary trading`

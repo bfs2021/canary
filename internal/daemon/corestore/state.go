@@ -70,6 +70,15 @@ func (s *Store) CompareAndSwapStateDocument(ctx context.Context, update StateDoc
 }
 
 func compareAndSwapStateTx(ctx context.Context, tx *sql.Tx, update StateDocumentCAS, now time.Time) (StateDocument, error) {
+	if update.ExpectedHead != nil {
+		current, err := readAuthorityHead(ctx, tx)
+		if err != nil {
+			return StateDocument{}, err
+		}
+		if current != *update.ExpectedHead {
+			return StateDocument{}, ErrAuthorityMismatch
+		}
+	}
 	if !update.UpdatedAtNotBefore.IsZero() && now.Before(update.UpdatedAtNotBefore) {
 		return StateDocument{}, fmt.Errorf("%w: state document commit clock precedes required floor", ErrRollback)
 	}

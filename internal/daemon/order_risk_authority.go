@@ -691,6 +691,9 @@ func sameOrderPositionImpact(a, b rpc.OrderPositionImpact) bool {
 // reserved or token is consumed. Drift always asks for a new preview/WhatIf;
 // it never silently rewrites OpenClose or adapts the signed quantity.
 func (s *Server) bindPreviewOrderRiskAuthority(ctx context.Context, binding *brokerWriteTransactionBinding, status rpc.TradingStatus, payload orderPreviewTokenPayload, draft rpc.OrderDraft) error {
+	if err := s.pendingExerciseOrderBlocker(ctx, status, draft); err != nil {
+		return err
+	}
 	if binding == nil {
 		return brokerWriteTransactionDriftError()
 	}

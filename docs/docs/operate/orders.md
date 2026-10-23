@@ -1,6 +1,6 @@
 # Gated orders and the trading build
 
-Updated: 2026-10-20 13:53 CEST
+Updated: 2026-10-23 11:54 WEST
 
 The standard `canary` binary is read-only and compiles in no broker-write path.
 It does preview: once `[trading].mode` is paper or live, `canary order preview`
@@ -237,6 +237,55 @@ reduce/cover candidate supplies the action authority.
 Option exercise is limited to daemon-owned candidates for held options. The
 confirmation surface must disclose the resulting underlying exposure and block
 an exercise that opens, increases, or flips risk.
+
+### Exercise reconciliation
+
+Owner decision recorded: 2026-10-23 11:43 WEST. Reconcile against IBKR evidence
+with human confirmation of the exact request; keep uncertain requests blocked.
+
+Sending an exercise instruction does not prove that IBKR has completed it.
+Canary keeps the affected option quantity and underlying capacity reserved
+while the outcome is unresolved, including after a timeout or restart. It
+blocks another disposal of the same option and orders that would use the same
+underlying capacity, including a leg of a strategy order. Unrelated contracts
+and actions keep their existing gates.
+
+Read the pending requests and available broker evidence:
+
+```sh
+canary opportunities exercises --json
+```
+
+Each pending request has a reference and revision. The result lists available
+evidence IDs and explains any missing evidence. After checking that the exact
+request has completed in full, with no quantity still pending, confirm it from
+an interactive human terminal:
+
+```text
+canary opportunities reconcile-exercise REQUEST_REF REVISION --evidence EVIDENCE_ID --confirm-complete --json
+```
+
+Canary checks the imported IBKR Flex exercise record and its linked trade:
+the account, option, underlying and whole quantity must match, the evidence
+must be dated after the request, and the record must not already have been
+used. The current option and underlying holdings in the same account must also
+reflect the exercise. `--confirm-complete` is your attestation that this exact request
+is fully resolved; the broker records alone do not prove which request caused
+the position change. Canary saves that distinction with the resolution.
+
+Successful reconciliation releases the reservation; it sends no order,
+exercise or cancellation to IBKR. Missing, partial or ambiguous evidence keeps
+the request blocked. A cancellation claim alone cannot clear it. The command
+cannot override these checks, and agents and MCP cannot perform this
+confirmation.
+
+Older pending exercise records may lack the exact contract and position
+metadata needed for evidence reconciliation. They stay visible with an
+explanation and cannot yet use this recovery command. Canary blocks sales of
+the affected option and trades in its known symbol; provably unrelated,
+identified contracts keep their existing gates. If the historical record
+cannot identify the affected symbol, or the proposed trade cannot be
+identified, Canary cannot establish that it is unrelated and keeps it blocked.
 
 ## Auto connections
 

@@ -191,6 +191,17 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	if err != nil {
 		return nil, err
 	}
+	// Capture the sequence before the authoritative target read. A fill or
+	// any other order event after this point invalidates staging, including
+	// callbacks arriving while risk authority is being captured.
+	expectedOrderEventSeq, err := s.orderJournal.LatestOrderEventSeq(orderJournalEventFromView(view, orderJournalEventModifyRequested, s.orderNow()))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read modify order authority: %v", ErrTradingDisabled, err)
+	}
+	view, err = s.openOrderViewForWrite(p.ID, status)
+	if err != nil {
+		return nil, err
+	}
 	if view.ReservedOrderID <= 0 {
 		return nil, errBadRequest("order modify requires a broker order ID")
 	}
@@ -239,14 +250,12 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 		}
 	}
 	contract := previewIBKRStrategyContract(modifiedDraft)
-	order := previewIBKROrder(modifiedDraft)
+	order, err := modifyPreviewWhatIfOrder(view, modifiedDraft, status)
+	if err != nil {
+		return nil, err
+	}
 	if modifiedDraft.EntryLink != nil {
 		order, err = attachedStockStopModifyOrder(view, modifiedDraft, status)
-		if err != nil {
-			return nil, err
-		}
-	} else if p.Origin == rpc.OrderOriginDaemonProtectiveGuard {
-		order.TotalQty, err = protectionModifyTotal(modifiedDraft.Quantity, view.Filled)
 		if err != nil {
 			return nil, err
 		}
@@ -268,10 +277,6 @@ func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc
 	modify.Message = fmt.Sprintf("%s broker modify attempted", auth.Route)
 	if err := s.requireBrokerWriteTransactionCurrent(binding); err != nil {
 		return nil, err
-	}
-	expectedOrderEventSeq, err := s.orderJournal.LatestOrderEventSeq(modify)
-	if err != nil {
-		return nil, fmt.Errorf("%w: read modify order authority: %v", ErrTradingDisabled, err)
 	}
 	stagedOrderEventSeq, err := s.orderJournal.StageModifyPreTransmit(payload.TokenID, payload.AuthorityEpoch, payload.SignerGeneration, view.ReservedOrderID, coreOrderOrigin(p.Origin), expectedOrderEventSeq, []orderJournalEvent{confirm, modify})
 	if err != nil {

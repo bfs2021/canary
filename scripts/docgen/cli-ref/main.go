@@ -108,7 +108,7 @@ var commandNotes = map[string]string{
 		"`dry-run`, `status`, and `monitor` only read.",
 	"proposals": "Proposals are advisory. Only `submit`, `submit-bundle` and `reduce` reach the broker; " +
 		"each needs an explicit human instruction for that exact order, and the standard build refuses them.",
-	"opportunities": "Opportunity detection is advisory. Only `exercise` reaches the broker; it needs an explicit human instruction for that exact action, and the standard build refuses it.",
+	"opportunities": "Opportunity detection is advisory. Only `exercise` reaches the broker; it needs an explicit human instruction for that exact action, and the standard build refuses it. `exercises` reads pending requests, revisions and available IBKR evidence. `reconcile-exercise REQUEST_REF REVISION --evidence EVIDENCE_ID --confirm-complete` records a human confirmation backed by matching broker records and sends no broker instruction. It requires an interactive human terminal; agents and MCP cannot confirm completion. Uncertain or partial requests stay blocked. See [Exercise reconciliation](../operate/orders.md#exercise-reconciliation).",
 	"trading":       "`status` reads the local trading gate and its blockers.",
 	"stop": "Stopping is local process management: it signals the daemon and the app on this machine and reaches no broker. Orders already working stay at the broker, but nothing local watches them until the daemon runs again — no fills or cancels in the journal, no protection proposals, no phone alerts. " +
 		"So `stop` asks before it stops a daemon that still has work in flight, the same work its own idle shutdown defers on, and `--yes` is how a script answers. " +
@@ -202,6 +202,8 @@ func renderCommand(out *strings.Builder, spec cli.CommandSpec) {
 	out.WriteString(". ")
 	if reason, cliOnly := mcp.ExcludedCLI[spec.Name]; cliOnly {
 		fmt.Fprintf(out, "CLI only, with no MCP tool: %s.\n\n", strings.TrimRight(reason, "."))
+	} else if spec.Name == "opportunities" {
+		out.WriteString("MCP exposes advisory opportunity snapshots and discovery refresh only; exercise reconciliation is CLI only.\n\n")
 	} else {
 		out.WriteString("Also available as an MCP tool.\n\n")
 	}

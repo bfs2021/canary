@@ -36,6 +36,18 @@ func (s *Server) submitOptionExercise(ctx context.Context, payload orderPreviewT
 	if err := s.bindExercisePositionAuthority(ctx, &binding, auth.Status, payload, opp, qty); err != nil {
 		return err
 	}
+	underlyingDraft, err := exerciseUnderlyingRiskDraft(opp, qty)
+	if err != nil {
+		return err
+	}
+	fillFrontier := s.reduceFillBinding()
+	if err := s.exerciseCompetingOrders(ctx, auth.Status, opp, underlyingDraft); err != nil {
+		return err
+	}
+	if err := s.exercisePositionSnapshot(ctx, fillFrontier, opp); err != nil {
+		return err
+	}
+	binding.reduceFillEvidence = &fillFrontier
 	now := s.orderNow()
 	attemptID, err := randomTokenID()
 	if err != nil {
@@ -43,6 +55,7 @@ func (s *Server) submitOptionExercise(ctx context.Context, payload orderPreviewT
 	}
 	confirm := previewTokenConfirmedEvent(payload, 0, now, "exercise preview token confirmed for broker transmit")
 	attempt := orderJournalEventForDraft(payload.Draft, orderJournalEventSendAttempted, auth.Status, payload.TokenID, 0, now)
+	attempt.ExerciseReservation = &exerciseReservation{Option: opp.Contract, Underlying: opp.UnderlyingContract, Quantity: qty, UnderlyingAction: underlyingDraft.Action, UnderlyingBefore: binding.riskPosition.Before, UnderlyingAfter: binding.riskPosition.After, OptionBefore: opp.PositionQuantity, PortfolioGeneration: opp.PortfolioGeneration}
 	attempt.AttemptID = attemptID
 	attempt.ActionKind = corestore.ActionExercise
 	attempt.SendState = orderSendStateSendAttempted

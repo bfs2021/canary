@@ -1,0 +1,32 @@
+# canary opportunities reconcile-exercise --help · COLUMNS=80 · colour off
+canary opportunities reconcile-exercise — Confirm one fully resolved exercise
+using matching IBKR evidence; human terminal only
+
+Usage: canary opportunities reconcile-exercise REQUEST_REF REVISION --evidence
+       EVIDENCE_ID --confirm-complete [--json]
+
+Flags
+  --confirm-complete        attest that this exact request is fully resolved
+                            with no quantity still pending; matching broker
+                            evidence remains required
+  --evidence STRING         unused matching evidence ID from opportunities
+                            exercises
+  --json                    emit the recorded human-attested broker-evidence
+                            resolution
+
+# canary opportunities reconcile-exercise --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary opportunities reconcile-exercise — Confirm one fully resolved exercise\x1b[0m
+\x1b[1musing matching IBKR evidence; human terminal only\x1b[0m
+
+Usage: \x1b[36mcanary opportunities reconcile-exercise REQUEST_REF REVISION --evidence\x1b[0m
+       \x1b[36mEVIDENCE_ID --confirm-complete [--json]\x1b[0m
+
+\x1b[1mFlags\x1b[0m
+  \x1b[36m--confirm-complete        \x1b[0mattest that this exact request is fully resolved
+                            with no quantity still pending; matching broker
+                            evidence remains required
+  \x1b[36m--evidence STRING         \x1b[0munused matching evidence ID from opportunities
+                            exercises
+  \x1b[36m--json                    \x1b[0memit the recorded human-attested broker-evidence
+                            resolution
+

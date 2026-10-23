@@ -808,8 +808,17 @@ func (s *Server) fetchPreviewWhatIfBound(ctx context.Context, status rpc.Trading
 func (s *Server) fetchModifyPreviewWhatIfBound(ctx context.Context, status rpc.TradingStatus, view rpc.OrderView, draft rpc.OrderDraft, timeout time.Duration, authority *orderPreviewBrokerAuthority) (rpc.OrderWhatIfResult, error) {
 	whatIfCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	order, err := modifyPreviewWhatIfOrder(view, draft, status)
+	if draft.EntryLink != nil {
+		order, err = attachedStockStopModifyOrder(view, draft, status)
+	}
+	if err != nil {
+		return rpc.OrderWhatIfResult{}, err
+	}
 	if s.orderPreviewWhatIf != nil {
-		return s.orderPreviewWhatIf(whatIfCtx, draft)
+		wireDraft := draft
+		wireDraft.Quantity = order.TotalQty
+		return s.orderPreviewWhatIf(whatIfCtx, wireDraft)
 	}
 	var c *ibkrlib.Connector
 	if authority != nil {
@@ -819,14 +828,6 @@ func (s *Server) fetchModifyPreviewWhatIfBound(ctx context.Context, status rpc.T
 	}
 	if c == nil {
 		return previewWhatIfUnavailableWithMessage("Broker WhatIf unavailable: gateway connector is not ready."), nil
-	}
-	order := modifyPreviewWhatIfOrder(view, draft, status)
-	var err error
-	if draft.EntryLink != nil {
-		order, err = attachedStockStopModifyOrder(view, draft, status)
-		if err != nil {
-			return rpc.OrderWhatIfResult{}, err
-		}
 	}
 	var result ibkrlib.OrderWhatIfResult
 	if authority != nil {
@@ -853,10 +854,17 @@ func (s *Server) fetchModifyPreviewWhatIfBound(ctx context.Context, status rpc.T
 // what-if claims the order's own ID, so it names the order it changes as the
 // modify does (#120, ibkrlib.OrderChangeIdentity); without that an order an
 // earlier process placed cannot be previewed, and so not changed.
-func modifyPreviewWhatIfOrder(view rpc.OrderView, draft rpc.OrderDraft, status rpc.TradingStatus) *ibkrlib.RawOrder {
+func modifyPreviewWhatIfOrder(view rpc.OrderView, draft rpc.OrderDraft, status rpc.TradingStatus) (*ibkrlib.RawOrder, error) {
+	// The signed draft is remaining intent; TWS expects the cumulative
+	// quantity, including fills, for both WhatIf and actual replacements.
+	total, err := protectionModifyTotal(draft.Quantity, view.Filled)
+	if err != nil {
+		return nil, err
+	}
 	order := previewIBKROrderForStatus(draft, status)
+	order.TotalQty = total
 	order.Changes = orderChangeIdentity(view)
-	return order
+	return order, nil
 }
 
 func previewIBKRContract(contract rpc.ContractParams) *ibkrlib.Contract {

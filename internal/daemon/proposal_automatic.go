@@ -445,6 +445,9 @@ func automaticBucketFor(p rpc.TradeProposal) string {
 // still covers it, and its rows are still served for the owner's hand.
 func (e *proposalEngine) automaticBucket(p rpc.TradeProposal) string {
 	bucket := automaticBucketFor(p)
+	if len(e.budgetHoldingLockBlockers(context.Background(), p)) > 0 {
+		return ""
+	}
 	if bucket == "" || bucket == preAuthorisedBucketMandateReduction || !e.coreLine(p) {
 		return bucket
 	}
@@ -609,6 +612,7 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 				continue
 			}
 			prop, ok := present[rec.Key]
+			lockBlockers := e.budgetHoldingLockBlockers(ctx, prop)
 			reason := ""
 			switch {
 			case !ok:
@@ -619,6 +623,8 @@ func (e *proposalEngine) reconcileAutomatic(ctx context.Context) {
 				reason = "proposal revision changed; a new window starts for the new revision"
 			case !proposalUnblocked(snap, prop):
 				reason = proposalBlockedReason(snap, prop)
+			case len(lockBlockers) > 0:
+				reason = lockBlockers[0].Message
 			case queued[rec.Key]:
 				reason = automaticQueuedReason
 			case rec.Bucket != preAuthorisedBucketMandateReduction && e.coreLine(prop):
@@ -1322,6 +1328,11 @@ func automaticFrozenRefusal(res rpc.TradeProposalSubmitResult, err, placeErr err
 func (e *proposalEngine) automaticSubmitBlockers(prop rpc.TradeProposal) []rpc.TradingBlocker {
 	if e == nil || e.server == nil {
 		return []rpc.TradingBlocker{{Code: "daemon_origin_unauthorised", Message: "automatic submission requires the daemon scheduler"}}
+	}
+	// submitAutomatic holds brokerWriteMu here, the same lock used when
+	// acknowledging a keep-list change, so a notice cannot outlive a lock.
+	if blockers := e.budgetHoldingLockBlockers(context.Background(), prop); len(blockers) > 0 {
+		return blockers
 	}
 	grant := e.server.automaticGrant.Load()
 	bucket := e.automaticBucket(prop)

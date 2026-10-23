@@ -1,0 +1,20 @@
+# canary opportunities exercises --help · COLUMNS=80 · colour off
+canary opportunities exercises — Read pending exercise requests and matching
+IBKR evidence; sends no broker instruction
+
+Usage: canary opportunities exercises [--json]
+
+Flags
+  --json                    emit pending requests, revisions, evidence IDs and
+                            blockers
+
+# canary opportunities exercises --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary opportunities exercises — Read pending exercise requests and matching\x1b[0m
+\x1b[1mIBKR evidence; sends no broker instruction\x1b[0m
+
+Usage: \x1b[36mcanary opportunities exercises [--json]\x1b[0m
+
+\x1b[1mFlags\x1b[0m
+  \x1b[36m--json                    \x1b[0memit pending requests, revisions, evidence IDs and
+                            blockers
+

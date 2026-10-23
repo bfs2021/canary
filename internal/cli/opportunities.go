@@ -33,6 +33,10 @@ func runOpportunities(ctx context.Context, env *Env, args []string) int {
 		return runOpportunitiesPreview(ctx, env, args)
 	case "exercise":
 		return runOpportunitiesExercise(ctx, env, args)
+	case "exercises":
+		return runOpportunityExercises(ctx, env, args)
+	case "reconcile-exercise":
+		return runOpportunityReconcileExercise(ctx, env, args)
 	case "ignore":
 		return runOpportunitiesIgnore(ctx, env, args)
 	default:
@@ -43,7 +47,7 @@ func runOpportunities(ctx context.Context, env *Env, args []string) int {
 func opportunitiesSubcommandIndex(args []string) int {
 	for i, arg := range args {
 		switch arg {
-		case "status", "refresh", "list", "preview", "exercise", "ignore":
+		case "status", "refresh", "list", "preview", "exercise", "exercises", "reconcile-exercise", "ignore":
 			return i
 		}
 	}

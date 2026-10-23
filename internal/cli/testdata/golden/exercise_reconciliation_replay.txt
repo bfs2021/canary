@@ -1,0 +1,16 @@
+# canary opportunities reconcile-exercise synthetic-request revision-one --evidence synthetic-evidence --confirm-complete · COLUMNS=80 · colour off
+Exercise reconciliation recorded; no broker instruction sent.
+Request        synthetic-request
+Revision       revision-one
+Evidence       synthetic-evidence
+Provenance     human-attested broker evidence
+Already recorded
+               true; this retry made no new resolution
+# canary opportunities reconcile-exercise synthetic-request revision-one --evidence synthetic-evidence --confirm-complete · COLUMNS=80 · colour on, ESC written as \x1b
+Exercise reconciliation recorded; no broker instruction sent.
+\x1b[2mRequest       \x1b[0m synthetic-request
+\x1b[2mRevision      \x1b[0m revision-one
+\x1b[2mEvidence      \x1b[0m synthetic-evidence
+\x1b[2mProvenance    \x1b[0m human-attested broker evidence
+\x1b[2mAlready recorded\x1b[0m
+\x1b[2m              \x1b[0m true; this retry made no new resolution

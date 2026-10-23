@@ -284,6 +284,8 @@ type StateDocument struct {
 // creates a missing document at revision one; a positive value updates exactly
 // behind a retained authority timestamp.
 type StateDocumentCAS struct {
+	// ExpectedHead binds evidence read from other projections to this mutation.
+	ExpectedHead     *AuthorityHead
 	ScopeKey         string
 	Kind             string
 	ExpectedRevision int64

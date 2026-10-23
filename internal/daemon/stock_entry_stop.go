@@ -96,12 +96,10 @@ func attachedStockStopModifyOrder(view rpc.OrderView, draft rpc.OrderDraft, stat
 	if err := validateModifyDraft(view, draft); err != nil {
 		return nil, err
 	}
-	total, err := protectionModifyTotal(draft.Quantity, view.Filled)
+	order, err := modifyPreviewWhatIfOrder(view, draft, status)
 	if err != nil {
 		return nil, err
 	}
-	order := modifyPreviewWhatIfOrder(view, draft, status)
-	order.TotalQty = total
 	order.OcaGroup, order.OcaType = view.OCAGroup, view.OCAType
 	return order, nil
 }

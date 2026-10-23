@@ -1,0 +1,40 @@
+# canary opportunities exercises · COLUMNS=80 · colour off
+Pending exercise requests · 2
+
+SYNA · 2 contracts · pending
+Request        synthetic-request
+Revision       revision-one
+Option         SYNA 20261218 40 P · contract 4242
+Underlying     SYNA · contract 4243
+Requested      2026-09-05T14:00:00+02:00
+Evidence       synthetic-evidence · 2026-09-05T15:00:00+02:00
+
+Option identity unavailable · quantity unavailable · pending
+Request        synthetic-legacy-request
+Revision       revision-two
+Option         unavailable; request remains pending
+Underlying     unavailable; request remains pending
+Requested      unavailable
+  - exercise_metadata_missing: Request metadata is unavailable; its outcome remains unresolved.
+
+Reservations remain until matching IBKR evidence and your confirmation resolve the exact request in full.
+# canary opportunities exercises · COLUMNS=80 · colour on, ESC written as \x1b
+Pending exercise requests · 2
+
+SYNA · 2 contracts · pending
+\x1b[2mRequest       \x1b[0m synthetic-request
+\x1b[2mRevision      \x1b[0m revision-one
+\x1b[2mOption        \x1b[0m SYNA 20261218 40 P · contract 4242
+\x1b[2mUnderlying    \x1b[0m SYNA · contract 4243
+\x1b[2mRequested     \x1b[0m 2026-09-05T14:00:00+02:00
+\x1b[2mEvidence      \x1b[0m synthetic-evidence · 2026-09-05T15:00:00+02:00
+
+Option identity unavailable · quantity unavailable · pending
+\x1b[2mRequest       \x1b[0m synthetic-legacy-request
+\x1b[2mRevision      \x1b[0m revision-two
+\x1b[2mOption        \x1b[0m unavailable; request remains pending
+\x1b[2mUnderlying    \x1b[0m unavailable; request remains pending
+\x1b[2mRequested     \x1b[0m unavailable
+  - exercise_metadata_missing: Request metadata is unavailable; its outcome remains unresolved.
+
+Reservations remain until matching IBKR evidence and your confirmation resolve the exact request in full.

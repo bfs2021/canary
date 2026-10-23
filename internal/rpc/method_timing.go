@@ -190,6 +190,8 @@ var methodTimings = []MethodTiming{
 	{Method: MethodOpportunitiesSnapshot, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
 	{Method: MethodOpportunitiesRefresh, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	{Method: MethodOpportunitiesPreviewExercise, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
+	{Method: MethodOpportunitiesExercises, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
+	{Method: MethodOpportunitiesReconcileExercise, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	{Method: MethodOpportunitiesSubmitExercise, Lifetime: MethodLifetimeUnary, DaemonTimeout: 55 * time.Second},
 	{Method: MethodOpportunitiesIgnore, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
 }

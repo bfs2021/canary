@@ -75,10 +75,11 @@ type protectiveOCAStop struct {
 // stops on its contract: the membership the sale is sent with (none when
 // Group is empty) and the shrink or cancel steps that must succeed first.
 type protectiveOCAPlan struct {
-	Group string
-	Type  int
-	Steps []protectiveStopGuardStep
-	Stops []protectiveOCAStop
+	Refusal string
+	Group   string
+	Type    int
+	Steps   []protectiveStopGuardStep
+	Stops   []protectiveOCAStop
 }
 
 // protectiveOCACandidate is a single-contract sale of a resolved contract:
@@ -141,6 +142,15 @@ func planProtectiveOCA(draft rpc.OrderDraft, held float64, stops []protectiveOCA
 	plan := protectiveOCAPlan{Stops: stops}
 	if !protectiveOCACandidate(draft) {
 		return plan
+	}
+	// A held child protects a pending entry, including its partial fills. Its
+	// shares cannot be separated safely from the current holding here. Refuse
+	// before changing any stop until the exact pair is confirmed active.
+	for _, stop := range stops {
+		if stop.View.EntryLink != nil && stop.View.EntryState != "active" {
+			plan.Refusal = "an attached entry stop is not confirmed active; wait for the entry and stop to resolve before selling this holding"
+			return plan
+		}
 	}
 	ownGroup := func() {
 		if isProtectiveStopOrderType(draft.OrderType) {
