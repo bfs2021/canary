@@ -191,6 +191,11 @@ func (e *proposalEngine) bindCore(ctx context.Context, core *corestore.Store) er
 			return fmt.Errorf("attach queued authorisations: %w", err)
 		}
 	}
+	// The sweep's fee rates are evidence, not authority: an unreadable
+	// document leaves selection ranking without a fee, as before any WhatIf.
+	if err := e.sweepFees.bindCore(ctx, core); err != nil && e.server != nil && e.server.logger != nil {
+		e.server.logger.Warnf("cash sweep fee rates not loaded: %v", err)
+	}
 	return nil
 }
 

@@ -28,6 +28,11 @@ benefit over cash, after the fee (the last accepted WhatIf's fee per face),
 the entry spread and the interest forgone, is highest; the ladder rung only
 breaks ties, and with none above zero the currency holds and lists no row.
 Without a cash rate the estimate is unavailable and the rung order stands.
+The fee per face is kept per currency and instrument, with when it was
+observed, in daemon.db (state `cash_sweep_fee_rates`), so a daemon restart
+does not list a bill that loses after the fee (2026-10-23 18:14 CEST); a
+non-finite or negative rate is never kept. Before any accepted WhatIf of an
+instrument, selection ranks without a fee and the preview's floor blocks a loss.
 The EUR window was set to 28–120 days the same minute, a liquidity horizon
 for an options book with large margin needs.
 

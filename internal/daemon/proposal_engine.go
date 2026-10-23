@@ -2323,7 +2323,7 @@ func (e *proposalEngine) preview(ctx context.Context, p rpc.TradeProposalPreview
 	}
 	e.appendEvent(proposalEventForProposal("previewed", prop, now, preview.PreviewTokenID, preview.Draft.OrderRef, "proposal previewed"))
 	e.noteBillUnitCheck(prop, preview)
-	e.noteSweepFee(prop, preview)
+	e.noteSweepFee(ctx, prop, preview, now)
 	if blockers := append(proposalPreviewSafetyBlockers(prop, preview), coreDueBlockers(prop, now)...); len(blockers) > 0 {
 		e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
 		return rpc.TradeProposalPreviewResult{Proposal: prop, PreviewTokenID: preview.PreviewTokenID, PreviewTokenExpiresAt: preview.PreviewTokenExpiresAt, Preview: sanitizeProposalPreviewForProposal(preview, prop), Blockers: blockers, AsOf: now}, nil
@@ -2542,7 +2542,7 @@ func (e *proposalEngine) submit(ctx context.Context, p rpc.TradeProposalSubmitPa
 	}
 	e.appendEvent(proposalEventForProposal("previewed", prop, now, preview.PreviewTokenID, preview.Draft.OrderRef, "proposal fast-path previewed"))
 	e.noteBillUnitCheck(prop, preview)
-	e.noteSweepFee(prop, preview)
+	e.noteSweepFee(ctx, prop, preview, now)
 	if blockers := append(proposalPreviewSafetyBlockers(prop, preview), coreDueBlockers(prop, now)...); len(blockers) > 0 {
 		e.appendBlocked(prop, prop.Key, prop.Revision, blockers, nil)
 		return rpc.TradeProposalSubmitResult{Proposal: prop, Preview: sanitizeProposalPreviewForProposal(preview, prop), PreviewTokenID: preview.PreviewTokenID, Blockers: blockers, AsOf: now}, nil
