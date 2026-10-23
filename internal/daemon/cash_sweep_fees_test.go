@@ -148,6 +148,24 @@ func TestCashSweepFeesRequireExactAcceptedFiniteUpperEnvelope(t *testing.T) {
 	if got := proposalPreviewSafetyBlockers(prop, preview); len(got) != 0 {
 		t.Fatalf("a finite exact upper bound needs no lower estimate: %v", got)
 	}
+	// A fixed-rate fee (owner, 2026-10-23 12:56 CEST): a commission in the
+	// cash currency and no min/max envelope bounds the fee, and principal
+	// plus that fee is still held to the free cash.
+	prop, preview = sweepFeePreview(1010, 1000, 10)
+	preview.WhatIf.Margin.MinCommission, preview.WhatIf.Margin.MaxCommission = nil, nil
+	if got := proposalPreviewSafetyBlockers(prop, preview); len(got) != 0 {
+		t.Fatalf("a fixed commission without an envelope was refused: %v", got)
+	}
+	prop, preview = sweepFeePreview(1005, 1000, 10)
+	preview.WhatIf.Margin.MinCommission, preview.WhatIf.Margin.MaxCommission = nil, nil
+	if got := proposalPreviewSafetyBlockers(prop, preview); !hasTradingBlocker(got, "cash_sweep_cost_above_free_cash") {
+		t.Fatalf("a fixed commission above the free cash passed: %v", got)
+	}
+	prop, preview = sweepFeePreview(1010, 1000, 10)
+	preview.WhatIf.Margin.MinCommission, preview.WhatIf.Margin.MaxCommission, preview.WhatIf.Margin.CommissionCurrency = nil, nil, ""
+	if got := proposalPreviewSafetyBlockers(prop, preview); !hasTradingBlocker(got, "cash_sweep_fees_unknown") {
+		t.Fatalf("a commission in no currency bounded the fee: %v", got)
+	}
 }
 
 func TestCashSweepSaleRequiresAnExactFeeBound(t *testing.T) {

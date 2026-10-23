@@ -77,17 +77,30 @@ type inboundOrderProtoSummary struct {
 	minCommission        float64
 	maxCommission        float64
 	commissionCurrency   string
-	marginCurrency       string
-	rejectReason         string
-	warningText          string
-	execID               string
-	execTime             string
-	execAccount          string
-	executionExchange    string
-	executionSide        string
-	shares               string
-	price                float64
-	cumQty               string
+	// stateSent marks the OrderState doubles (fields 2–13) IBKR sent: an
+	// absent one reads empty, never 0, so a WhatIf without a commission
+	// envelope is not mistaken for an explicit zero fee.
+	stateSent         uint32
+	marginCurrency    string
+	rejectReason      string
+	warningText       string
+	execID            string
+	execTime          string
+	execAccount       string
+	executionExchange string
+	executionSide     string
+	shares            string
+	price             float64
+	cumQty            string
+}
+
+// stateDouble formats an OrderState double IBKR sent; one it did not send is
+// empty, which the WhatIf reader reads as unknown.
+func (s inboundOrderProtoSummary) stateDouble(field int, value float64) string {
+	if s.stateSent&(1<<field) == 0 {
+		return ""
+	}
+	return formatProtoSummaryFloat(value)
 }
 
 func summarizeInboundOrderProtoCallback(wireMsgID int, body []byte) ([]string, bool) {
@@ -122,18 +135,18 @@ func summarizeOpenOrderProtoCallback(body []byte) []string {
 	fields = appendOrderSummaryFields(fields, summary)
 	fields = append(fields,
 		"status="+summary.status,
-		"initMarginBefore="+formatProtoSummaryFloat(summary.initMarginBefore),
-		"maintMarginBefore="+formatProtoSummaryFloat(summary.maintMarginBefore),
-		"equityWithLoanBefore="+formatProtoSummaryFloat(summary.equityWithLoanBefore),
-		"initMarginChange="+formatProtoSummaryFloat(summary.initMarginChange),
-		"maintMarginChange="+formatProtoSummaryFloat(summary.maintMarginChange),
-		"equityWithLoanChange="+formatProtoSummaryFloat(summary.equityWithLoanChange),
-		"initMarginAfter="+formatProtoSummaryFloat(summary.initMarginAfter),
-		"maintMarginAfter="+formatProtoSummaryFloat(summary.maintMarginAfter),
-		"equityWithLoanAfter="+formatProtoSummaryFloat(summary.equityWithLoanAfter),
-		"commission="+formatProtoSummaryFloat(summary.commission),
-		"minCommission="+formatProtoSummaryFloat(summary.minCommission),
-		"maxCommission="+formatProtoSummaryFloat(summary.maxCommission),
+		"initMarginBefore="+summary.stateDouble(2, summary.initMarginBefore),
+		"maintMarginBefore="+summary.stateDouble(3, summary.maintMarginBefore),
+		"equityWithLoanBefore="+summary.stateDouble(4, summary.equityWithLoanBefore),
+		"initMarginChange="+summary.stateDouble(5, summary.initMarginChange),
+		"maintMarginChange="+summary.stateDouble(6, summary.maintMarginChange),
+		"equityWithLoanChange="+summary.stateDouble(7, summary.equityWithLoanChange),
+		"initMarginAfter="+summary.stateDouble(8, summary.initMarginAfter),
+		"maintMarginAfter="+summary.stateDouble(9, summary.maintMarginAfter),
+		"equityWithLoanAfter="+summary.stateDouble(10, summary.equityWithLoanAfter),
+		"commission="+summary.stateDouble(11, summary.commission),
+		"minCommission="+summary.stateDouble(12, summary.minCommission),
+		"maxCommission="+summary.stateDouble(13, summary.maxCommission),
 		"commissionCurrency="+summary.commissionCurrency,
 		"marginCurrency="+summary.marginCurrency,
 		"rejectReason="+summary.rejectReason,
@@ -584,28 +597,40 @@ func parseInboundOrderStateProto(body []byte, summary *inboundOrderProtoSummary)
 		case 1:
 			summary.status = string(value)
 		case 2:
+			summary.stateSent |= 1 << 2
 			return setProtoDouble(fieldNumber, wireType, value, &summary.initMarginBefore)
 		case 3:
+			summary.stateSent |= 1 << 3
 			return setProtoDouble(fieldNumber, wireType, value, &summary.maintMarginBefore)
 		case 4:
+			summary.stateSent |= 1 << 4
 			return setProtoDouble(fieldNumber, wireType, value, &summary.equityWithLoanBefore)
 		case 5:
+			summary.stateSent |= 1 << 5
 			return setProtoDouble(fieldNumber, wireType, value, &summary.initMarginChange)
 		case 6:
+			summary.stateSent |= 1 << 6
 			return setProtoDouble(fieldNumber, wireType, value, &summary.maintMarginChange)
 		case 7:
+			summary.stateSent |= 1 << 7
 			return setProtoDouble(fieldNumber, wireType, value, &summary.equityWithLoanChange)
 		case 8:
+			summary.stateSent |= 1 << 8
 			return setProtoDouble(fieldNumber, wireType, value, &summary.initMarginAfter)
 		case 9:
+			summary.stateSent |= 1 << 9
 			return setProtoDouble(fieldNumber, wireType, value, &summary.maintMarginAfter)
 		case 10:
+			summary.stateSent |= 1 << 10
 			return setProtoDouble(fieldNumber, wireType, value, &summary.equityWithLoanAfter)
 		case 11:
+			summary.stateSent |= 1 << 11
 			return setProtoDouble(fieldNumber, wireType, value, &summary.commission)
 		case 12:
+			summary.stateSent |= 1 << 12
 			return setProtoDouble(fieldNumber, wireType, value, &summary.minCommission)
 		case 13:
+			summary.stateSent |= 1 << 13
 			return setProtoDouble(fieldNumber, wireType, value, &summary.maxCommission)
 		case 14:
 			summary.commissionCurrency = string(value)

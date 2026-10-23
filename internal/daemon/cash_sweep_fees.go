@@ -8,18 +8,29 @@ import (
 )
 
 // cashSweepFeeUpper uses only the exact draft's accepted broker WhatIf.
-// Commission alone is an estimate, MinCommission is a lower bound, and a
-// missing or foreign-currency upper bound cannot protect this currency's cash.
-// Zero is usable only when the broker explicitly reports it.
+// MinCommission is a lower bound, and a foreign-currency figure cannot
+// protect this currency's cash. Zero is usable only when the broker
+// explicitly reports it. When the broker sends a commission in the cash
+// currency and no min/max envelope at all (a fixed-rate fee, as for EUR
+// bills), that commission is the bound; the caller still checks principal
+// plus fee against free cash (owner, 2026-10-23 12:56 CEST). A worse real
+// fee leaves the currency that much under its kept cash, never in debt
+// beyond it.
 func cashSweepFeeUpper(preview *rpc.OrderPreviewResult, currency string) (float64, bool) {
 	if preview == nil || preview.WhatIf.Status != rpc.OrderWhatIfStatusAccepted || !preview.WhatIf.Available {
 		return 0, false
 	}
 	m := preview.WhatIf.Margin
-	if m == nil || m.MaxCommission == nil || normCcy(currency) == "" || normCcy(m.CommissionCurrency) != normCcy(currency) {
+	if m == nil || normCcy(currency) == "" || normCcy(m.CommissionCurrency) != normCcy(currency) {
 		return 0, false
 	}
 	valid := func(n float64) bool { return n >= 0 && finiteProtectionOptionPolicyValue(n) && n != math.MaxFloat64 }
+	if m.MaxCommission == nil {
+		if m.MinCommission != nil || m.Commission == nil || !valid(*m.Commission) {
+			return 0, false
+		}
+		return *m.Commission, true
+	}
 	upper := *m.MaxCommission
 	if !valid(upper) {
 		return 0, false
