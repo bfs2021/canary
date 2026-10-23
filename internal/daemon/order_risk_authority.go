@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -123,7 +124,7 @@ func (s *Server) resolvePreviewOrderContract(ctx context.Context, authority *ord
 	}
 	resolved, err := authority.connector.ResolveOrderContractForSession(ctx, authority.session, *previewIBKRContract(contract), timeout)
 	if err != nil {
-		return rpc.ContractParams{}, fmt.Errorf("%w: exact contract resolution failed: %v", ErrTradingDisabled, err)
+		return rpc.ContractParams{}, orderContractResolutionError(err)
 	}
 	result := contract
 	result.ConID = resolved.Contract.ConID
@@ -144,6 +145,27 @@ func (s *Server) resolvePreviewOrderContract(ctx context.Context, authority *ord
 	}
 	return result, nil
 }
+
+// orderContractResolutionError is the refusal of a failed exact-contract
+// lookup. A broker that did not answer in time is a retryable timeout, never
+// disabled trading (a slow gateway after a restart read as "trading
+// disabled" on 2026-10-23); any other failure still refuses as disabled.
+func orderContractResolutionError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ibkrlib.ErrContractDetailsTimeout) {
+		return &orderContractLookupTimeoutError{cause: err}
+	}
+	return fmt.Errorf("%w: exact contract resolution failed: %v", ErrTradingDisabled, err)
+}
+
+// orderContractLookupTimeoutError keeps the timeout it wraps, so the RPC
+// layer classifies it as the timeout code callers already retry.
+type orderContractLookupTimeoutError struct{ cause error }
+
+func (e *orderContractLookupTimeoutError) Error() string {
+	return "The broker did not answer the contract lookup in time; nothing was placed. Try again."
+}
+
+func (e *orderContractLookupTimeoutError) Unwrap() error { return e.cause }
 
 // confirmedPositionProjection is the one trust boundary every position read
 // for an order passes before any rule reads position.Before: the broker's
