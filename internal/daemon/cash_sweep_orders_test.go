@@ -51,12 +51,14 @@ func cashSweepTestResolve(cp cashSweepCurrencyPlan, price float64, now time.Time
 	return cp
 }
 
-// usBillRules and eurBillRules are the synthetic lines' grids
-// (synthBondLine): one bond of 1,000 face for USD, 1,000 of face in steps of
-// 1,000 for EUR.
+// usBillRules is the synthetic lines' grid (synthBondLine): one bond of
+// 1,000 face for USD and EUR. eurLotRules and eurLot5Rules are EUR bills
+// sold in lots of two and five bonds (2,000 and 5,000 of face), so the
+// sizing meets a grid coarser than one unit.
 var (
 	usBillRules  = ibkrlib.BondOrderRules{MinTick: 0.0001, MinSize: 1, SizeIncrement: 1}
-	eurBillRules = ibkrlib.BondOrderRules{MinTick: 0.0001, MinSize: 1000, SizeIncrement: 1000}
+	eurLotRules  = ibkrlib.BondOrderRules{MinTick: 0.0001, MinSize: 2, SizeIncrement: 2}
+	eurLot5Rules = ibkrlib.BondOrderRules{MinTick: 0.0001, MinSize: 5, SizeIncrement: 5}
 )
 
 // An invest order is whole order units on the line's grid, priced at the
@@ -75,8 +77,8 @@ func TestCashSweepSizingOnTheBillsGrid(t *testing.T) {
 		{"USD below par", 55000, us, usBillRules, 99.6, 55},
 		{"USD above par", 55000, us, usBillRules, 100.5, 54},
 		{"USD odd amount", 55999.99, us, usBillRules, 99.6, 55},
-		{"EUR on the step", 55500, eur, eurBillRules, 99.8, 55000},
-		{"EUR above par", 55000, eur, eurBillRules, 100.2, 54000},
+		{"EUR on the step", 55500, eur, eurLotRules, 99.8, 54},
+		{"EUR above par", 56000, eur, eurLotRules, 100.2, 54},
 	} {
 		got, reason := cashSweepInvestUnits(tc.amount, tc.conv, tc.rules, tc.price, "USD")
 		cost := float64(got) * tc.conv.FacePerUnit * tc.price / 100
@@ -84,7 +86,7 @@ func TestCashSweepSizingOnTheBillsGrid(t *testing.T) {
 			t.Errorf("%s: units %d (%q), want %d", tc.name, got, reason, tc.want)
 		}
 	}
-	if units, reason := cashSweepInvestUnits(900, eur, eurBillRules, 99.8, "EUR"); units != 0 || !strings.Contains(reason, "minimum order of 1000") {
+	if units, reason := cashSweepInvestUnits(1500, eur, eurLotRules, 99.8, "EUR"); units != 0 || !strings.Contains(reason, "minimum order of 2 × face_1000 (2000 EUR of face)") {
 		t.Fatalf("below the minimum = %d %q", units, reason)
 	}
 	if units, _ := cashSweepInvestUnits(55000, us, ibkrlib.BondOrderRules{}, 99.6, "USD"); units != 0 {
@@ -95,14 +97,14 @@ func TestCashSweepSizingOnTheBillsGrid(t *testing.T) {
 		rules      ibkrlib.BondOrderRules
 		units      int
 	}{
-		{2011, 10000, eurBillRules, 3000},
-		{500, 10000, eurBillRules, 1000},
-		{20000, 10000, eurBillRules, 10000},
+		{3, 10, eurLotRules, 4},
+		{1, 10, eurLotRules, 2},
+		{20, 10, eurLotRules, 10},
 		{3, 10, usBillRules, 3},
 		{20, 10, usBillRules, 10},
-		{1500, 1500, eurBillRules, 1000},
-		{800, 800, eurBillRules, 0},
-		{2500, 2600, eurBillRules, 2000},
+		{3, 3, eurLotRules, 2},
+		{1, 1, eurLotRules, 0},
+		{6, 8, eurLot5Rules, 5},
 		{1, 0, usBillRules, 0},
 	} {
 		if got, reason := cashSweepRedeemUnits(tc.want, tc.held, tc.rules); got != tc.units || (got == 0) != (reason != "") {
@@ -141,13 +143,14 @@ func TestCashSweepBondSessions(t *testing.T) {
 	}
 }
 
-// eurRedeemInput holds 10,000 EUR of face in one Bubill (quantity 10,000,
-// worth 9,950) with cash 3,000 EUR against keep_cash 5,000.
-func eurRedeemInput(held float64) cashSweepInput {
+// eurRedeemInput holds one Bubill of the given EUR face, counted in bonds of
+// 1,000 face (10,000 of face is quantity 10, worth 9,950: 995 a unit), with
+// cash 3,000 EUR against keep_cash 5,000.
+func eurRedeemInput(face float64) cashSweepInput {
 	in := cashSweepTestInput(map[string]float64{"EUR": 3000})
 	in.Holdings["EUR"] = []cashSweepHolding{{
-		Row:        rpc.PositionView{Symbol: "SYNTHB", SecType: "BOND", ConID: 7401, Currency: "EUR", Quantity: held, MarketValue: held * 0.995},
-		Instrument: cashSweepInstrumentDEBubill, Maturity: cashSweepDay(cashSweepTestNow()).AddDate(0, 0, 60), FaceValue: held, MarketValue: held * 0.995,
+		Row:        rpc.PositionView{Symbol: "SYNTHB", SecType: "BOND", ConID: 7401, Currency: "EUR", Quantity: face / 1000, MarketValue: face * 0.995},
+		Instrument: cashSweepInstrumentDEBubill, Maturity: cashSweepDay(cashSweepTestNow()).AddDate(0, 0, 60), FaceValue: face, MarketValue: face * 0.995,
 	}}
 	return in
 }
@@ -159,7 +162,10 @@ func eurRedeemInput(held float64) cashSweepInput {
 func TestCashSweepRedemptionOnTheBillsGrid(t *testing.T) {
 	now := cashSweepTestNow()
 	policy := cashSweepTestPolicy(rpc.CashSweepModeActive, 1e9)
-	held := &fakeBillSource{heldLines: map[int][]ibkrlib.BondContractDetails{7401: {synthBondLine(7401, synthDEBill2, "EUR", cashSweepDay(now).AddDate(0, 0, 60))}}}
+	// The held line sells in lots of two bonds (2,000 of face).
+	line := synthBondLine(7401, synthDEBill2, "EUR", cashSweepDay(now).AddDate(0, 0, 60))
+	line.MinSize, line.SizeIncrement = 2, 2
+	held := &fakeBillSource{heldLines: map[int][]ibkrlib.BondContractDetails{7401: {line}}}
 	row := func(in cashSweepInput, src cashSweepBillSource) rpc.TradeProposal {
 		t.Helper()
 		plan, byCcy := planAndResolve(t, policy, in, src)
@@ -169,13 +175,13 @@ func TestCashSweepRedemptionOnTheBillsGrid(t *testing.T) {
 		}
 		return cashSweepRow(policy, rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, now, plan, eur)
 	}
-	// The gap of 2,000 at 0.995 a unit asks for 2,011; the grid sells 3,000.
+	// The gap of 2,000 at 995 a unit asks for 3 units; the grid sells 4.
 	p := row(eurRedeemInput(10000), held)
-	if p.Quantity != 3000 || p.MaxQuantity != 10000 || p.PositionEffect != rpc.OrderPositionEffectReduce || len(p.Blockers) != 0 || p.Contract.SecType != "BOND" ||
-		p.Contract.ConID != 7401 || p.CashSweep.Session == nil || !slices.ContainsFunc(p.Details, func(d string) bool { return strings.Contains(d, "rounded to 3000") }) {
+	if p.Quantity != 4 || p.MaxQuantity != 10 || p.PositionEffect != rpc.OrderPositionEffectReduce || len(p.Blockers) != 0 || p.Contract.SecType != "BOND" ||
+		p.Contract.ConID != 7401 || p.CashSweep.Session == nil || !slices.ContainsFunc(p.Details, func(d string) bool { return strings.Contains(d, "rounded to 4") }) {
 		t.Fatalf("redeem row = %d/%d %s blockers %+v details %v", p.Quantity, p.MaxQuantity, p.PositionEffect, p.Blockers, p.Details)
 	}
-	if !p.AutomaticEligible() || cashSweepOrderTerms(p) == nil || cashSweepOrderTerms(p).FacePerUnit != 1 {
+	if !p.AutomaticEligible() || cashSweepOrderTerms(p) == nil || cashSweepOrderTerms(p).FacePerUnit != 1000 {
 		t.Fatalf("redeem row is not an ordinary proposal: %+v", p.CashSweep)
 	}
 	// The held line is asked as its position's type first, then the bill's.
@@ -187,23 +193,24 @@ func TestCashSweepRedemptionOnTheBillsGrid(t *testing.T) {
 	if len(p.Blockers) != 1 || p.Blockers[0].Code != rpc.CashSweepBlockerBillRules || p.CashSweep.Session != nil {
 		t.Fatalf("unreadable line = %+v", p.Blockers)
 	}
-	// 1,500 held sells the 1,000 the grid allows; 800 held cannot be sold on
-	// a 1,000 grid at all.
-	if p = row(eurRedeemInput(1500), held); p.Quantity != 1000 || p.PositionEffect != rpc.OrderPositionEffectReduce || len(p.Blockers) != 0 {
+	// 3 units held sell the 2 the grid allows; 1 unit held cannot be sold on
+	// a grid of 2 at all.
+	if p = row(eurRedeemInput(3000), held); p.Quantity != 2 || p.PositionEffect != rpc.OrderPositionEffectReduce || len(p.Blockers) != 0 {
 		t.Fatalf("partial sale = %d %s %+v", p.Quantity, p.PositionEffect, p.Blockers)
 	}
-	p = row(eurRedeemInput(800), held)
+	p = row(eurRedeemInput(1000), held)
 	if len(p.Blockers) != 1 || p.Blockers[0].Code != rpc.CashSweepBlockerBelowMinimum || !strings.Contains(p.Blockers[0].Message, "size") {
 		t.Fatalf("off-grid close = %+v", p.Blockers)
 	}
-	// max_order_notional 1,500 (EUR base) holds the sale to 1,507 units at
-	// 0.995, which the grid rounds down to 1,000; the next cycle sells the
-	// rest.
-	capped := cashSweepTestPolicy(rpc.CashSweepModeActive, 1500)
+	// With keep_cash 10,000 the gap of 7,000 asks for 8 units; max_order_notional
+	// 3,500 (EUR base) holds the sale to 3 units at 995, which the grid
+	// rounds down to 2; the next cycle sells the rest.
+	capped := cashSweepTestPolicy(rpc.CashSweepModeActive, 3500)
+	setSweepCcy(capped.Cash.Sweep, "EUR", func(c *protectionCashSweepCurrency) { c.KeepCash = new(10000.0) })
 	plan, byCcy := planAndResolve(t, capped, eurRedeemInput(10000), held)
 	eur := byCcy["EUR"]
 	p = cashSweepRow(capped, rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, now, plan, eur)
-	if !eur.heldToCap || p.Quantity != 1000 || p.MaxQuantity != 1000 || !p.CashSweep.HeldToCap || !strings.Contains(eur.status.Reason, "next cycle sells the rest") {
+	if !eur.heldToCap || eur.quantity != 3 || p.Quantity != 2 || p.MaxQuantity != 2 || !p.CashSweep.HeldToCap || !strings.Contains(eur.status.Reason, "next cycle sells the rest") {
 		t.Fatalf("capped sale = %d %+v (%s)", p.Quantity, p.CashSweep, eur.status.Reason)
 	}
 	// A cap below one unit holds the currency.

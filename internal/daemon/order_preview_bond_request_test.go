@@ -81,6 +81,7 @@ func newBondRequestRig(t *testing.T) *bondRequestRig {
 func (r *bondRequestRig) line(id, ccy string, conID int) *ibkrlib.BondContractDetails {
 	line := synthBondLine(conID, id, ccy, cashSweepDay(r.now).AddDate(3, 0, 0))
 	line.SecType, line.Maturity, line.IssueDate = "BOND", "", ""
+	line.MinSize, line.SizeIncrement = 1000, 1000 // a EUR bond: 1,000 of face in steps of 1,000
 	if ccy == "USD" {
 		line.MinSize, line.SizeIncrement = 1, 1
 	}

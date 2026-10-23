@@ -32,7 +32,8 @@ func sweepRedemptionCapRig(t *testing.T, cap, limit float64, authority string) (
 	plan := cashSweepPlanFor(policy, in, rig.now)
 	cashSweepResolveBills(t.Context(), src, policy.Cash.Sweep, &plan, rig.now)
 	row := cashSweepRow(policy, rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, rig.now, plan, cashSweepCurrencyOf(t, plan, "EUR"))
-	if row.Quantity != 1000 || row.MaxQuantity != 1000 || len(row.Blockers) != 0 {
+	// 10 bonds of 1,000 EUR face held; the 1,500 cap holds the sale to one.
+	if row.Quantity != 1 || row.MaxQuantity != 1 || len(row.Blockers) != 0 {
 		t.Fatalf("fixture redemption = %d/%d blockers %v", row.Quantity, row.MaxQuantity, row.Blockers)
 	}
 	rig.server.orderBondDetailsForTest = func(context.Context, int, string) ([]ibkrlib.BondContractDetails, error) {
@@ -43,7 +44,7 @@ func sweepRedemptionCapRig(t *testing.T, cap, limit float64, authority string) (
 		return rpc.OrderQuoteSnapshot{Symbol: c.Symbol, Bid: &bid, Ask: &ask, DataType: rpc.MarketDataLive, PriceAt: rig.now, AsOf: rig.now}, nil
 	}
 	rig.server.orderPreviewPositionImpact = func(_ context.Context, _ rpc.ContractParams, _ string, qty int) (rpc.OrderPositionImpact, error) {
-		return rpc.OrderPositionImpact{Before: 10000, After: 10000 - float64(qty), Effect: rpc.OrderPositionEffectReduce}, nil
+		return rpc.OrderPositionImpact{Before: 10, After: 10 - float64(qty), Effect: rpc.OrderPositionEffectReduce}, nil
 	}
 	rig.server.orderFXRateForTest = func(context.Context, string, string, time.Duration) (float64, time.Time, error) {
 		return 1, rig.now, nil
@@ -59,7 +60,7 @@ func TestCashSweepRedemptionRequestedQuantityCannotWidenTheCappedTranche(t *test
 	for _, path := range []string{"preview", "prepare", "submit", "prepared-submit"} {
 		t.Run(path, func(t *testing.T) {
 			rig, row, broker := sweepRedemptionCapRig(t, 1500, 99.5, "")
-			params := rpc.TradeProposalPreviewParams{Key: row.Key, Revision: row.Revision, Quantity: 10000, FastPath: true}
+			params := rpc.TradeProposalPreviewParams{Key: row.Key, Revision: row.Revision, Quantity: 10, FastPath: true}
 			var preview *rpc.TradeProposalOrderPreview
 			switch path {
 			case "preview":
@@ -81,19 +82,19 @@ func TestCashSweepRedemptionRequestedQuantityCannotWidenTheCappedTranche(t *test
 					}
 				}
 			case "submit":
-				out, err := rig.engine.Submit(t.Context(), rpc.TradeProposalSubmitParams{Key: row.Key, Revision: row.Revision, Quantity: 10000, FastPath: true, Origin: rpc.OrderOriginHumanTTY})
+				out, err := rig.engine.Submit(t.Context(), rpc.TradeProposalSubmitParams{Key: row.Key, Revision: row.Revision, Quantity: 10, FastPath: true, Origin: rpc.OrderOriginHumanTTY})
 				if err != nil || !out.Accepted || broker.count() != 1 {
 					t.Fatalf("direct send: accepted %v blockers %v broker calls %d err %v", out.Accepted, out.Blockers, broker.count(), err)
 				}
 				preview = out.Preview
 			}
-			if preview == nil || preview.Draft.Quantity != 1000 || preview.Notional > 1500 {
+			if preview == nil || preview.Draft.Quantity != 1 || preview.Notional > 1500 {
 				t.Fatalf("requested quantity bypassed sweep cap: %+v", preview)
 			}
 			broker.mu.Lock()
 			defer broker.mu.Unlock()
 			for _, order := range broker.orders {
-				if order.TotalQty != 1000 || float64(order.TotalQty)*order.LmtPrice/100 > 1500 {
+				if order.TotalQty != 1 || float64(order.TotalQty)*1000*order.LmtPrice/100 > 1500 {
 					t.Fatalf("broker received an order above the tranche: %+v", order)
 				}
 			}

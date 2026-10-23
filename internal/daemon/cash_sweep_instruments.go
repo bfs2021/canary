@@ -41,11 +41,18 @@ type cashSweepInstrumentConvention struct {
 // cashSweepInstrumentConventions: assumptions to verify, never facts.
 //   - us_tbill: IBKR counts US Treasuries in bonds of 1,000 USD face and
 //     quotes them per 100 of face; they trade 08:00–17:00 New York time.
-//   - de_bubill, fr_btf, uk_tbill, ca_tbill: IBKR counts European, UK and
-//     Canadian government bills in face value of their currency (one unit
-//     is 1 of face) and quotes them per 100 of face; Bubills and BTFs trade
-//     09:00–17:30 Frankfurt and Paris time, UK bills 08:00–16:30 London,
-//     Canadian bills 08:00–17:00 Toronto.
+//   - de_bubill, fr_btf: IBKR counts EUR bills in bonds of 1,000 EUR face,
+//     as US bills, and quotes them per 100 of face. Proven 2026-10-23 for a
+//     Bubill (proof step 7): its line read min_size 1, and WhatIfs of 50,
+//     5,000 and 50,000 units moved the initial margin by 2.5% of units ×
+//     1,000 EUR; the face_1 assumption had drafted a 50,000 EUR sweep as
+//     50 million of face, which the unit and fee checks refused. A BTF
+//     follows the Bubill: the journal values a EUR bond at one unit.
+//     Bubills and BTFs trade 09:00–17:30 Frankfurt and Paris time.
+//   - uk_tbill, ca_tbill: IBKR counts UK and Canadian bills in face value
+//     of their currency (one unit is 1 of face), unproven, and quotes them
+//     per 100 of face; UK bills trade 08:00–16:30 London, Canadian bills
+//     08:00–17:00 Toronto.
 //   - every bill: the contract's own min_size, size_increment and min_tick
 //     bound an order, and its liquid hours (else trading hours) replace the
 //     assumed session.
@@ -58,10 +65,10 @@ var cashSweepInstrumentConventions = map[string]cashSweepInstrumentConvention{
 	cashSweepInstrumentUSTBill: {QuantityUnit: rpc.BondQuantityUnitFace1000, FacePerUnit: 1000, PriceConvention: rpc.BondPriceConventionPer100,
 		SecTypes:     []string{ibkrlib.SecTypeBill},
 		SessionLabel: "US Treasury bills", TimeZone: "America/New_York", Open: 800, Close: 1700},
-	cashSweepInstrumentDEBubill: {QuantityUnit: rpc.BondQuantityUnitFace1, FacePerUnit: 1, PriceConvention: rpc.BondPriceConventionPer100,
+	cashSweepInstrumentDEBubill: {QuantityUnit: rpc.BondQuantityUnitFace1000, FacePerUnit: 1000, PriceConvention: rpc.BondPriceConventionPer100,
 		SecTypes:     []string{ibkrlib.SecTypeBill, ibkrlib.SecTypeBond},
 		SessionLabel: "German Bubills", TimeZone: "Europe/Berlin", Open: 900, Close: 1730},
-	cashSweepInstrumentFRBTF: {QuantityUnit: rpc.BondQuantityUnitFace1, FacePerUnit: 1, PriceConvention: rpc.BondPriceConventionPer100,
+	cashSweepInstrumentFRBTF: {QuantityUnit: rpc.BondQuantityUnitFace1000, FacePerUnit: 1000, PriceConvention: rpc.BondPriceConventionPer100,
 		SecTypes:     []string{ibkrlib.SecTypeBill, ibkrlib.SecTypeBond},
 		SessionLabel: "French BTFs", TimeZone: "Europe/Paris", Open: 900, Close: 1730},
 	cashSweepInstrumentUKTBill: {QuantityUnit: rpc.BondQuantityUnitFace1, FacePerUnit: 1, PriceConvention: rpc.BondPriceConventionPer100,
@@ -119,19 +126,35 @@ func cashSweepIdentifierInstrument(idType, id string) string {
 	return ""
 }
 
-// cashSweepBondConvention is the convention of a BOND line in ccy that is
-// not known to be a vocabulary bill: a working order or a fill Canary's
-// journal holds for it. It assumes the currency's bill unit (A5), so a USD
-// bond counts 1,000 of face and a EUR, GBP or CAD bond 1; any other currency
+// cashSweepBondConvention is the convention of a bill or bond line in ccy
+// that is not known to be a vocabulary bill: a working order or a fill
+// Canary's journal holds for it, or a bond named by identifier. A BILL line
+// takes its currency's bill unit (USD and EUR 1,000 of face, proven; GBP and
+// CAD 1, assumed); any other line its currency's bond unit (A5): USD 1,000
+// of face, EUR, GBP and CAD 1, unproven for EUR bonds. Any other currency
 // has none and stays unvalued.
-func cashSweepBondConvention(ccy string) (cashSweepInstrumentConvention, bool) {
+func cashSweepBondConvention(secType, ccy string) (cashSweepInstrumentConvention, bool) {
 	for _, instrument := range slices.Sorted(maps.Keys(cashSweepBillCurrency)) {
-		if cashSweepBillCurrency[instrument] == normCcy(ccy) {
-			return cashSweepInstrumentConventions[instrument], true
+		if cashSweepBillCurrency[instrument] != normCcy(ccy) {
+			continue
 		}
+		conv := cashSweepInstrumentConventions[instrument]
+		if ibkrlib.BillOrBondSecType(secType) == ibkrlib.SecTypeBill {
+			return conv, true
+		}
+		face := cashSweepBondFacePerUnit[normCcy(ccy)]
+		conv.FacePerUnit, conv.QuantityUnit = face, rpc.BondQuantityUnitFace1
+		if face == 1000 {
+			conv.QuantityUnit = rpc.BondQuantityUnitFace1000
+		}
+		return conv, true
 	}
 	return cashSweepInstrumentConvention{}, false
 }
+
+// cashSweepBondFacePerUnit is a BOND line's face per order unit by currency
+// (A5): the bill unit before EUR bills were proven to count in thousands.
+var cashSweepBondFacePerUnit = map[string]float64{"USD": 1000, "EUR": 1, "GBP": 1, "CAD": 1}
 
 // cashSweepISINCountryInstrument maps an ISIN's issuer country to the bill
 // instrument of that country. It identifies an owner-listed ISIN's

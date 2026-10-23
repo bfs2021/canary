@@ -28,10 +28,6 @@ const (
 	synthGBBill   = "GB00ZZZZZZ11"
 )
 
-// synthBondLine is a zero-coupon line issued 91 days before it matures. Its
-// size rules follow the assumed units: one bond of 1,000 face for USD, 1,000
-// of face in steps of 1,000 elsewhere. A USD line is a Treasury bill, which
-// IBKR lists as BILL.
 // bondFetchOf adapts a test source that returns no lookup trace.
 func bondFetchOf(f func(context.Context, ibkrlib.BondContractRequest) ([]ibkrlib.BondContractDetails, error)) func(context.Context, ibkrlib.BondContractRequest) ([]ibkrlib.BondContractDetails, *ibkrlib.BondLookupTrace, error) {
 	return func(ctx context.Context, r ibkrlib.BondContractRequest) ([]ibkrlib.BondContractDetails, *ibkrlib.BondLookupTrace, error) {
@@ -40,12 +36,20 @@ func bondFetchOf(f func(context.Context, ibkrlib.BondContractRequest) ([]ibkrlib
 	}
 }
 
+// synthBondLine is a zero-coupon line issued 91 days before it matures. Its
+// size rules follow the units: one bond of 1,000 face for USD and EUR (a
+// Bubill's line reads min_size 1, proven 2026-10-23), 1,000 of face in steps
+// of 1,000 elsewhere. A USD line is a Treasury bill, which IBKR lists as
+// BILL; a EUR line is a Bubill or BTF resolved as BOND.
 func synthBondLine(conID int, id, ccy string, maturity time.Time) ibkrlib.BondContractDetails {
 	line := ibkrlib.BondContractDetails{ConID: conID, Symbol: "SYNTHB", SecType: "BOND", CUSIPField: id, Currency: ccy,
 		Maturity: maturity.Format("20060102"), IssueDate: maturity.AddDate(0, 0, -91).Format("20060102"), Exchange: "SMART",
 		MinTick: 0.0001, MinSize: 1000, SizeIncrement: 1000, Complete: true, SecIDs: map[string]string{}}
-	if ccy == "USD" {
+	switch ccy {
+	case "USD":
 		line.MinSize, line.SizeIncrement, line.SecType = 1, 1, "BILL"
+	case "EUR":
+		line.MinSize, line.SizeIncrement = 1, 1
 	}
 	if ibkrlib.ValidISIN(id) {
 		line.SecIDs["ISIN"] = id
@@ -245,8 +249,8 @@ func TestCashSweepClassifiesHeldBills(t *testing.T) {
 		Stocks: []rpc.PositionView{
 			{Symbol: "SYNTHB", SecType: "BOND", ConID: 901, Currency: "USD", Quantity: 5, MarketValue: 4950},
 			{Symbol: "SYNTHN", SecType: "BOND", ConID: 902, Currency: "USD", Quantity: 3, MarketValue: 3000},
-			{Symbol: "SYNTHD", SecType: "BOND", ConID: 903, Currency: "EUR", Quantity: 20000, MarketValue: 19800},
-			{Symbol: "SYNTHG", SecType: "BOND", ConID: 905, Currency: "EUR", Quantity: 1000, MarketValue: 990},
+			{Symbol: "SYNTHD", SecType: "BOND", ConID: 903, Currency: "EUR", Quantity: 20, MarketValue: 19800},
+			{Symbol: "SYNTHG", SecType: "BOND", ConID: 905, Currency: "EUR", Quantity: 1, MarketValue: 990},
 			{Symbol: "SYNTHU", SecType: "BOND", ConID: 904, Currency: "CAD", Quantity: 1000, MarketValue: 990},
 		},
 		Bonds: []rpc.PositionBond{
@@ -648,12 +652,12 @@ func TestCashSweepResolvesListedEURBills(t *testing.T) {
 	// Rung 1 targets 28 days: the French 60-day bill is nearest; the 300-day
 	// German bill is outside 28–182.
 	if eur.bill == nil || eur.bill.ISIN != synthFRBill || eur.bill.Instrument != cashSweepInstrumentFRBTF || eur.bill.Source != rpc.CashSweepBillSourcePolicyISINs ||
-		eur.bill.QuantityUnit != rpc.BondQuantityUnitFace1 {
+		eur.bill.QuantityUnit != rpc.BondQuantityUnitFace1000 {
 		t.Fatalf("EUR bill = %+v (%s)", eur.bill, eur.status.Reason)
 	}
 	row := cashSweepRow(policy, rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, now, cashSweepPlan{status: rpc.TradeProposalCashSweepStatus{Mode: rpc.CashSweepModeShadow, Shadow: true}}, eur)
 	if row.CashSweep.Instrument != cashSweepInstrumentFRBTF || row.Key != cashSweepKey("EUR", rpc.CashSweepSideInvest, cashSweepInstrumentDEBubill, 7202) ||
-		row.Quantity != 55000 || row.CashSweep.QuantityUnit != rpc.BondQuantityUnitFace1 {
+		row.Quantity != 55 || row.CashSweep.QuantityUnit != rpc.BondQuantityUnitFace1000 {
 		t.Fatalf("row instrument %s key %s", row.CashSweep.Instrument, row.Key)
 	}
 	if _, ok := cashSweepOpenException(row); !ok {
@@ -923,7 +927,7 @@ func TestMarketBondCheck(t *testing.T) {
 	}
 	bond := []string{"BOND"}
 	res := marketBondCheck(context.Background(), dir, "ISIN", synthDEBill, "EUR", bond, time.Second, now)
-	if !res.Resolved || !res.Quoted || res.Contract.ConID != 7501 || res.Contract.Class != rpc.BondClassBill || res.Contract.QuantityUnit != rpc.BondQuantityUnitFace1 ||
+	if !res.Resolved || !res.Quoted || res.Contract.ConID != 7501 || res.Contract.Class != rpc.BondClassBill || res.Contract.QuantityUnit != rpc.BondQuantityUnitFace1000 ||
 		*res.Contract.DaysToMaturity != 100 || *res.Quote.Ask != 99.4 || res.Reason != "" {
 		t.Fatalf("resolved = %+v / %+v", res, res.Contract)
 	}

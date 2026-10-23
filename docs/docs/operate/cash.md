@@ -321,9 +321,10 @@ attempt with IBKR's code and text when none finds a line, and `canary positions`
 lists held bills and bonds in their own section with class, maturity and
 currency.
 
-An order counts the bill's own unit: Canary assumes a US Treasury bill is
-bought in bonds of 1,000 USD face (`face_1000`) and a German, French, UK or
-Canadian bill in single units of face (`face_1`), priced per 100 of face.
+An order counts the bill's own unit: a US Treasury bill, German Bubill or
+French BTF is bought in bonds of 1,000 of face (`face_1000`; IBKR's own
+figures prove it for Bubills), and Canary assumes a UK or
+Canadian bill in single units of face (`face_1`), all priced per 100 of face.
 The buy is the planned cash at the higher of par and the quoted price, in
 whole units rounded down to the bill's minimum size and size step, so neither
 its face value nor its cost passes the free cash; a tranche too small for the

@@ -430,8 +430,8 @@ requirement refuses instead):
 | Instrument | IBKR secType, in order (A10) | Quantity unit | Face per unit | Price | Assumed session |
 |---|---|---|---|---|---|
 | `us_tbill` | BILL | `face_1000` | 1,000 USD | per 100 of face | 08:00–17:00 America/New_York |
-| `de_bubill` | BILL, then BOND | `face_1` | 1 EUR | per 100 of face | 09:00–17:30 Europe/Berlin |
-| `fr_btf` | BILL, then BOND | `face_1` | 1 EUR | per 100 of face | 09:00–17:30 Europe/Paris |
+| `de_bubill` | BILL, then BOND | `face_1000` (F5) | 1,000 EUR | per 100 of face | 09:00–17:30 Europe/Berlin |
+| `fr_btf` | BILL, then BOND | `face_1000` (F5) | 1,000 EUR | per 100 of face | 09:00–17:30 Europe/Paris |
 | `uk_tbill` | BILL, then BOND | `face_1` | 1 GBP | per 100 of face | 08:00–16:30 Europe/London |
 | `ca_tbill` | BILL, then BOND | `face_1` | 1 CAD | per 100 of face | 08:00–17:00 America/Toronto |
 | `etf` | — (STK) | `shares` | — | per share | its exchange calendar |
@@ -441,9 +441,11 @@ the instrument's. The invest row's contract, its preview draft and its order
 carry the type the line resolved as (`bill.sec_type`); a redemption carries
 the position's type.
 
-A working bond order or a bond fill in the journal is valued at its
-currency's bill convention (USD 1,000 face per unit, EUR, GBP and CAD 1), the
-same assumption; a bond in any other currency stays unvalued (unknown).
+A working bill or bond order, or such a fill, in the journal is valued at
+its currency's convention for its line type: a BILL line at the bill unit
+(USD and EUR 1,000 face per unit, GBP and CAD 1), a BOND line at the bond
+unit (USD 1,000, EUR, GBP and CAD 1, unproven for EUR bonds), the same
+assumption; any other currency stays unvalued (unknown).
 
 ### Post-install proof (read-only, one whatIf)
 
@@ -622,6 +624,21 @@ admits a currency's schedule when the stream is completely downloaded and its
 final balance is within one unit of the refresh's trade-date cash, uses its
 lowest balance as settled cash, and rechecks it against the fill frontier at
 planning. The BASE row is never a currency's settled cash.
+
+F5, proof step 7, EUR bill unit (2026-10-23 12:40 CEST). A5 is refuted for
+EUR bills. The live German Bubill line DE000BU0E378 (secType BILL) reads
+`min_size` 1 and `size_increment` 1, and three WhatIf previews (no order
+sent) of 50, 5,000 and 50,000 units moved the initial margin by 2.5% of
+units × 1,000 EUR each (ratio 25 to the order's value at `face_1`), with an
+equity-with-loan change matching a 50-million-face order. IBKR counts EUR
+bills in bonds of 1,000 EUR face, as US bills. Under `face_1` the first live
+sweep row drafted 50,000 units for 50,000 EUR of face: the unit check read
+`bill_unit_mismatch` and the fee check `cash_sweep_fees_unknown` (the
+WhatIf named no commission currency), so nothing could be sent. `de_bubill`
+and `fr_btf` now count `face_1000`; a BTF follows the Bubill unproven, and
+the unit check still refuses either way (a wrong 1,000 reads near 0.00003).
+EUR BOND lines named by identifier keep `face_1`, which this evidence does
+not reach.
 
 ## Phase B order path as built
 

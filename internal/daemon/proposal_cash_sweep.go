@@ -1356,7 +1356,7 @@ func cashSweepMultiplier(secType string, multiplier int, ccy string) (float64, b
 	case "STK", "STOCK", "ETF":
 		return 1, true
 	case "BOND", "BILL":
-		conv, ok := cashSweepBondConvention(ccy)
+		conv, ok := cashSweepBondConvention(secType, ccy)
 		if !ok || conv.FacePerUnit <= 0 {
 			return 0, false
 		}

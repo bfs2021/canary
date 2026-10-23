@@ -122,20 +122,20 @@ func TestBondFactsBTFSpreadFromBenchmarkRecord(t *testing.T) {
 	srv := bondFactsTestServer(t, now, map[int]ibkrlib.BondContractDetails{7601: btf, 7602: bubill, 7603: farBubill},
 		map[int]rpc.BondQuote{7601: bondFactsQuote(99.40, 99.41), 7602: bondFactsQuote(99.45, 99.45), 7603: bondFactsQuote(98.90, 98.90)})
 	bought := time.Date(2026, 9, 22, 9, 30, 0, 0, time.UTC)
-	if err := srv.orderJournal.AppendAll([]orderJournalEvent{bondFactsBuy(bought, 7002, 7601, "SYNTHB", "EUR", 40000, 99.32)}); err != nil {
+	if err := srv.orderJournal.AppendAll([]orderJournalEvent{bondFactsBuy(bought, 7002, 7601, "SYNTHB", "EUR", 40, 99.32)}); err != nil {
 		t.Fatal(err)
 	}
 	build := func() []rpc.PositionBond {
 		return []rpc.PositionBond{
-			{ConID: 7601, Symbol: "SYNTHB", Currency: "EUR", Class: rpc.BondClassBill, ISIN: synthFRBill, Maturity: today.AddDate(0, 0, 94).Format(time.DateOnly), Quantity: 40000, Mark: 99.40, MarketValue: 39760},
-			{ConID: 7602, Symbol: "SYNTHB", Currency: "EUR", Class: rpc.BondClassBill, ISIN: synthDEBill, Maturity: today.AddDate(0, 0, 100).Format(time.DateOnly), Quantity: 10000, Mark: 99.45, MarketValue: 9945},
-			{ConID: 7603, Symbol: "SYNTHB", Currency: "EUR", Class: rpc.BondClassBill, ISIN: synthDEBill2, Maturity: today.AddDate(0, 0, 200).Format(time.DateOnly), Quantity: 10000, Mark: 98.90, MarketValue: 9890},
+			{ConID: 7601, Symbol: "SYNTHB", Currency: "EUR", Class: rpc.BondClassBill, ISIN: synthFRBill, Maturity: today.AddDate(0, 0, 94).Format(time.DateOnly), Quantity: 40, Mark: 99.40, MarketValue: 39760},
+			{ConID: 7602, Symbol: "SYNTHB", Currency: "EUR", Class: rpc.BondClassBill, ISIN: synthDEBill, Maturity: today.AddDate(0, 0, 100).Format(time.DateOnly), Quantity: 10, Mark: 99.45, MarketValue: 9945},
+			{ConID: 7603, Symbol: "SYNTHB", Currency: "EUR", Class: rpc.BondClassBill, ISIN: synthDEBill2, Maturity: today.AddDate(0, 0, 200).Format(time.DateOnly), Quantity: 10, Mark: 98.90, MarketValue: 9890},
 		}
 	}
 	rows := []rpc.PositionView{
-		{ConID: 7601, SecType: "BILL", Currency: "EUR", Quantity: 40000, Mark: 99.40, MarketValue: 39760, UnrealizedPnL: 32},
-		{ConID: 7602, SecType: "BILL", Currency: "EUR", Quantity: 10000, Mark: 99.45, MarketValue: 9945, UnrealizedPnL: 5},
-		{ConID: 7603, SecType: "BILL", Currency: "EUR", Quantity: 10000, Mark: 98.90, MarketValue: 9890, UnrealizedPnL: 5},
+		{ConID: 7601, SecType: "BILL", Currency: "EUR", Quantity: 40, Mark: 99.40, MarketValue: 39760, UnrealizedPnL: 32},
+		{ConID: 7602, SecType: "BILL", Currency: "EUR", Quantity: 10, Mark: 99.45, MarketValue: 9945, UnrealizedPnL: 5},
+		{ConID: 7603, SecType: "BILL", Currency: "EUR", Quantity: 10, Mark: 98.90, MarketValue: 9890, UnrealizedPnL: 5},
 	}
 	bonds := build()
 	srv.fillBondFacts(context.Background(), bonds, rows, now)

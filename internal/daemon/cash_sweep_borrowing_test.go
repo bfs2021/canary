@@ -41,8 +41,8 @@ func TestCashSweepBorrowedUSDHoldsEURBuys(t *testing.T) {
 		!hasBlocker(eur.status.Blockers, rpc.CashSweepBlockerCurrencyBorrowed) {
 		t.Fatalf("EUR = %s %+v", eur.side, eur.status)
 	}
-	eur.bill = &rpc.TradeProposalCashSweepBill{Instrument: cashSweepInstrumentDEBubill, ConID: 77, SecType: "BILL", Maturity: "2026-12-30", QuantityUnit: rpc.BondQuantityUnitFace1, PriceConvention: rpc.BondPriceConventionPer100, QuoteFresh: true}
-	eur.units = 40000
+	eur.bill = &rpc.TradeProposalCashSweepBill{Instrument: cashSweepInstrumentDEBubill, ConID: 77, SecType: "BILL", Maturity: "2026-12-30", QuantityUnit: rpc.BondQuantityUnitFace1000, PriceConvention: rpc.BondPriceConventionPer100, QuoteFresh: true}
+	eur.units = 40 // bonds of 1,000 EUR face
 	row := cashSweepRow(policy, rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, now, plan, eur)
 	if row.State != rpc.TradeProposalStateBlocked || !hasBlocker(row.Blockers, rpc.CashSweepBlockerCurrencyBorrowed) || row.AutomaticEligible() {
 		t.Fatalf("row = %s %+v", row.State, row.Blockers)

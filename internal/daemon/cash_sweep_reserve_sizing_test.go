@@ -69,8 +69,8 @@ func TestCashSweepWorkedCheckBookOf200k(t *testing.T) {
 	if plan.status.MaxOrderNotionalBase == nil || *plan.status.MaxOrderNotionalBase != 50000 || plan.status.MinOrderNotionalBase != 20000 {
 		t.Fatalf("status caps = %v %v", plan.status.MaxOrderNotionalBase, plan.status.MinOrderNotionalBase)
 	}
-	eur.bill = &rpc.TradeProposalCashSweepBill{Instrument: cashSweepInstrumentDEBubill, ConID: 77, SecType: "BILL", Maturity: "2026-12-30", QuantityUnit: rpc.BondQuantityUnitFace1, PriceConvention: rpc.BondPriceConventionPer100}
-	eur.units = 40000
+	eur.bill = &rpc.TradeProposalCashSweepBill{Instrument: cashSweepInstrumentDEBubill, ConID: 77, SecType: "BILL", Maturity: "2026-12-30", QuantityUnit: rpc.BondQuantityUnitFace1000, PriceConvention: rpc.BondPriceConventionPer100}
+	eur.units = 40 // bonds of 1,000 EUR face
 	row := cashSweepRow(ownerSizedSweepPolicy(), rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, now, plan, eur)
 	s := row.CashSweep
 	if s.Sizing == nil || !near(s.Sizing.ReserveBase, 20000) || s.Sizing.ReserveBound != rpc.CashSweepReserveBoundPctNLV || s.MaxOrderNotionalBase != 50000 ||
@@ -220,7 +220,7 @@ func TestCashSweepRedemptionBelowMinimumRestoresReserve(t *testing.T) {
 	in := sizedSweepInput(200000, map[string]float64{"EUR": 12000})
 	in.Holdings["EUR"] = eurRedeemInput(50000).Holdings["EUR"]
 	eur := cashSweepCurrencyOf(t, cashSweepPlanFor(ownerSizedSweepPolicy(), in, cashSweepTestNow()), "EUR")
-	if eur.side != rpc.CashSweepSideRedeem || !near(eur.gap, 8000) || !near(eur.orderAmount, 8000) || eur.quantity != int(math.Ceil(8000/0.995)) ||
+	if eur.side != rpc.CashSweepSideRedeem || !near(eur.gap, 8000) || !near(eur.orderAmount, 8000) || eur.quantity != int(math.Ceil(8000/995.0)) ||
 		!strings.Contains(eur.status.Reason, "below the reserve") {
 		t.Fatalf("EUR = %s gap %v amount %v qty %d (%s)", eur.side, eur.gap, eur.orderAmount, eur.quantity, eur.status.Reason)
 	}
@@ -272,11 +272,11 @@ func TestCashSweepTradingCapExemptionBoundary(t *testing.T) {
 	}
 	bill := func(ccy, secType, instrument string, cap float64) rpc.OrderDraft {
 		return rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 30, Contract: rpc.ContractParams{ConID: 9, SecType: secType, Currency: ccy},
-			Bond: &rpc.OrderBondTerms{Instrument: instrument, QuantityUnit: rpc.BondQuantityUnitFace1, FacePerUnit: 1, PriceConvention: rpc.BondPriceConventionPer100, TradingCapExemptUpToBase: cap,
+			Bond: &rpc.OrderBondTerms{Instrument: instrument, QuantityUnit: rpc.BondQuantityUnitFace1000, FacePerUnit: 1000, PriceConvention: rpc.BondPriceConventionPer100, TradingCapExemptUpToBase: cap,
 				// A sweep bill buy carries its bill's maturity (cashSweepOrderTerms).
 				Maturity: "2027-03-15"}}
 	}
-	open := rpc.OrderPositionImpact{Before: 0, After: 30000, Effect: rpc.OrderPositionEffectOpen}
+	open := rpc.OrderPositionImpact{Before: 0, After: 30, Effect: rpc.OrderPositionEffectOpen}
 	sell := bill("EUR", "BILL", cashSweepInstrumentDEBubill, 50000)
 	sell.Action = rpc.OrderActionSell
 	stock := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 300, Contract: rpc.ContractParams{Symbol: "AAA", SecType: "STK", Currency: "EUR"}}
@@ -292,7 +292,7 @@ func TestCashSweepTradingCapExemptionBoundary(t *testing.T) {
 	}{
 		{"bill buy within the sweep cap", bill("EUR", "BILL", cashSweepInstrumentDEBubill, 50000), open, 30000, true},
 		{"bond-typed bill buy within the cap", bill("EUR", "BOND", cashSweepInstrumentFRBTF, 50000), open, 50000, true},
-		{"bill redemption within the cap", sell, rpc.OrderPositionImpact{Before: 50000, After: 20000, Effect: rpc.OrderPositionEffectReduce}, 30000, true},
+		{"bill redemption within the cap", sell, rpc.OrderPositionImpact{Before: 50, After: 20, Effect: rpc.OrderPositionEffectReduce}, 30000, true},
 		{"bill buy over the sweep cap", bill("EUR", "BILL", cashSweepInstrumentDEBubill, 50000), open, 50001, false},
 		{"bill buy without the policy exemption", bill("EUR", "BILL", cashSweepInstrumentDEBubill, 0), open, 30000, false},
 		{"unreadable NLV leaves no cap", bill("EUR", "BILL", cashSweepInstrumentDEBubill, math.NaN()), open, 30000, false},

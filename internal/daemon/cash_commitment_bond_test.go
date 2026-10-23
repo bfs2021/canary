@@ -151,8 +151,11 @@ func TestCashCommitmentBondRequiresExactDurableTerms(t *testing.T) {
 func TestCashCommitmentBondZeroCouponBillAndFeeIndependence(t *testing.T) {
 	scope, order, _, evidence := syntheticWorkingBondCommitment()
 	order.SecType, evidence.Events[0].SecType = "BILL", "BILL"
+	// A Bubill counts in bonds of 1,000 EUR face: 40,000 of face is 40 units.
+	order.TotalQuantity, order.Remaining, evidence.Events[0].Quantity = 40, 40, 40
 	bond := evidence.Events[0].Bond
 	bond.Instrument, bond.Coupon, bond.AccruedBound = cashSweepInstrumentDEBubill, nil, 0
+	bond.QuantityUnit, bond.FacePerUnit = rpc.BondQuantityUnitFace1000, 1000
 	orders := []ibkrlib.OrderLifecycleEvent{order}
 	sweep := cashSweepCommitmentsFrom(orders, nil, scope, evidence)
 	leveling, unknown := currencyLevelingCommitted(orders, nil, scope, evidence)

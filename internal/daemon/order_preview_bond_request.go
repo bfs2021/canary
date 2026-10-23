@@ -79,7 +79,7 @@ func validatePreviewBondRequest(p rpc.OrderPreviewParams, replace bool) (preview
 	case p.Strategy != "" && !strings.EqualFold(p.Strategy, rpc.OrderStrategyPatientLimit):
 		return previewBondRequest{}, errBadRequest("a bond order is priced as a patient limit")
 	}
-	if _, ok := cashSweepBondConvention(req.currency); !ok {
+	if _, ok := cashSweepBondConvention(req.secType, req.currency); !ok {
 		return previewBondRequest{}, errBadRequest(fmt.Sprintf("Canary knows the order unit of USD, EUR, GBP and CAD bonds only, not %s", req.currency))
 	}
 	return req, nil
@@ -124,7 +124,7 @@ func (s *Server) resolvePreviewBondRequest(ctx context.Context, authority *order
 	if err != nil {
 		return fail(fmt.Errorf("%w: %v", ErrTradingDisabled, err))
 	}
-	conv, _ := cashSweepBondConvention(req.currency)
+	conv, _ := cashSweepBondConvention(line.SecType, req.currency)
 	quantity, err := bondRequestQuantity(req, conv, rules)
 	if err != nil {
 		return fail(refusePreviewCode(previewBondOrderInvalidCode, errBadRequest(err.Error())))

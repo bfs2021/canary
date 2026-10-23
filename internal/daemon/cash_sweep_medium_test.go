@@ -24,9 +24,9 @@ func TestCashSweepMinimumIsAWholeBuyInBaseAndNeverHoldsARedemption(t *testing.T)
 		t.Fatal("10500 USD is below the EUR-equivalent whole-order floor")
 	}
 	eur := cashSweepCurrencyOf(t, plan, "EUR")
-	// keep_cash 5000 less cash 2000: a 3000 gap, sold as such, far below
-	// the 10000 minimum.
-	if eur.side != rpc.CashSweepSideRedeem || eur.orderAmount != 3000 || float64(eur.quantity)*0.995 > 3100 || float64(eur.quantity)*0.995 < 3000 {
+	// keep_cash 5000 less cash 2000: a 3000 gap, sold as such (the fewest
+	// bonds of 995 that cover it), far below the 10000 minimum.
+	if eur.side != rpc.CashSweepSideRedeem || eur.orderAmount != 3000 || float64(eur.quantity)*995 < 3000 || float64(eur.quantity-1)*995 >= 3000 {
 		t.Fatalf("a redemption was held to, or raised to, the minimum: %+v", eur)
 	}
 	prop, preview := sweepFeePreview(30000, 10000, 10)
