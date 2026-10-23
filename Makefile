@@ -304,7 +304,8 @@ build check test test-pkg test-support test-internal test-daemon test-daemon-def
 # waits for, and by hand before deleting a safety test (AGENTS.md).
 test: ## Full gate: check + render + pkg, support, and daemon/integration tests (-race), overlapped
 	@start=$$(date +%s); timing=$$(mktemp "$${TMPDIR:-/tmp}/canary-gate-timing.XXXXXX") || exit 1; \
-	GATE_TIMING_FILE="$$timing" $(MAKE) $(TEST_MAKEFLAGS) test-daemon check app-render-check test-pkg test-support; \
+	GATE_TIMING_FILE="$$timing" $(MAKE) $(TEST_MAKEFLAGS) test-daemon check app-render-check test-pkg test-support \
+		CHECK_DEPS='$(filter-out test-daemon-trading,$(CHECK_DEPS))'; \
 	status=$$?; $(LEG) --summary "$$timing" "$$start"; rm -f "$$timing"; exit $$status
 	$(call gate-stamp,test)
 
@@ -327,17 +328,23 @@ commit-check: check ## Compatibility alias for the canonical repository gate
 # that path here keeps analysis rooted at the product module.
 #
 # CHECK_DEPS gates the optional pieces of the check matrix. Default is the
-# full strict gate (plugin-check + parity-check). CI without the `claude`
-# CLI on PATH overrides with CHECK_DEPS=parity-check — the MCP↔CLI drift
-# gate (parity-check) is what we cannot skip; plugin-manifest validation
-# is recoverable because the schema is small and changes go through PR
-# review anyway.
-CHECK_DEPS ?= plugin-check parity-check
+# full strict gate (plugin-check + parity-check + the trading-build daemon
+# tests). CI without the `claude` CLI on PATH overrides with
+# CHECK_DEPS=parity-check — the MCP↔CLI drift gate (parity-check) is what we
+# cannot skip; plugin-manifest validation is recoverable because the schema
+# is small and changes go through PR review anyway, and CI runs
+# test-daemon-trading as its own job.
+#
+# test-daemon-trading is here because the trading build is the one installed
+# (GO_TAGS=trading): until 2026-10-23 this gate ran no daemon tests, and a
+# cash-sweep test still asserting a superseded decision passed it. `make test`
+# drops it from its check leg, since its test-daemon leg runs the same suite.
+CHECK_DEPS ?= plugin-check parity-check test-daemon-trading
 CHECK_JOBS ?= 8
 CHECK_TARGETS = $(CHECK_DEPS) agent-config-check reduction-metrics-check regression-spine-contract-check go-dependencies-check modernize-check docs-check docs-html-check changelog-check account-data-check product-identity-check release-packaging-check smoke-contract-check app-log-contract-check scheduled-monitor-check app-contract-check app-syntax-check app-browser-helper-check app-auth-check app-behavior-check app-service-worker-check remote-relay-check go-doc-check gofmt-check vet-check staticcheck-check govulncheck-check
 CHECK_TARGETS += build-space-contract-check timed-leg-contract-check
 CHECK_MAKEFLAGS = $(if $(filter 0,$(MAKELEVEL)),-j$(CHECK_JOBS),)
-check: ## agent config/hooks + Go docs/format/vet/staticcheck/vulns + modernize/plugin/parity/docs/changelog/account/app checks (binding pre-commit gate)
+check: ## agent config/hooks + Go docs/format/vet/staticcheck/vulns + modernize/plugin/parity/docs/changelog/account/app checks + trading-build daemon tests (binding pre-commit gate)
 	$(LEG) check $(MAKE) $(CHECK_MAKEFLAGS) $(CHECK_TARGETS)
 	$(call gate-stamp,check)
 
