@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The project adheres to 
 
 ## v3.27.2 — Unreleased
 
+### Added
+
+- Option buys are gated by premium at risk, not by the mandate's volatility budget (owner decision 2026-10-23 18:22 CEST). A buy that would take one name's premium at risk past `option_name_act_pct` of NLV (new Rulebook key, written into the policy file at 15 by the migration) or the book's past the premium budget's act level is refused as `mandate_premium`, naming the figure, the limit and the name; a buy within them passes, with the volatility verdict as the preview's warning. Stock and ETF additions keep the volatility gate. A short option opened to sell stays on the volatility gate.
+- `canary policy override --control mandate.vol_target_pct` lifts the volatility budget's additions gate for the owner's own orders until it expires; the maximum loss, the owner sleeve's stop, the order caps, the premium limits and the device confirmation still bind. `canary mandate` and Desk show the override, its reason and its expiry. The `[mandate]` keys are listed by `canary policy show --explain`; the others take no override.
+- `canary mandate` (and `canary_mandate`) carries the book's exposure through the greeks, per underlying and in total: net delta in money, the same through each name's beta, gamma per 1% move, theta a day, vega a point, each name's share of the risk and beta, and the premium at risk against its cap. A figure a leg cannot supply is absent with its reason, never zero.
+
 ### Fixed
 
 - Statement reconciliation keeps the day's last complete account reading. A reading taken just before midnight that caught a later price can no longer leave the day's statement uncomparable.

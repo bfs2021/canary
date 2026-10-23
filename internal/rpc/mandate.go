@@ -24,6 +24,13 @@ type MandateRiskParams struct {
 // risk over the budget.
 const MandateBudgetBlockerCode = "mandate_budget"
 
+// MandatePremiumBlockerCode is the blocker of an option addition the premium
+// limits refuse: the premium at risk on its name past option_name_act_pct
+// of NLV, or the book's past the premium budget's act level (owner decision
+// 2026-10-23 18:22 CEST: options add risk within premium limits, not within
+// the volatility budget).
+const MandatePremiumBlockerCode = "mandate_premium"
+
 // MandateRiskResult is the mandate.risk payload. Active is false, with
 // Message, while the constitution carries no [mandate] table; the verdict
 // is then absent and the gate inactive.
@@ -53,6 +60,76 @@ type MandateRiskResult struct {
 	// (internal-docs/design/strategy-register.md): one entry per machine
 	// strategy, the core first.
 	Register []MandateStrategyView `json:"register,omitempty"`
+	// Exposure is the book through the greeks and the premium at risk, per
+	// underlying and in total, read from the same positions as the verdict
+	// (owner decision 2026-10-23 18:22 CEST). Nil while no positions read is
+	// current.
+	Exposure *MandateExposureView `json:"exposure,omitempty"`
+}
+
+// MandateExposureView is the book's exposure for the operator to watch, never
+// a gate except the premium limits it also serves: per underlying and for the
+// book, net delta in money (stock-equivalent exposure), the same through each
+// name's beta to the index, gamma (the money change of delta per 1% move),
+// theta (money a day), vega (money per volatility point) and the premium at
+// risk against its caps. A figure that cannot be measured is absent, with the
+// reason, never zero.
+type MandateExposureView struct {
+	AsOf         time.Time `json:"as_of"`
+	BaseCurrency string    `json:"base_currency,omitempty"`
+	// NLVBase is the net liquidation value the premium caps are shares of;
+	// NLVReason says why it is absent.
+	NLVBase   *float64 `json:"nlv_base,omitempty"`
+	NLVReason string   `json:"nlv_reason,omitempty"`
+	// NamePremiumCapPct is option_name_act_pct; BookPremiumCapPct the premium
+	// budget's act level of the regime set in force (BookPremiumSet), and
+	// BookPremiumWatchPct its watch level, the budget for new buying.
+	NamePremiumCapPct   float64 `json:"name_premium_cap_pct"`
+	BookPremiumCapPct   float64 `json:"book_premium_cap_pct"`
+	BookPremiumWatchPct float64 `json:"book_premium_watch_pct"`
+	BookPremiumSet      string  `json:"book_premium_set,omitempty"`
+	// Book is the whole book's row; Names one row per underlying, largest
+	// delta exposure first.
+	Book  MandateExposureRow   `json:"book"`
+	Names []MandateExposureRow `json:"names,omitempty"`
+}
+
+// MandateExposureRow is one underlying's exposure, or the book's.
+type MandateExposureRow struct {
+	Underlying string `json:"underlying,omitempty"`
+	// Legs counts the positions in the row; Options the option legs among them.
+	Legs    int `json:"legs"`
+	Options int `json:"options"`
+	// ContributionPct is the row's share of the mandate's risk (Euler) and
+	// Beta its beta to the index, both from the verdict; absent while the
+	// verdict carries none (an unknown verdict, a name it does not price).
+	ContributionPct *float64 `json:"contribution_pct,omitempty"`
+	Beta            *float64 `json:"beta,omitempty"`
+	// DeltaBase is net delta in base currency: shares plus every option's
+	// delta × contracts × multiplier, times the spot. DeltaBetaBase is the
+	// same through the beta (index-equivalent exposure). GammaBase is the
+	// change of DeltaBase for a 1% move of the underlying; ThetaBase the
+	// money a day of time decay (negative costs); VegaBase the money per
+	// volatility point.
+	DeltaBase     *float64 `json:"delta_base,omitempty"`
+	DeltaBetaBase *float64 `json:"delta_beta_base,omitempty"`
+	GammaBase     *float64 `json:"gamma_base,omitempty"`
+	ThetaBase     *float64 `json:"theta_base,omitempty"`
+	VegaBase      *float64 `json:"vega_base,omitempty"`
+	// PremiumAtRiskBase is the premium at risk outside protection (the
+	// higher of price paid and value per long leg), PremiumPctNLV its share
+	// of NLV, PremiumCapBase the cap in money (the name's or the book's) and
+	// PremiumRoomBase what the cap still leaves; PremiumOver says the cap is
+	// reached. HedgePremiumBase is the protection premium left out.
+	PremiumAtRiskBase *float64 `json:"premium_at_risk_base,omitempty"`
+	PremiumPctNLV     *float64 `json:"premium_pct_nlv,omitempty"`
+	PremiumCapBase    *float64 `json:"premium_cap_base,omitempty"`
+	PremiumRoomBase   *float64 `json:"premium_room_base,omitempty"`
+	PremiumOver       bool     `json:"premium_over,omitempty"`
+	HedgePremiumBase  *float64 `json:"hedge_premium_base,omitempty"`
+	// Unknown names each absent figure with why: a leg without greeks or
+	// spot, a stale quote, no exchange rate, no verdict row.
+	Unknown []string `json:"unknown,omitempty"`
 }
 
 // MandateStrategyView is one register entry: as the policy writes it (rule,
@@ -187,9 +264,40 @@ type MandateSeriesEvidence struct {
 type MandateGateView struct {
 	// RefusesAdditions is true whenever the verdict is not within, is older
 	// than the gate accepts, or the owner's allocation is over (allocations, 2026-10-18):
-	// it reads the gate for the owner's additions.
+	// it reads the gate for the owner's stock and ETF additions.
 	RefusesAdditions bool   `json:"refuses_additions"`
 	Reason           string `json:"reason,omitempty"`
+	// Options reads the gate for the owner's option additions, which the
+	// premium limits gate (owner decision 2026-10-23 18:22 CEST).
+	Options *MandateOptionsGateView `json:"options,omitempty"`
+	// Override is the active one-shot override of the volatility budget's
+	// additions gate (mandate.vol_target_pct), nil without one. While it is
+	// active RefusesAdditions is false and Reason names it.
+	Override *MandateOverrideView `json:"override,omitempty"`
+}
+
+// MandateOptionsGateView is the additions gate as it reads for an option buy
+// now: refused while the book's premium at risk is at or over the premium
+// budget's act level, or while the premium or NLV cannot be measured; per
+// name the gate judges each order against option_name_act_pct (the
+// exposure view carries each name's room). Warning carries the volatility
+// verdict's words while the verdict is not within: an option buy passes
+// them with that warning.
+type MandateOptionsGateView struct {
+	RefusesAdditions bool   `json:"refuses_additions"`
+	Reason           string `json:"reason,omitempty"`
+	Warning          string `json:"warning,omitempty"`
+}
+
+// MandateOverrideView is an active override of the additions gate: who
+// granted it is the owner (overrides are human-only), when and why, and
+// when it expires.
+type MandateOverrideView struct {
+	ID        string    `json:"id"`
+	Control   string    `json:"control"`
+	Reason    string    `json:"reason"`
+	GrantedAt time.Time `json:"granted_at"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 // FetchMandateRisk reads the daemon's mandate verdict. The daemon evaluates

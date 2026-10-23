@@ -121,7 +121,11 @@ cap scales with the book. Implemented 2026-10-05 20:28 CEST.
    reasoned, bounded by `override.max_duration_hours`, journaled with the
    fingerprint and self-expiring; it carries no value, so its meaning is fixed
    to "the ceiling", which the file still bounds. No other `[order_limits]` key
-   accepts an override; changing them is a revision.
+   accepts an override; changing them is a revision. Since 2026-10-23 18:22
+   CEST (owner decision) `mandate.vol_target_pct` takes one the same way: it
+   lifts the mandate's volatility gate for the owner's own additions until
+   it expires (mandate-risk-budget.md, "Options, the override and the
+   exposure view"); no other `[mandate]` key does.
 7. **Migration.** `canary policy ensure` writes each missing key from
    `config.toml` `[trading]` as written (the compiled 10,000 / 10 / false /
    false where a key is absent; the contracts were 5 until the owner decision

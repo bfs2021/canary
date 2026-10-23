@@ -294,6 +294,9 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	res := &rpc.MandateRiskResult{AsOf: now, Active: true, Verdict: &verdict, Evidence: evidence,
 		PolicyFingerprint: &rpc.Fingerprint{Version: rpc.RiskConstitutionFingerprintVersion, Key: fp},
 		Policy:            mandatePolicyView(c.Mandate)}
+	if pos != nil && currentPortfolioAuthority(pos.Authority) {
+		res.Exposure = s.mandateExposure(pos, &verdict, base, now)
+	}
 	res.Gate = s.mandateGateView(res, now)
 	res.Register = mandateRegisterView(resolved)
 	res.StatusSince = s.mandateStatusSince(ctx, verdict.Status, now)
@@ -402,32 +405,53 @@ func (s *Server) mandateGateView(res *rpc.MandateRiskResult, now time.Time) *rpc
 		return &rpc.MandateGateView{}
 	}
 	if age := now.Sub(res.AsOf); age > mandateVerdictMaxAge {
-		return &rpc.MandateGateView{RefusesAdditions: true, Reason: fmt.Sprintf("the verdict is %s old; the gate trusts one up to %s", formatQuoteAge(age), mandateVerdictMaxAge)}
+		reason := fmt.Sprintf("the verdict is %s old; the gate trusts one up to %s", formatQuoteAge(age), mandateVerdictMaxAge)
+		return &rpc.MandateGateView{RefusesAdditions: true, Reason: reason, Options: &rpc.MandateOptionsGateView{RefusesAdditions: true, Reason: reason}}
 	}
 	ccy := res.Verdict.BaseCurrency
-	switch res.Verdict.Status {
+	view := mandateVolatilityGateView(res.Verdict, ccy)
+	// Option additions read the premium limits; the volatility verdict is
+	// their warning (owner decision 2026-10-23 18:22 CEST).
+	view.Options = mandateOptionsGateView(res, view)
+	// The owner's override lifts the volatility gate; the holds that bound a
+	// loss stay (mandate_options_gate.go).
+	if override := s.mandateAdditionsOverride(now); override != nil {
+		view.Override = override
+		if hard := mandateHardHolds(res.Verdict, mandate.SleeveOwner, ccy, ""); hard != nil {
+			view.RefusesAdditions, view.Reason = true, strings.TrimPrefix(hard.Message, "Mandate budget: ")
+		} else {
+			view.RefusesAdditions, view.Reason = false, mandateOverrideSentence(override, res.Verdict, ccy)
+		}
+	}
+	return view
+}
+
+// mandateVolatilityGateView reads the volatility budget's gate for the
+// owner's stock and ETF additions.
+func mandateVolatilityGateView(v *mandate.Verdict, ccy string) *rpc.MandateGateView {
+	switch v.Status {
 	case mandate.StatusWithin:
 	case mandate.StatusOver, mandate.StatusReduce:
 		// Over budget, your sleeve keeps adding while it is inside its own
 		// allocation (owner, 2026-10-18 15:31 CEST).
-		if why := mandateOverBudgetHolds(res.Verdict, mandate.SleeveOwner, ccy); why != "" {
-			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, ccy) + "; " + why}
+		if why := mandateOverBudgetHolds(v, mandate.SleeveOwner, ccy); why != "" {
+			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(v, ccy) + "; " + why}
 		}
-		if why := mandateOwnerStopHolds(res.Verdict, mandate.SleeveOwner, ccy); why != "" {
-			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, ccy) + "; " + why}
+		if why := mandateOwnerStopHolds(v, mandate.SleeveOwner, ccy); why != "" {
+			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(v, ccy) + "; " + why}
 		}
-		return &rpc.MandateGateView{Reason: mandateStatusSentence(res.Verdict, ccy) + ", but your sleeve is inside its allocation: an addition that keeps it there passes"}
+		return &rpc.MandateGateView{Reason: mandateStatusSentence(v, ccy) + ", but your sleeve is inside its allocation: an addition that keeps it there passes"}
 	default:
-		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(res.Verdict, ccy)}
+		return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateStatusSentence(v, ccy)}
 	}
 	// Your sleeve's own drawdown stop holds your additions while engaged.
-	if why := mandateOwnerStopHolds(res.Verdict, mandate.SleeveOwner, ccy); why != "" {
+	if why := mandateOwnerStopHolds(v, mandate.SleeveOwner, ccy); why != "" {
 		return &rpc.MandateGateView{RefusesAdditions: true, Reason: why}
 	}
 	// Within the budget, your additions still stop at your allocation.
-	if allocation, ok := res.Verdict.Allocation(mandate.SleeveOwner); ok {
+	if allocation, ok := v.Allocation(mandate.SleeveOwner); ok {
 		if over, alone := mandateSleeveOver(allocation); over {
-			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateAllocationOverSentence(mandate.SleeveOwner, allocation, mandateMachineAllocations(*res.Verdict), "", mandateSleeveUse(allocation, alone), alone, res.Verdict.BaseCurrency)}
+			return &rpc.MandateGateView{RefusesAdditions: true, Reason: mandateAllocationOverSentence(mandate.SleeveOwner, allocation, mandateMachineAllocations(*v), "", mandateSleeveUse(allocation, alone), alone, v.BaseCurrency)}
 		}
 	}
 	return &rpc.MandateGateView{}
@@ -501,11 +525,24 @@ func mandateBillBuy(draft rpc.OrderDraft) bool {
 // is refused unless a kept verdict no older than mandateVerdictMaxAge reads
 // within, and the order itself, re-evaluated on the same book, keeps the
 // risk inside the budget and its own sleeve inside its allocation (mandate_allocations.go).
-// Cheap by construction: the kept verdict and a simulation of milliseconds,
-// never a broker read.
+// An option buy is judged by the premium limits instead and reads the
+// volatility verdict as a warning (owner decision 2026-10-23 18:22 CEST,
+// mandate_options_gate.go); an active override of mandate.vol_target_pct
+// lifts the volatility gate for the owner's additions. Cheap by
+// construction: the kept verdict and a simulation of milliseconds, never a
+// broker read.
 func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPositionImpact) *rpc.TradingBlocker {
+	blocker, _ := s.mandateBudgetJudgement(draft, position)
+	return blocker
+}
+
+// mandateBudgetJudgement is the gate with the warning an order passes with:
+// the volatility verdict an option buy adds risk against, or the override
+// that lifts it. The preview carries the warning; admission and the wire
+// guard read the blocker alone.
+func (s *Server) mandateBudgetJudgement(draft rpc.OrderDraft, position rpc.OrderPositionImpact) (*rpc.TradingBlocker, *rpc.DataWarning) {
 	if s == nil || s.riskPolicies == nil || s.riskCapital == nil {
-		return nil
+		return nil, nil
 	}
 	const open = " Reductions, closes, cancels and hedges stay open."
 	const action = "Reduce or close instead, or wait for the verdict to read within; `canary mandate` has the measurement."
@@ -516,22 +553,22 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 	// sleeve's (mandate-risk-budget.md, "Placement": the two gate gaps).
 	if draft.RegisterEntry != "" {
 		if why := s.mandateEntryOrderRefusal(c, draft); why != "" {
-			return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + why + "." + open, Action: "Refresh proposals; a strategy sends only its own row."}
+			return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + why + "." + open, Action: "Refresh proposals; a strategy sends only its own row."}, nil
 		}
 	}
 	if !s.riskAddingOrder(draft, position) || mandateBillBuy(draft) {
-		return nil
+		return nil, nil
 	}
 	if !c.MandateActive() {
-		return nil
+		return nil, nil
 	}
 	now := s.nowUTC()
 	result, input, at, fp := s.mandateVerdicts.current()
 	if result == nil || result.Verdict == nil || input == nil || fp != c.FingerprintKey() {
-		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: no verdict has been measured for the policy in force yet; this order adds risk." + open, Action: action}
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: no verdict has been measured for the policy in force yet; this order adds risk." + open, Action: action}, nil
 	}
 	if age := now.Sub(at); age > mandateVerdictMaxAge {
-		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: fmt.Sprintf("Mandate budget: the verdict is %s old and cannot be shown current; this order adds risk.", formatQuoteAge(age)) + open, Action: action}
+		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: fmt.Sprintf("Mandate budget: the verdict is %s old and cannot be shown current; this order adds risk.", formatQuoteAge(age)) + open, Action: action}, nil
 	}
 	ccy := result.Verdict.BaseCurrency
 	// A live entry's line is the entry's to add to: a hand buy of it would
@@ -540,13 +577,53 @@ func (s *Server) mandateBudgetGate(draft rpc.OrderDraft, position rpc.OrderPosit
 	if draft.RegisterEntry == "" {
 		if why := s.mandateEntryLineRefusal(c, draft); why != "" {
 			return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: " + why + "." + open,
-				Action: "Let the strategy trade its line, or write its stage = \"suspended\" with a higher policy_version to trade it by hand."}
+				Action: "Let the strategy trade its line, or write its stage = \"suspended\" with a higher policy_version to trade it by hand."}, nil
 		}
 	}
 	// The order is placed by its origin, as the verdict places fills
 	// (strategy_placement.go): the core's contract is the core's whoever
 	// sends it, an entry's own row is the entry's, anything else the owner's.
 	sleeve, legID := mandateOrderPlacement(input.Allocations, draft, s.registerSleeveOf(c, draft.RegisterEntry))
+	// An option buy adds risk within the premium limits, never within the
+	// volatility budget (owner decision 2026-10-23 18:22 CEST): the premium
+	// gate refuses it, the holds that bound a loss (the maximum loss, the
+	// owner sleeve's stop) refuse it, and the volatility verdict is its
+	// warning.
+	option := mandateOptionAddition(draft)
+	if option {
+		if blocker := s.mandatePremiumGate(draft, result, input, ccy, open); blocker != nil {
+			return blocker, nil
+		}
+	}
+	// The owner's one-shot override of the volatility budget lifts the
+	// volatility gate for the owner's own additions (mandate_options_gate.go:
+	// what still binds). A machine sleeve's order never reads it.
+	override := s.mandateAdditionsOverride(now)
+	if override != nil && sleeve != mandate.SleeveOwner {
+		override = nil
+	}
+	if option || override != nil {
+		if blocker := mandateHardHolds(result.Verdict, sleeve, ccy, open); blocker != nil {
+			return blocker, nil
+		}
+		if override != nil {
+			return nil, mandateOverrideWarning(override, result.Verdict, ccy)
+		}
+	}
+	vol := s.mandateVolatilityGate(draft, position, result, input, sleeve, legID, now, ccy, open, action)
+	if vol == nil {
+		return nil, nil
+	}
+	if option {
+		return nil, mandateOptionWarning(vol)
+	}
+	return vol, nil
+}
+
+// mandateVolatilityGate judges a risk-adding order against the volatility
+// budget: the standing verdict, the book re-evaluated with the order, the
+// gap caps and the order's sleeve allocation.
+func (s *Server) mandateVolatilityGate(draft rpc.OrderDraft, position rpc.OrderPositionImpact, result *rpc.MandateRiskResult, input *mandate.Input, sleeve, legID string, now time.Time, ccy, open, action string) *rpc.TradingBlocker {
 	// A book over budget adds nothing, except in a sleeve inside its own risk
 	// allocation (owner, 2026-10-18 15:31 CEST: "yes, it should. unless you
 	// advise differently"): that sleeve keeps adding inside its allocation

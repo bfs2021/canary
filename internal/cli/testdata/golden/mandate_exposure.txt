@@ -1,0 +1,136 @@
+# canary mandate · COLUMNS=80 · colour off
+Mandate  REDUCE
+Since · Sat 5 Sep 12:58 TZ · 1h 02m
+Risk · 95,880 EUR a year · 1-day 6,040 EUR · 99% expected shortfall 16,480 EUR
+  · 299% of the budget 32,050 EUR
+Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
+  high-water mark 235,000 EUR
+Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
+  since 2026-09-01 −5,000 EUR
+Stock additions · open · your override of mandate.vol_target_pct lifts the
+                  volatility budget until 2026-09-05 10:00 UTC ("earnings week,
+                  adding by hand"); the verdict reads: the mandate risk 95,880
+                  EUR a year is over the budget 32,050 EUR (299%)
+Option buys · open within the premium limits · warning: the mandate risk 95,880
+              EUR a year is over the budget 32,050 EUR (299%); a gap in SYNA,
+              SYNB would lose more than the gap cap 22,940 EUR
+Override · mandate.vol_target_pct until 12:00:00 TZ · "earnings week, adding
+           by hand" · granted 12:00:00 TZ · ov-20260905-080000-1
+
+Risk allocations  each sleeve's use against its allocation, a year · alone: its own risk
+  Owner · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the
+  budget less the machine's allocations
+  Core · 0 EUR of 0 EUR · alone 0 EUR · the core runs in shadow: it serves its
+  target and sends no orders, so it reserves nothing (stage unwritten: shadow,
+  as before the register)
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy registered in the overlay
+  yet
+
+Exposure  net delta in money · through beta to SPY · gamma per 1% move · theta a day · vega a point · premium at risk against its cap · NLV 300,000 EUR
+  Book · delta 121,300 EUR · β-delta 126,204 EUR · gamma −310 EUR · theta −42
+         EUR · vega ? · premium 48,000 EUR (16.0% of NLV, cap 35%) · calm set
+  SYNA · 66.9% of the risk · beta 1.12 · delta 81,300 EUR · β-delta 91,056 EUR ·
+  gamma −310 EUR · theta −42 EUR · vega −180 EUR · premium 48,000 EUR (16.0% of
+  NLV, cap 15%) · AT CAP
+  SYNB · 33.1% of the risk · beta 0.64 · delta 40,000 EUR · β-delta 25,600 EUR ·
+  gamma 0 EUR · theta 0 EUR · vega ? · premium 0 EUR (0.0% of NLV, cap 15%)
+    SYNB 20261218 C 90: no vega from the broker's model
+  book: vega unknown for SYNB
+
+Contributions  share of the risk · beta to SPY · one-name gap against its cap
+  SYNA · 66.9% · beta 1.12 · gap −25% loses 88,400 EUR, +25% loses 24,800 EUR
+  (cap 22,940) · BREACH
+  SYNB · 33.1% · beta 0.64 · gap −25% loses 40,000 EUR (cap 22,940) · BREACH
+
+Positions
+  SYNA · 71.4% · 360,000 EUR
+  SYNB · 33.1% · 160,000 EUR
+  SYNA 20261218 110 C · −4.5% · −2,160 EUR
+
+Stresses
+  Index −10% through beta · loses 39,480 EUR
+  Gap cap per name · 22,940 EUR · breaches: SYNA, SYNB
+  Currency share of the risk · 11%
+Not modelled · SYNT (bill, no equity risk modelled)
+
+Evidence
+  Verdict · 14:00:00 TZ
+  Equity · 13:58:00 TZ
+  Positions · 13:59:00 TZ
+  Scenarios · 252 daily returns, 2025-09-05 to 2026-09-04
+  fx:USD · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
+The mandate refuses stock and ETF additions outside the volatility budget and
+  option buys outside the premium limits. Its reduction is a set of proposals
+  (canary proposals); the daemon places them itself only when mandate_reduction
+  is pre-authorised, after the veto window.
+# canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mMandate\x1b[0m  \x1b[31m\x1b[1mREDUCE\x1b[0m\x1b[0m
+Since · Sat 5 Sep 12:58 TZ · 1h 02m
+Risk · 95,880 EUR a year · 1-day 6,040 EUR · 99% expected shortfall 16,480 EUR
+  · 299% of the budget 32,050 EUR
+Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
+  high-water mark 235,000 EUR
+Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
+  since 2026-09-01 −5,000 EUR
+Stock additions · \x1b[32mopen · your override of mandate.vol_target_pct lifts the\x1b[0m
+                  \x1b[32mvolatility budget until 2026-09-05 10:00 UTC ("earnings week,\x1b[0m
+                  \x1b[32madding by hand"); the verdict reads: the mandate risk 95,880\x1b[0m
+                  \x1b[32mEUR a year is over the budget 32,050 EUR (299%)\x1b[0m
+Option buys · \x1b[33mopen within the premium limits · warning: the mandate risk 95,880\x1b[0m
+              \x1b[33mEUR a year is over the budget 32,050 EUR (299%); a gap in SYNA,\x1b[0m
+              \x1b[33mSYNB would lose more than the gap cap 22,940 EUR\x1b[0m
+Override · \x1b[33mmandate.vol_target_pct until 12:00:00 TZ · "earnings week, adding\x1b[0m
+           \x1b[33mby hand" · granted 12:00:00 TZ · ov-20260905-080000-1\x1b[0m
+
+\x1b[1mRisk allocations\x1b[0m  each sleeve's use against its allocation, a year · alone: its own risk
+  \x1b[31mOwner · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the\x1b[0m
+  \x1b[31mbudget less the machine's allocations\x1b[0m
+  Core · 0 EUR of 0 EUR · alone 0 EUR · the core runs in shadow: it serves its
+  target and sends no orders, so it reserves nothing (stage unwritten: shadow,
+  as before the register)
+  Overlay · 0 EUR of 0 EUR · alone 0 EUR · no strategy registered in the overlay
+  yet
+
+\x1b[1mExposure\x1b[0m  net delta in money · through beta to SPY · gamma per 1% move · theta a day · vega a point · premium at risk against its cap · NLV 300,000 EUR
+  Book · delta 121,300 EUR · β-delta 126,204 EUR · gamma −310 EUR · theta −42
+         EUR · vega ? · premium 48,000 EUR (16.0% of NLV, cap 35%) · calm set
+  \x1b[31mSYNA · 66.9% of the risk · beta 1.12 · delta 81,300 EUR · β-delta 91,056 EUR ·\x1b[0m
+  \x1b[31mgamma −310 EUR · theta −42 EUR · vega −180 EUR · premium 48,000 EUR (16.0% of\x1b[0m
+  \x1b[31mNLV, cap 15%) · AT CAP\x1b[0m
+  SYNB · 33.1% of the risk · beta 0.64 · delta 40,000 EUR · β-delta 25,600 EUR ·
+  gamma 0 EUR · theta 0 EUR · vega ? · premium 0 EUR (0.0% of NLV, cap 15%)
+    \x1b[33mSYNB 20261218 C 90: no vega from the broker's model\x1b[0m
+  \x1b[33mbook: vega unknown for SYNB\x1b[0m
+
+\x1b[1mContributions\x1b[0m  share of the risk · beta to SPY · one-name gap against its cap
+  \x1b[31mSYNA · 66.9% · beta 1.12 · gap −25% loses 88,400 EUR, +25% loses 24,800 EUR\x1b[0m
+  \x1b[31m(cap 22,940) · BREACH\x1b[0m
+  \x1b[31mSYNB · 33.1% · beta 0.64 · gap −25% loses 40,000 EUR (cap 22,940) · BREACH\x1b[0m
+
+\x1b[1mPositions\x1b[0m
+  SYNA · 71.4% · 360,000 EUR
+  SYNB · 33.1% · 160,000 EUR
+  SYNA 20261218 110 C · −4.5% · −2,160 EUR
+
+\x1b[1mStresses\x1b[0m
+  Index −10% through beta · loses 39,480 EUR
+  Gap cap per name · 22,940 EUR · breaches: SYNA, SYNB
+  Currency share of the risk · 11%
+Not modelled · SYNT (bill, no equity risk modelled)
+
+\x1b[1mEvidence\x1b[0m
+  Verdict · 14:00:00 TZ
+  Equity · 13:58:00 TZ
+  Positions · 13:59:00 TZ
+  Scenarios · 252 daily returns, 2025-09-05 to 2026-09-04
+  fx:USD · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
+  u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
+The mandate refuses stock and ETF additions outside the volatility budget and
+  option buys outside the premium limits. Its reduction is a set of proposals
+  (canary proposals); the daemon places them itself only when mandate_reduction
+  is pre-authorised, after the veto window.

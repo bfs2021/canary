@@ -7,8 +7,9 @@ Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
   high-water mark 235,000 EUR
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
-Additions · refused · your sleeve carries 23,970 EUR a year, over its allocation
-            19,230 EUR (the budget less the machine's allocations of 12,820 EUR)
+Stock additions · refused · your sleeve carries 23,970 EUR a year, over its
+                  allocation 19,230 EUR (the budget less the machine's
+                  allocations of 12,820 EUR)
 
 Risk allocations  each sleeve's use against its allocation, a year · alone: its own risk
   Owner · 23,970 EUR of 19,230 EUR · alone 23,970 EUR · OVER by 4,740 EUR · the
@@ -42,7 +43,8 @@ Evidence
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
-The mandate refuses risk-adding orders. Its reduction is a set of proposals
+The mandate refuses stock and ETF additions outside the volatility budget and
+  option buys outside the premium limits. Its reduction is a set of proposals
   (canary proposals); the daemon places them itself only when mandate_reduction
   is pre-authorised, after the veto window.
 # canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
@@ -54,8 +56,9 @@ Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
   high-water mark 235,000 EUR
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
-Additions · \x1b[31mrefused · your sleeve carries 23,970 EUR a year, over its allocation\x1b[0m
-            \x1b[31m19,230 EUR (the budget less the machine's allocations of 12,820 EUR)\x1b[0m
+Stock additions · \x1b[31mrefused · your sleeve carries 23,970 EUR a year, over its\x1b[0m
+                  \x1b[31mallocation 19,230 EUR (the budget less the machine's\x1b[0m
+                  \x1b[31mallocations of 12,820 EUR)\x1b[0m
 
 \x1b[1mRisk allocations\x1b[0m  each sleeve's use against its allocation, a year · alone: its own risk
   \x1b[31mOwner · 23,970 EUR of 19,230 EUR · alone 23,970 EUR · OVER by 4,740 EUR · the\x1b[0m
@@ -89,6 +92,7 @@ Not modelled · SYNT (bill, no equity risk modelled)
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
-The mandate refuses risk-adding orders. Its reduction is a set of proposals
+The mandate refuses stock and ETF additions outside the volatility budget and
+  option buys outside the premium limits. Its reduction is a set of proposals
   (canary proposals); the daemon places them itself only when mandate_reduction
   is pre-authorised, after the veto window.

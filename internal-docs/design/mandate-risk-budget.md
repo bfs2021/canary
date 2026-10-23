@@ -1,6 +1,7 @@
 # Mandate risk budget (ex-ante volatility budget and the additions gate)
 
-Updated: 2026-10-18 22:00 WEST (2026-10-18 23:00 CEST)
+Updated: 2026-10-23 19:30 CEST (options at the gate, the override and the
+exposure view, "Options, the override and the exposure view" below)
 Status: increment 1 implemented 2026-10-14 (measurement, verdict, additions
 gate); increment 2 implemented 2026-10-14 (forced reduction, below);
 increment 3 implemented 2026-10-18 (allocations, below); increment 4
@@ -1104,11 +1105,100 @@ place and order modify both bind through `bindPreviewOrderRiskAuthority`.
 This is stated here because the gate's placement inside `if
 binding.riskBound` was reviewed as the riskiest integration point.
 
+## Options, the override and the exposure view
+
+Owner decisions, verbatim in substance, 2026-10-23 18:22 CEST (the live book
+was at 940% of the volatility budget, every addition refused, while the
+option book's loss was bounded by its premium):
+
+1. **Options are gated by premium at risk, not by yearly volatility.** Per
+   name, the premium at risk on an underlying (every long option outside
+   protection on it, each leg the higher of price paid and today's value,
+   rule 2's figure) may be at most `option_name_act_pct` of NLV, a new
+   Rulebook key written into the owner's file at 15 by the rulebook
+   migration (`# Added by Canary vX at its default`, the struct comment
+   carrying the date). In total the premium budget's act level of the regime
+   set in force (rule 3, 35% in every set by default) applies as it does
+   today. An option buy that would breach either is refused with the figure,
+   the limit and the name (`mandate_premium`: "with this order the premium at
+   risk in SYNA would be 46,800 EUR, 15.6% of net liquidation 300,000 EUR,
+   over the 15.0% limit for one name (now 0.0%)"; "the book's premium at risk
+   would be 107,200 EUR, 35.7% of net liquidation 300,000 EUR, over the 35.0%
+   premium budget of the calm set (now 33.3%)"), and the action names the
+   room left. The order's premium is contracts × multiplier × limit in base
+   currency; without a limit, a rate or a current NLV it is refused, never
+   passed (nothing passes unmeasured). The gate reads the premium from the
+   exposure view the verdict was measured with (one measurement for the
+   page and the gate: `risk.PremiumAtRisk` over the rulebook's classified
+   names, `mandate_exposure.go`), so a verdict too old for the gate holds
+   option buys as it holds stock buys.
+2. **The volatility budget keeps gating stock and ETF additions.** For an
+   option buy its verdict, the 1-day 99% expected shortfall and the
+   beta-adjusted exposure are computed and shown as before, and the whole
+   volatility judgement (the standing verdict, the book re-evaluated with the
+   order, the gap caps, the sleeve allocation, a name without history) is
+   carried on the preview as a warning (`mandate_budget`, severity warning),
+   never a block (`mandateBudgetJudgement`). Two holds bound a loss rather
+   than a volatility and stay for every addition: at the maximum loss (no
+   room) nothing adds, and the owner sleeve's drawdown stop keeps its sleeve
+   reduce-only while engaged (`mandateHardHolds`). A short option opened to
+   sell is no option addition: its loss has no premium to bound it, so it
+   stays on the volatility gate as before. The gate view reads both:
+   `gate.refuses_additions` for stock and ETF additions, `gate.options` for
+   option buys (refused while the book's premium is at its cap or cannot be
+   measured; `warning` the volatility sentence a buy passes with).
+3. **A human-only override lifts the additions gate.** `canary policy
+   override --control mandate.vol_target_pct --reason TEXT --hours N` (the
+   existing mechanism: journaled, expiring, capped by
+   `override.max_duration_hours`) lifts the volatility budget's gate for the
+   owner's own additions until it expires. The `[mandate]` keys are
+   constitution limits once the table is written (`risk.mandateLimits`), so
+   the control is a known key; of them only `mandate.vol_target_pct` takes
+   an override (`risk.MandateAdditionsOverrideControl`), the others change
+   by a revision. What still bounds risk while it is active: the drawdown
+   brake and the no-room hold at the 30% maximum loss, the owner sleeve's
+   stop, every order cap, the premium limits above, the device confirmation
+   of every order, and the override's expiry. A machine sleeve's order never
+   reads it. `canary mandate` prints the override with its reason, grant and
+   expiry; `gate.override` carries it and Desk shows it on Risk › Mandate.
+   Desk never grants one: the owner does, in a terminal.
+4. **Exposure through the greeks, to watch, never to gate.** The verdict
+   carries `exposure` (`rpc.MandateExposureView`): per underlying and for the
+   book, net delta in money (shares plus delta × contracts × multiplier, at
+   the spot, in base currency), the same through the name's beta to SPY from
+   the verdict, gamma as the money change of that delta for a 1% move, theta
+   a day and vega a point as IBKR's model reports them per contract, the
+   name's share of the risk and beta, and the premium at risk against its cap
+   (the cap and the room in money, `premium_over` at the cap). A leg without
+   a greek, a spot or a rate, or with a stale quote, leaves that figure of
+   its name absent with the reason, and the book's total absent naming the
+   name; a verdict that prices no name leaves its share and beta absent. The
+   NLV the caps are shares of is the order limits' current account reading,
+   named when absent. Nothing here is zero for want of data.
+
+Verification (`internal/daemon/mandate_options_gate_test.go`; the earlier
+assertions that an option buy was refused by the gap cap and the budget,
+`TestMandateGateFailsClosedOnUnpricedOptions` and
+`TestMandateGateBoundsAnUnpricedOptionBuyByItsAllocation`, now assert the
+warning and the premium refusal; CLI golden `mandate_exposure`): on a book
+far over budget a stock buy is refused and a call buy inside the premium
+limits passes with the verdict as its warning, a put sold to open stays
+refused; thirteen contracts past the 15% name limit are refused naming the
+figures, twelve pass; the book's premium is capped at the set's 35% with the
+hedge put left out and named; the greeks sum per name and for the book, a
+missing vega or a stale quote leaves the figure absent with its reason; the
+override lifts the stock gate with its warning, the gate view names it, the
+other mandate keys take none, the no-room hold stands, and an expired
+override reads as none; the rulebook migration writes
+`option_name_act_pct = 15` with its provenance and keeps the policy in
+force.
+
 ## Exceptions And Change Control
 
 - Who may grant an exception: the owner, by revising `[mandate]` (raise D or
   the target, lower the reserve, move the start) with a higher
-  `policy_version`. No one-shot override control exists for this table.
+  `policy_version`, or by the one-shot override of `mandate.vol_target_pct`
+  (above, 2026-10-23), which lifts the additions gate alone and expires.
 - Required reason, scope, expiry, and audit record: the file edit and its
   fingerprint; the high-water mark advances and starts are journaled
   (`mandate_hwm_advanced`, `mandate_started`) with the fingerprint.
@@ -1182,6 +1272,10 @@ internal/rpc/mandate.go                mandate.risk method, result types, FetchM
 internal/daemon/mandate_capital.go     high-water mark, room, daily samples (inside the risk_capital document)
 internal/daemon/mandate_history.go     decision-grade daily closes, background refresh
 internal/daemon/mandate_verdict.go     evaluation cache, RPC handler, mandate_budget gate
+internal/daemon/mandate_options_gate.go the premium gate for option buys, the hard holds, the override (2026-10-23)
+internal/daemon/mandate_exposure.go    the exposure view: greeks and premium at risk per name and for the book
+internal/risk/premium_at_risk.go       premium at risk per leg, name and book (rule 3's figure)
+internal/risk/mandate_limits.go        the [mandate] keys as constitution limits; the override control
 internal/daemon/mandate_status.go      when the verdict's status last changed (status_since)
 internal/daemon/mandate_reduction.go   forced reduction: sizing, hold, release, rows
 internal/daemon/mandate_allocations.go       allocation plan and placement, the allocation check

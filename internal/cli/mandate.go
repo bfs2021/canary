@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,15 +135,10 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 		riskReadLine(env, "Risk base", mandateAmount(c.RiskBase, ccy)+" = equity "+mandateAmount(c.EquityBase, ccy)+" − tax reserve "+mandateAmount(c.TaxReserveBase, ccy), flows)
 	}
 	renderMandateOwnerStop(env, v.OwnerStop, ccy)
-	if res.Gate != nil {
-		if res.Gate.RefusesAdditions {
-			riskDisplayLine(env, "Additions · ", briefJoin("refused", res.Gate.Reason), env.red)
-		} else {
-			riskDisplayLine(env, "Additions · ", "open · reductions, closes, cancels and hedges always are", env.green)
-		}
-	}
+	renderMandateGate(env, res.Gate)
 	renderMandateReduction(env, res.Reduction, ccy)
 	renderMandateAllocations(env, v, ccy)
+	renderMandateExposure(env, res.Exposure, ccy)
 	renderMandateRegister(env, res.Register)
 	if len(v.Reasons) > 0 {
 		fmt.Fprintln(env.Stdout, "\n"+env.bold("Why unknown"))
@@ -219,7 +215,102 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 			}
 		}
 	}
-	riskReadLine(env, "", "The mandate refuses risk-adding orders. Its reduction is a set of proposals (canary proposals); the daemon places them itself only when mandate_reduction is pre-authorised, after the veto window.")
+	riskReadLine(env, "", "The mandate refuses stock and ETF additions outside the volatility budget and option buys outside the premium limits. Its reduction is a set of proposals (canary proposals); the daemon places them itself only when mandate_reduction is pre-authorised, after the veto window.")
+}
+
+// renderMandateGate prints the additions gate as it reads now: for stock
+// and ETF additions the volatility budget, for option buys the premium
+// limits with the volatility verdict as their warning, and an active
+// override of the volatility budget with its reason and expiry (owner
+// decision 2026-10-23 18:22 CEST).
+func renderMandateGate(env *Env, g *rpc.MandateGateView) {
+	if g == nil {
+		return
+	}
+	if g.RefusesAdditions {
+		riskDisplayLine(env, "Stock additions · ", briefJoin("refused", g.Reason), env.red)
+	} else {
+		riskDisplayLine(env, "Stock additions · ", briefJoin("open", nonEmpty(g.Reason, "reductions, closes, cancels and hedges always are")), env.green)
+	}
+	if o := g.Options; o != nil {
+		switch {
+		case o.RefusesAdditions:
+			riskDisplayLine(env, "Option buys · ", briefJoin("refused by the premium limits", o.Reason), env.red)
+		case o.Warning != "":
+			riskDisplayLine(env, "Option buys · ", briefJoin("open within the premium limits", "warning: "+o.Warning), env.yellow)
+		default:
+			riskDisplayLine(env, "Option buys · ", "open within the premium limits (per name and for the book)", env.green)
+		}
+	}
+	if o := g.Override; o != nil {
+		riskDisplayLine(env, "Override · ", briefJoin(o.Control+" until "+formatTimeShort(o.ExpiresAt.Local()), fmt.Sprintf("%q", o.Reason), "granted "+formatTimeShort(o.GrantedAt.Local()), o.ID), env.yellow)
+	}
+}
+
+// renderMandateExposure prints the book through the greeks and the premium
+// at risk against its caps: the book's totals, then one row per underlying.
+// An absent figure prints as "?" and the reasons follow the rows.
+func renderMandateExposure(env *Env, e *rpc.MandateExposureView, ccy string) {
+	if e == nil {
+		return
+	}
+	figure := func(v *float64) string {
+		if v == nil {
+			return "?"
+		}
+		return mandateAmount(*v, ccy)
+	}
+	premium := func(r rpc.MandateExposureRow, capPct float64) string {
+		if r.PremiumAtRiskBase == nil {
+			return "premium ?"
+		}
+		out := "premium " + mandateAmount(*r.PremiumAtRiskBase, ccy)
+		if r.PremiumPctNLV != nil {
+			out += fmt.Sprintf(" (%.1f%% of NLV, cap %s%%)", *r.PremiumPctNLV, strconv.FormatFloat(capPct, 'f', -1, 64))
+		}
+		if r.PremiumOver {
+			out += " · AT CAP"
+		}
+		return out
+	}
+	nlv := "NLV unknown"
+	if e.NLVBase != nil {
+		nlv = "NLV " + mandateAmount(*e.NLVBase, ccy)
+	} else if e.NLVReason != "" {
+		nlv += " (" + e.NLVReason + ")"
+	}
+	fmt.Fprintln(env.Stdout, "\n"+env.bold("Exposure")+"  net delta in money · through beta to "+mandate.IndexSymbol+" · gamma per 1% move · theta a day · vega a point · premium at risk against its cap · "+nlv)
+	book := e.Book
+	riskDisplayLine(env, "  Book · ", briefJoin("delta "+figure(book.DeltaBase), "β-delta "+figure(book.DeltaBetaBase), "gamma "+figure(book.GammaBase), "theta "+figure(book.ThetaBase), "vega "+figure(book.VegaBase), premium(book, e.BookPremiumCapPct)+nonEmptyPrefix(" · ", e.BookPremiumSet, " set")), nil)
+	for _, r := range e.Names {
+		share := ""
+		if r.ContributionPct != nil {
+			share = mandateShare(*r.ContributionPct) + " of the risk"
+		}
+		beta := ""
+		if r.Beta != nil {
+			beta = fmt.Sprintf("beta %.2f", *r.Beta)
+		}
+		style := func(s string) string { return s }
+		if r.PremiumOver {
+			style = env.red
+		}
+		riskDisplayLine(env, "  ", briefJoin(r.Underlying, share, beta, "delta "+figure(r.DeltaBase), "β-delta "+figure(r.DeltaBetaBase), "gamma "+figure(r.GammaBase), "theta "+figure(r.ThetaBase), "vega "+figure(r.VegaBase), premium(r, e.NamePremiumCapPct)), style)
+		for _, why := range r.Unknown {
+			riskDisplayLine(env, "    ", why, env.yellow)
+		}
+	}
+	for _, why := range book.Unknown {
+		riskDisplayLine(env, "  ", "book: "+why, env.yellow)
+	}
+}
+
+// nonEmptyPrefix wraps a value in its prefix and suffix, or prints nothing.
+func nonEmptyPrefix(prefix, value, suffix string) string {
+	if value == "" {
+		return ""
+	}
+	return prefix + value + suffix
 }
 
 // renderMandateOwnerStop prints the owner sleeve's drawdown stop

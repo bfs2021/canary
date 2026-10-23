@@ -590,8 +590,9 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	if brake != nil {
 		return nil, refusePreview(errBadRequest(brake.Message), *brake)
 	}
-	if blocker := s.mandateBudgetGate(draft, position); blocker != nil {
-		return nil, refusePreview(errBadRequest(blocker.Message), *blocker)
+	mandateBlocker, mandateWarning := s.mandateBudgetJudgement(draft, position)
+	if mandateBlocker != nil {
+		return nil, refusePreview(errBadRequest(mandateBlocker.Message), *mandateBlocker)
 	}
 	var whatIf rpc.OrderWhatIfResult
 	if scope == rpc.OrderTokenScopeModify {
@@ -717,6 +718,9 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	}
 	warnings = append(warnings, rulebookPreviewWarnings(s.rulesForPreview(ctx), draft, position)...)
 	warnings = append(warnings, brakeWarnings...)
+	if mandateWarning != nil {
+		warnings = append(warnings, *mandateWarning)
+	}
 	tokenMinted := token != "" && tokenID != ""
 	submitEligible := tokenMinted && whatIf.Status == rpc.OrderWhatIfStatusAccepted && !whatIf.RequiredForSubmit
 

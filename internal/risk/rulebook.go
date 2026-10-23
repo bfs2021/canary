@@ -823,33 +823,21 @@ func (c *ruleContext) premiumBudget() RuleRow {
 				continue
 			}
 			longLegs++
-			substituted := l.MarketValueBaseSource == MarketValueBaseSourceSubstituted
-			// The same per-leg figure as rule 2: a losing leg counts at the
-			// price paid, a gaining leg at its value.
-			atRisk, note := math.Abs(l.MarketValueBase), ""
-			if l.CostBasisBase != nil && *l.CostBasisBase > atRisk {
-				atRisk, note = *l.CostBasisBase, "counted at the price paid, above today's value"
-			}
+			// The same per-leg figure as rule 2 and the premium gate
+			// (PremiumAtRiskLeg): a losing leg counts at the price paid, a
+			// gaining leg at its value. A substituted base value is wrong by
+			// the exchange rate, and a leg with neither a cost nor a value
+			// is simply not known: zero would be a quiet pass.
+			atRisk, note, ok, why := PremiumAtRiskLeg(l)
 			// Protection is outside the budget whatever its base value.
 			if rule12HedgeLeg(l) {
-				if !substituted {
+				if ok {
 					hedgeTotal += atRisk
 				}
 				continue
 			}
-			// A substituted base value is wrong by the exchange rate, so the
-			// materiality floor cannot be judged on it either (rule 4's
-			// guard): the leg is unmeasured whatever its raw size.
-			if substituted {
-				unmeasured = append(unmeasured, RuleOffender{Symbol: n.Symbol, Leg: l.Desc, Status: RuleStatusUnknown,
-					Note: "premium not convertible to base — no FX rate for the leg's currency"})
-				continue
-			}
-			// Without a cost and without a value the leg's premium is simply
-			// not known; zero would be a quiet pass.
-			if l.CostBasisBase == nil && l.MarketValueBase == 0 {
-				unmeasured = append(unmeasured, RuleOffender{Symbol: n.Symbol, Leg: l.Desc, Status: RuleStatusUnknown,
-					Note: "neither the price paid nor a current value is known"})
+			if !ok {
+				unmeasured = append(unmeasured, RuleOffender{Symbol: n.Symbol, Leg: l.Desc, Status: RuleStatusUnknown, Note: why})
 				continue
 			}
 			total += atRisk

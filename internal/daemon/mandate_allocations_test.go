@@ -195,31 +195,18 @@ func TestMandateGatePlacesTheCoreFundWithTheCore(t *testing.T) {
 	}
 }
 
-// An option buy the evaluator cannot price is judged against its sleeve by
-// the sleeve's own risk plus the volatility-free bound: a squeeze the whole
-// budget would admit is refused once the owner's allocation is smaller.
+// An option buy the evaluator cannot price was once bounded by its sleeve's
+// allocation; since the owner's decision of 2026-10-23 18:22 CEST it is
+// judged by the premium limits, and the allocation bound is its warning:
+// the owner's allocation, smaller than the budget once the core runs, is
+// named on the preview, and the per-name premium cap refuses the buy.
 func TestMandateGateBoundsAnUnpricedOptionBuyByItsAllocation(t *testing.T) {
 	c := testCoreConstitution()
-	c.Mandate.Core.Stage = risk.StageShadow
+	c.Mandate.Core.Stage = risk.StageLive
 	srv, _ := mandateTestServer(t, c)
 	seedMandateHistory(t, srv, 0)
 	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(100), nil }
-	option := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 1, LimitPrice: 40, Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "OPT", Currency: "USD", Right: "C", Strike: 50, Expiry: "20270115", Multiplier: 100}}
-	srv.evaluateMandate(t.Context(), false)
-	// The largest count the whole book admits with the core running nothing.
-	most := 0
-	for q := 1; q <= 12; q++ {
-		option.Quantity = q
-		if srv.mandateBudgetGate(option, mandateOpen) != nil {
-			break
-		}
-		most = q
-	}
-	if most == 0 {
-		t.Fatal("fixture: no unpriced option buy fits the whole book")
-	}
-	option.Quantity = most
-	c.Mandate.Core.Stage = risk.StageLive
+	option := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 12, LimitPrice: 40, Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "OPT", Currency: "USD", Right: "C", Strike: 50, Expiry: "20270115", Multiplier: 100}}
 	res := srv.evaluateMandate(t.Context(), false)
 	owner, _ := res.Verdict.Allocation(mandate.SleeveOwner)
 	_, kept, _, _ := srv.mandateVerdicts.current()
@@ -227,16 +214,21 @@ func TestMandateGateBoundsAnUnpricedOptionBuyByItsAllocation(t *testing.T) {
 	if why != "" {
 		t.Fatal(why)
 	}
-	worst := owner.StandaloneBase + b.riskAnnual - res.Verdict.Risk.SDAnnualBase
-	blocker := srv.mandateBudgetGate(option, mandateOpen)
-	switch {
-	case worst > owner.AllocationBase && (blocker == nil || !strings.Contains(blocker.Message, "your sleeve could carry")):
-		t.Fatalf("%d contracts bound at %.0f over the owner's allocation %.0f: %+v", most, worst, owner.AllocationBase, blocker)
-	case worst <= owner.AllocationBase && blocker != nil:
-		t.Fatalf("%d contracts bound at %.0f inside the owner's allocation %.0f: %+v", most, worst, owner.AllocationBase, blocker)
-	}
-	if worst <= owner.AllocationBase {
+	if worst := owner.StandaloneBase + b.riskAnnual - res.Verdict.Risk.SDAnnualBase; worst <= owner.AllocationBase {
 		t.Fatalf("fixture: the allocation does not bind (%.0f of %.0f); the test proves nothing", worst, owner.AllocationBase)
+	}
+	// Twelve contracts at 40 USD: 43,200 EUR of premium, 14.4% of the
+	// 300,000 EUR net liquidation, inside the 15% per-name limit: the buy
+	// passes, and the allocation bound is its warning.
+	blocker, warning := srv.mandateBudgetJudgement(option, mandateOpen)
+	if blocker != nil || warning == nil || !strings.Contains(warning.Message, "could") || !strings.Contains(warning.Message, "premium limits") {
+		t.Fatalf("twelve contracts: blocker %+v warning %+v", blocker, warning)
+	}
+	// Thirteen: 46,800 EUR, 15.6%, over the limit for one name.
+	option.Quantity = 13
+	blocker, warning = srv.mandateBudgetJudgement(option, mandateOpen)
+	if blocker == nil || blocker.Code != rpc.MandatePremiumBlockerCode || warning != nil || !strings.Contains(blocker.Message, "premium at risk in SYNA would be 46,800 EUR, 15.6% of net liquidation 300,000 EUR, over the 15.0% limit for one name") {
+		t.Fatalf("thirteen contracts: blocker %+v warning %+v", blocker, warning)
 	}
 }
 

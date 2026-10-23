@@ -11,9 +11,9 @@ Owner sleeve · STOP ENGAGED since Sat 5 Sep 13:30 TZ · 27% below its
                high-water mark 240,000 EUR · stop 25%, releases under 20% ·
                reduce-only to 15,600 EUR a year, half its risk 31,200 EUR at the
                stop · risk now 23,970 EUR
-Additions · refused · your sleeve is 27% below its high-water mark 240,000 EUR,
-            past its 25% stop; the sleeve is reduce-only until its drawdown is
-            back under 20%, 5 points under the stop
+Stock additions · refused · your sleeve is 27% below its high-water mark 240,000
+                  EUR, past its 25% stop; the sleeve is reduce-only until its
+                  drawdown is back under 20%, 5 points under the stop
 Reduction · reducing · 1 row, pre-authorised: the daemon places 1 after the veto
             window, the last at 14:28:00 TZ
   1. sell 300 SYNA · owner sleeve stop · 71.4% of the risk · places itself at
@@ -51,7 +51,8 @@ Evidence
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
-The mandate refuses risk-adding orders. Its reduction is a set of proposals
+The mandate refuses stock and ETF additions outside the volatility budget and
+  option buys outside the premium limits. Its reduction is a set of proposals
   (canary proposals); the daemon places them itself only when mandate_reduction
   is pre-authorised, after the veto window.
 # canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
@@ -67,9 +68,9 @@ Owner sleeve · \x1b[31mSTOP ENGAGED since Sat 5 Sep 13:30 TZ · 27% below its\x
                \x1b[31mhigh-water mark 240,000 EUR · stop 25%, releases under 20% ·\x1b[0m
                \x1b[31mreduce-only to 15,600 EUR a year, half its risk 31,200 EUR at the\x1b[0m
                \x1b[31mstop · risk now 23,970 EUR\x1b[0m
-Additions · \x1b[31mrefused · your sleeve is 27% below its high-water mark 240,000 EUR,\x1b[0m
-            \x1b[31mpast its 25% stop; the sleeve is reduce-only until its drawdown is\x1b[0m
-            \x1b[31mback under 20%, 5 points under the stop\x1b[0m
+Stock additions · \x1b[31mrefused · your sleeve is 27% below its high-water mark 240,000\x1b[0m
+                  \x1b[31mEUR, past its 25% stop; the sleeve is reduce-only until its\x1b[0m
+                  \x1b[31mdrawdown is back under 20%, 5 points under the stop\x1b[0m
 Reduction · \x1b[33mreducing · 1 row, pre-authorised: the daemon places 1 after the veto\x1b[0m
             \x1b[33mwindow, the last at 14:28:00 TZ\x1b[0m
   1. sell 300 SYNA · owner sleeve stop · 71.4% of the risk · places itself at
@@ -107,6 +108,7 @@ Not modelled · SYNT (bill, no equity risk modelled)
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
-The mandate refuses risk-adding orders. Its reduction is a set of proposals
+The mandate refuses stock and ETF additions outside the volatility budget and
+  option buys outside the premium limits. Its reduction is a set of proposals
   (canary proposals); the daemon places them itself only when mandate_reduction
   is pre-authorised, after the veto window.

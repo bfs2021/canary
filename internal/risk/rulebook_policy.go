@@ -95,6 +95,8 @@ type RulebookPolicy struct {
 	OptionLineWatchPct float64 `toml:"option_line_watch_pct" json:"option_line_watch_pct"`
 	// OptionLineActPct acts at or above this long-option premium at risk as a percent of NLV. It also supplies the budget governor's per-line limit under basis = rulebook.
 	OptionLineActPct float64 `toml:"option_line_act_pct" json:"option_line_act_pct"`
+	// OptionNameActPct caps the premium at risk on one underlying, every long option outside protection on it summed (the higher of price paid and current value, as rule 2 measures a line), as a percent of NLV. An option buy that would take the name past it is refused at every order gate; the premium budget's act level caps the book the same way. Owner decision 2026-10-23 18:22 CEST: options add risk within premium limits, not within the mandate's volatility budget.
+	OptionNameActPct float64 `toml:"option_name_act_pct" json:"option_name_act_pct"`
 	// HedgeLineWatchPct watches at or above this protection option's premium at risk as a percent of NLV. Rule 12 separately measures total hedge size.
 	HedgeLineWatchPct float64 `toml:"hedge_line_watch_pct" json:"hedge_line_watch_pct"`
 	// HedgeLineActPct acts at or above this protection option's premium at risk as a percent of NLV.
@@ -189,22 +191,26 @@ func DefaultRulebookPolicy() RulebookPolicy {
 			RuleLossBudget:         RuleModeAlert,
 			RuleMarginHeadroom:     RuleModeAlert,
 		},
-		SingleNameWatchPct:     30,
-		SingleNameActPct:       40,
-		TakeoverGapPct:         100,
-		HedgeMinDays:           14,
-		ExitParticipationPct:   20,
-		IlliquidDaysToExit:     3,
-		IlliquidWatchPct:       20,
-		IlliquidActPct:         30,
-		DeltaSwingWatchPct:     30,
-		ClusterDropPct:         30,
-		ClusterWatchPct:        15,
-		BudgetWatchPct:         100,
-		IssuerGroups:           map[string][]string{},
-		Clusters:               map[string][]string{},
-		OptionLineWatchPct:     5,
-		OptionLineActPct:       10,
+		SingleNameWatchPct:   30,
+		SingleNameActPct:     40,
+		TakeoverGapPct:       100,
+		HedgeMinDays:         14,
+		ExitParticipationPct: 20,
+		IlliquidDaysToExit:   3,
+		IlliquidWatchPct:     20,
+		IlliquidActPct:       30,
+		DeltaSwingWatchPct:   30,
+		ClusterDropPct:       30,
+		ClusterWatchPct:      15,
+		BudgetWatchPct:       100,
+		IssuerGroups:         map[string][]string{},
+		Clusters:             map[string][]string{},
+		OptionLineWatchPct:   5,
+		OptionLineActPct:     10,
+		// The per-name premium cap for option additions: 15% of NLV (owner
+		// decision 2026-10-23 18:22 CEST). Written into the policy file at
+		// this value by the rulebook migration; the file is read from there.
+		OptionNameActPct:       15,
 		HedgeLineWatchPct:      15,
 		HedgeLineActPct:        25,
 		RunwayWatchDTE:         14,
@@ -395,6 +401,7 @@ func (p RulebookPolicy) FingerprintKey() string {
 		SingleNameActPct         float64             `json:"single_name_act_pct"`
 		OptionLineWatchPct       float64             `json:"option_line_watch_pct"`
 		OptionLineActPct         float64             `json:"option_line_act_pct"`
+		OptionNameActPct         float64             `json:"option_name_act_pct"`
 		HedgeLineWatchPct        float64             `json:"hedge_line_watch_pct"`
 		HedgeLineActPct          float64             `json:"hedge_line_act_pct"`
 		RunwayWatchDTE           int                 `json:"runway_watch_dte"`
@@ -440,6 +447,7 @@ func (p RulebookPolicy) FingerprintKey() string {
 		SingleNameActPct:         q.SingleNameActPct,
 		OptionLineWatchPct:       q.OptionLineWatchPct,
 		OptionLineActPct:         q.OptionLineActPct,
+		OptionNameActPct:         q.OptionNameActPct,
 		HedgeLineWatchPct:        q.HedgeLineWatchPct,
 		HedgeLineActPct:          q.HedgeLineActPct,
 		RunwayWatchDTE:           q.RunwayWatchDTE,
@@ -547,6 +555,7 @@ func (p RulebookPolicy) Validate() error {
 		{"delta_swing_watch_pct", p.DeltaSwingWatchPct, 0, 1000},
 		{"cluster_watch_pct", p.ClusterWatchPct, 0, 1000},
 		{"budget_watch_pct", p.BudgetWatchPct, 0, 10000},
+		{"option_name_act_pct", p.OptionNameActPct, 0, 1000},
 	}
 	for _, set := range []struct {
 		name string

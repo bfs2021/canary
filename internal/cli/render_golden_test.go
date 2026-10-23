@@ -284,6 +284,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "mandate_unknown", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateUnknown()}},
 		{name: "mandate_unknown_held", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateHeld()}},
 		{name: "mandate_no_room", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateNoRoom()}},
+		{name: "mandate_exposure", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: goldenMandateExposure()}},
 		{name: "mandate_inactive", argv: []string{"mandate"}, conn: goldenConn{rpc.MethodMandateRisk: rpc.MandateRiskResult{AsOf: goldenAt, Message: "the risk constitution carries no [mandate] table; the mandate budget is inactive", Gate: &rpc.MandateGateView{}}}},
 		{name: "core", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCore()}},
 		{name: "core_hold", argv: []string{"core"}, conn: goldenConn{rpc.MethodCoreTarget: goldenCoreHold()}},
@@ -587,6 +588,27 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 	if status != mandate.StatusWithin {
 		res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "the mandate risk 95,880 EUR a year is over the budget 32,050 EUR (299%); a gap in SYNA, SYNB would lose more than the gap cap 22,940 EUR"}
 	}
+	return res
+}
+
+// goldenMandateExposure is the reduce verdict with the exposure view, the
+// options gate reading the premium limits and an active override of the
+// volatility budget (owner decision 2026-10-23 18:22 CEST).
+func goldenMandateExposure() rpc.MandateRiskResult {
+	res := goldenMandate(mandate.StatusReduce)
+	nlv, beta := 300000.0, 1.12
+	num := func(v float64) *float64 { return &v }
+	res.Exposure = &rpc.MandateExposureView{AsOf: goldenAt.Add(-time.Minute), BaseCurrency: "EUR", NLVBase: &nlv, NamePremiumCapPct: 15, BookPremiumCapPct: 35, BookPremiumWatchPct: 25, BookPremiumSet: "calm",
+		Book: rpc.MandateExposureRow{Legs: 4, Options: 2, DeltaBase: num(121300), DeltaBetaBase: num(126204), GammaBase: num(-310), ThetaBase: num(-42), PremiumAtRiskBase: num(48000), PremiumPctNLV: num(16), PremiumCapBase: num(105000), PremiumRoomBase: num(57000),
+			Unknown: []string{"vega unknown for SYNB"}},
+		Names: []rpc.MandateExposureRow{
+			{Underlying: "SYNA", Legs: 2, Options: 1, ContributionPct: num(66.9), Beta: &beta, DeltaBase: num(81300), DeltaBetaBase: num(91056), GammaBase: num(-310), ThetaBase: num(-42), VegaBase: num(-180), PremiumAtRiskBase: num(48000), PremiumPctNLV: num(16), PremiumCapBase: num(45000), PremiumRoomBase: num(0), PremiumOver: true},
+			{Underlying: "SYNB", Legs: 2, Options: 1, ContributionPct: num(33.1), Beta: num(0.64), DeltaBase: num(40000), DeltaBetaBase: num(25600), GammaBase: num(0), ThetaBase: num(0), PremiumAtRiskBase: num(0), PremiumPctNLV: num(0), PremiumCapBase: num(45000), PremiumRoomBase: num(45000),
+				Unknown: []string{"SYNB 20261218 C 90: no vega from the broker's model"}},
+		}}
+	res.Gate = &rpc.MandateGateView{Reason: "your override of mandate.vol_target_pct lifts the volatility budget until 2026-09-05 10:00 UTC (\"earnings week, adding by hand\"); the verdict reads: the mandate risk 95,880 EUR a year is over the budget 32,050 EUR (299%)",
+		Options:  &rpc.MandateOptionsGateView{Warning: "the mandate risk 95,880 EUR a year is over the budget 32,050 EUR (299%); a gap in SYNA, SYNB would lose more than the gap cap 22,940 EUR"},
+		Override: &rpc.MandateOverrideView{ID: "ov-20260905-080000-1", Control: "mandate.vol_target_pct", Reason: "earnings week, adding by hand", GrantedAt: goldenAt.Add(-2 * time.Hour), ExpiresAt: goldenAt.Add(22 * time.Hour)}}
 	return res
 }
 

@@ -125,6 +125,7 @@ func ConstitutionLimits(c *Constitution) []ConstitutionLimit {
 	}
 	rows = append(rows, orderLimitRows(c, cur, get, str)...)
 	rows = append(rows, portfolioPlanLimits(c)...)
+	rows = append(rows, mandateLimits(c, get, pct, money)...)
 	if c != nil && c.PositionAdd != nil {
 		stock, stockSource := pct(c.PositionAdd.MaxStockPctNLV)
 		name, nameSource := pct(c.PositionAdd.MaxUnderlyingStockPctNLV)

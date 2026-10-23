@@ -416,6 +416,7 @@ var rulebookTemplateKeys = []rulebookTemplateKey{
 	{"option_line_act_pct", ""},
 	{"hedge_line_watch_pct", ""},
 	{"hedge_line_act_pct", ""},
+	{"option_name_act_pct", "Option additions — premium at risk per name (owner decision 2026-10-23 18:22 CEST)"},
 	{"runway_watch_dte", "Rule 5 — options nearing expiry"},
 	{"runway_act_dte", ""},
 	{"runway_itm_delta_floor", ""},
