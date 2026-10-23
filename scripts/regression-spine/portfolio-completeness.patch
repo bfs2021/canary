@@ -1,9 +1,9 @@
 diff --git a/internal/daemon/reduce_portfolio.go b/internal/daemon/reduce_portfolio.go
-index 676d3dc1..b8f2eccd 100644
+index 8d1e9b45..7a65a57c 100644
 --- a/internal/daemon/reduce_portfolio.go
 +++ b/internal/daemon/reduce_portfolio.go
-@@ -43,10 +43,9 @@ type reduceSweepCandidate struct {
- 	blockers         []rpc.TradingBlocker
+@@ -37,10 +37,9 @@
+ 	beta   *float64
  }
  
 -// netPortfolioDollarDelta measures the whole signed book in base currency.
@@ -15,15 +15,15 @@ index 676d3dc1..b8f2eccd 100644
  		return 0, false
  	}
  	baseCcy := ""
-@@ -56,7 +55,6 @@ func netPortfolioDollarDelta(pos *rpc.PositionsResult) (net float64, complete bo
- 	complete = true
- 	add := func(row rpc.PositionView, isOption bool) {
+@@ -53,7 +52,6 @@
+ 			return // no market and no value: no exposure to measure
+ 		}
  		if row.Stale {
 -			complete = false
  			return
  		}
  		dd, ok := positionDollarDelta(row, isOption)
-@@ -69,12 +67,7 @@ func netPortfolioDollarDelta(pos *rpc.PositionsResult) (net float64, complete bo
+@@ -66,12 +64,7 @@
  			complete = false
  			return
  		}
@@ -37,7 +37,7 @@ index 676d3dc1..b8f2eccd 100644
  	}
  	for _, o := range pos.Options {
  		add(o, true)
-@@ -100,9 +93,6 @@ func reduceSweepCandidates(pos *rpc.PositionsResult, percent int) (cands []reduc
+@@ -107,9 +100,6 @@
  		return nil, 0, false, 0, []rpc.TradingBlocker{{Code: "positions_unavailable", Message: "current positions are unavailable", Action: "Retry once the daemon has refreshed positions."}}
  	}
  	netDelta, netComplete = netPortfolioDollarDelta(pos)
