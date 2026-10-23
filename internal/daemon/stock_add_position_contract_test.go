@@ -47,3 +47,24 @@ func TestPortfolioPlanCanonicalHeldStocksRemainInUniverse(t *testing.T) {
 		}
 	}
 }
+
+// A holding the broker reports as terminal and values at zero carries no
+// exposure, so it never blocks a stock Add (owner review 2026-10-23 18:40
+// CEST: one defunct line refused every stock addition); a zero mark without
+// that verdict is still unknown and refuses.
+func TestStockAddSkipsADefunctHolding(t *testing.T) {
+	live := rpc.PositionView{Symbol: "SYNA", SecType: positionSecType("STK"), ConID: 101, Currency: "USD", Quantity: 4, Mark: 20}
+	defunct := rpc.PositionView{Symbol: "SYND", SecType: positionSecType("STK"), ConID: 202, Currency: "USD", Quantity: 20000, Stale: true,
+		StaleReason: "zero-value portfolio row; likely inactive or defunct", QuoteExpectation: rpc.QuoteExpectationNone,
+		QuoteExpectationReason: rpc.QuoteExpectationReasonTerminal, MarketValueBase: new(0.)}
+	contract := rpc.ContractParams{Symbol: live.Symbol, ConID: live.ConID, SecType: "STK", Currency: "USD"}
+	input := risk.StockAddInput{}
+	if err := stockAddHeldStocks(&input, &rpc.PositionsResult{Stocks: []rpc.PositionView{live, defunct}}, contract, "USD"); err != nil || input.StockValueBase != 80 || input.CurrentQuantity != 4 {
+		t.Fatalf("a defunct holding blocked or distorted Add: %+v %v", input, err)
+	}
+	unknown := defunct
+	unknown.QuoteExpectation, unknown.QuoteExpectationReason = "", ""
+	if err := stockAddHeldStocks(&risk.StockAddInput{}, &rpc.PositionsResult{Stocks: []rpc.PositionView{live, unknown}}, contract, "USD"); err == nil {
+		t.Fatal("a zero mark without the broker's terminal verdict passed as no exposure")
+	}
+}

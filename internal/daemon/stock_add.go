@@ -662,9 +662,15 @@ func stockAddHeldStocks(input *risk.StockAddInput, pos *rpc.PositionsResult, con
 			}
 			return &stockAddProblem{kind: "unsupported", message: fmt.Sprintf("cross-asset issuer concentration for held %s is not yet supported by equity Add", stock.SecType)}
 		}
+		// A holding the broker reports as terminal and values at zero carries
+		// no exposure (defunctHolding, the shared verdict): it neither blocks
+		// an Add nor counts (owner review 2026-10-23 18:40 CEST).
+		if defunctHolding(stock) {
+			continue
+		}
 		rate, ok := positionBaseRate(stock, base)
 		if !ok || stock.Stale || !positiveFinite(stock.Mark) {
-			return fmt.Errorf("a held stock has no current valuation or currency conversion")
+			return fmt.Errorf("held %s has no current price or currency conversion, so the book's stock exposure cannot be measured; refresh, or reconcile that holding", nonEmptyString(stock.Symbol, "stock"))
 		}
 		value := math.Abs(stock.Quantity) * stock.Mark * rate
 		input.StockValueBase += value
