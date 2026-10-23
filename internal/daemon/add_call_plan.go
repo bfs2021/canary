@@ -24,7 +24,7 @@ func (s *Server) handleAddCallPlan(ctx context.Context, req *rpc.Request) (*rpc.
 	if !addCallSessionLive(windows, hoursOK, s.orderNow()) {
 		return nil, errBadRequest("Options session must be open to plan a call")
 	}
-	plan, err := planCallQuantity(ctx, p, s.previewOrder)
+	plan, err := planCallQuantity(ctx, p, s.addOptionCap(), s.previewOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -58,11 +58,26 @@ func addCallSessionLive(windows []ibkr.TradingWindow, hoursOK bool, now time.Tim
 	return addClassOptionsCalendar(addOptionsCalendar(now), windows, hoursOK, now).mode == "live"
 }
 
+// addOptionCap is the option contracts one order may carry under the order
+// limits in force, or 0 when they cannot be read (the preview still judges).
+func (s *Server) addOptionCap() int {
+	if limits := s.orderLimitsInForce(""); limits.Complete && limits.MaxOptionContracts > 0 {
+		return limits.MaxOptionContracts
+	}
+	return 0
+}
+
 // Every candidate, including a rounded-up lot, receives its own exact broker
 // preview. Rounding is an explicit draft preference, never spending authority.
-func planCallQuantity(ctx context.Context, p rpc.AddCallPlanParams, previewOrder func(context.Context, rpc.OrderPreviewParams) (*rpc.OrderPreviewResult, error)) (*rpc.AddCallPlanResult, error) {
+// A known option cap holds the size, rounding included: a plan never sizes
+// into a refusal (owner review 2026-10-23 16:50 CEST).
+func planCallQuantity(ctx context.Context, p rpc.AddCallPlanParams, maxContracts int, previewOrder func(context.Context, rpc.OrderPreviewParams) (*rpc.OrderPreviewResult, error)) (*rpc.AddCallPlanResult, error) {
 	c := p.Contract
 	n := int(math.Min(1000000, math.Floor(p.Budget/(p.LimitPrice*100))))
+	held := maxContracts > 0 && n > maxContracts
+	if held {
+		n = maxContracts
+	}
 	rounded := false
 	for attempt := 0; attempt < 4 && n > 0; attempt++ {
 		preview, err := previewOrder(ctx, rpc.OrderPreviewParams{Action: rpc.OrderActionBuy, Contract: c, Quantity: n, OrderType: "LMT", LimitPrice: new(p.LimitPrice), Strategy: "explicit-limit", TIF: "DAY", AdaptivePriority: "Normal"})
@@ -84,13 +99,20 @@ func planCallQuantity(ctx context.Context, p rpc.AddCallPlanParams, previewOrder
 		if debit <= p.Budget || rounded {
 			if p.RoundSize && !rounded {
 				next := roundCallQuantity(n)
+				if maxContracts > 0 {
+					next = min(next, maxContracts)
+				}
 				if next != n {
 					n = next
 					rounded = true
 					continue
 				}
 			}
-			return &rpc.AddCallPlanResult{RoundSize: p.RoundSize, OverBudget: debit > p.Budget, Contract: d.Contract, LimitPrice: p.LimitPrice, Budget: p.Budget, Quantity: n, FeeBound: fee, Debit: debit, AsOf: time.Now()}, nil
+			out := &rpc.AddCallPlanResult{RoundSize: p.RoundSize, OverBudget: debit > p.Budget, Contract: d.Contract, LimitPrice: p.LimitPrice, Budget: p.Budget, Quantity: n, FeeBound: fee, Debit: debit, AsOf: time.Now()}
+			if held && n == maxContracts {
+				out.HeldToCap, out.OptionCap = true, maxContracts
+			}
+			return out, nil
 		}
 		next := int(math.Floor((p.Budget - fee) / (p.LimitPrice * 100)))
 		n = min(n-1, next)

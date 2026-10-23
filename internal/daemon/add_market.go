@@ -82,7 +82,7 @@ func (s *Server) handleAddMarket(ctx context.Context, req *rpc.Request) (*rpc.Ad
 			release(cleanup)
 		}()
 	}
-	out := &rpc.AddMarketResult{Version: 1, Underlying: setupOptionContract(exact.Contract), OptionsSession: session.current, OptionsLastSession: session.last, OptionMode: session.mode}
+	out := &rpc.AddMarketResult{Version: 1, Underlying: setupOptionContract(exact.Contract), OptionsSession: session.current, OptionsLastSession: session.last, OptionMode: session.mode, OptionCap: s.addOptionCap()}
 	out.PriceIncrements = addPriceRules(ctx, c, binding, exact)
 	lap("rules")
 	var expiries []rpc.SetupOptionExpiry

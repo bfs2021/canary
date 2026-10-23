@@ -61,4 +61,7 @@ type AddMarketResult struct {
 	OptionsSession     MarketSession               `json:"options_session"`
 	OptionsLastSession *MarketSession              `json:"options_last_session,omitempty"`
 	OptionMode         string                      `json:"option_mode"` // live | planning | unavailable
+	// OptionCap is the option contracts one order may carry under the
+	// order limits in force; 0 when they cannot be read.
+	OptionCap int `json:"option_cap,omitempty"`
 }

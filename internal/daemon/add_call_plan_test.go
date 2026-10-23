@@ -27,7 +27,7 @@ func TestCallRoundingUsesFeeInclusiveQuantityAndRechecksRoundedLot(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			p := rpc.AddCallPlanParams{Contract: rpc.ContractParams{ConID: 10001, Symbol: "SYNX", SecType: "OPT", Exchange: "SMART", Currency: "USD", Right: "C", Multiplier: 100, Strike: 80, Expiry: "20261218", TradingClass: "SYNX"}, LimitPrice: 5.5, Budget: tc.budget, RoundSize: tc.round}
 			var checked []int
-			result, err := planCallQuantity(t.Context(), p, func(_ context.Context, p rpc.OrderPreviewParams) (*rpc.OrderPreviewResult, error) {
+			result, err := planCallQuantity(t.Context(), p, 0, func(_ context.Context, p rpc.OrderPreviewParams) (*rpc.OrderPreviewResult, error) {
 				checked = append(checked, p.Quantity)
 				return &rpc.OrderPreviewResult{Draft: rpc.OrderDraft{Action: p.Action, OrderType: p.OrderType, Contract: p.Contract, Quantity: p.Quantity, LimitPrice: *p.LimitPrice}, WhatIf: rpc.OrderWhatIfResult{Status: rpc.OrderWhatIfStatusAccepted, Available: true, Margin: &rpc.OrderMarginImpact{MaxCommission: new(tc.fee), CommissionCurrency: "USD"}}}, nil
 			})
@@ -47,7 +47,7 @@ func TestCallRoundingUsesFeeInclusiveQuantityAndRechecksRoundedLot(t *testing.T)
 func TestCallSizingRejectsUnknownFeesAndChangedContract(t *testing.T) {
 	p := rpc.AddCallPlanParams{Contract: rpc.ContractParams{ConID: 10001, Symbol: "SYNX", SecType: "OPT", Exchange: "SMART", Currency: "USD", Right: "C", Multiplier: 100, Strike: 80, Expiry: "20261218", TradingClass: "SYNX"}, LimitPrice: 5.5, Budget: 5000, RoundSize: true}
 	for _, changed := range []bool{false, true} {
-		_, err := planCallQuantity(t.Context(), p, func(_ context.Context, in rpc.OrderPreviewParams) (*rpc.OrderPreviewResult, error) {
+		_, err := planCallQuantity(t.Context(), p, 0, func(_ context.Context, in rpc.OrderPreviewParams) (*rpc.OrderPreviewResult, error) {
 			r := &rpc.OrderPreviewResult{Draft: rpc.OrderDraft{Action: in.Action, OrderType: in.OrderType, Contract: in.Contract, Quantity: in.Quantity, LimitPrice: *in.LimitPrice}}
 			if changed {
 				r.WhatIf = rpc.OrderWhatIfResult{Status: rpc.OrderWhatIfStatusAccepted, Available: true, Margin: &rpc.OrderMarginImpact{MaxCommission: new(12.0), CommissionCurrency: "USD"}}
@@ -58,5 +58,39 @@ func TestCallSizingRejectsUnknownFeesAndChangedContract(t *testing.T) {
 		if err == nil {
 			t.Fatalf("accepted changed=%v", changed)
 		}
+	}
+}
+
+// A plan sizes within the option cap in force, never past it into a refusal
+// (owner review 2026-10-23 16:50 CEST: $10k sized 17 calls against a cap of
+// 5), and says the cap held it; rounding never lifts it past the cap.
+func TestCallPlanSizesWithinTheOptionCap(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cap     int
+		round   bool
+		want    int
+		checked []int
+		held    bool
+	}{
+		{"cap holds the budget's 18 to 5", 5, false, 5, []int{5}, true},
+		{"rounding stays at the cap of 4", 4, true, 4, []int{4}, true},
+		{"no cap known keeps the budget's size", 0, false, 18, []int{18}, false},
+		{"a cap above the budget does not bind", 50, false, 18, []int{18}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := rpc.AddCallPlanParams{Contract: rpc.ContractParams{ConID: 10001, Symbol: "SYNX", SecType: "OPT", Exchange: "SMART", Currency: "USD", Right: "C", Multiplier: 100, Strike: 80, Expiry: "20261218", TradingClass: "SYNX"}, LimitPrice: 5.5, Budget: 10000, RoundSize: tc.round}
+			var checked []int
+			result, err := planCallQuantity(t.Context(), p, tc.cap, func(_ context.Context, p rpc.OrderPreviewParams) (*rpc.OrderPreviewResult, error) {
+				checked = append(checked, p.Quantity)
+				return &rpc.OrderPreviewResult{Draft: rpc.OrderDraft{Action: p.Action, OrderType: p.OrderType, Contract: p.Contract, Quantity: p.Quantity, LimitPrice: *p.LimitPrice}, WhatIf: rpc.OrderWhatIfResult{Status: rpc.OrderWhatIfStatusAccepted, Available: true, Margin: &rpc.OrderMarginImpact{MaxCommission: new(12.0), CommissionCurrency: "USD"}}}, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Quantity != tc.want || result.HeldToCap != tc.held || (tc.held && result.OptionCap != tc.cap) || !reflect.DeepEqual(checked, tc.checked) {
+				t.Fatalf("result=%+v checked=%v", result, checked)
+			}
+		})
 	}
 }

@@ -23,5 +23,9 @@ type AddCallPlanResult struct {
 	Quantity   int            `json:"quantity"`
 	FeeBound   float64        `json:"fee_bound"`
 	Debit      float64        `json:"debit"`
-	AsOf       time.Time      `json:"as_of"`
+	// HeldToCap says the option cap in force ([order_limits].
+	// max_option_contracts, OptionCap) held the budget's size.
+	HeldToCap bool      `json:"held_to_cap,omitempty"`
+	OptionCap int       `json:"option_cap,omitempty"`
+	AsOf      time.Time `json:"as_of"`
 }
