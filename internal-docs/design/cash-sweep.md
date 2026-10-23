@@ -22,6 +22,14 @@ after the entry spread, the fee and the interest forgone, is at or below zero
 is blocked (`cash_sweep_no_net_gain`); an unavailable estimate and
 `min_net_gain` stay advisory. The first live Bubill sweep (50,000 EUR face,
 47 days, 2.246% at the ask against 1.976% on cash) estimated −11.96 EUR.
+On 2026-10-23 16:30 CEST the owner replaced maturity-only selection: among the
+listed bills inside the window, the sweep buys the one whose conservative
+benefit over cash, after the fee (the last accepted WhatIf's fee per face),
+the entry spread and the interest forgone, is highest; the ladder rung only
+breaks ties, and with none above zero the currency holds and lists no row.
+Without a cash rate the estimate is unavailable and the rung order stands.
+The EUR window was set to 28–120 days the same minute, a liquidity horizon
+for an options book with large margin needs.
 
 This record follows `.agents/docs/risk-policy-contract.md`. It records the
 owner's decisions of 2026-09-30 09:10 CEST (S1–S6), the reviewer's decisions

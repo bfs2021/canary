@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 	ibkrlib "github.com/osauer/canary/v2/pkg/ibkr"
 )
@@ -49,8 +50,9 @@ type cashSweepBillSource interface {
 const cashSweepResolveBudget = 10 * time.Second
 
 // cashSweepMaxBillAttempts bounds how many candidates one currency confirms
-// per cycle, nearest first.
-const cashSweepMaxBillAttempts = 3
+// and quotes per cycle, nearest the rung first; the best net of those is
+// bought (owner decision 2026-10-23 16:30 CEST).
+const cashSweepMaxBillAttempts = 6
 
 // serverBillSource reads the daemon's own list, directory and quotes.
 type serverBillSource struct{ s *Server }
@@ -115,7 +117,7 @@ func cashSweepResolveBills(ctx context.Context, src cashSweepBillSource, bucket 
 		cp := &plan.currencies[i]
 		switch {
 		case cp.side == rpc.CashSweepSideInvest && cashSweepIsBill(cp.instrument):
-			cashSweepResolveCurrency(ctx, src, bucket.currency(cp.status.Currency), cp, now)
+			cashSweepResolveCurrency(ctx, src, bucket.currency(cp.status.Currency), cp, plan.feeRates, now)
 		case cp.side == rpc.CashSweepSideInvest:
 			// The declared ETF is matched by contract id, which Canary does not
 			// resolve: there is nothing it could order, so there is no row.
@@ -183,7 +185,7 @@ func cashSweepResolveRedemption(ctx context.Context, src cashSweepBillSource, cp
 	cp.units = units
 }
 
-func cashSweepResolveCurrency(ctx context.Context, src cashSweepBillSource, cfg protectionCashSweepCurrency, cp *cashSweepCurrencyPlan, now time.Time) {
+func cashSweepResolveCurrency(ctx context.Context, src cashSweepBillSource, cfg protectionCashSweepCurrency, cp *cashSweepCurrencyPlan, feeRates map[string]float64, now time.Time) {
 	st := &cp.status
 	ccy := st.Currency
 	today := cashSweepDay(now)
@@ -280,6 +282,7 @@ func cashSweepResolveCurrency(ctx context.Context, src cashSweepBillSource, cfg 
 	slices.SortFunc(candidates, func(a, b cashSweepBillCandidate) int {
 		return cmp.Or(cmp.Compare(cashSweepAbs(a.days-cp.targetDays), cashSweepAbs(b.days-cp.targetDays)), cmp.Compare(a.days, b.days), strings.Compare(a.id, b.id))
 	})
+	var picks []cashSweepPick
 	for _, cand := range candidates[:min(len(candidates), cashSweepMaxBillAttempts)] {
 		line := cand.line
 		if line == nil {
@@ -333,21 +336,86 @@ func cashSweepResolveCurrency(ctx context.Context, src cashSweepBillSource, cfg 
 			continue
 		}
 		bill := cashSweepBillFrom(cand, *line, q, now)
-		st.Evidence = nil
-		st.Bill = rpc.CloneCashSweepBill(&bill)
-		st.Reason += fmt.Sprintf("; the bill is %s maturing %s (%d days), quoted %s per 100 of face", cashSweepBillName(bill), bill.Maturity, bill.DaysToMaturity, formatBillPrice(bill.Price))
 		conv := cashSweepInstrumentConventions[bill.Instrument]
 		units, reason := cashSweepInvestUnits(cp.orderAmount, conv, rules, *bill.Price, ccy)
 		if units == 0 {
+			evidence = append(evidence, fmt.Sprintf("%s: %s", cand.id, reason))
+			continue
+		}
+		pick := cashSweepPick{bill: bill, rules: rules, units: units}
+		pick.gain, pick.feeKnown, pick.gainKnown = cashSweepPlanGain(cp, bill, units, conv, feeRates)
+		picks = append(picks, pick)
+	}
+	if len(picks) == 0 {
+		if len(evidence) > 0 && strings.Contains(evidence[len(evidence)-1], "buys less than") {
 			cp.side = ""
-			st.State, st.Reason = rpc.CashSweepStateHold, st.Reason+"; "+reason+", so nothing is swept"
+			st.State, st.Reason, st.Evidence = rpc.CashSweepStateHold, st.Reason+"; "+evidence[len(evidence)-1]+", so nothing is swept", evidence
 			return
 		}
-		cp.bill, cp.rules, cp.units, cp.session = &bill, &rules, units, rpc.CloneBondSession(bill.Session)
-		st.Reason += fmt.Sprintf("; the order is %d × %s (%s of face)", units, conv.QuantityUnit, formatBudgetMoney(float64(units)*conv.FacePerUnit, ccy))
+		fail(rpc.CashSweepStateInstrumentUnresolved, fmt.Sprintf("no %s bill maturing within %s was confirmed by contract details and a quote", ccy, window), evidence)
 		return
 	}
-	fail(rpc.CashSweepStateInstrumentUnresolved, fmt.Sprintf("no %s bill maturing within %s was confirmed by contract details and a quote", ccy, window), evidence)
+	// The bill that earns most over the cash it replaces, after the entry
+	// spread, the fee and the interest forgone; the rung only breaks ties
+	// (picks are in rung order). None above zero: the currency holds and no
+	// row is listed (owner decisions 2026-10-23 13:16 and 16:30 CEST). With
+	// no cash rate the estimate is unavailable and the rung order stands.
+	best := picks[0]
+	if best.gainKnown {
+		for _, p := range picks[1:] {
+			if p.gainKnown && p.gain > best.gain+cashSweepMoneyEpsilon {
+				best = p
+			}
+		}
+		if best.gain <= 0 {
+			cp.side = ""
+			st.State = rpc.CashSweepStateHold
+			st.Reason += fmt.Sprintf("; no listed bill maturing within %s earns more than the cash: the best, %s maturing %s, earns about %.2f %s against it after %s, so the cash stays cash",
+				window, cashSweepBillName(best.bill), best.bill.Maturity, best.gain, cp.sizing.BaseCurrency, cashSweepFeeWords(best.feeKnown))
+			return
+		}
+	}
+	bill, conv := best.bill, cashSweepInstrumentConventions[best.bill.Instrument]
+	st.Evidence = nil
+	st.Bill = rpc.CloneCashSweepBill(&bill)
+	st.Reason += fmt.Sprintf("; the bill is %s maturing %s (%d days), quoted %s per 100 of face", cashSweepBillName(bill), bill.Maturity, bill.DaysToMaturity, formatBillPrice(bill.Price))
+	if best.gainKnown {
+		st.Reason += fmt.Sprintf(", the best of %d listed bills: about %.2f %s more than the cash after %s", len(picks), best.gain, cp.sizing.BaseCurrency, cashSweepFeeWords(best.feeKnown))
+	}
+	cp.bill, cp.rules, cp.units, cp.session = &bill, &best.rules, best.units, rpc.CloneBondSession(bill.Session)
+	st.Reason += fmt.Sprintf("; the order is %d × %s (%s of face)", best.units, conv.QuantityUnit, formatBudgetMoney(float64(best.units)*conv.FacePerUnit, ccy))
+}
+
+// cashSweepPick is one confirmed, quoted and sized bill a currency may buy.
+type cashSweepPick struct {
+	bill                rpc.TradeProposalCashSweepBill
+	rules               ibkrlib.BondOrderRules
+	units               int
+	gain                float64
+	feeKnown, gainKnown bool
+}
+
+// cashSweepPlanGain is a pick's conservative benefit over the cash it
+// replaces, in base, at its ask, with the fee the last accepted WhatIf of the
+// instrument implies (none known: no fee, which the preview's floor then
+// catches). gainKnown is false without a usable cash rate or maturity.
+func cashSweepPlanGain(cp *cashSweepCurrencyPlan, bill rpc.TradeProposalCashSweepBill, units int, conv cashSweepInstrumentConvention, feeRates map[string]float64) (float64, bool, bool) {
+	ccy := cp.status.Currency
+	rate, _ := cashInterestRate(cashInterestCreditSide(cp.interest, ccy), ccy)
+	if rate == nil || bill.Price == nil || !positiveFinite(*bill.Price) || bill.DaysToMaturity <= 0 || !positiveFinite(cp.rate) || cp.sizing == nil {
+		return 0, false, false
+	}
+	face := float64(units) * conv.FacePerUnit
+	feeRate, feeKnown := feeRates[cashSweepBillUnitKey(ccy, bill.Instrument)]
+	gain, ok := risk.CashSweepIncrementalGain(face, face**bill.Price/100, feeRate*face, *rate, float64(bill.DaysToMaturity), cp.rate)
+	return gain, feeKnown, ok
+}
+
+func cashSweepFeeWords(known bool) string {
+	if known {
+		return "the broker fee, the entry spread and the interest forgone"
+	}
+	return "the entry spread and the interest forgone (no broker fee known yet)"
 }
 
 // cashSweepUSBillMaturity permits an omitted broker date only for the exact

@@ -42,9 +42,6 @@ func TestCashSweepBenefitIsAdvisoryThroughActualProposalPreview(t *testing.T) {
 				Reason: "the latest USD credit row is dated 2026-09-24, 4 business days ago, so the live rate is unknown"}
 		}},
 		{"valid zero benchmark", "estimated", func(s *rpc.TradeProposalCashSweep) { s.MinNetGainBase = 0 }},
-		{"zero benchmark with negative benefit", "estimated", func(s *rpc.TradeProposalCashSweep) {
-			s.MinNetGainBase, s.CashInterest = 0, cashInterestTestSide(1.0)
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := newSweepPreviewRig(t, time.Date(2026, 9, 30, 14, 0, 0, 0, time.UTC))
@@ -105,5 +102,20 @@ func TestCashSweepAdvisoryNeverMutatesOrRenewsPreview(t *testing.T) {
 	second := sanitizeProposalPreviewForProposal(preview, prop)
 	if *second.CashSweepEconomics.FeeReserve != 1 || *second.CashSweepEconomics.IncrementalGainBase == 1234 || !second.CashSweepEconomics.AsOf.Equal(preview.AsOf) || second.Draft.Quantity != preview.Draft.Quantity {
 		t.Fatal("a consumer changed or renewed the reviewed evidence")
+	}
+}
+
+// A negative estimate is no longer advisory: the buy is blocked (owner
+// decision 2026-10-23 13:16 CEST), and the preview still shows the estimate.
+func TestCashSweepNegativeBenefitBlocksThroughActualProposalPreview(t *testing.T) {
+	rig := newSweepPreviewRig(t, time.Date(2026, 9, 30, 14, 0, 0, 0, time.UTC))
+	s := rig.row.CashSweep
+	s.MinNetGainBase, s.CashInterest = 0, cashInterestTestSide(1.0)
+	out := rig.preview(t)
+	if out.Accepted || !hasTradingBlocker(out.Blockers, rpc.CashSweepBlockerNoNetGain) {
+		t.Fatalf("a sweep worse than cash passed review: accepted=%v blockers=%v", out.Accepted, out.Blockers)
+	}
+	if out.Preview == nil || out.Preview.CashSweepEconomics == nil || out.Preview.CashSweepEconomics.State != "estimated" {
+		t.Fatal("the blocked preview lost its estimate")
 	}
 }

@@ -199,6 +199,10 @@ type cashSweepCurrencyPlan struct {
 type cashSweepPlan struct {
 	status     rpc.TradeProposalCashSweepStatus
 	currencies []cashSweepCurrencyPlan
+	// feeRates is the broker fee per unit of face from the last accepted
+	// WhatIf of each currency's instrument (cash_sweep_fee_memory.go), so
+	// bill selection can weigh the fee before a preview.
+	feeRates map[string]float64
 }
 
 const cashSweepMoneyEpsilon = 1e-6
@@ -811,6 +815,7 @@ func (e *proposalEngine) cashSweepProposals(ctx context.Context, policy protecti
 	plan := cashSweepPlanFor(policy, e.cashSweepInput(ctx, policy, acct, pos, scope, now), now)
 	// An invest row exists only for a bill confirmed by contract details and
 	// a quote and sized on its grid; a redemption reads its held bill's grid.
+	plan.feeRates = e.sweepFees.snapshot()
 	cashSweepResolveBills(ctx, e.cashSweepBillSourceFor(), policy.Cash.Sweep, &plan, now)
 	var out []rpc.TradeProposal
 	for _, cp := range plan.currencies {

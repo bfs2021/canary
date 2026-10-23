@@ -343,7 +343,10 @@ func TestCashSweepResolvesNearestUSBill(t *testing.T) {
 	if usd.status.Bill == nil || usd.status.Bill.CUSIP != synthCUSIP35 || !strings.Contains(usd.status.Reason, "CUSIP "+synthCUSIP35) {
 		t.Fatalf("status = %+v", usd.status)
 	}
-	if !slices.Equal(src.asked, []string{"CUSIP:" + synthCUSIP35 + ":USD"}) {
+	// Every candidate in the window is confirmed and quoted, nearest the
+	// rung first, so the best net can be bought (owner decision 2026-10-23
+	// 16:30 CEST); with no cash rate here the nearest stands.
+	if len(src.asked) == 0 || src.asked[0] != "CUSIP:"+synthCUSIP35+":USD" {
 		t.Fatalf("asked = %v", src.asked)
 	}
 	// A US bill is asked as BILL only, and the row records it resolved so.
