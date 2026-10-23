@@ -250,10 +250,28 @@ func reduceAllowanceFor(limits *risk.ConstitutionOrderLimits, row rpc.PositionVi
 // reducePositions is the one positions read behind a reduce preview, sweep
 // and tokened submit; tests replace it through reducePositionsForTest.
 func (s *Server) reducePositions(ctx context.Context) (*rpc.PositionsResult, error) {
+	var pos *rpc.PositionsResult
+	var err error
 	if s.reducePositionsForTest != nil {
-		return s.reducePositionsForTest(ctx)
+		pos, err = s.reducePositionsForTest(ctx)
+	} else {
+		pos, err = s.handlePositionsList(ctx, &rpc.Request{})
 	}
-	return s.handlePositionsList(ctx, &rpc.Request{})
+	if err != nil || pos == nil {
+		return pos, err
+	}
+	var held []reduceHeldPosition
+	for _, rows := range [][]rpc.PositionView{pos.Stocks, pos.Options} {
+		for _, row := range rows {
+			if reduceEligible(row) {
+				held = append(held, reduceHeldPosition{proposalContractFromPosition(row, positionWireSecType(row.SecType)), row.Quantity})
+			}
+		}
+	}
+	if _, err := s.ensureReduceFillCoherence(ctx, held, 0); err != nil {
+		return nil, err
+	}
+	return pos, nil
 }
 
 // prepareReduceForRow applies the hedge exclusion, sizes the order, and builds
@@ -373,24 +391,31 @@ func reducePlaceBlocker(err error) rpc.TradingBlocker {
 // reduceCommittedSales is what Canary's own working orders already sell (or
 // buy, for a short) of the holding: the remaining quantity of every open
 // order Canary placed on the exact contract in the reduction's direction,
+// including the remaining contracts sold by each working combo leg,
 // its own stops aside, which the one-cancels-all link and the stop guard
 // keep within the line (review 2026-10-22, finding 2; owner instruction
 // 2026-10-22 17:45 CEST). Hand orders in TWS are the owner's and do not
 // count (owner decision 2026-10-12 19:55 CEST).
 func (s *Server) reduceCommittedSales(contract rpc.ContractParams, action string) (float64, []rpc.TradingBlocker) {
-	views, _, err := s.loadOrderViews()
-	if err != nil {
-		return 0, []rpc.TradingBlocker{{Code: "orders_unavailable", Message: "Canary's order journal cannot be read, so its working reductions of this holding are unknown: " + err.Error(), Action: "Retry once the journal reads; nothing was sent."}}
+	inventory, ok := s.journalOrderViewsForInventory()
+	if !ok {
+		return 0, []rpc.TradingBlocker{{Code: "orders_unavailable", Message: "Canary's order journal cannot be read, so its working reductions of this holding are unknown", Action: "Retry once the journal reads; nothing was sent."}}
 	}
 	scope := s.currentBrokerStateScope()
 	committed := 0.0
-	for i := range views {
-		v := &views[i]
-		if !protectiveStopGuardCanaryPlaced(v, scope) || !strings.EqualFold(strings.TrimSpace(v.Action), action) || isProtectiveStopOrderType(v.OrderType) ||
-			!journalOrderIdentity(*v).sameContract(contract) {
+	for i := range inventory.views {
+		v := &inventory.views[i]
+		if !protectiveStopGuardCanaryPlaced(v, scope) || isProtectiveStopOrderType(v.OrderType) {
 			continue
 		}
-		committed += orderViewRemainingQuantity(*v)
+		order := journalOrderIdentity(*v)
+		order.Remaining = orderViewRemainingQuantity(*v)
+		order.Legs = inventory.legsOf(v)
+		quantity := order.competesWith(contract, action)
+		if math.IsNaN(quantity) || math.IsInf(quantity, 0) {
+			return 0, []rpc.TradingBlocker{{Code: "orders_unavailable", Message: "Canary cannot determine how much a working combo would trade of this holding", Action: "Reconcile the working combo in Orders, then preview again; nothing was sent."}}
+		}
+		committed += quantity
 	}
 	return committed, nil
 }

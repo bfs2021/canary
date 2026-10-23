@@ -307,11 +307,83 @@ canary watchlist replace --spec PATH|- [--json]
 
 Plan a stock addition or opening and review it through existing order confirmation.
 
+`plan` checks a stock addition or opening; `preview` creates an exact order review for separate owner confirmation through the existing order path. Neither places an order. Choose exactly one of `--quantity` or `--max`. An optional `--stop-price` applies only to added shares, uses GTC regular-session instructions, and stays held until the entry fills completely. Existing protection requires a separate review.
+
+```sh
+canary add plan SYNA --currency USD --limit 100 --quantity 3
+canary add preview SYNA --currency USD --limit 100 --quantity 3 --stop-price 90 --json
+```
+
+`market` and `call-plan` read exactly one JSON object from standard input and always return JSON, even without `--json`. Unknown fields, extra objects, positional arguments and stock-only flags are rejected. These are read-only broker requests. The examples below use synthetic identities: replace the stock symbol and use the exact returned call contract, including its broker identity.
+
+#### Stock quotes and call discovery
+
+```sh
+canary add market --json <<'JSON'
+{
+  "underlying": {
+    "symbol": "SYNA",
+    "sec_type": "STK",
+    "currency": "USD",
+    "exchange": "SMART"
+  },
+  "discover": true
+}
+JSON
+```
+
+| Request field | Meaning |
+| --- | --- |
+| `underlying` | Required stock contract: `symbol`, `sec_type: "STK"`, uppercase three-letter `currency`, `exchange: "SMART"`; optional known `con_id`. |
+| `discover` | Optional boolean, default false. Discover call candidates for a USD stock. Omit for stock quotes alone. |
+| `selected` | Optional exact call contract returned by discovery; refresh that selection. |
+| `refresh` | Optional array of up to four `{"horizon_days": 30, "contract": {...}}` objects. Horizons must be unique and one of 14, 30, 60 or 120. Cannot be combined with `discover: true`. |
+
+Calls require USD. Each selected or refreshed contract must match the underlying symbol and carry its resolved `con_id`, `sec_type: "OPT"`, `currency: "USD"`, `exchange: "SMART"`, `expiry`, positive `strike`, `right: "C"`, `multiplier: 100` and `trading_class`. Copy the returned contract rather than assembling a broker identity.
+
+The response includes the resolved `underlying`, stock `quote`, `price_increments`, and optional `calls` or `selected` rows. Read `option_mode` (`live`, `planning`, or `unavailable`), `options_session`, and each row's `planning` or `unavailable` evidence. Closed-session planning prices are not executable quotes. Discovery grants no order authority or risk capacity.
+
+#### Size a selected call
+
+```sh
+canary add call-plan --json <<'JSON'
+{
+  "contract": {
+    "symbol": "SYNA",
+    "con_id": 10001,
+    "sec_type": "OPT",
+    "currency": "USD",
+    "exchange": "SMART",
+    "expiry": "20300118",
+    "strike": 100,
+    "right": "C",
+    "multiplier": 100,
+    "trading_class": "SYNA"
+  },
+  "limit_price": 5.5,
+  "budget": 5000,
+  "round_size": false
+}
+JSON
+```
+
+| Request field | Meaning |
+| --- | --- |
+| `contract` | Required exact USD SMART call returned by `market`; same contract fields as above, with expiry `YYYYMMDD` more than seven days away. |
+| `limit_price` | Required positive premium per underlying share in USD; each standard contract represents 100 shares. |
+| `budget` | Required positive total USD debit including the broker fee bound, at most 1000000000. |
+| `round_size` | Optional boolean, default false. Round to the nearest five contracts while retaining quantities of one or two. Rounding can exceed the budget. |
+
+The options session must be open. Read `quantity`, `debit`, `fee_bound`, and `over_budget` before using a result; `debit` includes the fee bound. Sizing returns no submission token and reserves no money. An exact order preview and separate owner confirmation are still required.
+
+MCP exposes stock planning through `canary_stock_add`; `market`, `call-plan` and preview are CLI surfaces, not MCP tools.
+
 Guard `read-only`. Also available as an MCP tool.
 
 ```text
-canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity N
---max) [--con-id ID] [--json]
+canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity N|--max) [--con-id ID] [--stop-price PRICE] [--json]
+canary add market [--json] < request.json
+canary add call-plan [--json] < request.json
 ```
 
 Subcommands: `plan`, `preview`, `market`, `call-plan`.

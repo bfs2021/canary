@@ -122,7 +122,9 @@ func runAddInventoryDiagnostic(t *testing.T, mode string) {
 					send(58, "1", f[2], "1")
 					send(1, "6", f[2], "1", "1.00", "100", "0")
 					send(1, "6", f[2], "2", "1.02", "100", "0")
-					send(21, f[2], "13", "0", "0.2", "0.6", "1.01", "0", "0.01", "0.1", "-0.1", "110")
+					// The 30-day fixture must stay inside the owner's 0.35–0.50
+					// delta band so this test isolates slow inventory completion.
+					send(21, f[2], "13", "0", "0.2", "0.45", "1.01", "0", "0.01", "0.1", "-0.1", "110")
 					continue
 				}
 				send(58, "1", f[2], "1")

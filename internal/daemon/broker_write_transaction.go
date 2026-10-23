@@ -19,6 +19,7 @@ import (
 // account/mode scope that passed authorization. It is never durable order
 // authority and must be revalidated immediately before broker I/O.
 type brokerWriteTransactionBinding struct {
+	reduceFillEvidence         *protectionOrderSnapshotBinding
 	deskAuthority              *deskAuthorityFence
 	stockAddReview             *rpc.AddReview
 	stockAddQueueAdmission     *ownerQueueAdmission
@@ -377,6 +378,9 @@ func (s *Server) brokerWireGuard(binding brokerWriteTransactionBinding, status r
 		}
 		if cancel {
 			return nil
+		}
+		if binding.reduceFillEvidence != nil && !s.reduceFillBindingCurrent(*binding.reduceFillEvidence) {
+			return fmt.Errorf("%w: broker fills or session changed before reduction transmission; preview again", ErrTradingDisabled)
 		}
 		// The order limits are read before the control lease: they come from
 		// the risk constitution and the account reading, not the settings

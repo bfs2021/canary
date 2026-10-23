@@ -1,0 +1,58 @@
+# canary add --help · COLUMNS=80 · colour off
+canary add — Plan a stock addition or opening and review it through existing
+order confirmation
+
+Usage: canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity
+       N|--max) [--con-id ID] [--stop-price PRICE] [--json]
+       canary add market [--json] < request.json
+       canary add call-plan [--json] < request.json
+
+Flags
+  --adaptive-priority STRING
+                            IBKR Adaptive priority for the limit: Normal,
+                            Patient, or Urgent
+  --con-id INT              exact broker stock identity when known
+  --currency STRING         stock trading currency (required)
+  --exchange STRING         broker venue (default: SMART)
+  --json                    emit typed Add evidence
+  --limit FLOAT             maximum price per share in the stock currency
+  --max                     find the maximum supported addition for one order
+  --quantity INT            exact additional whole shares; choose this or --max
+  --stop-price FLOAT        fixed attached stop below entry; added shares only,
+                            GTC regular session
+
+plan checks a stock addition or opening; preview creates an exact order review
+for separate owner confirmation. Neither places an order.
+market reads stock quotes and discovers or refreshes calls; call-plan sizes an
+exact call using broker fee evidence. Both read one JSON object from stdin. Run
+canary add market --help or canary add call-plan --help for request fields and
+examples.
+# canary add --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary add — Plan a stock addition or opening and review it through existing\x1b[0m
+\x1b[1morder confirmation\x1b[0m
+
+Usage: \x1b[36mcanary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity\x1b[0m
+       \x1b[36mN|--max) [--con-id ID] [--stop-price PRICE] [--json]\x1b[0m
+       \x1b[36mcanary add market [--json] < request.json\x1b[0m
+       \x1b[36mcanary add call-plan [--json] < request.json\x1b[0m
+
+\x1b[1mFlags\x1b[0m
+  \x1b[36m--adaptive-priority STRING\x1b[0m
+                            IBKR Adaptive priority for the limit: Normal,
+                            Patient, or Urgent
+  \x1b[36m--con-id INT              \x1b[0mexact broker stock identity when known
+  \x1b[36m--currency STRING         \x1b[0mstock trading currency (required)
+  \x1b[36m--exchange STRING         \x1b[0mbroker venue (default: SMART)
+  \x1b[36m--json                    \x1b[0memit typed Add evidence
+  \x1b[36m--limit FLOAT             \x1b[0mmaximum price per share in the stock currency
+  \x1b[36m--max                     \x1b[0mfind the maximum supported addition for one order
+  \x1b[36m--quantity INT            \x1b[0mexact additional whole shares; choose this or --max
+  \x1b[36m--stop-price FLOAT        \x1b[0mfixed attached stop below entry; added shares only,
+                            GTC regular session
+
+plan checks a stock addition or opening; preview creates an exact order review
+for separate owner confirmation. Neither places an order.
+market reads stock quotes and discovers or refreshes calls; call-plan sizes an
+exact call using broker fee evidence. Both read one JSON object from stdin. Run
+canary add market --help or canary add call-plan --help for request fields and
+examples.

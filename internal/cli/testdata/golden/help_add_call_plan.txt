@@ -1,0 +1,98 @@
+# canary add call-plan --help · COLUMNS=80 · colour off
+canary add call-plan — Size an exact long call using broker fee evidence; no
+orders placed
+
+Usage: canary add call-plan [--json] < request.json
+
+Flags
+  --json                    emit checked call size
+
+Stdin: one JSON object; unknown fields and extra objects are rejected. Output is
+always JSON, with or without --json.
+
+contract (required): copy the exact contract returned by add market. It must be
+a USD SMART call: sec_type OPT, right C, multiplier 100, positive con_id,
+trading_class and expiry YYYYMMDD more than seven days away; retain symbol and
+strike.
+
+limit_price (required): positive premium per underlying share in USD. budget
+(required): positive total USD debit including the broker fee bound, at most
+1000000000.
+
+round_size (optional boolean, default false): round to the nearest five
+contracts, retaining one or two. Rounding can exceed budget; inspect
+over_budget, debit, quantity and fee_bound in the result.
+
+The options session must be open. Sizing returns no submission token and
+reserves no money. An exact order preview and separate owner confirmation are
+required to place an order.
+
+Example (synthetic identity; replace with your resolved contract):
+canary add call-plan --json <<'JSON'
+{
+  "contract": {
+    "symbol": "SYNA",
+    "con_id": 10001,
+    "sec_type": "OPT",
+    "currency": "USD",
+    "exchange": "SMART",
+    "expiry": "20300118",
+    "strike": 100,
+    "right": "C",
+    "multiplier": 100,
+    "trading_class": "SYNA"
+  },
+  "limit_price": 5.5,
+  "budget": 5000,
+  "round_size": false
+}
+JSON
+# canary add call-plan --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary add call-plan — Size an exact long call using broker fee evidence; no\x1b[0m
+\x1b[1morders placed\x1b[0m
+
+Usage: \x1b[36mcanary add call-plan [--json] < request.json\x1b[0m
+
+\x1b[1mFlags\x1b[0m
+  \x1b[36m--json                    \x1b[0memit checked call size
+
+Stdin: one JSON object; unknown fields and extra objects are rejected. Output is
+always JSON, with or without --json.
+
+contract (required): copy the exact contract returned by add market. It must be
+a USD SMART call: sec_type OPT, right C, multiplier 100, positive con_id,
+trading_class and expiry YYYYMMDD more than seven days away; retain symbol and
+strike.
+
+limit_price (required): positive premium per underlying share in USD. budget
+(required): positive total USD debit including the broker fee bound, at most
+1000000000.
+
+round_size (optional boolean, default false): round to the nearest five
+contracts, retaining one or two. Rounding can exceed budget; inspect
+over_budget, debit, quantity and fee_bound in the result.
+
+The options session must be open. Sizing returns no submission token and
+reserves no money. An exact order preview and separate owner confirmation are
+required to place an order.
+
+Example (synthetic identity; replace with your resolved contract):
+canary add call-plan --json <<'JSON'
+{
+  "contract": {
+    "symbol": "SYNA",
+    "con_id": 10001,
+    "sec_type": "OPT",
+    "currency": "USD",
+    "exchange": "SMART",
+    "expiry": "20300118",
+    "strike": 100,
+    "right": "C",
+    "multiplier": 100,
+    "trading_class": "SYNA"
+  },
+  "limit_price": 5.5,
+  "budget": 5000,
+  "round_size": false
+}
+JSON

@@ -93,10 +93,10 @@ type mandateReductionInput struct {
 	// stand for good, so its line leaves the plan. Nil reads none.
 	WorkingOrder func(row rpc.PositionView, action string) (found, conditional bool)
 	// Locked reports a line on the owner's keep list; its leg leaves the
-	// batch. Nil reads none: an unreadable keep list never stops the
-	// reduction, which only ever lowers risk, so the worst case is a locked
-	// line trimmed while the store is down.
+	// batch. An unreadable keep list holds the batch through LocksUnknown.
 	Locked func(conID int) bool
+	// LocksUnknown is the reason the owner's keep list cannot be confirmed.
+	LocksUnknown string
 	// Previous holds the mandate_reduction rows of the last generation in
 	// this scope, and Episode its breach episode.
 	Previous []rpc.TradeProposal
@@ -144,12 +144,15 @@ func (e *proposalEngine) mandateReductionInput(ctx context.Context, policy prote
 	if limits := s.orderLimitsInForce(protectionCoverageBaseCurrency(pos)); limits.Complete {
 		in.OrderCapBase = limits.CapBase
 	}
+	in.LocksUnknown = "the locked holdings cannot be read without a request context"
 	if ctx != nil {
 		if locks, err := s.holdingLocks(ctx); err == nil {
+			in.LocksUnknown = ""
 			in.Locked = locks.Locked
 		} else {
+			in.LocksUnknown = "the locked holdings cannot be read; automatic reductions wait until the keep list is available"
 			if s.logger != nil {
-				s.logger.Warnf("mandate reduction: locked holdings unreadable, no line is kept: %v", err)
+				s.logger.Warnf("mandate reduction held: locked holdings unreadable: %v", err)
 			}
 		}
 		if snapshot, inventoryScope, err := s.brokerOpenOrderInventory(ctx, false); err == nil && sameBrokerScope(inventoryScope, scope) {
@@ -255,6 +258,9 @@ func (e *proposalEngine) mandateReductionProposals(policy protectionPolicy, stat
 	hold := func(state, why string) ([]rpc.TradeProposal, *rpc.TradeProposalMandateStatus) {
 		st.State, st.Reason = state, why
 		return e.mandateHeldRows(policy, status, standing, acct, pos, sources, marketEvents, now, st, why)
+	}
+	if in.LocksUnknown != "" {
+		return hold(rpc.MandateReductionUnknown, in.LocksUnknown)
 	}
 	res := in.Result
 	if res == nil || res.Verdict == nil || in.Input == nil {

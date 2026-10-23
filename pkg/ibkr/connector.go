@@ -57,6 +57,11 @@ type Connector struct {
 	marketRulesMu sync.Mutex
 	marketRules   map[marketRuleKey][]PriceIncrement
 
+	// A failed cancellation retains the read subscription until the session
+	// changes; repeated refreshes must not accumulate live broker streams.
+	positionsRefreshMu          sync.Mutex
+	positionsRefreshUncancelled ConnectorSessionBinding
+
 	display displayChanges
 	name    string
 	config  *ConnectorConfig
@@ -6181,25 +6186,160 @@ func isZeroValueStockPosition(pos *RawPosition) bool {
 	return pos.MarketPrice <= 0 && math.Abs(pos.MarketValue) < 1e-9
 }
 
-// RefreshPositions issues the broker's singleton positions request, waits up
-// callers must serialize refreshes.
+// RefreshPositions captures the ready broker session and requests a completed,
+// isolated positions snapshot within timeout.
 func (c *Connector) RefreshPositions(timeout time.Duration) ([]*RawPosition, error) {
-	if !c.isConnected() {
+	binding, ok := c.CaptureSession()
+	if !ok {
 		return nil, ErrIBKRUnavailable
 	}
-	c.mu.RLock()
-	conn := c.conn
-	c.mu.RUnlock()
-	if conn == nil {
+	return c.RefreshPositionsForSession(context.Background(), binding, timeout)
+}
+
+// RefreshPositionsForSession uses a correlated positions subscription on the
+// captured session. reqPositions has no request ID and cannot distinguish
+// queued updates from a retired subscription from a fresh initial snapshot.
+// The subscription is canceled after completion or timeout, and rows never
+// update the streaming portfolio projection.
+func (c *Connector) RefreshPositionsForSession(ctx context.Context, binding ConnectorSessionBinding, timeout time.Duration) (rows []*RawPosition, resultErr error) {
+	if ctx == nil || !c.SessionCurrent(binding) {
 		return nil, ErrIBKRUnavailable
 	}
-	if err := conn.RequestPositions(); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if err := conn.WaitForPositionsEnd(timeout); err != nil {
+	if timeout <= 0 {
+		return nil, fmt.Errorf("positions snapshot timeout must be positive")
+	}
+	if !c.positionsRefreshMu.TryLock() {
+		return nil, fmt.Errorf("another positions snapshot is in progress")
+	}
+	defer c.positionsRefreshMu.Unlock()
+	if c.positionsRefreshUncancelled == binding {
+		return nil, fmt.Errorf("prior positions subscription cancellation is unconfirmed")
+	}
+	conn := binding.connection
+	// The current negotiated maximum is 203. Position Multi remains legacy
+	// on these sessions; account protobuf begins at 207.
+	if version := conn.ServerVersion(); version < 103 || version >= 207 {
+		return nil, fmt.Errorf("positions snapshot protocol is unsupported")
+	}
+	expected := accountSummaryExpectedAccount(conn)
+	if !expected.valid() {
+		return nil, ErrAccountSummaryScopeConflict
+	}
+	guard := func() error {
+		if !c.SessionCurrent(binding) {
+			return ErrIBKRUnavailable
+		}
+		if !expected.equal(accountSummaryExpectedAccount(conn)) {
+			return ErrAccountSummaryScopeConflict
+		}
+		return nil
+	}
+	reqID, _, err := conn.reserveNextRequestIDForEpoch(binding.epoch)
+	if err != nil {
 		return nil, err
 	}
-	return c.filteredCachedPositions(conn.GetPositionsSnapshot()), nil
+	defer conn.discardRequestIDReservation(reqID)
+	if _, err := conn.claimRequestIDForEpoch(reqID, binding.epoch); err != nil {
+		return nil, err
+	}
+	var mu sync.Mutex
+	terminal := false
+	positions := make(map[int]*RawPosition)
+	done := make(chan error, 1)
+	finish := func(err error) {
+		if !terminal {
+			terminal = true
+			done <- err
+		}
+	}
+	rowHandler := conn.RegisterHandlerAtEpoch(msgPositionMulti, func(fields []string, epoch uint64) {
+		if epoch != binding.epoch || len(fields) < 3 || fields[2] != strconv.Itoa(reqID) {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if terminal {
+			return
+		}
+		row, err := parsePositionMultiSnapshotRow(fields, string(expected))
+		if err != nil {
+			finish(err)
+			return
+		}
+		if row.Position == 0 {
+			delete(positions, row.Contract.ConID)
+		} else {
+			positions[row.Contract.ConID] = row
+		}
+	})
+	endHandler := conn.RegisterHandlerAtEpoch(msgPositionMultiEnd, func(fields []string, epoch uint64) {
+		if epoch != binding.epoch || len(fields) < 3 || fields[2] != strconv.Itoa(reqID) {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if fields[1] != "1" || (len(fields) != 3 && (len(fields) != 4 || fields[3] != "")) {
+			finish(fmt.Errorf("malformed positions snapshot end"))
+			return
+		}
+		finish(nil)
+	})
+	defer conn.UnregisterHandler(msgPositionMulti, rowHandler)
+	defer conn.UnregisterHandler(msgPositionMultiEnd, endHandler)
+	sentPossible := false
+	defer func() {
+		mu.Lock()
+		terminal = true
+		mu.Unlock()
+		if !sentPossible {
+			return
+		}
+		// Cancellation needs its own bounded cleanup even when the reader's
+		// context expired. The caller's budget also bounds this cleanup.
+		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer cancel()
+		err := conn.sendMessageWithTypeContextForEpochGuarded(cancelCtx, conn.encodeMsg(cancelPositionsMulti, 1, reqID), RequestTypeGeneral, binding.epoch, true, guard)
+		if err != nil {
+			c.positionsRefreshUncancelled = binding
+			rows, resultErr = nil, fmt.Errorf("cancel positions subscription: %w", err)
+		} else {
+			c.positionsRefreshUncancelled = ConnectorSessionBinding{}
+		}
+		if err := guard(); err != nil {
+			rows, resultErr = nil, err
+		}
+	}()
+	readCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err = conn.sendMessageWithTypeContextForEpochGuarded(readCtx, conn.encodeMsg(reqPositionsMulti, 1, reqID, string(expected), ""), RequestTypeGeneral, binding.epoch, true, guard)
+	sentPossible = err == nil || SendDispositionOf(err) != SendDispositionDefinitelyUnsent
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+	case <-readCtx.Done():
+		return nil, fmt.Errorf("waiting for positions snapshot: %w", readCtx.Err())
+	}
+	if err := readCtx.Err(); err != nil {
+		return nil, err
+	}
+	if err := guard(); err != nil {
+		return nil, err
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	rows = make([]*RawPosition, 0, len(positions))
+	for _, row := range positions {
+		rows = append(rows, row)
+	}
+	return rows, nil
 }
 
 // registerHandlers sets up message handlers for IBKR responses.

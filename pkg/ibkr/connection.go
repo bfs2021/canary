@@ -1646,6 +1646,8 @@ const (
 	updateDisplayGroup          = 69
 	unsubscribeFromGroupEvents  = 70
 	startAPI                    = 71
+	reqPositionsMulti           = 74
+	cancelPositionsMulti        = 75
 	reqAccountUpdatesMulti      = 76
 	cancelAccountUpdatesMulti   = 77
 	reqSecDefOptParams          = 78
@@ -2297,6 +2299,11 @@ func (c *Connection) processMessageAtEpoch(msgBytes []byte, epoch uint64) {
 		default:
 			// Channel already has a signal
 		}
+	case msgPositionMulti, msgPositionMultiEnd:
+		// Retired request IDs carry private holdings too; consume their late
+		// callbacks without falling through to generic unhandled-frame logs.
+		c.dispatchHandlers(msgID, fields, epoch)
+		return
 	case msgAccountSummary:
 		c.handleAccountSummaryUnderBrokerScopeLease(fields)
 	case msgAccountSummaryEnd:
@@ -6975,6 +6982,40 @@ func (c *Connection) cancelMarketDataForEpoch(ctx context.Context, reqID int, ep
 		c.releaseMarketDataSlotAtEpoch(reqID, epoch)
 	}
 	return err
+}
+
+// parsePositionMultiSnapshotRow reads the legacy PositionMulti callback:
+// version, request ID, account, contract, position, average cost, model code.
+// Account/model conflicts and malformed quantities cannot certify an empty or
+// smaller holding. The current maximum negotiated server version is 203.
+func parsePositionMultiSnapshotRow(fields []string, account string) (*RawPosition, error) {
+	if len(fields) < 18 || fields[1] != "1" {
+		return nil, fmt.Errorf("malformed positions snapshot callback")
+	}
+	if !strings.EqualFold(strings.TrimSpace(fields[3]), account) || fields[17] != "" {
+		return nil, ErrAccountSummaryScopeConflict
+	}
+	conID, conErr := strconv.Atoi(fields[4])
+	quantity, qtyErr := strconv.ParseFloat(fields[15], 64)
+	cost, costErr := strconv.ParseFloat(fields[16], 64)
+	strike := 0.0
+	var strikeErr error
+	if fields[8] != "" {
+		strike, strikeErr = strconv.ParseFloat(fields[8], 64)
+	}
+	multiplier := 1
+	var multiplierErr error
+	if fields[10] != "" {
+		multiplier, multiplierErr = strconv.Atoi(fields[10])
+	}
+	if conErr != nil || conID <= 0 || qtyErr != nil || !finiteFloat(quantity) || costErr != nil || !finiteFloat(cost) ||
+		strikeErr != nil || !finiteFloat(strike) || multiplierErr != nil || multiplier <= 0 || fields[5] == "" || fields[6] == "" || fields[12] == "" {
+		return nil, fmt.Errorf("malformed positions snapshot callback")
+	}
+	return &RawPosition{Account: account, Position: quantity, AverageCost: cost, Contract: Contract{
+		ConID: conID, Symbol: fields[5], SecType: fields[6], Expiry: fields[7], Strike: strike,
+		Right: fields[9], Multiplier: multiplier, Exchange: fields[11], Currency: fields[12], LocalSymbol: fields[13], TradingClass: fields[14],
+	}}, nil
 }
 
 // RequestPositions requests current positions via the one-shot reqPositions

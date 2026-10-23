@@ -148,3 +148,54 @@ func TestStockAddCLIRequiresExplicitSizingIntent(t *testing.T) {
 		}
 	}
 }
+
+func TestAddHelpDispatchesWithoutReadingOrCalling(t *testing.T) {
+	for _, tc := range []struct {
+		action string
+		fields []string
+	}{
+		{"market", []string{"underlying", "discover", "selected", "refresh", "horizon_days"}},
+		{"call-plan", []string{"contract", "limit_price", "budget", "round_size"}},
+	} {
+		for _, args := range [][]string{{tc.action, "--help"}, {"--help", tc.action}, {tc.action, "--json", "-h"}} {
+			t.Run(strings.Join(args, "_"), func(t *testing.T) {
+				c := &stockAddConn{}
+				var out bytes.Buffer
+				code := Run(t.Context(), &Env{Conn: c, Stdin: addHelpNoRead{t}, Stdout: &out, Stderr: &out, HelpOnly: true}, "add", args)
+				if code != 0 || c.method != "" {
+					t.Fatalf("help exit=%d method=%s output=%s", code, c.method, out.String())
+				}
+				if !strings.Contains(out.String(), "canary add "+tc.action) || strings.Contains(out.String(), "--stop-price") {
+					t.Fatalf("wrong command help: %s", out.String())
+				}
+				for _, field := range tc.fields {
+					if !strings.Contains(out.String(), field) {
+						t.Errorf("stdin field %q missing from help: %s", field, out.String())
+					}
+				}
+			})
+		}
+	}
+}
+
+type addHelpNoRead struct{ t *testing.T }
+
+func (r addHelpNoRead) Read([]byte) (int, error) {
+	r.t.Fatal("help read stdin")
+	return 0, errors.New("unexpected stdin read")
+}
+
+func TestAddHelpDoesNotTreatFlagValuesAsActions(t *testing.T) {
+	for _, args := range [][]string{
+		{"plan", "SYNA", "--exchange", "market", "--help"},
+		{"plan", "SYNA", "--currency", "call-plan", "--help"},
+		{"plan", "market", "--help"},
+	} {
+		var out bytes.Buffer
+		c := &stockAddConn{}
+		code := Run(t.Context(), &Env{Conn: c, Stdin: addHelpNoRead{t}, Stdout: &out, Stderr: &out, HelpOnly: true}, "add", args)
+		if code != 0 || c.method != "" || !strings.Contains(out.String(), "--stop-price") {
+			t.Fatalf("%v: exit=%d method=%s help=%s", args, code, c.method, out.String())
+		}
+	}
+}

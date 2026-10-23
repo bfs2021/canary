@@ -598,6 +598,10 @@ type Server struct {
 	// orderDeltaPositionsForTest replaces the positions read the
 	// delta-reducing exit exemption measures its underlying from.
 	orderDeltaPositionsForTest func(context.Context) (*rpc.PositionsResult, error)
+	// Synthetic exact-position receipts and lifecycle frontiers for fill-lag tests.
+	reduceFillSnapshotForTest   func(context.Context, time.Duration) ([]*ibkrlib.RawPosition, error)
+	reduceFillGenerationForTest func() uint64
+
 	// reducePositionsForTest replaces the positions read behind a reduce
 	// preview, sweep and tokened submit (reducePositions).
 	reducePositionsForTest   func(context.Context) (*rpc.PositionsResult, error)

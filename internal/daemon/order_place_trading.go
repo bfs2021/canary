@@ -67,6 +67,16 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 	if err := s.bindPreviewOrderRiskAuthority(ctx, &binding, status, payload, payload.Draft); err != nil {
 		return nil, err
 	}
+	if payload.Draft.Source == reduceOrderSource {
+		fillBinding, err := s.ensureReduceFillCoherence(ctx, []reduceHeldPosition{{payload.Draft.Contract, binding.riskPosition.Before}}, p.TimeoutMs)
+		if err != nil {
+			return nil, err
+		}
+		binding.reduceFillEvidence = &fillBinding
+		if err := s.validateReduceTokenForPlace(ctx, payload, binding.riskPosition.Before, p.TimeoutMs); err != nil {
+			return nil, err
+		}
+	}
 	if payload.Scope == rpc.OrderTokenScopeProtectedAdd {
 		return s.placeProtectedStockAdd(ctx, p, payload, binding, status)
 	}
@@ -138,6 +148,37 @@ func (s *Server) placeOrder(ctx context.Context, p rpc.OrderPlaceParams) (*rpc.O
 		Message:         fmt.Sprintf("%s broker placeOrder transmit attempted; waiting for broker lifecycle callback", auth.Route),
 		AsOf:            s.orderNow(),
 	}, nil
+}
+
+// A reduce preview uses the normal place scope. Enforce its extra contract at
+// that common write boundary too, so order.place cannot bypass the reduction
+// wrapper. The held quantity is the fresh authority bound through first send;
+// ordinary held-long exits retain their separate admission policy.
+func (s *Server) validateReduceTokenForPlace(ctx context.Context, payload orderPreviewTokenPayload, held float64, timeoutMs int) error {
+	draft := payload.Draft
+	if (draft.Action == rpc.OrderActionSell && held <= 0) || (draft.Action == rpc.OrderActionBuy && held >= 0) {
+		return fmt.Errorf("%w: %s is no longer held on the reviewed reduction side", ErrTradingDisabled, draft.Contract.Symbol)
+	}
+	committed, blockers := s.reduceCommittedSales(draft.Contract, draft.Action)
+	if len(blockers) > 0 {
+		return tradingBlockersError(blockers)
+	}
+	free, blockers := reduceFreeQuantity(held, committed, draft.Contract.Symbol)
+	if len(blockers) > 0 {
+		return tradingBlockersError(blockers)
+	}
+	available, _ := closeReduceQuantity(free)
+	if draft.Quantity > available {
+		return fmt.Errorf("%w: the reviewed reduction of %d exceeds the %d whole units left after Canary's working orders", ErrTradingDisabled, draft.Quantity, available)
+	}
+	quote, err := s.fetchPreviewQuoteBound(ctx, draft.Contract, orderPreviewTimeout(timeoutMs), nil)
+	if err != nil {
+		return fmt.Errorf("%w: current reduction quote unavailable: %v", ErrTradingDisabled, err)
+	}
+	if _, blockers := reducePriceBoundCheck(draft, payload.Quote, quote); len(blockers) > 0 {
+		return tradingBlockersError(blockers)
+	}
+	return nil
 }
 
 func (s *Server) modifyOrder(ctx context.Context, p rpc.OrderModifyParams) (*rpc.OrderModifyResult, error) {

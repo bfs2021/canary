@@ -5,12 +5,37 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
 func runAdd(ctx context.Context, env *Env, args []string) int {
+	// Route before parsing so --help belongs to the selected action. Skip
+	// value-taking flags: a stock currency or venue is not an action name.
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "-") {
+			if !strings.Contains(arg, "=") && isValueFlag(arg) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
+			continue
+		}
+		switch arg {
+		case "market":
+			return runAddMarket(ctx, env, append(append([]string{}, args[:i]...), args[i+1:]...))
+		case "call-plan":
+			return runAddCallPlan(ctx, env, append(append([]string{}, args[:i]...), args[i+1:]...))
+		}
+		break
+	}
 	fs := flagSet(env, "add")
+	usage := fs.Usage
+	fs.Usage = func() {
+		usage()
+		helpLine(env, "", "plan checks a stock addition or opening; preview creates an exact order review for separate owner confirmation. Neither places an order.", nil)
+		helpLine(env, "", "market reads stock quotes and discovers or refreshes calls; call-plan sizes an exact call using broker fee evidence. Both read one JSON object from stdin. Run canary add market --help or canary add call-plan --help for request fields and examples.", nil)
+	}
 	stop := fs.Float64("stop-price", 0, "fixed attached stop below entry; added shares only, GTC regular session")
 	price := fs.Float64("limit", 0, "maximum price per share in the stock currency")
 	quantity := fs.Int("quantity", 0, "exact additional whole shares; choose this or --max")
@@ -22,16 +47,6 @@ func runAdd(ctx context.Context, env *Env, args []string) int {
 	jsonOut := fs.Bool("json", false, "emit typed Add evidence")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
-	}
-	// Run hoists flags before positionals. Keep the subcommand's own parser
-	// responsible for rejecting stock-only flags on these read-only requests.
-	if fs.NArg() == 1 {
-		switch fs.Arg(0) {
-		case "market":
-			return runAddMarket(ctx, env, args[:len(args)-1])
-		case "call-plan":
-			return runAddCallPlan(ctx, env, args[:len(args)-1])
-		}
 	}
 	if fs.NArg() != 2 || (fs.Arg(0) != "plan" && fs.Arg(0) != "preview") {
 		return fail(env, "usage: canary add plan|preview SYMBOL --currency CCY --limit PRICE (--quantity N | --max) [--con-id ID] [--json]")
@@ -153,7 +168,28 @@ func addBlockerKindLabel(kind string) string {
 
 // runAddMarket adapts one bounded read-only request; stdin carries no authority.
 func runAddMarket(ctx context.Context, env *Env, args []string) int {
-	fs := flagSet(env, "add market")
+	fs := describedFlagSet(env, "add market", "Read stock quotes and discover or refresh exact long calls; no orders placed", "canary add market [--json] < request.json")
+	usage := fs.Usage
+	fs.Usage = func() {
+		usage()
+		renderAddRequestHelp(env, []string{
+			"Stdin: one JSON object; unknown fields and extra objects are rejected. Output is always JSON, with or without --json.",
+			"underlying (required): stock contract with symbol, sec_type STK, currency and exchange SMART; con_id is optional when known.",
+			"discover (optional boolean): discover call candidates for USD stocks. selected (optional contract): refresh one exact call returned by discovery.",
+			"refresh (optional array): up to four {horizon_days, contract} objects; unique horizons 14, 30, 60 or 120. Do not combine refresh with discover. selected and refresh contracts must be exact USD SMART calls for the underlying, with con_id, expiry, strike, right C, multiplier 100 and trading_class.",
+			"Options require USD. Read option_mode and per-call planning or unavailable evidence: planning prices are not executable quotes. Use the returned exact contract for call-plan.",
+		}, `canary add market --json <<'JSON'
+{
+  "underlying": {
+    "symbol": "SYNA",
+    "sec_type": "STK",
+    "currency": "USD",
+    "exchange": "SMART"
+  },
+  "discover": true
+}
+JSON`)
+	}
 	_ = fs.Bool("json", false, "emit typed market evidence")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
@@ -175,7 +211,36 @@ func runAddMarket(ctx context.Context, env *Env, args []string) int {
 }
 
 func runAddCallPlan(ctx context.Context, env *Env, args []string) int {
-	fs := flagSet(env, "add call-plan")
+	fs := describedFlagSet(env, "add call-plan", "Size an exact long call using broker fee evidence; no orders placed", "canary add call-plan [--json] < request.json")
+	usage := fs.Usage
+	fs.Usage = func() {
+		usage()
+		renderAddRequestHelp(env, []string{
+			"Stdin: one JSON object; unknown fields and extra objects are rejected. Output is always JSON, with or without --json.",
+			"contract (required): copy the exact contract returned by add market. It must be a USD SMART call: sec_type OPT, right C, multiplier 100, positive con_id, trading_class and expiry YYYYMMDD more than seven days away; retain symbol and strike.",
+			"limit_price (required): positive premium per underlying share in USD. budget (required): positive total USD debit including the broker fee bound, at most 1000000000.",
+			"round_size (optional boolean, default false): round to the nearest five contracts, retaining one or two. Rounding can exceed budget; inspect over_budget, debit, quantity and fee_bound in the result.",
+			"The options session must be open. Sizing returns no submission token and reserves no money. An exact order preview and separate owner confirmation are required to place an order.",
+		}, `canary add call-plan --json <<'JSON'
+{
+  "contract": {
+    "symbol": "SYNA",
+    "con_id": 10001,
+    "sec_type": "OPT",
+    "currency": "USD",
+    "exchange": "SMART",
+    "expiry": "20300118",
+    "strike": 100,
+    "right": "C",
+    "multiplier": 100,
+    "trading_class": "SYNA"
+  },
+  "limit_price": 5.5,
+  "budget": 5000,
+  "round_size": false
+}
+JSON`)
+	}
 	_ = fs.Bool("json", false, "emit checked call size")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
@@ -194,4 +259,13 @@ func runAddCallPlan(ctx context.Context, env *Env, args []string) int {
 		return fail(env, "add call-plan: %v", err)
 	}
 	return printJSON(env, out)
+}
+
+func renderAddRequestHelp(env *Env, paragraphs []string, example string) {
+	for _, paragraph := range paragraphs {
+		helpLine(env, "", paragraph, nil)
+		fmt.Fprintln(env.Stdout)
+	}
+	helpLine(env, "", "Example (synthetic identity; replace with your resolved contract):", nil)
+	fmt.Fprintln(env.Stdout, example)
 }

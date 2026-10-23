@@ -1,0 +1,78 @@
+# canary add market --help · COLUMNS=80 · colour off
+canary add market — Read stock quotes and discover or refresh exact long calls;
+no orders placed
+
+Usage: canary add market [--json] < request.json
+
+Flags
+  --json                    emit typed market evidence
+
+Stdin: one JSON object; unknown fields and extra objects are rejected. Output is
+always JSON, with or without --json.
+
+underlying (required): stock contract with symbol, sec_type STK, currency and
+exchange SMART; con_id is optional when known.
+
+discover (optional boolean): discover call candidates for USD stocks. selected
+(optional contract): refresh one exact call returned by discovery.
+
+refresh (optional array): up to four {horizon_days, contract} objects; unique
+horizons 14, 30, 60 or 120. Do not combine refresh with discover. selected and
+refresh contracts must be exact USD SMART calls for the underlying, with con_id,
+expiry, strike, right C, multiplier 100 and trading_class.
+
+Options require USD. Read option_mode and per-call planning or unavailable
+evidence: planning prices are not executable quotes. Use the returned exact
+contract for call-plan.
+
+Example (synthetic identity; replace with your resolved contract):
+canary add market --json <<'JSON'
+{
+  "underlying": {
+    "symbol": "SYNA",
+    "sec_type": "STK",
+    "currency": "USD",
+    "exchange": "SMART"
+  },
+  "discover": true
+}
+JSON
+# canary add market --help · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mcanary add market — Read stock quotes and discover or refresh exact long calls;\x1b[0m
+\x1b[1mno orders placed\x1b[0m
+
+Usage: \x1b[36mcanary add market [--json] < request.json\x1b[0m
+
+\x1b[1mFlags\x1b[0m
+  \x1b[36m--json                    \x1b[0memit typed market evidence
+
+Stdin: one JSON object; unknown fields and extra objects are rejected. Output is
+always JSON, with or without --json.
+
+underlying (required): stock contract with symbol, sec_type STK, currency and
+exchange SMART; con_id is optional when known.
+
+discover (optional boolean): discover call candidates for USD stocks. selected
+(optional contract): refresh one exact call returned by discovery.
+
+refresh (optional array): up to four {horizon_days, contract} objects; unique
+horizons 14, 30, 60 or 120. Do not combine refresh with discover. selected and
+refresh contracts must be exact USD SMART calls for the underlying, with con_id,
+expiry, strike, right C, multiplier 100 and trading_class.
+
+Options require USD. Read option_mode and per-call planning or unavailable
+evidence: planning prices are not executable quotes. Use the returned exact
+contract for call-plan.
+
+Example (synthetic identity; replace with your resolved contract):
+canary add market --json <<'JSON'
+{
+  "underlying": {
+    "symbol": "SYNA",
+    "sec_type": "STK",
+    "currency": "USD",
+    "exchange": "SMART"
+  },
+  "discover": true
+}
+JSON

@@ -271,11 +271,23 @@ sweep. `--plan` sizes the legs without broker previews and reports what the
 book would lose if the index fell 10% now and after, from the mandate's
 index stress; a plan cannot be submitted.
 
+A reduction reserves the quantities already committed by Canary's working
+orders, including individual legs of combo orders. A known fill does not
+make those units available for another sale while positions are catching up:
+Canary checks a completed broker position snapshot against the position used
+for the reduction and refuses while they disagree or cannot be confirmed.
+An order-state change before transmission also requires another review.
+These checks, and the reviewed worst price, apply when a reduction token is
+submitted through `order place` as well as through `proposals reduce`.
+
 No portfolio sweep, in any mode, selects a locked holding. `canary locks
 lock SYMBOL --con-id ID --role hedge|core` puts a line on the keep list:
 a hedge is a hedge because you say so, not because of its delta sign that
 day. Net mode reads the direction of the unlocked book. The mandate's
-automatic reduction leaves locked lines out too. A reviewed basket refuses,
+automatic reduction leaves locked lines out too. If the keep list cannot be
+read, automatic reductions wait; an unreadable list never means no locks. A
+lock save waits for any in-flight broker transaction before acknowledging the
+new list. It does not cancel orders already sent. A reviewed basket refuses,
 and sends nothing for, a leg locked after the review. A single-holding
 `proposals reduce SYMBOL` still works on a locked line. `--include-hedges` is
 a hard error under `--portfolio` instead of a silent no-op.

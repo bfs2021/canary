@@ -106,6 +106,10 @@ func (s *Server) handleHoldingLocksReplace(ctx context.Context, req *rpc.Request
 	if err != nil {
 		return nil, err
 	}
+	// A successful lock save orders after any in-flight broker transaction.
+	// The next bulk or automatic reduction must therefore read the new list.
+	s.brokerWriteMu.Lock()
+	defer s.brokerWriteMu.Unlock()
 	s.holdingLocksMu.Lock()
 	defer s.holdingLocksMu.Unlock()
 	if s.coreStore == nil || !s.coreStore.Health().Ready {
