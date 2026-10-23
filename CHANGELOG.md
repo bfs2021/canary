@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.27.1 — 2026-10-23 12:16 WEST
+
+### What's new
+
+Canary keeps option quantities and underlying position capacity reserved while
+an exercise is unresolved. The human-only reconciliation command
+requires a matching IBKR statement record, updated holdings and confirmation
+that the exact request is fully resolved. Uncertain requests stay blocked.
+Older exercise requests without the required record remain blocked; this
+command cannot clear them.
+
+Existing trading limits are unchanged. Standard binaries and all MCP tools
+remain read-only.
+
+### Fixed
+
+- Budget reductions exclude locked holdings while still counting their exposure. Automatic budget reductions recheck the keep list before sending and stop if it cannot be read.
+- Selling a holding cannot cancel an attached protective stop while its entry is still unfinished, including after a partial fill.
+- Changing a partly filled order preserves the requested remaining quantity when converting to IBKR's total quantity. A fill arriving during review invalidates the change before sending.
+- Automatic strategy pricing requires current, live quotes during each leg's trading session. Delayed, frozen or old quotes cannot authorize an automatically priced order.
+- Pending exercises reserve capacity across restarts and block competing orders, including combo legs and unacknowledged orders. A fill notification alone cannot free capacity before holdings reflect the exercise.
+- Exercise recovery consumes matching broker evidence only once and refuses incomplete or ambiguous evidence. CLI help, JSON errors and documentation explain how to inspect unresolved requests and reconcile a completed exercise.
+- EUR bill quantities now use IBKR's units of EUR 1,000 face value, keeping cash-sweep sizing, previews and holdings valuation consistent.
+- Missing IBKR order-preview figures remain unknown instead of becoming zero. A commission-only broker preview can bound the fee when supplied in the cash currency with no commission range.
+
 ## v3.27.0 — 2026-10-23 08:14 WEST
 
 ### What's new
