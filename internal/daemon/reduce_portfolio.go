@@ -411,6 +411,9 @@ func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposal
 	}
 	s.reduceIndexLoss(ctx, res, reduceTradeChanges(res.Legs))
 	aggregateBasket(res, false)
+	if res.Mode == rpc.ReduceModeNet && !p.PlanOnly {
+		projectReducePortfolioReview(res, pos, cands)
+	}
 	if p.PlanOnly {
 		// A plan is never a basket to submit: its legs are planned or
 		// blocked, and its total is the planned legs' marks.

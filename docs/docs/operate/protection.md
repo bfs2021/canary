@@ -280,6 +280,16 @@ and sends nothing for, a leg locked after the review. A single-holding
 `proposals reduce SYMBOL` still works on a locked line. `--include-hedges` is
 a hard error under `--portfolio` instead of a silent no-op.
 
+A net portfolio preview also discloses signed net dollar delta before and the
+estimated delta after eligible orders fill, using current prices and Greeks;
+blocked orders do not count toward that estimate. Its `untouched_positions`
+list names every nonzero holding left unchanged, with exact contract identity,
+held quantity and the reason: locked by you, opposite-direction delta,
+unsupported position, whole-unit rounding, or a blocked preview. An empty list
+means no untouched holdings; null means the review is unavailable, as for a
+scoped sweep, which lists what it keeps under `kept`. These fields only explain
+the existing sizing and never change which orders are selected.
+
 A reduce preview returns, for each order it would place, a signed preview
 token and the exact terms that token binds (`terms`): the contract, side,
 quantity, order type, limit, time in force and algorithm the broker will

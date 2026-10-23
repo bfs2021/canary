@@ -1750,6 +1750,15 @@ type TradeProposalReduceLeg struct {
 	Beta   *float64 `json:"beta,omitempty"`
 }
 
+// TradeProposalReduceUntouchedPosition explains a held contract left unchanged
+// by the eligible preview orders. It does not change sweep selection or sizing.
+type TradeProposalReduceUntouchedPosition struct {
+	Contract         ContractParams `json:"contract"`
+	PositionQuantity float64        `json:"position_quantity"`
+	Code             string         `json:"code"`
+	Reason           string         `json:"reason"`
+}
+
 // TradeProposalReducePortfolioResult is the basket preview/submit envelope.
 type TradeProposalReducePortfolioResult struct {
 	Accepted             bool                     `json:"accepted"`
@@ -1784,4 +1793,12 @@ type TradeProposalReducePortfolioResult struct {
 	IndexLossAfterBase  *float64 `json:"index_loss_after_base,omitempty"`
 	IndexLossUnknown    string   `json:"index_loss_unknown,omitempty"`
 	PlanOnly            bool     `json:"plan_only,omitempty"`
+	// NetDollarDeltaAfter estimates signed exposure after all eligible preview
+	// legs fill at current Greeks/prices. Nil means unavailable, not zero.
+	NetDollarDeltaAfter *float64 `json:"net_dollar_delta_after,omitempty"`
+	// UntouchedPositions, on a net preview, names every held contract the
+	// eligible orders leave unchanged and why, locked lines included (owner,
+	// 2026-10-19). An empty list is a complete review with none; null means
+	// this response carries no such projection (a scoped sweep reports Kept).
+	UntouchedPositions []TradeProposalReduceUntouchedPosition `json:"untouched_positions"`
 }
