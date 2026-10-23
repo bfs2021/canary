@@ -2,6 +2,47 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## v3.27.0 — 2026-10-23 08:14 WEST
+
+### What's new
+
+Review a stock addition with optional protection for the added shares, discover
+long calls across four horizons, and size a selected call against a budget.
+The Add CLI now includes request fields and copyable JSON examples.
+
+Choose holdings to keep out of bulk and automatic reductions. Plan a trim of
+net exposure, long positions, a sector or higher-beta holdings before creating
+an order review. A plan cannot be submitted.
+
+Existing written limits are preserved. The policy migration adds missing
+reduction-allowance fields and advances the policy version. Standard binaries
+and every MCP tool remain read-only; order previews and execution retain their
+separate authority gates.
+
+### Added
+
+- Stock Add plans and exact previews support an optional attached stop for the added shares. The stop stays held until the entry fills completely; it does not replace protection for existing shares.
+- Call discovery resolves actual broker contracts and respects each option class's session. Outside the session, it labels frozen broker quote evidence as planning data rather than an executable quote.
+- Holding locks exclude chosen hedge and core lines from portfolio sweeps and automatic reductions. An explicit single-holding reduction remains available.
+- Portfolio reductions support net, long-only and all-position plans, with sector and beta filters. JSON responses identify untouched holdings and report the estimated index-loss comparison.
+
+### Changed
+
+- Percentage reductions now use a worst-price limit instead of the earlier midpoint band: the new policy fields default to 1% for stocks and ETFs, and 5% for options with at least one tick of allowance. Review that limit before confirming.
+- Call discovery targets delta 0.50–0.70 through 21 days to expiry, 0.35–0.50 from 22–45 days, and 0.25–0.40 beyond 45 days. Longer horizons therefore select lower-delta calls.
+
+### Fixed
+
+- Reductions reserve quantities committed by Canary's working orders, including combo legs, and wait when known fills and position evidence disagree. Ordinary order placement enforces the same reduction-token quantity and reviewed-price checks.
+- Saving holding locks waits for an in-flight broker transaction, and automatic reductions wait if the keep list cannot be read. Saving a lock does not cancel orders already sent.
+- Add discovery retains complete slow replies, searches farther when nearby calls are unsuitable, and stops when its caller disconnects. Stock quote reads preserve native currency.
+- Statement reconciliation compares equity using statement-closing prices and FX while retaining broker precision.
+- Add subcommand help now shows its own JSON request schema and examples without reading stdin or contacting the daemon.
+
+### Security
+
+- Updated the HTTP/2 dependency to golang.org/x/net v0.60.0.
+
 ## v3.26.3 — 2026-10-21 08:06 CEST
 
 ### What's new

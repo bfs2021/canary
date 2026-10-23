@@ -702,6 +702,19 @@ async function runRound4SyntheticSmoke() {
       horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     }));
     if (!edgeView.learning.includes("Same decisions") || !edgeView.cycles.includes("SYN CALL")) throw new Error("Edge learning evidence did not render");
+    if (args["edge-screenshot"]) {
+      // Capture the production app from the same fully intercepted synthetic
+      // fixture used by the assertions. Restore privacy and viewport afterwards.
+      const screenshotViewport = page.viewportSize();
+      await page.locator("#accountPrivacyToggle").click();
+      await page.setViewportSize({ width: 821, height: 684 });
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const edgeTop = Math.ceil((await page.locator("#edgeTab").boundingBox()).y);
+      await page.setViewportSize({ width: 821, height: 684 + edgeTop });
+      await page.screenshot({ path: args["edge-screenshot"], clip: { x: 0, y: edgeTop, width: 821, height: 684 }, animations: "disabled" });
+      await page.setViewportSize(screenshotViewport);
+      await page.locator("#accountPrivacyToggle").click();
+    }
     await page.locator(".edge-analysis > summary").click();
     if (!await page.locator(".edge-analysis .edge-matrix-note").isVisible()) throw new Error("Horizon comparisons must show their different-samples qualification");
     await page.locator(".edge-analysis > summary").click();

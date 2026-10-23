@@ -61,7 +61,7 @@ The bundle carries its own macOS and Linux binaries. The
 [Claude Desktop walkthrough](https://osauer.dev/canary/claude-desktop-interactive-brokers/)
 covers the first connection.
 
-![Canary Edge showing a synthetic one-year decision review, 1/5/20-session matrix, and ranked findings](docs/social/canary-app-edge.png)
+![Canary Edge showing a synthetic decision review, review coverage and price outcomes after decisions](docs/social/canary-app-edge.png)
 
 _Current Canary SPA rendered from synthetic data. Edge reports observed
 historical outcomes; it is not a forecast or a causal claim._
@@ -131,6 +131,18 @@ that artifact.
   US equities and listed options, Xetra, London, Tokyo and Hong Kong, with
   explicit coverage bounds and intraday breaks. `canary macro` separately reads
   cached official economic calendars and publications with their source health.
+- **Can I review an addition before placing it?** `canary add plan` checks a
+  stock addition; `canary add preview` reviews exact terms, including an optional
+  stop for the added shares. `canary add market` discovers calls and
+  `canary add call-plan` sizes an exact call against a budget. These commands
+  place no order. See the [Add command guide](docs/docs/reference/cli.md#add)
+  for request examples and the separate confirmation boundary.
+- **How can I reduce exposure while keeping chosen holdings?**
+  `canary locks` keeps specified lines out of bulk and automatic reductions.
+  Portfolio reductions can target net exposure, long positions, sectors or
+  higher-beta holdings. `--plan` shows a proposed reduction without creating
+  anything that can be submitted. A direct single-holding reduction can still
+  target a locked line. See [reductions and holding locks](docs/docs/operate/protection.md).
 - **What work already exists?** Proposals, opportunities, and the local order
   journal show what is blocked or ready for human review and how it changed.
   They are evidence, not broker authority. A multi-leg option position is

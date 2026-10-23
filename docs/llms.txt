@@ -1,6 +1,15 @@
 # Canary
 
-Updated: 2026-10-20 13:50 CEST
+Updated: 2026-10-23 08:14 WEST
+
+Version 3.27 adds stock-entry reviews with optional protection for the added
+shares, call discovery and budget-based call sizing, and holding locks for
+bulk and automatic reductions. CLI help includes JSON request examples.
+Reduction checks account for Canary's working combo legs and wait when known
+fills and positions disagree. Existing written limits are preserved; policy
+migration adds missing reduction-allowance fields (1% for stocks/ETFs and 5%
+for options). Standard binaries and MCP remain read-only, and MCP cannot
+preview or submit orders.
 
 Version 3.26 says in plain words which TWS or IB Gateway settings differ
 from what Canary needs: `canary status` gains a Gateway setup row, read once
