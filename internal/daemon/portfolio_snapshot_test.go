@@ -148,8 +148,8 @@ func TestClassificationPrecedenceAndBrokerMap(t *testing.T) {
 		t.Fatalf("unlisted fund must pool, not map: %+v", c)
 	}
 	// Wikipedia's GICS sector beats the broker's industry for an S&P name.
-	if c := classifyUnderlying("AMZN", ibkrlib.MarketClassification{Industry: "Communications", Category: "Internet"}); c.Sector != "Consumer Discretionary" {
-		t.Fatalf("AMZN: %+v", c)
+	if c := classifyUnderlying("BKNG", ibkrlib.MarketClassification{Industry: "Communications", Category: "Internet"}); c.Sector != "Consumer Discretionary" {
+		t.Fatalf("BKNG: %+v", c)
 	}
 	cases := map[[2]string]string{
 		{"Consumer, Non-cyclical", "Pharmaceuticals"}:     "Health Care",
