@@ -17,6 +17,13 @@ as of Canary 278cc600.
 | LO-P1 | An exit fires when the stock breaks the idea (a level on the underlying, or the event that was the thesis), not when the option's price wobbles. | missing |
 | LO-P2 | A last-resort loss on the premium backs it up. | built: loss exit at −60% (Rulebook loss line), full close, owner approval |
 | LO-P3 | A protect exit sells with a patient limit inside the spread, never at market. | partly: previews price patient limits; the profit trail is a broker trail that becomes a market order |
+| LO-P4 | Adding to a long option that is down more than 40% from its cost waits a cooling-off until the next session and shows the loss so far and the days left; it cannot be sent in the moment. No purpose is asked. (Owner 2026-10-24 08:33 CEST: 40%, cooling-off rather than a hard stop.) | missing |
+
+Considered and not adopted: a shared premium limit for names that move
+together (owner 2026-10-24 08:33 CEST: co-movement between these names is
+likely a passing phase of speculative flows, not lasting). Co-movement stays
+visible as each name's share of risk on Risk › Mandate, which follows the
+names' actual joint moves.
 
 ## Harvest: keep winners, take risk off
 
