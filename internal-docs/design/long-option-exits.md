@@ -53,4 +53,4 @@ names' actual joint moves.
 
 | ID | Requirement | Canary today |
 |---|---|---|
-| LO-V1 | Before a rule acts without the owner, it is replayed on the owner's own option trades and compared with what the owner did, net of spread and fees, every price marked as recorded or modelled. | missing: Edge builds no option counterfactual (its method says so) |
+| LO-V1 | Before a rule acts without the owner, it is replayed on the owner's own option trades and compared with what the owner did, net of spread and fees, every price marked as recorded or modelled. | built: `canary edge replay` (daemon `edge.replay`, read-only) replays sets A-D and each rule alone on recorded marks, with a separately labelled modelled run; not yet installed |

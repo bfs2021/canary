@@ -37,7 +37,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary core`](#canary-core) | Desk | Core sleeve target: the month's trend and volatility decision, the target shares, the holding, the band and what the rule would trade; live, the month's row waiting for your confirmation and the last decision. Reads only | `read-only` | yes |
 | [`canary strategy`](#canary-strategy) | Desk | A registered strategy's target by its id in the strategy register: its month's decision, target, paper position and what its rule would trade, in the core's shape; with --replay, its rule run over the month-ends FROM TO on the daemon's own history, the table the lab's `replay-compare` reads; read-only, no orders | `read-only` | yes |
 | [`canary brief`](#canary-brief) | Desk | Combined post- and pre-trade operator brief with disclosed source degradation | `read-only` | yes |
-| [`canary edge`](#canary-edge) | Desk | Review past trading decisions using broker records | `read-only` | yes |
+| [`canary edge`](#canary-edge) | Desk | Review past trading decisions using broker records; replay long-option exit rules over your own option trades | `read-only` | yes |
 | [`canary scorecard`](#canary-scorecard) | Desk | Score past decisions per strategy against the underlying's own history, with sequential evidence and gates | `read-only` | yes |
 | [`canary short-interest`](#canary-short-interest) | Desk | Screen FINRA short positions across US equities | `read-only` | yes |
 | [`canary lending`](#canary-lending) | Desk | Read lending income, borrowing fees and stock market context | `read-only` | yes |
@@ -614,13 +614,16 @@ canary brief [--details] [--json]
 
 ## `canary edge`
 
-Review past trading decisions using broker records.
+Review past trading decisions using broker records; replay long-option exit rules over your own option trades.
 
 Guard `read-only`. Also available as an MCP tool.
 
 ```text
 canary edge [--window 90d|365d] [--horizon 1|5|20] [--limit N] [--change ID] [--option ID] [--option-offset N] [--option-limit N] [--all-options] [--json]
+canary edge replay [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--rules A,B,C,D,loss_exit,...] [--json]
 ```
+
+Subcommands: `replay`.
 
 **Flags**
 
@@ -634,6 +637,9 @@ canary edge [--window 90d|365d] [--horizon 1|5|20] [--limit N] [--change ID] [--
 | `--option-offset` | yes | - |
 | `--option-limit` | yes | - |
 | `--all-options` | no | - |
+| `--from` | yes | - |
+| `--to` | yes | - |
+| `--rules` | yes | - |
 | `--json` | no | - |
 
 ## `canary scorecard`

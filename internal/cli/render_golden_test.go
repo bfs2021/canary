@@ -362,6 +362,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "positions_bond_facts", argv: []string{"positions"}, render: func(env *Env) { renderBondFacts(env, env.Stdout, goldenBondFacts()) }},
 		{name: "edge", argv: []string{"edge"}, conn: goldenConn{rpc.MethodEdgeSnapshot: goldenEdge(0, 3)}},
 		{name: "edge_option_page", argv: []string{"edge", "--option-offset", "3", "--option-limit", "3"}, conn: goldenConn{rpc.MethodEdgeSnapshot: goldenEdge(3, 3)}},
+		{name: "edge_replay", argv: []string{"edge", "replay", "--from", "2026-08-03"}, conn: goldenConn{rpc.MethodEdgeReplay: goldenEdgeReplay()}},
 	}
 }
 
@@ -369,6 +370,45 @@ func renderGoldenCases() []renderGoldenCase {
 // rows [offset, offset+limit): completed positions closed by trade, expiry
 // and assignment, realized episodes with one row lacking a P/L, and open
 // positions. The counts and totals cover every row, as the daemon sends them.
+// goldenEdgeReplay is a synthetic exit replay over two underlyings: the
+// actual baseline, the four sets and one single rule on recorded prices, and
+// set B on modelled prices.
+func goldenEdgeReplay() rpc.EdgeReplayResult {
+	day := func(s string) time.Time { v, _ := time.Parse(time.DateOnly, s); return v }
+	run := func(id, prices string, pnl, diff float64, exits int, reasons []rpc.EdgeReplayReason, timing rpc.EdgeReplayTiming, peak, pct float64, cov rpc.EdgeReplayCoverage, syna, synb float64) rpc.EdgeReplayRun {
+		return rpc.EdgeReplayRun{ID: id, Rules: rpc.EdgeReplaySetRules(id), Prices: prices, PNLBase: pnl, DiffVsActualBase: diff, Exits: exits, ExitsByReason: reasons,
+			VsOwner: timing, PeakValueBase: peak, PeakDate: day("2026-08-20"), PeakNLVBase: new(200000.0), PeakPctNLV: new(pct), Coverage: cov,
+			ByUnderlying: []rpc.EdgeReplayNameRow{{Underlying: "SYNA", PNLBase: syna}, {Underlying: "SYNB", PNLBase: synb}}}
+	}
+	recorded := rpc.EdgeReplayCoverage{StatementDays: 40, TradeCloseDays: 6, UntestableEvents: 2, UnitsKeptActual: 12}
+	return rpc.EdgeReplayResult{
+		SchemaVersion: rpc.EdgeReplaySchemaVersion, State: rpc.EdgeStateCurrent, From: day("2026-08-03"), To: day("2026-08-28"), StartStateDate: day("2026-07-31"),
+		BaseCurrency: "EUR", StatementDays: 20, NotExecution: true,
+		Parameters: rpc.EdgeReplayParameters{
+			Rules: []rpc.EdgeReplayParameter{
+				{Name: "loss_exit_pct", Value: 60}, {Name: "expiry_close_dte", Value: 7}, {Name: "profit_arm_gain_pct", Value: 50}, {Name: "profit_trail_pct", Value: 30},
+				{Name: "locked_gain_pct", Value: 5}, {Name: "profit_trail_min_dte", Value: 14}, {Name: "min_trail_abs", Value: 0.1}, {Name: "recover_cost_gain_pct", Value: 100},
+				{Name: "option_name_act_pct", Value: 15}, {Name: "stock_trail_range_multiple", Value: 2.5}, {Name: "stock_trail_atr_sessions", Value: 20},
+			},
+			HalfSpreadPct: new(0.2), HalfSpreadSamples: 12, HalfSpreadSource: "median of 12 measured option fills", CommissionPerContractBase: new(0.55), CommissionContracts: 400,
+			PolicySource: "Rulebook rulebook-default v1 (compiled-default) · protection protection-mvp v3",
+		},
+		Scope: rpc.EdgeReplayScope{Contracts: 4, Underlyings: []string{"SYNA", "SYNB"}, BuyLots: 6, PreheldLots: 1, ContractsBought: 120, ExcludedHedgeContracts: 2, ExcludedHedgeExecutions: 5, ExcludedOther: map[string]int{"instrument_unavailable": 1}},
+		Runs: []rpc.EdgeReplayRun{
+			run("A", rpc.EdgeReplayPricesActual, 4200, 0, 5, []rpc.EdgeReplayReason{{Reason: "sold", Events: 4, Units: 100}, {Reason: "expiry", Events: 1, Units: 10}}, rpc.EdgeReplayTiming{Same: 130}, 30000, 15, rpc.EdgeReplayCoverage{}, 3000, 1200),
+			run("B", rpc.EdgeReplayPricesRecorded, 1500, -2700, 3, []rpc.EdgeReplayReason{{Reason: "loss_exit", Events: 2, Units: 30}, {Reason: "expiry_close", Events: 1, Units: 10}}, rpc.EdgeReplayTiming{Earlier: 20, Later: 60, Same: 38, Untestable: 12}, 52000, 26, recorded, 900, 600),
+			run("C", rpc.EdgeReplayPricesRecorded, 4800, 600, 7, []rpc.EdgeReplayReason{{Reason: "loss_exit", Events: 2, Units: 30}, {Reason: "trim_to_cap", Events: 4, Units: 25}, {Reason: "recover_cost", Events: 1, Units: 5}}, rpc.EdgeReplayTiming{Earlier: 45, Later: 40, Same: 33, Untestable: 12}, 30500, 15.2, recorded, 3500, 1300),
+			run("D", rpc.EdgeReplayPricesRecorded, 2100, -2100, 4, []rpc.EdgeReplayReason{{Reason: "loss_exit", Events: 2, Units: 30}, {Reason: "stock_trail", Events: 2, Units: 20}}, rpc.EdgeReplayTiming{Earlier: 30, Later: 50, Same: 38, Untestable: 12}, 52000, 26, recorded, 1400, 700),
+			run("loss_exit", rpc.EdgeReplayPricesRecorded, -800, -5000, 2, []rpc.EdgeReplayReason{{Reason: "loss_exit", Events: 2, Units: 30}}, rpc.EdgeReplayTiming{Earlier: 30, Later: 70, Same: 18, Untestable: 12}, 61000, 30.5, recorded, -500, -300),
+			run("B", rpc.EdgeReplayPricesModelled, 2600, -1600, 4, []rpc.EdgeReplayReason{{Reason: "loss_exit", Events: 2, Units: 30}, {Reason: "profit_trail", Events: 2, Units: 15}}, rpc.EdgeReplayTiming{Earlier: 20, Later: 98, Same: 12}, 58000, 29, rpc.EdgeReplayCoverage{StatementDays: 40, TradeCloseDays: 6, ModelledDays: 18}, 1600, 1000),
+		},
+		Reconciliation: rpc.EdgeReplayReconciliation{
+			ActualUnitsBase: 4200, ActualCashBase: 4200, FlowsBase: -3800, StartValueBase: 2000, EndValueBase: 10000, BrokerRealizedBase: new(3900.0),
+			EdgeCycles: 3, EdgeCycleContracts: 3, ComparedContracts: 2, EdgeCyclesPNLBase: 2500, ActualOnCyclesBase: 2450, FXTranslationBase: -50, Reconciled: true, ReconciliationNotes: []string{},
+		},
+	}
+}
+
 func goldenEdge(offset, limit int) rpc.EdgeResult {
 	result := edgeCLIResult()
 	at := result.AsOf

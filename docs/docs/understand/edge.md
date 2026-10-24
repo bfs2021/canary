@@ -185,6 +185,48 @@ are a **subset of realized activity**, not another amount to add to it. They are
 not reconstructed multi-leg strategies, and their counts are not a strategy win
 rate. No holding-period or return-on-risk recommendation is inferred.
 
+## Long-option exit replay
+
+`canary edge replay` asks a different question from the snapshot: how would
+an exit rule have done on your own long options? It keeps your actual buys and
+replaces your exits with the rule set under test, over every retained
+statement or a `--from`/`--to` window. It is read-only, calculated by the
+daemon on request, and separate from the published snapshot.
+
+- **Set A** is what you did: buys at cost, sales at their proceeds, options
+  still held at the end at the end day's mark, options held at the start at
+  the start day's mark.
+- **Set B** is today's rules: the Rulebook loss line, the in-the-money expiry
+  close at the Rulebook's runway, and the protection policy's option profit
+  trail, evaluated by the same function the daemon's exit proposals use.
+- **Set C** harvests: the loss line and expiry close, a sale that recovers a
+  buy's cost after the policy's harvest gain, and a trim of each underlying
+  back to the Rulebook's name cap of that day's NLV.
+- **Set D** trails the stock: the loss line and expiry close, and an exit when
+  the underlying closes more than the policy's multiple of its 20-session
+  average true range below its high since the buy.
+
+Each rule also runs alone, so protection, harvest and time can be judged
+separately; `--rules` selects sets and rules. Every number comes from the
+policies in force.
+
+Rules are evaluated once per statement day at the recorded closing mark: the
+Open Positions mark, else the execution's closing price, else the mid of a
+recorded two-sided chain quote. A rule exit sells at that mark less the median
+half-spread of your measured option fills and your average commission. In the
+recorded run, a day without a recorded mark is untestable: the contracts still
+held keep your actual outcome from then on. A separate modelled run fills such
+days with Black-Scholes at the underlying's close, the volatility backed out of
+the last recorded mark, and says so on every row. Long puts on a hedge symbol
+and short options are excluded and counted.
+
+Each run reports its P/L against set A, exits by reason, whether it sold
+earlier, later or on the same day as you, the peak value it held against that
+day's NLV (a set that needs more capital than the book had shows here), and
+its price coverage. Set A is reconciled to the window's broker cash flows, and
+to the completed option positions above on the same contracts, where the only
+difference is the currency move between buy and sale; the result shows both.
+
 ## Local protection context
 
 Where a Flex execution exactly matches a scoped local execution record and a

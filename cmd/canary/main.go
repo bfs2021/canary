@@ -230,6 +230,11 @@ func cliInvocationTiming(cmd string, rest []string) ([]string, time.Duration, ti
 		return []string{rpc.MethodSetupsEvaluate, rpc.MethodSetupsOptions, rpc.MethodSetupsCoverage, rpc.MethodSetupsMarkouts}, 15 * time.Second, longFloor
 	case "chains":
 		return []string{rpc.MethodChainsRecorded, rpc.MethodChainsRecordedRows}, ordinaryHeadroom, ordinaryFloor
+	case "edge":
+		if hasInvocationToken(rest, "replay") {
+			return []string{rpc.MethodEdgeReplay}, ordinaryHeadroom, ordinaryFloor
+		}
+		return []string{rpc.MethodEdgeSnapshot}, ordinaryHeadroom, ordinaryFloor
 	case "regime":
 		return []string{rpc.MethodRegimeSnapshot}, ordinaryHeadroom, ordinaryFloor
 	case "stress":

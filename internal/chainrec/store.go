@@ -593,6 +593,53 @@ FROM quotes q JOIN runs r ON r.run_id = q.run_id WHERE q.rowid > ?`
 	return out, next, nil
 }
 
+// TwoSidedQuote is one recorded quote with both a bid and an ask: the
+// session date, the exact contract and its prices.
+type TwoSidedQuote struct {
+	SessionDate string
+	Symbol      string
+	Expiry      string
+	Strike      float64
+	Right       string
+	ConID       int64
+	Bid         float64
+	Ask         float64
+}
+
+// TwoSidedQuotes returns the recorded two-sided quotes of the given
+// underlyings on session dates from through to (YYYY-MM-DD), oldest first.
+// The exit replay prices an exact contract on a past day from them.
+func (s *Store) TwoSidedQuotes(ctx context.Context, from, to string, symbols []string) ([]TwoSidedQuote, error) {
+	if len(symbols) == 0 {
+		return nil, nil
+	}
+	args := []any{from, to}
+	marks := make([]string, 0, len(symbols))
+	for _, symbol := range symbols {
+		marks = append(marks, "?")
+		args = append(args, symbol)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT r.session_date, q.symbol, q.expiry, q.strike, q.option_right, q.con_id, q.bid, q.ask
+FROM runs r JOIN quotes q ON q.run_id = r.run_id
+WHERE r.session_date BETWEEN ? AND ? AND q.symbol IN (`+strings.Join(marks, ",")+`) AND q.bid IS NOT NULL AND q.ask IS NOT NULL
+ORDER BY r.session_date, q.rowid`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TwoSidedQuote
+	for rows.Next() {
+		var q TwoSidedQuote
+		var conID sql.NullInt64
+		if err := rows.Scan(&q.SessionDate, &q.Symbol, &q.Expiry, &q.Strike, &q.Right, &conID, &q.Bid, &q.Ask); err != nil {
+			return nil, err
+		}
+		q.ConID = conID.Int64
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
 func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339Nano) }
 
 func parseTime(s string) time.Time {

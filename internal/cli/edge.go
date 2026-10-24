@@ -14,6 +14,10 @@ import (
 )
 
 func runEdge(ctx context.Context, env *Env, args []string) int {
+	// Flags arrive hoisted ahead of positionals, so the subcommand is last.
+	if n := len(args); n > 0 && args[n-1] == "replay" && (n == 1 || !isValueFlag(args[n-2]) || strings.Contains(args[n-2], "=")) {
+		return runEdgeReplay(ctx, env, args[:n-1])
+	}
 	fs := flagSet(env, "edge")
 	window := fs.String("window", "365d", "optional review override: 90d or 365d (default 365d)")
 	horizon := fs.Int("horizon", 0, "optional highlighted horizon override: 1, 5, or 20 (default automatic)")

@@ -433,6 +433,13 @@ func TestStorePersistsAndReadsBack(t *testing.T) {
 		r.ConID != 7001 || r.ObservedAt.IsZero() || !r.LastTradeAt.IsZero() {
 		t.Fatalf("first row = %+v", r)
 	}
+	quotes, err := store.TwoSidedQuotes(ctx, "2026-10-01", "2026-10-31", []string{"SYNB"})
+	if err != nil || len(quotes) != 120 || quotes[0].SessionDate != "2026-10-14" || quotes[0].Symbol != "SYNB" || quotes[0].Right != "C" || quotes[0].Bid <= 0 || quotes[0].Ask < quotes[0].Bid {
+		t.Fatalf("two-sided SYNB quotes = %d (%+v), %v; want the 120 quoted calls", len(quotes), quotes[:min(1, len(quotes))], err)
+	}
+	if outside, err := store.TwoSidedQuotes(ctx, "2026-10-15", "2026-10-31", []string{"SYNA", "SYNB"}); err != nil || len(outside) != 0 {
+		t.Fatalf("quotes after the session = %d, %v", len(outside), err)
+	}
 	for _, stmt := range []string{`UPDATE quotes SET bid = 0`, `DELETE FROM runs`, `DELETE FROM run_outcomes`, `UPDATE run_symbols SET spot = 0`} {
 		if _, err := store.db.ExecContext(ctx, stmt); err == nil {
 			t.Fatalf("%s succeeded on an append-only table", stmt)
