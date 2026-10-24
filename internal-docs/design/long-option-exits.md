@@ -17,6 +17,13 @@ as of Canary 278cc600.
 | LO-P1 | An exit fires when the stock breaks the idea (a level on the underlying, or the event that was the thesis), not when the option's price wobbles. | missing |
 | LO-P2 | A last-resort loss on the premium backs it up. | built: loss exit at −60% (Rulebook loss line), full close, owner approval |
 | LO-P3 | A protect exit sells with a patient limit inside the spread, never at market. | partly: previews price patient limits; the profit trail is a broker trail that becomes a market order |
+| LO-P4 | Adding to a long option that is down more than 40% from its cost waits a cooling-off until the next session and shows the loss so far and the days left; it cannot be sent in the moment. No purpose is asked. (Owner 2026-10-24 08:33 CEST: 40%, cooling-off rather than a hard stop.) | missing |
+
+Considered and not adopted: a shared premium limit for names that move
+together (owner 2026-10-24 08:33 CEST: co-movement between these names is
+likely a passing phase of speculative flows, not lasting). Co-movement stays
+visible as each name's share of risk on Risk › Mandate, which follows the
+names' actual joint moves.
 
 ## Harvest: keep winners, take risk off
 
@@ -24,7 +31,7 @@ as of Canary 278cc600.
 |---|---|---|
 | LO-H1 | A winner that grows past its share of the risk budget (premium per name over 15% of NLV) is trimmed back to it; the rest stays on. | partly: the cap blocks additions (2026-10-23); book-level budget reductions exist; no per-name trim |
 | LO-H2 | After a large gain, enough is sold to recover the cost; the rest runs. | missing: every exit is a full close |
-| LO-H3 | A winner can be rolled up or out: sell it, buy a further strike or later expiry, keep the direction with less money at risk. | missing: deferred since 2026-09-28 |
+| LO-H3 | A winner can be rolled up or out: sell it, buy a further strike or later expiry, keep the direction with less money at risk. The new leg reuses Add's discovery (expiry by horizon, strike by delta range), pricing and sizing; the old leg uses the exit; both go as one combo order at a net price, and the order gates judge the roll by its net change, not as a fresh addition. (Owner 2026-10-24 08:44 CEST.) | missing: deferred since 2026-09-28. Parts exist: Add's call discovery, plan and price ladder; the option exits; a combo route that closes multi-leg units (`option_exit_units.go`), not yet one that closes and opens |
 | LO-H4 | Any trail follows the stock and scales to how much the stock moves, so one big option day does not stop the position out. | missing: today's trail is on the option premium, armed at +50%, full close |
 
 ## Time: never let decay or expiry decide
