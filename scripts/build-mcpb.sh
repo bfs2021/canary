@@ -30,6 +30,7 @@ mcpb() {
 rm -rf "$stage" "$bundle" "$stable_bundle"
 mkdir -p "$stage/server/bin"
 install -m 0644 web/app/icon-512.png "$stage/icon.png"
+install -m 0644 LICENSE "$stage/LICENSE"
 
 for target in $targets; do
     tarball="${dist_dir}/canary-${version}-${target}.tar.gz"

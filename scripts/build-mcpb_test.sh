@@ -16,6 +16,7 @@ packed_stage="$test_root/packed-stage"
 targets="darwin-arm64 darwin-amd64 linux-amd64 linux-arm64"
 mkdir -p "$fixture/scripts" "$fixture/web/app" "$dist" "$fake_bin"
 cp "$repo_root/scripts/build-mcpb.sh" "$fixture/scripts/"
+cp "$repo_root/LICENSE" "$fixture/LICENSE"
 printf '%s\n' 'fixture icon' > "$fixture/web/app/icon-512.png"
 
 for target in $targets; do
@@ -78,6 +79,10 @@ canonical="$dist/canary-v1.2.3.mcpb"
 }
 cmp -s "$canonical" "$dist/canary.mcpb" || {
 	echo "build-mcpb test: stable bundle differs from versioned canonical asset" >&2
+	exit 1
+}
+cmp -s "$fixture/LICENSE" "$packed_stage/LICENSE" || {
+	echo "build-mcpb test: bundle does not preserve the full repository license" >&2
 	exit 1
 }
 if compgen -G "$dist/ibkr*.mcpb" >/dev/null; then
