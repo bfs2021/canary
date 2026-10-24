@@ -148,7 +148,7 @@ Options are a first-class review surface, but they cannot credibly use the stock
 - **Realized episodes** use only broker-reported realized P/L inside the selected review window. Executions share one episode only when they carry the same IBKR order identity on the same day. A row without order linkage remains its own execution episode. An `OptionEAE` row is a separate lifecycle event unless its broker trade identity matches an already retained trade.
 - **Latest open snapshot** uses only non-zero option positions in the latest dated Flex Open Positions snapshot. A present snapshot retains its date even when it confirms zero open options, while absent snapshot evidence remains undated. Its unrealized P/L is not added to historical realized P/L and is never presented as one all-time option total.
 
-The compact public lists seat at least one gain and one loss when both exist, then rank by absolute broker P/L. Realized and open lists each cap at 20 rows and disclose the full count, known P/L subtotal, sign counts, completeness counts, and truncation. Rows without numeric P/L stay in those counts but are not magnitude-ranked. Missing realized P/L, open P/L, FX conversion, or contract metadata remains typed missing evidence; none becomes zero.
+The option lists rank rows by absolute broker P/L and seat at least one gain and one loss in the first 20 rows when both exist. Rows without numeric P/L stay in the counts and follow the ranked rows, by date, without being magnitude-ranked. Each list returns 20 rows by default and discloses the full count, known P/L subtotal, sign counts, completeness counts and truncation; those always describe every row, never the page. `canary edge --option-offset N --option-limit N` (1–500 rows) or `option_offset` and `option_limit` on `canary_edge` read another page of the completed-position, realized and open lists together; each list's `next_offset` names the next page and is absent on its last. `canary edge --all-options --json` follows the pages and returns every row. Missing realized P/L, open P/L, FX conversion, or contract metadata remains typed missing evidence; none becomes zero.
 
 Tap an option row in the app, pass `--option option_…` to the CLI, or pass `option_id` to `canary_edge` to read the evidence behind that opaque result. A realized detail carries exact contracts, opening/closing indicator, side, quantity, execution price, multiplier, broker realized P/L, and direct costs where reported. An open detail carries the dated contract, side, quantity, mark, cost basis, and broker open P/L. This is evidence expansion, not a trading control.
 
@@ -180,7 +180,7 @@ counted as boundary exclusions. Nonzero ending quantity is still open, not
 completed.
 
 Each completed row includes its dates, how it closed, execution count, broker
-realized P/L and missing-evidence status. The bounded list discloses truncation. These positions
+realized P/L and missing-evidence status. The list pages like the other option lists and discloses truncation. These positions
 are a **subset of realized activity**, not another amount to add to it. They are
 not reconstructed multi-leg strategies, and their counts are not a strategy win
 rate. No holding-period or return-on-risk recommendation is inferred.

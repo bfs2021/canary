@@ -1,0 +1,98 @@
+# canary edge · COLUMNS=80 · colour off
+Canary Edge · 90d decision review · 20-session lens · evidence to 2026-08-24
+  Best observed result: ABC add, USD +125.50 after 20 sessions.
+
+Evidence
+  Coverage · 4 of 6 eligible stock/ETF changes scored at 20 sessions (66.7%) ·
+    8 broker position changes found, 2 outside the stock/ETF review
+  Horizon · 20 sessions selected with --horizon · automatic mode picks the
+    longest horizon with at least 25% coverage and a 3-observation action sample
+  Last full revalidation · 2026-08-24
+
+Account P/L
+  $ 450.00 · 2026-05-27 to 2026-08-24 · external flows $ 100.00
+  Everything after confirmed flows, options and market moves included; not a
+    sum of the rows below.
+
+Decisions by action
+  Columns are separate decision sets; compare horizons under Same decisions.
+  ACTION      1 SESSION            5 SESSIONS           20 SESSIONS
+  OPEN           $ 1.00  n=1           $ 5.00  n=1          $ 20.00  n=1
+  ADD            $ 1.00  n=1           $ 5.00  n=1          $ 20.00  n=1
+  TRIM           $ 1.00  n=1           $ 5.00  n=1          $ 20.00  n=1
+  EXIT           $ 1.00  n=1           $ 5.00  n=1          $ 20.00  n=1
+
+Findings  by absolute impact at 20 sessions; not the headline group
+       $ 100.00   +10.00%  ABC add  change_abc
+        $ 99.00    +9.00%  DEF add  change_def
+        $ 98.00    +8.00%  GHI add  change_ghi
+
+Options  broker actuals in separate scopes; they do not add together
+  Completed positions · 5 proven flat-to-flat contract cycles · 5 complete
+    P/L · 4 contracts still open · 1 contract excluded · a subset of realized
+    activity, not an additional total or a multi-leg strategy
+  Reconstruction gaps · 1 lifecycle or transfer; 2 opened before window ·
+    opening/window exclusions count positions; other exclusions count contracts
+       $ 4,890.00  short SYNA 260821C00115000 · 2026-06-24 to 2026-08-21 · 2 executions · closed by assignment, option leg only · complete
+      -$ 1,250.00  long SYNB 260918P00090000 · 2026-07-24 to 2026-08-19 · 3 executions · closed by expiry · complete
+         $ 830.00  long SYNC 261016C00050000 · 2026-07-24 to 2026-08-16 · 2 executions · complete
+  Realized episodes · $ 4,590.00 known · 5 episodes: 3 positive, 1 negative, 0
+    flat · 1 incomplete · showing 3
+       $ 4,890.00  SYNA 2026-09-18 115 C · 2026-08-21 · complete · option_e1
+      -$ 1,250.00  SYNB 2026-09-18 90 P · 2026-08-19 · complete · option_e2
+  Open snapshot 2026-08-24 · -$ 285.00 known · 4 positions: 2 positive, 2
+    negative, 0 flat · showing 3
+         $ 410.00  SYNB 2026-12-18 85 P · complete · option_o2
+        -$ 640.00  SYNA 2026-12-18 120 C · complete · option_o1
+  More option rows: canary edge --option-offset 3 --option-limit 20
+
+Details: canary edge --change <id> · canary edge --option <id> · canary edge --json
+# canary edge · COLUMNS=80 · colour on, ESC written as \x1b
+Canary Edge · 90d decision review · 20-session lens · evidence to 2026-08-24
+  Best observed result: ABC add, USD +125.50 after 20 sessions.
+
+Evidence
+  Coverage · 4 of 6 eligible stock/ETF changes scored at 20 sessions (66.7%) ·
+    8 broker position changes found, 2 outside the stock/ETF review
+  Horizon · 20 sessions selected with --horizon · automatic mode picks the
+    longest horizon with at least 25% coverage and a 3-observation action sample
+  Last full revalidation · 2026-08-24
+
+Account P/L
+  \x1b[1m\x1b[32m$ 450.00\x1b[0m\x1b[0m · 2026-05-27 to 2026-08-24 · external flows \x1b[32m$ 100.00\x1b[0m
+  \x1b[2mEverything after confirmed flows, options and market moves included; not a
+    sum of the rows below.\x1b[0m
+
+Decisions by action
+  \x1b[2mColumns are separate decision sets; compare horizons under Same decisions.\x1b[0m
+  ACTION      1 SESSION            5 SESSIONS           20 SESSIONS
+  OPEN           \x1b[32m$ 1.00\x1b[0m  n=1           \x1b[32m$ 5.00\x1b[0m  n=1          \x1b[32m$ 20.00\x1b[0m  n=1
+  ADD            \x1b[32m$ 1.00\x1b[0m  n=1           \x1b[32m$ 5.00\x1b[0m  n=1          \x1b[32m$ 20.00\x1b[0m  n=1
+  TRIM           \x1b[32m$ 1.00\x1b[0m  n=1           \x1b[32m$ 5.00\x1b[0m  n=1          \x1b[32m$ 20.00\x1b[0m  n=1
+  EXIT           \x1b[32m$ 1.00\x1b[0m  n=1           \x1b[32m$ 5.00\x1b[0m  n=1          \x1b[32m$ 20.00\x1b[0m  n=1
+
+Findings  \x1b[2mby absolute impact at 20 sessions; not the headline group\x1b[0m
+       \x1b[32m$ 100.00\x1b[0m   +10.00%  ABC add  \x1b[2mchange_abc\x1b[0m
+        \x1b[32m$ 99.00\x1b[0m    +9.00%  DEF add  \x1b[2mchange_def\x1b[0m
+        \x1b[32m$ 98.00\x1b[0m    +8.00%  GHI add  \x1b[2mchange_ghi\x1b[0m
+
+Options  \x1b[2mbroker actuals in separate scopes; they do not add together\x1b[0m
+  Completed positions · 5 proven flat-to-flat contract cycles · 5 complete
+    P/L · 4 contracts still open · 1 contract excluded · a subset of realized
+    activity, not an additional total or a multi-leg strategy
+  Reconstruction gaps · 1 lifecycle or transfer; 2 opened before window ·
+    opening/window exclusions count positions; other exclusions count contracts
+       \x1b[32m$ 4,890.00\x1b[0m  short SYNA 260821C00115000 · 2026-06-24 to 2026-08-21 · 2 executions · closed by assignment, option leg only · complete
+      \x1b[31m-$ 1,250.00\x1b[0m  long SYNB 260918P00090000 · 2026-07-24 to 2026-08-19 · 3 executions · closed by expiry · complete
+         \x1b[32m$ 830.00\x1b[0m  long SYNC 261016C00050000 · 2026-07-24 to 2026-08-16 · 2 executions · complete
+  Realized episodes · \x1b[32m$ 4,590.00\x1b[0m known · 5 episodes: 3 positive, 1 negative, 0
+    flat · 1 incomplete · showing 3
+       \x1b[32m$ 4,890.00\x1b[0m  SYNA 2026-09-18 115 C · 2026-08-21 · complete · \x1b[2moption_e1\x1b[0m
+      \x1b[31m-$ 1,250.00\x1b[0m  SYNB 2026-09-18 90 P · 2026-08-19 · complete · \x1b[2moption_e2\x1b[0m
+  Open snapshot 2026-08-24 · \x1b[31m-$ 285.00\x1b[0m known · 4 positions: 2 positive, 2
+    negative, 0 flat · showing 3
+         \x1b[32m$ 410.00\x1b[0m  SYNB 2026-12-18 85 P · complete · \x1b[2moption_o2\x1b[0m
+        \x1b[31m-$ 640.00\x1b[0m  SYNA 2026-12-18 120 C · complete · \x1b[2moption_o1\x1b[0m
+  More option rows: canary edge --option-offset 3 --option-limit 20
+
+Details: canary edge --change <id> · canary edge --option <id> · canary edge --json

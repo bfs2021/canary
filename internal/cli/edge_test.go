@@ -54,7 +54,7 @@ func TestEdgeCLIUsesBoundedTypedRPCParameters(t *testing.T) {
 	if conn.method != rpc.MethodEdgeSnapshot {
 		t.Fatalf("method=%q", conn.method)
 	}
-	want := (rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 5, Limit: 2, ChangeID: "change_opaque"})
+	want := (rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 5, Limit: 2, OptionLimit: rpc.MaxEdgeOptionResults, ChangeID: "change_opaque"})
 	if conn.params != want {
 		t.Fatalf("params=%+v want %+v", conn.params, want)
 	}
@@ -70,7 +70,7 @@ func TestEdgeCLIForwardsOpaqueOptionDetail(t *testing.T) {
 	if code := Run(t.Context(), env, "edge", []string{"--option", "option_opaque", "--json"}); code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
-	want := rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: rpc.MaxEdgeFindings, OptionID: "option_opaque"}
+	want := rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: rpc.MaxEdgeFindings, OptionLimit: rpc.MaxEdgeOptionResults, OptionID: "option_opaque"}
 	if conn.params != want {
 		t.Fatalf("params=%+v want %+v", conn.params, want)
 	}
@@ -83,7 +83,7 @@ func TestEdgeCLIDefaultsToTheAutomaticOneYearReview(t *testing.T) {
 	if code := Run(t.Context(), env, "edge", nil); code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
-	want := rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: rpc.MaxEdgeFindings}
+	want := rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: rpc.MaxEdgeFindings, OptionLimit: rpc.MaxEdgeOptionResults}
 	if conn.params != want {
 		t.Fatalf("default params=%+v want %+v", conn.params, want)
 	}
@@ -281,5 +281,88 @@ func TestEdgeCycleRowsNameLifecycleClose(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// edgePagingConn serves the golden Edge review one page at a time and
+// records each requested page; a changed fingerprint simulates a snapshot
+// republished between pages.
+type edgePagingConn struct {
+	pages        []rpc.EdgeSnapshotParams
+	changeAtPage int
+}
+
+func (c *edgePagingConn) Call(_ context.Context, _ string, params, out any) error {
+	p := params.(rpc.EdgeSnapshotParams)
+	c.pages = append(c.pages, p)
+	// The fixture has five rows at most; serve pages of two whatever the
+	// request asks, so following next_offset takes several calls.
+	result := goldenEdge(p.OptionOffset, min(p.OptionLimit, 2))
+	if c.changeAtPage > 0 && len(c.pages) >= c.changeAtPage {
+		result.Fingerprint = "edge_republished"
+	}
+	*out.(*rpc.EdgeResult) = result
+	return nil
+}
+
+func (*edgePagingConn) Stream(context.Context, string, any, func(json.RawMessage) error) error {
+	return nil
+}
+
+func TestEdgeCLIPagesOptionRows(t *testing.T) {
+	conn := &edgePagingConn{}
+	var stdout, stderr bytes.Buffer
+	env := &Env{Stdout: &stdout, Stderr: &stderr, Conn: conn}
+	if code := Run(t.Context(), env, "edge", []string{"--option-offset", "2", "--option-limit", "50", "--json"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if len(conn.pages) != 1 || conn.pages[0].OptionOffset != 2 || conn.pages[0].OptionLimit != 50 {
+		t.Fatalf("pages=%+v", conn.pages)
+	}
+	if code := Run(t.Context(), env, "edge", []string{"--option-limit", "501"}); code == 0 {
+		t.Fatal("an option page past the bound was accepted")
+	}
+}
+
+// --all-options follows next_offset until every list is whole and returns
+// one page carrying every row, with the totals unchanged.
+func TestEdgeCLIAllOptionsFetchesEveryRow(t *testing.T) {
+	conn := &edgePagingConn{}
+	var stdout, stderr bytes.Buffer
+	env := &Env{Stdout: &stdout, Stderr: &stderr, Conn: conn}
+	if code := Run(t.Context(), env, "edge", []string{"--all-options", "--json"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	var got rpc.EdgeResult
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	o := got.Options
+	if len(o.Cycles.Cycles) != 5 || len(o.Realized.Episodes) != 5 || len(o.Open.Positions) != 4 || o.Realized.TotalCount != 5 || o.Cycles.CompletedCount != 5 {
+		t.Fatalf("merged rows=%d/%d/%d", len(o.Cycles.Cycles), len(o.Realized.Episodes), len(o.Open.Positions))
+	}
+	if o.Cycles.Truncated || o.Realized.Truncated || o.Open.Truncated || o.Cycles.NextOffset != nil || o.Realized.NextOffset != nil || o.Open.NextOffset != nil {
+		t.Fatalf("merged lists still read as partial: %+v", o.Realized)
+	}
+	seen := map[string]bool{}
+	for _, row := range o.Realized.Episodes {
+		if seen[row.ID] {
+			t.Fatalf("row %s repeated", row.ID)
+		}
+		seen[row.ID] = true
+	}
+	if len(conn.pages) != 3 || conn.pages[0].OptionLimit != rpc.MaxEdgeOptionPage || conn.pages[1].OptionOffset != 2 || conn.pages[2].OptionOffset != 4 {
+		t.Fatalf("pages=%+v", conn.pages)
+	}
+
+	changed := &edgePagingConn{changeAtPage: 2}
+	stdout.Reset()
+	stderr.Reset()
+	env.Conn = changed
+	if code := Run(t.Context(), env, "edge", []string{"--all-options", "--json"}); code == 0 || !strings.Contains(stderr.String(), "changed while reading") {
+		t.Fatalf("pages of two snapshots were merged: exit %d %s", code, stderr.String())
+	}
+	if code := Run(t.Context(), env, "edge", []string{"--all-options", "--option-offset", "3"}); code == 0 {
+		t.Fatal("--all-options with an offset was accepted")
 	}
 }

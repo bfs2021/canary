@@ -129,14 +129,16 @@ func rpcEdgeProtectionContext(in edgecore.ProtectionContext) rpc.EdgeProtectionC
 	return rpc.EdgeProtectionContext{Status: in.Status, ExecutionCount: in.ExecutionCount, MatchedExecutions: in.MatchedExecutions, Bucket: in.Bucket, EvidenceAt: in.EvidenceAt}
 }
 
-func rpcEdgeOptionCycles(in edgecore.OptionCycles) rpc.EdgeOptionCycles {
+func rpcEdgeOptionCycles(in edgecore.OptionCycles, offset, limit int) rpc.EdgeOptionCycles {
 	out := rpc.EdgeOptionCycles{CompletedCount: in.CompletedCount, CompletePNLCount: in.CompletePNLCount, OpenContractCount: in.OpenContractCount, ExcludedContracts: in.ExcludedContracts, Reasons: in.Reasons, KnownPNLBase: in.KnownPNLBase, Cycles: []rpc.EdgeOptionCycle{}}
-	rows := seatEdgeOptionSigns(in.Cycles, rpc.MaxEdgeOptionResults, func(row edgecore.OptionCycle) float64 {
+	ordered := seatEdgeOptionSigns(in.Cycles, rpc.MaxEdgeOptionResults, func(row edgecore.OptionCycle) float64 {
 		if row.RealizedPNLBase == nil {
 			return 0
 		}
 		return *row.RealizedPNLBase
 	})
+	rows, next := edgeOptionPage(ordered, offset, limit)
+	out.Offset, out.NextOffset = offset, next
 	for _, row := range rows {
 		out.Cycles = append(out.Cycles, rpc.EdgeOptionCycle{ID: row.ID, Symbol: row.Symbol, Direction: row.Direction, OpenedAt: row.OpenedAt, ClosedAt: row.ClosedAt, ClosedBy: row.ClosedBy, ExecutionCount: row.ExecutionCount, RealizedPNLBase: row.RealizedPNLBase, PNLStatus: row.PNLStatus, MissingEvidence: row.MissingEvidence, LinkedProtectionCount: row.LinkedProtectionCount})
 	}

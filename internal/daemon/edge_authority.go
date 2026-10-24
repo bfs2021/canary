@@ -932,7 +932,7 @@ func (s *Server) handleEdgeSnapshot(ctx context.Context, req *rpc.Request) (*rpc
 	}
 	result.LastFullRevalidation = publication.LastFullRevalidation
 	if haveWindow {
-		populateRPCEdgeResult(result, coreResult, horizon, limit, params.AutomaticHorizon)
+		populateRPCEdgeResult(result, coreResult, horizon, limit, params.OptionOffset, params.OptionLimit, params.AutomaticHorizon)
 		result.State, result.Reason = publication.State, publication.Reason
 	}
 	if params.ChangeID != "" {
@@ -1027,7 +1027,7 @@ func edgeSetup(reason string) *rpc.EdgeSetup {
 	return setup
 }
 
-func populateRPCEdgeResult(out *rpc.EdgeResult, in edgecore.Result, horizon, limit int, automatic bool) {
+func populateRPCEdgeResult(out *rpc.EdgeResult, in edgecore.Result, horizon, limit, optionOffset, optionLimit int, automatic bool) {
 	out.AsOf, out.Account, out.Fingerprint = in.AsOf, rpcEdgeAccount(in.Account), in.Fingerprint
 	out.HorizonSessions, out.AutomaticHorizon = horizon, automatic
 	out.HorizonSelection = edgeHorizonSelection(in, horizon, automatic)
@@ -1050,7 +1050,7 @@ func populateRPCEdgeResult(out *rpc.EdgeResult, in edgecore.Result, horizon, lim
 	for _, pattern := range in.Patterns {
 		out.Patterns = append(out.Patterns, rpcEdgeDecisionPattern(pattern))
 	}
-	out.Options = rpcEdgeOptionReview(in.Options)
+	out.Options = rpcEdgeOptionReview(in.Options, optionOffset, optionLimit)
 	out.Headline = edgeHeadline(out)
 }
 
@@ -1171,9 +1171,13 @@ func rpcEdgeAccount(in *edgecore.AccountResult) *rpc.EdgeAccountResult {
 	return &rpc.EdgeAccountResult{BaseCurrency: in.BaseCurrency, RequestedFrom: in.RequestedFrom, ActualFrom: in.ActualFrom, ActualTo: in.ActualTo, StartingEquityBase: in.StartingEquityBase, EndingEquityBase: in.EndingEquityBase, ExternalFlowsBase: in.ExternalFlowsBase, ProfitLossBase: in.ProfitLossBase, Definition: in.Definition}
 }
 
-func rpcEdgeOptionReview(in edgecore.OptionReview) rpc.EdgeOptionReview {
+// rpcEdgeOptionReview projects one page of each option list. Counts and
+// known totals always describe every row; offset and limit pick rows from
+// one canonical order, so pages of any size walk each list without a gap or
+// a repeat.
+func rpcEdgeOptionReview(in edgecore.OptionReview, offset, limit int) rpc.EdgeOptionReview {
 	out := rpc.EdgeOptionReview{
-		Cycles: rpcEdgeOptionCycles(in.Cycles),
+		Cycles: rpcEdgeOptionCycles(in.Cycles, offset, limit),
 		Coverage: rpc.EdgeOptionCoverage{
 			ExecutionEpisodes: in.Coverage.ExecutionEpisodes, OpeningEpisodes: in.Coverage.OpeningEpisodes,
 			OpeningOnlyZeroEpisodes: in.Coverage.OpeningOnlyZeroEpisodes, ClosingEpisodes: in.Coverage.ClosingEpisodes,
@@ -1190,18 +1194,66 @@ func rpcEdgeOptionReview(in edgecore.OptionReview) rpc.EdgeOptionReview {
 			UnavailableCount: in.Open.UnavailableCount, TotalCount: len(in.Open.Positions), Positions: []rpc.EdgeOptionOpenPositionSummary{},
 		},
 	}
-	for _, episode := range selectEdgeOptionEpisodes(in.Realized.Episodes, rpc.MaxEdgeOptionResults) {
+	episodes, next := edgeOptionPage(orderEdgeOptionEpisodes(in.Realized.Episodes), offset, limit)
+	for _, episode := range episodes {
 		out.Realized.Episodes = append(out.Realized.Episodes, rpcEdgeOptionEpisodeSummary(episode))
 	}
+	out.Realized.Offset, out.Realized.NextOffset = offset, next
 	out.Realized.Truncated = out.Realized.TotalCount > len(out.Realized.Episodes)
-	for _, position := range selectEdgeOptionOpenPositions(in.Open.Positions, rpc.MaxEdgeOptionResults) {
+	positions, next := edgeOptionPage(orderEdgeOptionOpenPositions(in.Open.Positions), offset, limit)
+	for _, position := range positions {
 		out.Open.Positions = append(out.Open.Positions, rpcEdgeOptionOpenSummary(position))
 	}
+	out.Open.Offset, out.Open.NextOffset = offset, next
 	out.Open.Truncated = out.Open.TotalCount > len(out.Open.Positions)
 	return out
 }
 
+// edgeOptionPage returns rows [offset, offset+limit) of an ordered list and
+// the offset of the next page, nil when no row remains.
+func edgeOptionPage[T any](ordered []T, offset, limit int) ([]T, *int) {
+	start := min(max(offset, 0), len(ordered))
+	end := min(len(ordered), start+limit)
+	if end < len(ordered) {
+		return ordered[start:end], &end
+	}
+	return ordered[start:end], nil
+}
+
+// orderEdgeOptionEpisodes is the canonical realized order: episodes with a
+// numeric P/L ranked as the default page shows them, then the rest, which
+// are counted but never magnitude-ranked, in their dated order.
+func orderEdgeOptionEpisodes(in []edgecore.OptionEpisode) []edgecore.OptionEpisode {
+	out := rankEdgeOptionEpisodes(in, rpc.MaxEdgeOptionResults)
+	for _, episode := range in {
+		if episode.RealizedPNLBase == nil {
+			out = append(out, episode)
+		}
+	}
+	return out
+}
+
+func orderEdgeOptionOpenPositions(in []edgecore.OptionOpenPosition) []edgecore.OptionOpenPosition {
+	out := rankEdgeOptionOpenPositions(in, rpc.MaxEdgeOptionResults)
+	for _, position := range in {
+		if position.OpenPNLBase == nil {
+			out = append(out, position)
+		}
+	}
+	return out
+}
+
 func selectEdgeOptionEpisodes(in []edgecore.OptionEpisode, limit int) []edgecore.OptionEpisode {
+	ranked := rankEdgeOptionEpisodes(in, limit)
+	return ranked[:min(len(ranked), max(limit, 0))]
+}
+
+func selectEdgeOptionOpenPositions(in []edgecore.OptionOpenPosition, limit int) []edgecore.OptionOpenPosition {
+	ranked := rankEdgeOptionOpenPositions(in, limit)
+	return ranked[:min(len(ranked), max(limit, 0))]
+}
+
+func rankEdgeOptionEpisodes(in []edgecore.OptionEpisode, seat int) []edgecore.OptionEpisode {
 	candidates := make([]edgecore.OptionEpisode, 0, len(in))
 	for _, episode := range in {
 		if episode.RealizedPNLBase != nil {
@@ -1215,10 +1267,10 @@ func selectEdgeOptionEpisodes(in []edgecore.OptionEpisode, limit int) []edgecore
 		}
 		return candidates[i].ID < candidates[j].ID
 	})
-	return seatEdgeOptionSigns(candidates, limit, func(row edgecore.OptionEpisode) float64 { return *row.RealizedPNLBase })
+	return seatEdgeOptionSigns(candidates, seat, func(row edgecore.OptionEpisode) float64 { return *row.RealizedPNLBase })
 }
 
-func selectEdgeOptionOpenPositions(in []edgecore.OptionOpenPosition, limit int) []edgecore.OptionOpenPosition {
+func rankEdgeOptionOpenPositions(in []edgecore.OptionOpenPosition, seat int) []edgecore.OptionOpenPosition {
 	candidates := make([]edgecore.OptionOpenPosition, 0, len(in))
 	for _, position := range in {
 		if position.OpenPNLBase != nil {
@@ -1232,32 +1284,34 @@ func selectEdgeOptionOpenPositions(in []edgecore.OptionOpenPosition, limit int) 
 		}
 		return candidates[i].ID < candidates[j].ID
 	})
-	return seatEdgeOptionSigns(candidates, limit, func(row edgecore.OptionOpenPosition) float64 { return *row.OpenPNLBase })
+	return seatEdgeOptionSigns(candidates, seat, func(row edgecore.OptionOpenPosition) float64 { return *row.OpenPNLBase })
 }
 
-func seatEdgeOptionSigns[T any](sorted []T, limit int, value func(T) float64) []T {
-	if limit <= 0 || len(sorted) == 0 {
-		return []T{}
+// seatEdgeOptionSigns returns every row of a magnitude-sorted list, with a
+// gain and a loss inside the first seat rows when both exist: the first row
+// of a missing sign moves into the last seat and the rows it passes shift
+// down one place, so the order stays a permutation and paging stays whole.
+func seatEdgeOptionSigns[T any](sorted []T, seat int, value func(T) float64) []T {
+	out := append([]T{}, sorted...)
+	if seat <= 0 || len(out) <= seat {
+		return out
 	}
-	if len(sorted) <= limit {
-		return append([]T(nil), sorted...)
-	}
-	out := append([]T(nil), sorted[:limit]...)
 	hasPositive, hasNegative := false, false
-	for _, row := range out {
+	for _, row := range out[:seat] {
 		hasPositive = hasPositive || value(row) > 0
 		hasNegative = hasNegative || value(row) < 0
 	}
 	if hasPositive && hasNegative {
 		return out
 	}
-	for _, row := range sorted[limit:] {
-		if !hasPositive && value(row) > 0 || !hasNegative && value(row) < 0 {
-			out[len(out)-1] = row
+	for j := seat; j < len(out); j++ {
+		if row := out[j]; !hasPositive && value(row) > 0 || !hasNegative && value(row) < 0 {
+			copy(out[seat:j+1], out[seat-1:j])
+			out[seat-1] = row
 			break
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return math.Abs(value(out[i])) > math.Abs(value(out[j])) })
+	sort.SliceStable(out[:seat], func(i, j int) bool { return math.Abs(value(out[i])) > math.Abs(value(out[j])) })
 	return out
 }
 

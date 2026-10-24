@@ -993,7 +993,7 @@ func TestPopulateEdgeResultDisclosesOptionTruncation(t *testing.T) {
 	}
 	in.Options.Realized.KnownPNLBase = &known
 	out := edgeStateOnlyResult(rpc.EdgeStateCurrent, "", "365d", 20, true)
-	populateRPCEdgeResult(out, in, 20, 3, true)
+	populateRPCEdgeResult(out, in, 20, 3, 0, rpc.MaxEdgeOptionResults, true)
 	if len(out.Options.Realized.Episodes) != rpc.MaxEdgeOptionResults || out.Options.Realized.TotalCount != rpc.MaxEdgeOptionResults+5 || !out.Options.Realized.Truncated {
 		t.Fatalf("option disclosure=%d/%d truncated=%v", len(out.Options.Realized.Episodes), out.Options.Realized.TotalCount, out.Options.Realized.Truncated)
 	}
@@ -1039,7 +1039,7 @@ func TestPopulateEdgeResultNamesEveryUnavailableMarketBenchmark(t *testing.T) {
 		Rollups:  []edgecore.ActionRollup{{Action: edgecore.ActionAdd, Horizons: []edgecore.HorizonRollup{{Sessions: 20, SampleCount: 3, TotalBase: &total, MedianBase: &median}}}},
 	}
 	out := edgeStateOnlyResult(rpc.EdgeStateDegraded, "context_test", "365d", 20, true)
-	populateRPCEdgeResult(out, in, 20, 3, true)
+	populateRPCEdgeResult(out, in, 20, 3, 0, rpc.MaxEdgeOptionResults, true)
 	if !slices.Equal(out.MarketContextMissing, []string{"spy", "qqq", "dia", "vix"}) || len(out.MarketContext) != 0 {
 		t.Fatalf("market context disclosure=%+v missing=%v", out.MarketContext, out.MarketContextMissing)
 	}

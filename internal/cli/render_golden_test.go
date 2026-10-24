@@ -360,7 +360,63 @@ func renderGoldenCases() []renderGoldenCase {
 			renderBondRisk(env, env.Stdout, bonds, book)
 		}},
 		{name: "positions_bond_facts", argv: []string{"positions"}, render: func(env *Env) { renderBondFacts(env, env.Stdout, goldenBondFacts()) }},
+		{name: "edge", argv: []string{"edge"}, conn: goldenConn{rpc.MethodEdgeSnapshot: goldenEdge(0, 3)}},
+		{name: "edge_option_page", argv: []string{"edge", "--option-offset", "3", "--option-limit", "3"}, conn: goldenConn{rpc.MethodEdgeSnapshot: goldenEdge(3, 3)}},
 	}
+}
+
+// goldenEdge is a synthetic Edge review whose option lists are one page of
+// rows [offset, offset+limit): completed positions closed by trade, expiry
+// and assignment, realized episodes with one row lacking a P/L, and open
+// positions. The counts and totals cover every row, as the daemon sends them.
+func goldenEdge(offset, limit int) rpc.EdgeResult {
+	result := edgeCLIResult()
+	at := result.AsOf
+	money := func(v float64) *float64 { return &v }
+	cycles := []rpc.EdgeOptionCycle{
+		{ID: "option-cycle_a1", Symbol: "SYNA  260821C00115000", Direction: "short", OpenedAt: at.AddDate(0, -2, 0), ClosedAt: at.AddDate(0, 0, -3), ClosedBy: "assignment", ExecutionCount: 2, RealizedPNLBase: money(4890), PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option-cycle_a2", Symbol: "SYNB  260918P00090000", Direction: "long", OpenedAt: at.AddDate(0, -1, 0), ClosedAt: at.AddDate(0, 0, -5), ClosedBy: "expiry", ExecutionCount: 3, RealizedPNLBase: money(-1250), PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option-cycle_a3", Symbol: "SYNC  261016C00050000", Direction: "long", OpenedAt: at.AddDate(0, -1, 0), ClosedAt: at.AddDate(0, 0, -8), ClosedBy: "trade", ExecutionCount: 2, RealizedPNLBase: money(830), PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option-cycle_a4", Symbol: "SYNA  260821P00100000", Direction: "long", OpenedAt: at.AddDate(0, -1, -5), ClosedAt: at.AddDate(0, 0, -10), ClosedBy: "exercise", ExecutionCount: 2, RealizedPNLBase: money(-310), PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option-cycle_a5", Symbol: "SYND  260918C00020000", Direction: "short", OpenedAt: at.AddDate(0, -1, -9), ClosedAt: at.AddDate(0, 0, -12), ClosedBy: "trade", ExecutionCount: 2, RealizedPNLBase: money(120), PNLStatus: "complete", MissingEvidence: []string{}},
+	}
+	leg := func(symbol string, strike float64, putCall string) []rpc.EdgeOptionLegIdentity {
+		return []rpc.EdgeOptionLegIdentity{{Symbol: symbol, Underlying: symbol[:4], Expiry: "2026-09-18", Strike: &strike, PutCall: putCall}}
+	}
+	episodes := []rpc.EdgeOptionEpisodeSummary{
+		{ID: "option_e1", Grouping: "exact_order", Lifecycle: "closing", Underlying: "SYNA", ActivityFrom: at.AddDate(0, 0, -3), ActivityTo: at.AddDate(0, 0, -3), RealizedPNLBase: money(4890), PNLStatus: "complete", MissingEvidence: []string{}, Legs: leg("SYNA CALL", 115, "call")},
+		{ID: "option_e2", Grouping: "exact_order", Lifecycle: "closing", Underlying: "SYNB", ActivityFrom: at.AddDate(0, 0, -5), ActivityTo: at.AddDate(0, 0, -5), RealizedPNLBase: money(-1250), PNLStatus: "complete", MissingEvidence: []string{}, Legs: leg("SYNB PUT", 90, "put")},
+		{ID: "option_e3", Grouping: "exact_order", Lifecycle: "closing", Underlying: "SYNC", ActivityFrom: at.AddDate(0, 0, -8), ActivityTo: at.AddDate(0, 0, -8), RealizedPNLBase: money(830), PNLStatus: "complete", MissingEvidence: []string{}, Legs: leg("SYNC CALL", 50, "call")},
+		{ID: "option_e4", Grouping: "unlinked_execution", Lifecycle: "closing", Underlying: "SYND", ActivityFrom: at.AddDate(0, 0, -12), ActivityTo: at.AddDate(0, 0, -12), RealizedPNLBase: money(120), PNLStatus: "complete", MissingEvidence: []string{}, Legs: leg("SYND CALL", 20, "call")},
+		{ID: "option_e5", Grouping: "unlinked_execution", Lifecycle: "closing", Underlying: "SYNE", ActivityFrom: at.AddDate(0, 0, -14), ActivityTo: at.AddDate(0, 0, -14), PNLStatus: "unavailable", MissingEvidence: []string{"realized_pnl"}, Legs: leg("SYNE PUT", 30, "put")},
+	}
+	positions := []rpc.EdgeOptionOpenPositionSummary{
+		{ID: "option_o1", Symbol: "SYNA CALL", Underlying: "SYNA", SnapshotDate: at, Expiry: "2026-12-18", Strike: money(120), PutCall: "call", OpenPNLBase: money(-640), PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option_o2", Symbol: "SYNB PUT", Underlying: "SYNB", SnapshotDate: at, Expiry: "2026-12-18", Strike: money(85), PutCall: "put", OpenPNLBase: money(410), PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option_o3", Symbol: "SYNC CALL", Underlying: "SYNC", SnapshotDate: at, Expiry: "2027-01-15", Strike: money(55), PutCall: "call", OpenPNLBase: money(-90), PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option_o4", Symbol: "SYND PUT", Underlying: "SYND", SnapshotDate: at, Expiry: "2027-01-15", Strike: money(18), PutCall: "put", OpenPNLBase: money(35), PNLStatus: "complete", MissingEvidence: []string{}},
+	}
+	page := func(total int) (int, int, *int) {
+		start, end := min(offset, total), min(total, offset+limit)
+		if end < total {
+			return start, end, &end
+		}
+		return start, end, nil
+	}
+	options := rpc.EdgeOptionReview{
+		Coverage: rpc.EdgeOptionCoverage{ExecutionEpisodes: 5, ClosingEpisodes: 5},
+		Cycles:   rpc.EdgeOptionCycles{CompletedCount: 5, CompletePNLCount: 5, OpenContractCount: 4, ExcludedContracts: 1, Reasons: map[string]int{"opened_before_window": 2, "lifecycle_or_transfer": 1}, KnownPNLBase: money(4280), Offset: offset},
+		Realized: rpc.EdgeOptionRealizedReview{KnownPNLBase: money(4590), PositiveCount: 3, NegativeCount: 1, CompleteCount: 4, UnavailableCount: 1, TotalCount: 5, Offset: offset},
+		Open:     rpc.EdgeOptionOpenReview{SnapshotDate: at, KnownPNLBase: money(-285), PositiveCount: 2, NegativeCount: 2, CompleteCount: 4, TotalCount: 4, Offset: offset},
+	}
+	start, end, next := page(len(cycles))
+	options.Cycles.Cycles, options.Cycles.NextOffset, options.Cycles.Truncated = cycles[start:end], next, end-start < len(cycles)
+	start, end, next = page(len(episodes))
+	options.Realized.Episodes, options.Realized.NextOffset, options.Realized.Truncated = episodes[start:end], next, end-start < len(episodes)
+	start, end, next = page(len(positions))
+	options.Open.Positions, options.Open.NextOffset, options.Open.Truncated = positions[start:end], next, end-start < len(positions)
+	result.Options = options
+	return result
 }
 
 // goldenBondFacts is a synthetic held bill book with the console's facts

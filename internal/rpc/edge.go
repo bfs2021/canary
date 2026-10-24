@@ -19,7 +19,12 @@ const (
 	EdgeStateInsufficient   = "insufficient_evidence"
 	EdgeStateUnavailable    = "unavailable"
 	MaxEdgeFindings         = 3
-	MaxEdgeOptionResults    = 20
+	// MaxEdgeOptionResults is the default option page: the rows the review
+	// shows unless a caller pages.
+	MaxEdgeOptionResults = 20
+	// MaxEdgeOptionPage bounds one requested option page; a caller reads
+	// longer lists by following next_offset.
+	MaxEdgeOptionPage = 500
 )
 
 // EdgeSnapshotParams selects one deterministic lens over the daemon-published
@@ -29,8 +34,13 @@ type EdgeSnapshotParams struct {
 	HorizonSessions  int    `json:"horizon_sessions,omitempty"`
 	AutomaticHorizon bool   `json:"automatic_horizon,omitempty"`
 	Limit            int    `json:"limit,omitempty"`
-	ChangeID         string `json:"change_id,omitempty"`
-	OptionID         string `json:"option_id,omitempty"`
+	// OptionOffset and OptionLimit page the three option lists (completed
+	// positions, realized episodes, open positions) together: each list
+	// returns its rows [offset, offset+limit) of one canonical order.
+	OptionOffset int    `json:"option_offset,omitempty"`
+	OptionLimit  int    `json:"option_limit,omitempty"`
+	ChangeID     string `json:"change_id,omitempty"`
+	OptionID     string `json:"option_id,omitempty"`
 }
 
 // NormalizeEdgeSnapshotParams is the single public input contract shared by
@@ -56,6 +66,12 @@ func NormalizeEdgeSnapshotParams(in EdgeSnapshotParams) (EdgeSnapshotParams, err
 	}
 	if out.Limit < 1 || out.Limit > MaxEdgeFindings {
 		return EdgeSnapshotParams{}, fmt.Errorf("edge limit must be between 1 and %d", MaxEdgeFindings)
+	}
+	if out.OptionLimit == 0 {
+		out.OptionLimit = MaxEdgeOptionResults
+	}
+	if out.OptionOffset < 0 || out.OptionLimit < 1 || out.OptionLimit > MaxEdgeOptionPage {
+		return EdgeSnapshotParams{}, fmt.Errorf("edge option page needs offset >= 0 and limit between 1 and %d", MaxEdgeOptionPage)
 	}
 	out.ChangeID = strings.TrimSpace(out.ChangeID)
 	if len(out.ChangeID) > 128 || out.ChangeID != "" && !strings.HasPrefix(out.ChangeID, "change_") {
@@ -241,8 +257,10 @@ type EdgeOptionCoverage struct {
 	EventEpisodes           int `json:"event_episodes"`
 }
 
-// EdgeOptionRealizedReview is a bounded public view over all realized
-// episodes in the selected window.
+// EdgeOptionRealizedReview is one page over all realized episodes in the
+// selected window; its counts and known total describe every episode.
+// Episodes with a numeric P/L come first, ranked by magnitude with a gain
+// and a loss seated in the first default page, then the rest by date.
 type EdgeOptionRealizedReview struct {
 	KnownPNLBase     *float64                   `json:"known_pnl_base,omitempty"`
 	PositiveCount    int                        `json:"positive_count"`
@@ -253,11 +271,13 @@ type EdgeOptionRealizedReview struct {
 	UnavailableCount int                        `json:"unavailable_count"`
 	TotalCount       int                        `json:"total_count"`
 	Truncated        bool                       `json:"truncated"`
+	Offset           int                        `json:"offset"`
+	NextOffset       *int                       `json:"next_offset,omitempty"`
 	Episodes         []EdgeOptionEpisodeSummary `json:"episodes"`
 }
 
-// EdgeOptionOpenReview is a bounded public view over the latest authoritative
-// Flex open-position snapshot.
+// EdgeOptionOpenReview is one page over the latest authoritative Flex
+// open-position snapshot; its counts and known total describe every row.
 type EdgeOptionOpenReview struct {
 	SnapshotDate     time.Time                       `json:"snapshot_date,omitzero"`
 	KnownPNLBase     *float64                        `json:"known_pnl_base,omitempty"`
@@ -268,6 +288,8 @@ type EdgeOptionOpenReview struct {
 	UnavailableCount int                             `json:"unavailable_count"`
 	TotalCount       int                             `json:"total_count"`
 	Truncated        bool                            `json:"truncated"`
+	Offset           int                             `json:"offset"`
+	NextOffset       *int                            `json:"next_offset,omitempty"`
 	Positions        []EdgeOptionOpenPositionSummary `json:"positions"`
 }
 
@@ -626,7 +648,7 @@ func validateEdgeOptionReview(review EdgeOptionReview) error {
 		return fmt.Errorf("inconsistent Edge option coverage")
 	}
 	realized := review.Realized
-	if realized.TotalCount < 0 || realized.TotalCount != realized.CompleteCount+realized.PartialCount+realized.UnavailableCount || realized.PositiveCount+realized.NegativeCount+realized.FlatCount != realized.CompleteCount+realized.PartialCount || len(realized.Episodes) > MaxEdgeOptionResults || realized.TotalCount < len(realized.Episodes) || realized.Truncated != (realized.TotalCount > len(realized.Episodes)) {
+	if realized.TotalCount < 0 || realized.TotalCount != realized.CompleteCount+realized.PartialCount+realized.UnavailableCount || realized.PositiveCount+realized.NegativeCount+realized.FlatCount != realized.CompleteCount+realized.PartialCount || !validEdgeOptionPage(realized.TotalCount, realized.Offset, len(realized.Episodes), realized.NextOffset) || realized.Truncated != (realized.TotalCount > len(realized.Episodes)) {
 		return fmt.Errorf("invalid Edge realized option counts")
 	}
 	if (realized.KnownPNLBase == nil) != (realized.CompleteCount+realized.PartialCount == 0) || realized.KnownPNLBase != nil && !finite(*realized.KnownPNLBase) {
@@ -643,7 +665,7 @@ func validateEdgeOptionReview(review EdgeOptionReview) error {
 		}
 	}
 	open := review.Open
-	if open.TotalCount < 0 || open.TotalCount != open.CompleteCount+open.UnavailableCount || open.PositiveCount+open.NegativeCount+open.FlatCount != open.CompleteCount || len(open.Positions) > MaxEdgeOptionResults || open.TotalCount < len(open.Positions) || open.Truncated != (open.TotalCount > len(open.Positions)) {
+	if open.TotalCount < 0 || open.TotalCount != open.CompleteCount+open.UnavailableCount || open.PositiveCount+open.NegativeCount+open.FlatCount != open.CompleteCount || !validEdgeOptionPage(open.TotalCount, open.Offset, len(open.Positions), open.NextOffset) || open.Truncated != (open.TotalCount > len(open.Positions)) {
 		return fmt.Errorf("invalid Edge open option counts")
 	}
 	if (open.KnownPNLBase == nil) != (open.CompleteCount == 0) || open.KnownPNLBase != nil && !finite(*open.KnownPNLBase) {
@@ -889,6 +911,18 @@ func validEdgeMarketContextIdentity(key, label, kind string) bool {
 
 func validEdgeMarketContextKey(key string) bool {
 	return key == "spy" || key == "qqq" || key == "dia" || key == "vix"
+}
+
+// validEdgeOptionPage checks one page of a list of total rows: rows lie
+// inside the list, and next_offset is present exactly when rows remain.
+func validEdgeOptionPage(total, offset, rows int, next *int) bool {
+	if total < 0 || offset < 0 || rows < 0 || rows > MaxEdgeOptionPage || rows > 0 && offset+rows > total {
+		return false
+	}
+	if offset+rows < total {
+		return next != nil && *next == offset+rows
+	}
+	return next == nil
 }
 
 func validEdgeHorizon(value int) bool { return value == 1 || value == 5 || value == 20 }

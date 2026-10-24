@@ -686,6 +686,17 @@
             "type": "string",
             "description": "optional opaque option ID returned by a prior canary_edge call"
           },
+          "option_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "rows per option list; default 20. Counts and known totals cover every row whatever the page."
+          },
+          "option_offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "first row of each option list (options.cycles, options.realized, options.open) to return; default 0. Pass a list's next_offset to read its next page."
+          },
           "window": {
             "type": "string",
             "enum": [

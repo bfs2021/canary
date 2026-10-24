@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"regexp"
 	"sort"
@@ -19,6 +20,9 @@ func runEdge(ctx context.Context, env *Env, args []string) int {
 	limit := fs.Int("limit", rpc.MaxEdgeFindings, "maximum findings: 1-3")
 	change := fs.String("change", "", "opaque change ID for one detailed result")
 	option := fs.String("option", "", "opaque option episode or open-position ID for one detailed result")
+	optionOffset := fs.Int("option-offset", 0, "first row of each option list to return (completed positions, realized episodes, open positions)")
+	optionLimit := fs.Int("option-limit", rpc.MaxEdgeOptionResults, fmt.Sprintf("option rows per list: 1-%d", rpc.MaxEdgeOptionPage))
+	allOptions := fs.Bool("all-options", false, "return every row of each option list")
 	jsonOut := fs.Bool("json", false, "emit machine-readable JSON")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
@@ -26,22 +30,77 @@ func runEdge(ctx context.Context, env *Env, args []string) int {
 	if fs.NArg() != 0 {
 		return failUnexpectedArgs(env, fs)
 	}
-	params, err := rpc.NormalizeEdgeSnapshotParams(rpc.EdgeSnapshotParams{Window: *window, HorizonSessions: *horizon, Limit: *limit, ChangeID: *change, OptionID: *option})
+	paged := *allOptions
+	fs.Visit(func(f *flag.Flag) { paged = paged || f.Name == "option-offset" || f.Name == "option-limit" })
+	if *allOptions && (*optionOffset != 0 || *optionLimit != rpc.MaxEdgeOptionResults) {
+		return fail(env, "edge: --all-options replaces --option-offset and --option-limit")
+	}
+	params, err := rpc.NormalizeEdgeSnapshotParams(rpc.EdgeSnapshotParams{Window: *window, HorizonSessions: *horizon, Limit: *limit, OptionOffset: *optionOffset, OptionLimit: *optionLimit, ChangeID: *change, OptionID: *option})
 	if err != nil {
 		return fail(env, "edge: %v", err)
 	}
-	var result rpc.EdgeResult
-	if err := env.Conn.Call(ctx, rpc.MethodEdgeSnapshot, params, &result); err != nil {
-		return fail(env, "edge: %v", err)
+	if *allOptions {
+		params.OptionLimit = rpc.MaxEdgeOptionPage
 	}
-	if err := rpc.ValidateEdgeResult(result); err != nil {
-		return fail(env, "edge: daemon returned an invalid result: %v", err)
+	result, err := fetchEdge(ctx, env, params, *allOptions)
+	if err != nil {
+		return fail(env, "edge: %v", err)
 	}
 	if *jsonOut {
 		return printJSON(env, result)
 	}
-	renderEdgeText(env, result)
+	renderEdgeView(env, result, paged, params.OptionLimit)
 	return 0
+}
+
+// fetchEdge reads one Edge page or, with all set, follows next_offset until
+// every option list is complete and returns them as one page. Each page is
+// validated; pages from different snapshots are refused rather than merged.
+func fetchEdge(ctx context.Context, env *Env, params rpc.EdgeSnapshotParams, all bool) (rpc.EdgeResult, error) {
+	var result rpc.EdgeResult
+	if err := env.Conn.Call(ctx, rpc.MethodEdgeSnapshot, params, &result); err != nil {
+		return rpc.EdgeResult{}, err
+	}
+	if err := rpc.ValidateEdgeResult(result); err != nil {
+		return rpc.EdgeResult{}, fmt.Errorf("daemon returned an invalid result: %w", err)
+	}
+	for all {
+		next := edgeOptionNextOffset(result.Options)
+		if next == nil {
+			break
+		}
+		page := params
+		page.OptionOffset = *next
+		var more rpc.EdgeResult
+		if err := env.Conn.Call(ctx, rpc.MethodEdgeSnapshot, page, &more); err != nil {
+			return rpc.EdgeResult{}, err
+		}
+		if err := rpc.ValidateEdgeResult(more); err != nil {
+			return rpc.EdgeResult{}, fmt.Errorf("daemon returned an invalid result: %w", err)
+		}
+		if more.Fingerprint != result.Fingerprint || more.Options.Realized.Offset != *next {
+			return rpc.EdgeResult{}, fmt.Errorf("the Edge snapshot changed while reading its option rows; run the command again")
+		}
+		options := &result.Options
+		options.Cycles.Cycles = append(options.Cycles.Cycles, more.Options.Cycles.Cycles...)
+		options.Cycles.NextOffset, options.Cycles.Truncated = more.Options.Cycles.NextOffset, options.Cycles.CompletedCount > len(options.Cycles.Cycles)
+		options.Realized.Episodes = append(options.Realized.Episodes, more.Options.Realized.Episodes...)
+		options.Realized.NextOffset, options.Realized.Truncated = more.Options.Realized.NextOffset, options.Realized.TotalCount > len(options.Realized.Episodes)
+		options.Open.Positions = append(options.Open.Positions, more.Options.Open.Positions...)
+		options.Open.NextOffset, options.Open.Truncated = more.Options.Open.NextOffset, options.Open.TotalCount > len(options.Open.Positions)
+	}
+	return result, nil
+}
+
+// edgeOptionNextOffset is the next page offset any option list still has.
+// The lists share one offset, so they never disagree on it.
+func edgeOptionNextOffset(options rpc.EdgeOptionReview) *int {
+	for _, next := range []*int{options.Cycles.NextOffset, options.Realized.NextOffset, options.Open.NextOffset} {
+		if next != nil {
+			return next
+		}
+	}
+	return nil
 }
 
 // edgeMoneyWidth right-aligns money cells; "-€ 13,716.62" is 12 cells.
@@ -55,6 +114,13 @@ const edgeMoneyWidth = 13
 // shown only when no pattern is selected, because that text explains a gate
 // and carries no amounts.
 func renderEdgeText(env *Env, result rpc.EdgeResult) {
+	renderEdgeView(env, result, false, rpc.MaxEdgeOptionResults)
+}
+
+// renderEdgeView is renderEdgeText plus, when the reader paged the option
+// lists, the page's rows of each list and the command for the next page.
+// The default view keeps its overview and says how to read further rows.
+func renderEdgeView(env *Env, result rpc.EdgeResult, paged bool, optionLimit int) {
 	out := env.Stdout
 	width := briefProseWidth(out)
 	fmt.Fprintln(out, edgeTitle(env, result))
@@ -82,7 +148,13 @@ func renderEdgeText(env *Env, result rpc.EdgeResult) {
 	renderEdgeAccount(env, result, width)
 	renderEdgeMatrix(env, result, width)
 	renderEdgeFindings(env, result)
-	renderEdgeOptions(env, result)
+	renderEdgeOptions(env, result, paged)
+	if paged {
+		renderEdgeOptionPage(env, result)
+	}
+	if next := edgeOptionNextOffset(result.Options); next != nil {
+		fmt.Fprintf(out, "  More option rows: canary edge --option-offset %d --option-limit %d\n", *next, optionLimit)
+	}
 	if result.Change != nil {
 		renderEdgeChange(env, *result.Change, edgeBaseCurrency(result))
 	}
@@ -306,12 +378,15 @@ func renderEdgeFindings(env *Env, result rpc.EdgeResult) {
 	}
 }
 
-func renderEdgeOptions(env *Env, result rpc.EdgeResult) {
+// renderEdgeOptions summarises each option list. The default view adds the
+// first rows and the extremes; a paged view lists its rows below instead,
+// because a later page's extremes are not the list's.
+func renderEdgeOptions(env *Env, result rpc.EdgeResult, paged bool) {
 	out := env.Stdout
 	options := result.Options
 	currency := edgeBaseCurrency(result)
 	fmt.Fprintf(out, "\nOptions  %s\n", env.dim("broker actuals in separate scopes; they do not add together"))
-	renderEdgeOptionCycles(env, result)
+	renderEdgeOptionCycles(env, result, paged)
 	if options.Realized.TotalCount == 0 {
 		edgeRow(env, "Realized episodes", "no broker-reported episode available in the selected window")
 	} else {
@@ -327,7 +402,9 @@ func renderEdgeOptions(env *Env, result rpc.EdgeResult) {
 			values = append(values, fmt.Sprintf("showing %d", len(options.Realized.Episodes)))
 		}
 		edgeRow(env, "Realized episodes", values...)
-		renderEdgeOptionExtremes(env, options.Realized.Episodes, currency)
+		if !paged {
+			renderEdgeOptionExtremes(env, options.Realized.Episodes, currency)
+		}
 	}
 	switch {
 	case options.Open.SnapshotDate.IsZero():
@@ -347,19 +424,20 @@ func renderEdgeOptions(env *Env, result rpc.EdgeResult) {
 			values = append(values, fmt.Sprintf("showing %d", len(options.Open.Positions)))
 		}
 		edgeRow(env, "Open snapshot "+options.Open.SnapshotDate.Format(time.DateOnly), values...)
-		renderEdgeOpenOptionExtremes(env, options.Open.Positions, currency)
+		if !paged {
+			renderEdgeOpenOptionExtremes(env, options.Open.Positions, currency)
+		}
 	}
 	if n := options.Coverage.OpeningOnlyZeroEpisodes; n > 0 {
 		edgeRow(env, "Activity", fmt.Sprintf("%d opening-only zero-P/L %s retained as coverage, not realized results", n, pluralWord(n, "episode", "episodes")))
 	}
 }
 
-func renderEdgeOptionCycles(env *Env, result rpc.EdgeResult) {
+func renderEdgeOptionCycles(env *Env, result rpc.EdgeResult, paged bool) {
 	cycles := result.Options.Cycles
 	if cycles.Reasons == nil {
 		return
 	}
-	out := env.Stdout
 	ccy := edgeBaseCurrency(result)
 	edgeRow(env, "Completed positions",
 		fmt.Sprintf("%d proven flat-to-flat contract %s", cycles.CompletedCount, pluralWord(cycles.CompletedCount, "cycle", "cycles")),
@@ -376,15 +454,58 @@ func renderEdgeOptionCycles(env *Env, result rpc.EdgeResult) {
 		edgeRow(env, "Reconstruction gaps", strings.Join(reasons, "; "), "opening/window exclusions count positions; other exclusions count contracts")
 	}
 	for i, row := range cycles.Cycles {
-		if i == 3 {
+		if i == 3 || paged {
 			break
 		}
+		edgeCycleLine(env, row, ccy)
+	}
+}
+
+func edgeCycleLine(env *Env, row rpc.EdgeOptionCycle, ccy string) {
+	amount := env.dim("unavailable")
+	if row.RealizedPNLBase != nil {
+		amount = edgeSignedMoney(env, *row.RealizedPNLBase, ccy)
+	}
+	fmt.Fprintf(env.Stdout, "    %s  %s %s · %s to %s · %d %s%s · %s\n", padLeftVisible(amount, edgeMoneyWidth), row.Direction, edgeCompactSymbol(row.Symbol), row.OpenedAt.Format(time.DateOnly), row.ClosedAt.Format(time.DateOnly), row.ExecutionCount, pluralWord(row.ExecutionCount, "execution", "executions"), edgeCycleCloser(row.ClosedBy), row.PNLStatus)
+}
+
+// renderEdgeOptionPage lists one page of each option list in the daemon's
+// order: ranked rows with a numeric P/L first, then rows without one.
+func renderEdgeOptionPage(env *Env, result rpc.EdgeResult) {
+	out := env.Stdout
+	options := result.Options
+	ccy := edgeBaseCurrency(result)
+	fmt.Fprintf(out, "\nOption rows  %s\n", env.dim("this page of each list; the counts and totals above cover every row"))
+	edgeRow(env, "Completed positions", edgePageRange(options.Cycles.Offset, len(options.Cycles.Cycles), options.Cycles.CompletedCount))
+	for _, row := range options.Cycles.Cycles {
+		edgeCycleLine(env, row, ccy)
+	}
+	edgeRow(env, "Realized episodes", edgePageRange(options.Realized.Offset, len(options.Realized.Episodes), options.Realized.TotalCount))
+	for _, row := range options.Realized.Episodes {
 		amount := env.dim("unavailable")
 		if row.RealizedPNLBase != nil {
 			amount = edgeSignedMoney(env, *row.RealizedPNLBase, ccy)
 		}
-		fmt.Fprintf(out, "    %s  %s %s · %s to %s · %d %s%s · %s\n", padLeftVisible(amount, edgeMoneyWidth), row.Direction, edgeCompactSymbol(row.Symbol), row.OpenedAt.Format(time.DateOnly), row.ClosedAt.Format(time.DateOnly), row.ExecutionCount, pluralWord(row.ExecutionCount, "execution", "executions"), edgeCycleCloser(row.ClosedBy), row.PNLStatus)
+		fmt.Fprintf(out, "    %s  %s · %s · %s · %s\n", padLeftVisible(amount, edgeMoneyWidth), edgeOptionEpisodeLabel(row), row.ActivityFrom.Format(time.DateOnly), row.PNLStatus, env.dim(sanitizeRunText(row.ID)))
 	}
+	edgeRow(env, "Open positions", edgePageRange(options.Open.Offset, len(options.Open.Positions), options.Open.TotalCount))
+	for _, row := range options.Open.Positions {
+		amount := env.dim("unavailable")
+		if row.OpenPNLBase != nil {
+			amount = edgeSignedMoney(env, *row.OpenPNLBase, ccy)
+		}
+		fmt.Fprintf(out, "    %s  %s · %s · %s\n", padLeftVisible(amount, edgeMoneyWidth), edgeOptionContractLabel(row.Underlying, row.Symbol, row.Expiry, row.Strike, row.PutCall), row.PNLStatus, env.dim(sanitizeRunText(row.ID)))
+	}
+}
+
+func edgePageRange(offset, rows, total int) string {
+	if rows == 0 {
+		return fmt.Sprintf("no rows from %d of %d", offset+1, total)
+	}
+	if rows == 1 {
+		return fmt.Sprintf("row %d of %d", offset+1, total)
+	}
+	return fmt.Sprintf("rows %d–%d of %d", offset+1, offset+rows, total)
 }
 
 // edgeCycleCloser names a lifecycle close; a closing trade needs no words.

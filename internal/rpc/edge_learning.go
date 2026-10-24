@@ -72,8 +72,11 @@ type EdgeProtectionContext struct {
 
 // EdgeOptionCycles describes proven exact-contract positions opened and fully
 // closed inside the review window. It does not infer multi-leg strategies.
+// Cycles is one page; the counts and known total describe every cycle.
 type EdgeOptionCycles struct {
 	Truncated         bool              `json:"truncated"`
+	Offset            int               `json:"offset"`
+	NextOffset        *int              `json:"next_offset,omitempty"`
 	CompletedCount    int               `json:"completed_count"`
 	CompletePNLCount  int               `json:"complete_pnl_count"`
 	OpenContractCount int               `json:"open_contract_count"`
@@ -211,7 +214,7 @@ func validateEdgeLearning(result EdgeResult) error {
 		return fmt.Errorf("unknown Edge review pattern")
 	}
 	c := result.Options.Cycles
-	if c.CompletedCount < 0 || c.CompletePNLCount < 0 || c.CompletePNLCount > c.CompletedCount || c.OpenContractCount < 0 || c.ExcludedContracts < 0 || len(c.Cycles) > MaxEdgeOptionResults || len(c.Cycles) > c.CompletedCount || c.Truncated != (len(c.Cycles) < c.CompletedCount) || !edgeLearningAmount(c.KnownPNLBase) {
+	if c.CompletedCount < 0 || c.CompletePNLCount < 0 || c.CompletePNLCount > c.CompletedCount || c.OpenContractCount < 0 || c.ExcludedContracts < 0 || !validEdgeOptionPage(c.CompletedCount, c.Offset, len(c.Cycles), c.NextOffset) || c.Truncated != (len(c.Cycles) < c.CompletedCount) || !edgeLearningAmount(c.KnownPNLBase) {
 		return fmt.Errorf("invalid Edge option cycles")
 	}
 	ids := map[string]bool{}

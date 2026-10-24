@@ -619,7 +619,7 @@ Review past trading decisions using broker records.
 Guard `read-only`. Also available as an MCP tool.
 
 ```text
-canary edge [--window 90d|365d] [--horizon 1|5|20] [--limit N] [--change ID] [--option ID] [--json]
+canary edge [--window 90d|365d] [--horizon 1|5|20] [--limit N] [--change ID] [--option ID] [--option-offset N] [--option-limit N] [--all-options] [--json]
 ```
 
 **Flags**
@@ -631,6 +631,9 @@ canary edge [--window 90d|365d] [--horizon 1|5|20] [--limit N] [--change ID] [--
 | `--limit` | yes | - |
 | `--change` | yes | - |
 | `--option` | yes | - |
+| `--option-offset` | yes | - |
+| `--option-limit` | yes | - |
+| `--all-options` | no | - |
 | `--json` | no | - |
 
 ## `canary scorecard`

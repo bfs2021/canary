@@ -258,7 +258,7 @@ func TestEdgeToolPreservesTheTypedDecisionReviewExactly(t *testing.T) {
 		t.Fatalf("MCP changed the typed Edge result:\ngot  %+v\nwant %+v", got, want)
 	}
 	call := <-calls
-	if call.method != rpc.MethodEdgeSnapshot || call.params != (rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: 3}) {
+	if call.method != rpc.MethodEdgeSnapshot || call.params != (rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: 3, OptionLimit: rpc.MaxEdgeOptionResults}) {
 		t.Fatalf("MCP call=%+v", call)
 	}
 }
@@ -294,6 +294,24 @@ func TestEdgeToolForwardsOpaqueOptionDetail(t *testing.T) {
 	call := <-calls
 	if call.params.OptionID != "option_opaque" || call.params.Window != "365d" || !call.params.AutomaticHorizon {
 		t.Fatalf("MCP option detail call=%+v", call)
+	}
+}
+
+func TestEdgeToolForwardsOptionPage(t *testing.T) {
+	tool, ok := lookupTool("canary_edge")
+	if !ok {
+		t.Fatal("missing canary_edge")
+	}
+	conn, calls := startMCPToolFakeConn(t, edgeMCPParityResult())
+	defer conn.Close()
+	if _, err := tool.Handler(t.Context(), conn, json.RawMessage(`{"option_offset":20,"option_limit":100}`)); err != nil {
+		t.Fatal(err)
+	}
+	if call := <-calls; call.params.OptionOffset != 20 || call.params.OptionLimit != 100 {
+		t.Fatalf("MCP option page call=%+v", call)
+	}
+	if _, err := tool.Handler(t.Context(), conn, json.RawMessage(`{"option_limit":501}`)); err == nil {
+		t.Fatal("an option page past the bound was forwarded")
 	}
 }
 

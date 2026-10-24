@@ -304,7 +304,7 @@ Read the half-spread each fill paid against the exact-contract quote Canary reta
 
 ## `canary_edge`
 
-Call with no arguments after canary_brief for an automatic one-year review of historical decision price outcomes: action/direction coverage, comparisons of the same decisions at different horizons, monthly consistency, concentration, and exact local protection provenance when available. SPY, QQQ, DIA, and VIX supply informational context. Options separately report option lifecycle coverage, proven flat-to-flat exact-contract positions, broker-reported realized option episodes, and the latest dated open option snapshot; these scopes overlap and must not be added. Use a returned change_id or returned option_id for broker-fact details; completed position cycles are already expanded in options.cycles. Do not use for current risk, order decisions, forecasting, or causal claims. Do not infer skill, strategy win rates, trade intent, or risk effectiveness. Use canary_brief for current portfolio risk and canary_positions for current holdings. Read-only; parameters select retained evidence and cannot refresh data.
+Call with no arguments after canary_brief for an automatic one-year review of historical decision price outcomes: action/direction coverage, comparisons of the same decisions at different horizons, monthly consistency, concentration, and exact local protection provenance when available. SPY, QQQ, DIA, and VIX supply informational context. Options separately report option lifecycle coverage, proven flat-to-flat exact-contract positions, broker-reported realized option episodes, and the latest dated open option snapshot; these scopes overlap and must not be added. Use a returned change_id or returned option_id for broker-fact details; completed position cycles are already expanded in options.cycles, each with closed_by (trade, expiry, exercise or assignment; after an exercise or assignment the P/L is the option leg's only). The option lists return 20 rows by default; their counts and known totals always cover every row, and option_offset with option_limit pages them, following next_offset until it is absent. Do not use for current risk, order decisions, forecasting, or causal claims. Do not infer skill, strategy win rates, trade intent, or risk effectiveness. Use canary_brief for current portfolio risk and canary_positions for current holdings. Read-only; parameters select retained evidence and cannot refresh data.
 
 **Parameters:**
 
@@ -314,6 +314,8 @@ Call with no arguments after canary_brief for an automatic one-year review of hi
 | `horizon_sessions` | integer | no | optional explicit decision-price-impact horizon; omitted selects the longest adequately covered horizon automatically |
 | `limit` | integer | no | maximum findings; default 3 |
 | `option_id` | string | no | optional opaque option ID returned by a prior canary_edge call |
+| `option_limit` | integer | no | rows per option list; default 20. Counts and known totals cover every row whatever the page. |
+| `option_offset` | integer | no | first row of each option list (options.cycles, options.realized, options.open) to return; default 0. Pass a list's next_offset to read its next page. |
 | `window` | string | no | optional review override; default 365d |
 
 ## `canary_scorecard`
