@@ -257,3 +257,29 @@ func TestEdgeHumanOutputComposesHeadlineAndOrdersSections(t *testing.T) {
 		t.Fatalf("matrix caveat is not adjacent to the matrix:\n%s", got)
 	}
 }
+
+// A cycle closed by a lifecycle event says so; after an exercise or
+// assignment the row says its P/L is the option leg's alone.
+func TestEdgeCycleRowsNameLifecycleClose(t *testing.T) {
+	t.Parallel()
+	result := edgeCLIResult()
+	now := result.AsOf
+	gain, loss, flat := 4890.0, -200.0, 0.0
+	total := gain + loss + flat
+	result.Options.Cycles = rpc.EdgeOptionCycles{CompletedCount: 3, CompletePNLCount: 3, Reasons: map[string]int{}, KnownPNLBase: &total, Cycles: []rpc.EdgeOptionCycle{
+		{ID: "option-cycle_a", Symbol: "SYNX 260918C00100000", Direction: "short", OpenedAt: now.AddDate(0, 0, -30), ClosedAt: now.AddDate(0, 0, -2), ClosedBy: "assignment", ExecutionCount: 2, RealizedPNLBase: &gain, PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option-cycle_b", Symbol: "SYNX 260918P00090000", Direction: "long", OpenedAt: now.AddDate(0, 0, -30), ClosedAt: now.AddDate(0, 0, -2), ClosedBy: "expiry", ExecutionCount: 2, RealizedPNLBase: &loss, PNLStatus: "complete", MissingEvidence: []string{}},
+		{ID: "option-cycle_c", Symbol: "SYNX 260918C00110000", Direction: "long", OpenedAt: now.AddDate(0, 0, -30), ClosedAt: now.AddDate(0, 0, -2), ClosedBy: "trade", ExecutionCount: 2, RealizedPNLBase: &flat, PNLStatus: "complete", MissingEvidence: []string{}},
+	}}
+	if err := rpc.ValidateEdgeResult(result); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	renderEdgeText(&Env{Stdout: &stdout}, result)
+	got := stdout.String()
+	for _, want := range []string{"2 executions · closed by assignment, option leg only · complete", "2 executions · closed by expiry · complete", "2026-08-22 · 2 executions · complete"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+}

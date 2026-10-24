@@ -16,6 +16,7 @@ All notable changes to this project are documented here. The project adheres to 
 - Edge no longer restarts its monthly statement download every night. A section without rows that day is no longer read as a change to the Flex query.
 - Edge accepts IBKR's stored copy of a statement period it already built, instead of retrying every 30 minutes because a newer daily report exists.
 - Edge includes the executions of its last statement day. The review stopped at midnight UTC at the start of that day, so the newest day's fills were missing from option episodes, completed option positions and decision changes.
+- Edge counts option positions closed by expiry, exercise or assignment as completed positions, with the broker's realized P/L and a `closed_by` of `expiry`, `exercise` or `assignment` (`trade` otherwise). They were excluded as lifecycle activity, and the event's duplicate row moved the replayed quantity twice, which marked some contracts unbalanced. After an exercise or assignment the P/L is the option leg's; the stock leg is not included.
 
 ## v3.27.1 — 2026-10-23 12:16 WEST
 

@@ -401,7 +401,7 @@ func defaultMethod() Method {
 		MarketContext:       "For SPY, QQQ, DIA, and VIX, compare the last daily close before the execution session with the close on the decision horizon day. QQQ and DIA are ETF proxies. Context is informational and never changes Decision price impact.",
 		AccountDefinition:   "Ending equity minus starting equity minus statement-confirmed external flows.",
 		Exclusions:          "Decision price impact excludes distributions, financing and borrow, market impact, and effects outside the fixed price-path comparison.",
-		OptionsMethod:       "Proven exact-contract flat-to-flat positions opened and closed inside the window are a subset of broker-reported realized option episodes, separate from the latest dated open-position P/L snapshot. Opening-only zero-P/L executions remain coverage, gains and losses are seated before magnitude ranking, missing evidence is never zero-filled, and no historical option counterfactual or cross-order strategy identity is synthesized.",
+		OptionsMethod:       "Proven exact-contract flat-to-flat positions opened and closed inside the window are a subset of broker-reported realized option episodes; a close by expiry, exercise or assignment counts once with the broker's realized P/L for the option leg, never a stock-leg P/L. Both are separate from the latest dated open-position P/L snapshot. Opening-only zero-P/L executions remain coverage, gains and losses are seated before magnitude ranking, missing evidence is never zero-filled, and no historical option counterfactual or cross-order strategy identity is synthesized.",
 		NoCausalClaim:       true,
 		NoPredictiveClaim:   true,
 		NotInvestmentAdvice: true,

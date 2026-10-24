@@ -556,7 +556,20 @@ func buildMutations(groups []groupedTrade, ev evidence) []mutation {
 		}
 		out = append(out, mutation{conid: item.ConID, at: item.Date, delta: delta, kind: "transfer", key: item.ID})
 	}
+	// IBKR writes an exercise, assignment or expiration both as an OptionEAE
+	// row and as a BookTrade execution with the same trade ID and signed
+	// quantity. The execution already moved the position; the event row
+	// mutates it only when no such execution was retained.
+	executed := map[string]bool{}
+	for _, group := range groups {
+		for _, id := range group.tradeIDs {
+			executed[lifecycleTradeKey(group.conid, id)] = true
+		}
+	}
 	for _, item := range ev.optionEvents {
+		if item.TradeID != "" && executed[lifecycleTradeKey(item.ConID, item.TradeID)] {
+			continue
+		}
 		if item.ConID != 0 && item.Quantity != nil {
 			out = append(out, mutation{conid: item.ConID, at: item.Date, delta: *item.Quantity, kind: "option_event", key: item.RecordID})
 		}
@@ -576,6 +589,10 @@ func buildMutations(groups []groupedTrade, ev evidence) []mutation {
 		return out[i].key < out[j].key
 	})
 	return out
+}
+
+func lifecycleTradeKey(conid int64, tradeID string) string {
+	return strconv.FormatInt(conid, 10) + "\x00" + tradeID
 }
 
 func buildScoringIndex(input Input, mutations []mutation) scoringIndex {
@@ -1645,6 +1662,7 @@ func dayStart(v time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 func endOfDay(v time.Time) time.Time { return dayStart(v).Add(24*time.Hour - time.Nanosecond) }
+
 // tradeStatementDay is the statement day an execution belongs to: its Flex
 // reportDate, or, for a row without one, its trade date on the statement
 // clock. It is never the UTC date of the execution instant: a fill late in

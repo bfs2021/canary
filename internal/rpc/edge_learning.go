@@ -84,12 +84,16 @@ type EdgeOptionCycles struct {
 }
 
 // EdgeOptionCycle is a broker-reconciled flat-to-flat exact-contract history.
+// ClosedBy is how the flattening execution closed it: trade, expiry,
+// exercise or assignment. After an exercise or assignment the realized P/L is
+// the option leg's as the broker reports it; the stock leg is not included.
 type EdgeOptionCycle struct {
 	ID                    string    `json:"id"`
 	Symbol                string    `json:"symbol"`
 	Direction             string    `json:"direction"`
 	OpenedAt              time.Time `json:"opened_at"`
 	ClosedAt              time.Time `json:"closed_at"`
+	ClosedBy              string    `json:"closed_by"`
 	ExecutionCount        int       `json:"execution_count"`
 	RealizedPNLBase       *float64  `json:"realized_pnl_base,omitempty"`
 	PNLStatus             string    `json:"pnl_status"`
@@ -212,7 +216,7 @@ func validateEdgeLearning(result EdgeResult) error {
 	}
 	ids := map[string]bool{}
 	for _, row := range c.Cycles {
-		if !strings.HasPrefix(row.ID, "option-cycle_") || ids[row.ID] || row.Symbol == "" || !validEdgeDirection(row.Direction) || row.OpenedAt.IsZero() || row.ClosedAt.Before(row.OpenedAt) || row.ExecutionCount < 2 || row.LinkedProtectionCount < 0 || row.LinkedProtectionCount > row.ExecutionCount || !edgeLearningAmount(row.RealizedPNLBase) {
+		if !strings.HasPrefix(row.ID, "option-cycle_") || ids[row.ID] || row.Symbol == "" || !validEdgeDirection(row.Direction) || row.OpenedAt.IsZero() || row.ClosedAt.Before(row.OpenedAt) || !validEdgeCycleCloser(row.ClosedBy) || row.ExecutionCount < 2 || row.LinkedProtectionCount < 0 || row.LinkedProtectionCount > row.ExecutionCount || !edgeLearningAmount(row.RealizedPNLBase) {
 			return fmt.Errorf("invalid Edge option cycle")
 		}
 		ids[row.ID] = true
@@ -254,4 +258,13 @@ func validateEdgeProtectionContext(c EdgeProtectionContext) error {
 		return fmt.Errorf("unknown Edge protection status")
 	}
 	return nil
+}
+
+func validEdgeCycleCloser(value string) bool {
+	switch value {
+	case "trade", "expiry", "exercise", "assignment":
+		return true
+	default:
+		return false
+	}
 }

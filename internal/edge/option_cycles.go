@@ -23,12 +23,18 @@ type OptionCycles struct {
 }
 
 // OptionCycle is a broker-reconciled flat-to-flat exact-contract history.
+// ClosedBy says how the flattening execution closed the position: trade, or
+// the broker lifecycle event (expiry, exercise, assignment) whose BookTrade
+// execution carries the broker's realized P/L. After an exercise or
+// assignment that P/L is the option leg's alone; the stock delivered or
+// taken is not part of the cycle.
 type OptionCycle struct {
 	ID                    string    `json:"id"`
 	Symbol                string    `json:"symbol"`
 	Direction             string    `json:"direction"`
 	OpenedAt              time.Time `json:"opened_at"`
 	ClosedAt              time.Time `json:"closed_at"`
+	ClosedBy              string    `json:"closed_by"`
 	ExecutionCount        int       `json:"execution_count"`
 	RealizedPNLBase       *float64  `json:"realized_pnl_base,omitempty"`
 	PNLStatus             string    `json:"pnl_status"`
@@ -39,17 +45,33 @@ type OptionCycle struct {
 func buildOptionCycles(ev evidence, from, to time.Time, base string, protection map[string]ProtectionRecord, initial map[int64]float64, unbalanced map[int64]bool) OptionCycles {
 	out := OptionCycles{Reasons: map[string]int{}, Cycles: []OptionCycle{}}
 	byContract := map[int64][]flexstmt.Trade{}
+	executed := map[string]bool{}
 	for _, trade := range ev.trades {
-		if !strings.EqualFold(trade.AssetClass, "OPT") || trade.ConID == 0 || tradeStatementDay(trade).After(dayStart(to)) {
+		if !strings.EqualFold(trade.AssetClass, "OPT") || trade.ConID == 0 {
 			continue
 		}
 		if trade.LevelOfDetail != "" && trade.LevelOfDetail != "EXECUTION" && trade.LevelOfDetail != "EXECUTIONS" {
 			continue
 		}
+		if trade.TradeID != "" {
+			executed[lifecycleTradeKey(trade.ConID, trade.TradeID)] = true
+		}
+		if tradeStatementDay(trade).After(dayStart(to)) {
+			continue
+		}
 		byContract[trade.ConID] = append(byContract[trade.ConID], trade)
 	}
+	// An expiry, exercise or assignment whose BookTrade execution was
+	// retained is closed by that execution, which carries the broker's
+	// realized P/L. Any other lifecycle row keeps the contract unproved.
+	closedBy := map[string]string{}
 	contaminated := map[int64]bool{}
 	for _, event := range ev.optionEvents {
+		key := lifecycleTradeKey(event.ConID, event.TradeID)
+		if kind := optionCycleCloser(event.TransactionType); event.TradeID != "" && executed[key] && kind != "" {
+			closedBy[key] = kind
+			continue
+		}
 		contaminated[event.ConID] = true
 	}
 	for _, event := range ev.transfers {
@@ -119,6 +141,10 @@ func buildOptionCycles(ev evidence, from, to time.Time, base string, protection 
 				continue
 			}
 			cycle := optionCycleFromRows(active, base, ev.fxRates, protection)
+			cycle.ClosedBy = "trade"
+			if last := active[len(active)-1]; last.TradeID != "" && closedBy[lifecycleTradeKey(last.ConID, last.TradeID)] != "" {
+				cycle.ClosedBy = closedBy[lifecycleTradeKey(last.ConID, last.TradeID)]
+			}
 			out.CompletedCount++
 			if cycle.PNLStatus == OptionPNLComplete {
 				out.CompletePNLCount++
@@ -151,6 +177,19 @@ func buildOptionCycles(ev evidence, from, to time.Time, base string, protection 
 		return out.Cycles[i].ID < out.Cycles[j].ID
 	})
 	return out
+}
+
+// optionCycleCloser names the lifecycle events that close an exact-contract
+// position with a broker-reported realized P/L; anything else is "".
+func optionCycleCloser(transactionType string) string {
+	switch optionEventType(transactionType) {
+	case "expiration":
+		return "expiry"
+	case "exercise", "assignment":
+		return optionEventType(transactionType)
+	default:
+		return ""
+	}
 }
 
 func optionCyclePathReason(rows []flexstmt.Trade, quantity float64) string {

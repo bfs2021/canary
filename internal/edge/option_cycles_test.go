@@ -2,6 +2,7 @@ package edge
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -145,4 +146,78 @@ func TestLastStatementDayExecutionsAreInTheWindow(t *testing.T) {
 	if lastDay != 1 {
 		t.Fatalf("last statement day stock change missing from changes: %+v", result.Changes)
 	}
+}
+
+// IBKR reports an expiry, assignment or exercise twice: as an OptionEAE row
+// and as a BookTrade execution with the same trade ID, the same signed
+// quantity and the broker's realized P/L. The pair closes the round trip
+// once; an OptionEAE row without its execution still keeps the contract out.
+func TestLifecycleClosedOptionCyclesAreCompleted(t *testing.T) {
+	for _, tc := range []struct {
+		name, eventType, closedBy string
+		openSide                  string
+		pnl                       float64
+	}{
+		{"long expires worthless", "Expiration", "expiry", "BUY", -200},
+		{"short expires worthless", "EXPIRATION", "expiry", "SELL", 150},
+		{"short assigned", "Assignment", "assignment", "SELL", 80},
+		{"long exercised", "Exercise", "exercise", "BUY", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := edgeStatement()
+			closeSide, quantity := "SELL", -1.0
+			if tc.openSide == "SELL" {
+				closeSide, quantity = "BUY", 1
+			}
+			trade := func(id, side, marker string, at time.Time, pnl float64) flexstmt.Trade {
+				return flexstmt.Trade{RecordID: id, AccountID: "U", ConID: 456, Symbol: "SYNX 260116C00100000", AssetClass: "OPT", Currency: "EUR", TradeID: "t-" + id, OrderID: id, ExecutionID: id, ExecutedAt: at, ReportDate: dayStart(at), Side: side, OpenClose: marker, Quantity: new(float64(1)), Price: new(float64(2)), Multiplier: new(float64(100)), Commission: new(float64(-1)), Taxes: new(float64(0)), RealizedPNL: new(pnl), LevelOfDetail: "EXECUTION"}
+			}
+			st.Trades = append(st.Trades,
+				trade("open", tc.openSide, "O", dayTime("2026-01-06", 15), 0),
+				trade("book", closeSide, "C", dayTime("2026-01-16", 21), tc.pnl),
+			)
+			st.Trades[2].Price = new(float64(0))
+			st.OptionEvents = []flexstmt.OptionEvent{{RecordID: "eae", AccountID: "U", ConID: 456, Symbol: "SYNX 260116C00100000", AssetClass: "OPT", Currency: "EUR", Date: day("2026-01-16"), TransactionType: strings.ToUpper(tc.eventType), Quantity: new(quantity), RealizedPNL: new(tc.pnl), TradeID: "t-book"}}
+			// A dated anchor between the open and the event: replaying the
+			// event and its execution as two mutations would not reconcile.
+			held := -quantity
+			st.Positions = append(st.Positions,
+				flexstmt.OpenPosition{RecordID: "mid", AccountID: "U", ConID: 456, AssetClass: "OPT", ReportDate: day("2026-01-10"), Quantity: &held},
+				flexstmt.OpenPosition{RecordID: "end", AccountID: "U", ConID: 456, AssetClass: "OPT", ReportDate: day("2026-02-01"), Quantity: new(float64(0))},
+			)
+			result, err := Analyze(Input{AsOf: day("2026-02-10"), WindowDays: 90, BaseCurrency: "EUR", Statements: []flexstmt.Statement{st}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			c := result.Options.Cycles
+			if c.CompletedCount != 1 || c.ExcludedContracts != 0 || len(c.Cycles) != 1 {
+				t.Fatalf("cycles=%+v, want one completed round trip", c)
+			}
+			row := c.Cycles[0]
+			if row.ClosedBy != tc.closedBy || row.RealizedPNLBase == nil || *row.RealizedPNLBase != tc.pnl || row.PNLStatus != OptionPNLComplete || row.ExecutionCount != 2 {
+				t.Fatalf("cycle=%+v, want closed by %s with the broker's %.0f once", row, tc.closedBy, tc.pnl)
+			}
+		})
+	}
+	t.Run("event without its execution stays excluded", func(t *testing.T) {
+		st := cycleTestStatement([]float64{1}, []string{"O"}, 0)
+		st.OptionEvents = []flexstmt.OptionEvent{{RecordID: "eae", ConID: 456, AssetClass: "OPT", Date: day("2026-01-16"), TransactionType: "EXPIRATION", Quantity: new(float64(-1)), TradeID: "t-missing"}}
+		result, err := Analyze(Input{AsOf: day("2026-02-10"), WindowDays: 90, BaseCurrency: "EUR", Statements: []flexstmt.Statement{st}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := result.Options.Cycles; c.CompletedCount != 0 || c.Reasons["lifecycle_or_transfer"] != 1 {
+			t.Fatalf("cycles=%+v", c)
+		}
+	})
+	t.Run("plain trade close says trade", func(t *testing.T) {
+		st := cycleTestStatement([]float64{1, -1}, []string{"O", "C"}, 0)
+		result, err := Analyze(Input{AsOf: day("2026-02-10"), WindowDays: 90, BaseCurrency: "EUR", Statements: []flexstmt.Statement{st}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c := result.Options.Cycles; len(c.Cycles) != 1 || c.Cycles[0].ClosedBy != "trade" {
+			t.Fatalf("cycles=%+v", c)
+		}
+	})
 }

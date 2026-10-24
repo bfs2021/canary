@@ -162,17 +162,25 @@ partial closes stay together; reopening after flat starts another position.
 Raw execution chronology, open/close indicators and dated quantity anchors must
 agree. Long and short positions remain distinct.
 
+A position can end by expiry, exercise or assignment. IBKR reports such an
+event twice: as an Options, Exercises, Assignments and Expirations row and as a
+closing execution with the same trade ID, quantity and realized P/L. Edge
+counts that pair once, as the execution that closed the position, and says how
+it closed: `closed_by` is `trade`, `expiry`, `exercise` or `assignment`. After
+an exercise or assignment the realized P/L is the option leg's as the broker
+reports it; the stock delivered or taken is not part of the position, and Edge
+does not calculate a P/L for it.
+
 Closing-only history or an add to an already-held position cannot prove the
 opening. Unknown quantities, ambiguous simultaneous opposing executions,
-cross-zero fills, inconsistent anchors and lifecycle/transfer/corporate-action
-activity keep the affected contract unproved. This first version conservatively
-excludes contracts touched by those lifecycle events rather than allocating
-underlying deliveries or inventing expired-option values. Positions opened
-before the window are counted as boundary exclusions. Nonzero ending quantity
-is still open, not completed.
+cross-zero fills, inconsistent anchors, transfers, corporate actions and a
+lifecycle event without its closing execution keep the affected contract
+unproved (`lifecycle_or_transfer`). Positions opened before the window are
+counted as boundary exclusions. Nonzero ending quantity is still open, not
+completed.
 
-Each completed row includes its dates, execution count, broker realized P/L and
-missing-evidence status. The bounded list discloses truncation. These positions
+Each completed row includes its dates, how it closed, execution count, broker
+realized P/L and missing-evidence status. The bounded list discloses truncation. These positions
 are a **subset of realized activity**, not another amount to add to it. They are
 not reconstructed multi-leg strategies, and their counts are not a strategy win
 rate. No holding-period or return-on-risk recommendation is inferred.

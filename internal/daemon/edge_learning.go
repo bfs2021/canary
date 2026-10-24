@@ -138,7 +138,7 @@ func rpcEdgeOptionCycles(in edgecore.OptionCycles) rpc.EdgeOptionCycles {
 		return *row.RealizedPNLBase
 	})
 	for _, row := range rows {
-		out.Cycles = append(out.Cycles, rpc.EdgeOptionCycle{ID: row.ID, Symbol: row.Symbol, Direction: row.Direction, OpenedAt: row.OpenedAt, ClosedAt: row.ClosedAt, ExecutionCount: row.ExecutionCount, RealizedPNLBase: row.RealizedPNLBase, PNLStatus: row.PNLStatus, MissingEvidence: row.MissingEvidence, LinkedProtectionCount: row.LinkedProtectionCount})
+		out.Cycles = append(out.Cycles, rpc.EdgeOptionCycle{ID: row.ID, Symbol: row.Symbol, Direction: row.Direction, OpenedAt: row.OpenedAt, ClosedAt: row.ClosedAt, ClosedBy: row.ClosedBy, ExecutionCount: row.ExecutionCount, RealizedPNLBase: row.RealizedPNLBase, PNLStatus: row.PNLStatus, MissingEvidence: row.MissingEvidence, LinkedProtectionCount: row.LinkedProtectionCount})
 	}
 	out.Truncated = len(out.Cycles) < out.CompletedCount
 	return out

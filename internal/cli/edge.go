@@ -383,7 +383,20 @@ func renderEdgeOptionCycles(env *Env, result rpc.EdgeResult) {
 		if row.RealizedPNLBase != nil {
 			amount = edgeSignedMoney(env, *row.RealizedPNLBase, ccy)
 		}
-		fmt.Fprintf(out, "    %s  %s %s · %s to %s · %d %s · %s\n", padLeftVisible(amount, edgeMoneyWidth), row.Direction, edgeCompactSymbol(row.Symbol), row.OpenedAt.Format(time.DateOnly), row.ClosedAt.Format(time.DateOnly), row.ExecutionCount, pluralWord(row.ExecutionCount, "execution", "executions"), row.PNLStatus)
+		fmt.Fprintf(out, "    %s  %s %s · %s to %s · %d %s%s · %s\n", padLeftVisible(amount, edgeMoneyWidth), row.Direction, edgeCompactSymbol(row.Symbol), row.OpenedAt.Format(time.DateOnly), row.ClosedAt.Format(time.DateOnly), row.ExecutionCount, pluralWord(row.ExecutionCount, "execution", "executions"), edgeCycleCloser(row.ClosedBy), row.PNLStatus)
+	}
+}
+
+// edgeCycleCloser names a lifecycle close; a closing trade needs no words.
+// After an exercise or assignment the P/L is the option leg's alone.
+func edgeCycleCloser(closedBy string) string {
+	switch closedBy {
+	case "expiry":
+		return " · closed by expiry"
+	case "exercise", "assignment":
+		return " · closed by " + closedBy + ", option leg only"
+	default:
+		return ""
 	}
 }
 
