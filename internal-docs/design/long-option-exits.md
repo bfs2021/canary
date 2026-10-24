@@ -31,7 +31,7 @@ names' actual joint moves.
 |---|---|---|
 | LO-H1 | A winner that grows past its share of the risk budget (premium per name over 15% of NLV) is trimmed back to it; the rest stays on. | partly: the cap blocks additions (2026-10-23); book-level budget reductions exist; no per-name trim |
 | LO-H2 | After a large gain, enough is sold to recover the cost; the rest runs. | missing: every exit is a full close |
-| LO-H3 | A winner can be rolled up or out: sell it, buy a further strike or later expiry, keep the direction with less money at risk. | missing: deferred since 2026-09-28 |
+| LO-H3 | A winner can be rolled up or out: sell it, buy a further strike or later expiry, keep the direction with less money at risk. The new leg reuses Add's discovery (expiry by horizon, strike by delta range), pricing and sizing; the old leg uses the exit; both go as one combo order at a net price, and the order gates judge the roll by its net change, not as a fresh addition. (Owner 2026-10-24 08:44 CEST.) | missing: deferred since 2026-09-28. Parts exist: Add's call discovery, plan and price ladder; the option exits; a combo route that closes multi-leg units (`option_exit_units.go`), not yet one that closes and opens |
 | LO-H4 | Any trail follows the stock and scales to how much the stock moves, so one big option day does not stop the position out. | missing: today's trail is on the option premium, armed at +50%, full close |
 
 ## Time: never let decay or expiry decide
