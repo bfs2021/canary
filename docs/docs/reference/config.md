@@ -95,7 +95,9 @@ Loaded from the path in `[auto_trade].policy_file` (default `~/.config/ibkr/poli
 | `[buckets.trailing_stop.options]` | `min_trail_abs` | `float64` | MinTrailAbs is the minimum absolute trailing amount in dollars (default 0.10). |
 | `[buckets.trailing_stop.options]` | `order_type` | `string` | OrderType is TRAIL LIMIT in V1; a plain TRAIL market trigger is not approved (default TRAIL LIMIT). |
 | `[buckets.trailing_stop.options]` | `profit_arm_gain_pct` | `float64` | ProfitArmGainPct arms a premium trail when the fresh executable bid is this percent above cost (default 50). |
+| `[buckets.trailing_stop.options]` | `recover_cost_gain_pct` | `float64` | RecoverCostGainPct is the harvest point: once a long option's gain reaches this percent of its cost, enough contracts are sold to recover the cost and the rest runs (default 100; long-option-exits LO-H2, read by the exit replay until the harvest exit is built). |
 | `[buckets.trailing_stop.options]` | `spread_multiple` | `float64` | SpreadMultiple sizes the trailing amount as a multiple of the observed spread (default 2). |
+| `[buckets.trailing_stop.options]` | `stock_trail_range_multiple` | `float64` | StockTrailRangeMultiple is the stock trail: a long option exits when its stock closes more than this many 20-day average true ranges below its highest close since entry (default 2.5; long-option-exits LO-H4, read by the exit replay until the stock trail is built). |
 | `[buckets.trailing_stop.options]` | `tif` | `string` | TIF is the option profit-trail lifetime; V1 requires DAY so theta cannot trigger a persistent order (default DAY). |
 | `[buckets.trailing_stop.stock_etf]` | `default_pct` | `float64` | DefaultPct is the standard trailing distance in percent (default 8). |
 | `[buckets.trailing_stop.stock_etf]` | `enabled` | `bool` | Enabled turns trailing-stop proposals for stock/ETF positions on (default true). |

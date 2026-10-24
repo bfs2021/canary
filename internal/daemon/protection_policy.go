@@ -333,6 +333,10 @@ type protectionTrailOptionPolicy struct {
 	MaxSpreadPctOfMid float64 `toml:"max_spread_pct_of_mid" json:"max_spread_pct_of_mid"`
 	// MinTrailAbs is the minimum absolute trailing amount in dollars (default 0.10).
 	MinTrailAbs float64 `toml:"min_trail_abs" json:"min_trail_abs"`
+	// RecoverCostGainPct is the harvest point: once a long option's gain reaches this percent of its cost, enough contracts are sold to recover the cost and the rest runs (default 100; long-option-exits LO-H2, read by the exit replay until the harvest exit is built).
+	RecoverCostGainPct float64 `toml:"recover_cost_gain_pct" json:"recover_cost_gain_pct"`
+	// StockTrailRangeMultiple is the stock trail: a long option exits when its stock closes more than this many 20-day average true ranges below its highest close since entry (default 2.5; long-option-exits LO-H4, read by the exit replay until the stock trail is built).
+	StockTrailRangeMultiple float64 `toml:"stock_trail_range_multiple" json:"stock_trail_range_multiple"`
 	// SpreadMultiple sizes the trailing amount as a multiple of the observed spread (default 2).
 	SpreadMultiple float64 `toml:"spread_multiple" json:"spread_multiple"`
 	// LimitOffsetAbs is the explicitly configured absolute limit offset for the stop; required positive when order_type is TRAIL LIMIT (default 0.05).
@@ -652,20 +656,22 @@ func defaultProtectionPolicy() protectionPolicy {
 					MaxSpreadPctOfMid: 2.0,
 				},
 				Options: protectionTrailOptionPolicy{
-					Enabled:               false,
-					MinDTE:                14,
-					ProfitArmGainPct:      50.0,
-					LockedGainPct:         5.0,
-					TIF:                   rpc.OrderTIFDay,
-					OrderType:             rpc.OrderTypeTRAILLIMIT,
-					DefaultPct:            30.0,
-					MinPct:                20.0,
-					MaxPct:                50.0,
-					MaxSpreadPctOfMid:     25.0,
-					MinTrailAbs:           0.10,
-					SpreadMultiple:        2.0,
-					LimitOffsetAbs:        0.05,
-					AllowShortProfitTrail: false,
+					Enabled:                 false,
+					MinDTE:                  14,
+					ProfitArmGainPct:        50.0,
+					LockedGainPct:           5.0,
+					TIF:                     rpc.OrderTIFDay,
+					OrderType:               rpc.OrderTypeTRAILLIMIT,
+					DefaultPct:              30.0,
+					MinPct:                  20.0,
+					MaxPct:                  50.0,
+					MaxSpreadPctOfMid:       25.0,
+					MinTrailAbs:             0.10,
+					RecoverCostGainPct:      100.0,
+					StockTrailRangeMultiple: 2.5,
+					SpreadMultiple:          2.0,
+					LimitOffsetAbs:          0.05,
+					AllowShortProfitTrail:   false,
 				},
 			},
 		},
@@ -716,6 +722,12 @@ func applyProtectionPolicyDefaults(p *protectionPolicy, md *toml.MetaData) {
 	}
 	if md == nil || !md.IsDefined("buckets", "trailing_stop", "options", "profit_arm_gain_pct") {
 		p.Buckets.TrailingStop.Options.ProfitArmGainPct = optionDefaults.ProfitArmGainPct
+	}
+	if md == nil || !md.IsDefined("buckets", "trailing_stop", "options", "recover_cost_gain_pct") {
+		p.Buckets.TrailingStop.Options.RecoverCostGainPct = optionDefaults.RecoverCostGainPct
+	}
+	if md == nil || !md.IsDefined("buckets", "trailing_stop", "options", "stock_trail_range_multiple") {
+		p.Buckets.TrailingStop.Options.StockTrailRangeMultiple = optionDefaults.StockTrailRangeMultiple
 	}
 	if md == nil || !md.IsDefined("buckets", "trailing_stop", "options", "locked_gain_pct") {
 		p.Buckets.TrailingStop.Options.LockedGainPct = optionDefaults.LockedGainPct
@@ -973,6 +985,12 @@ func validateTrailOptionPolicy(prefix string, p protectionTrailOptionPolicy) err
 	}
 	if !finiteProtectionOptionPolicyValue(p.ProfitArmGainPct) || p.ProfitArmGainPct <= 0 {
 		return fmt.Errorf("%s.profit_arm_gain_pct must be positive", prefix)
+	}
+	if !finiteProtectionOptionPolicyValue(p.RecoverCostGainPct) || p.RecoverCostGainPct <= 0 || p.RecoverCostGainPct > 1000 {
+		return fmt.Errorf("%s.recover_cost_gain_pct must be above 0 and at most 1000", prefix)
+	}
+	if !finiteProtectionOptionPolicyValue(p.StockTrailRangeMultiple) || p.StockTrailRangeMultiple <= 0 || p.StockTrailRangeMultiple > 20 {
+		return fmt.Errorf("%s.stock_trail_range_multiple must be above 0 and at most 20", prefix)
 	}
 	if !finiteProtectionOptionPolicyValue(p.LockedGainPct) || p.LockedGainPct < 0 {
 		return fmt.Errorf("%s.locked_gain_pct must not be negative", prefix)

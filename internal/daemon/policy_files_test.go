@@ -635,6 +635,10 @@ func TestProtectionMigrationLeavesARetiredKeyItCannotEditAlone(t *testing.T) {
 		inline += d.key + " = " + d.value + "\n"
 	}
 	inline += "\n[cash]\nconfirmation_window = \"10m\"\n"
+	// Complete option-exit numbers too, for the same reason.
+	for _, d := range optionExitWrittenDefaults {
+		inline = strings.Replace(inline, "[buckets.trailing_stop.options]\n", "[buckets.trailing_stop.options]\n"+d.key+" = "+d.value+"\n", 1)
+	}
 	if _, _, err := parseProtectionPolicy([]byte(inline)); err != nil {
 		t.Fatalf("inline retired key must load: %v", err)
 	}

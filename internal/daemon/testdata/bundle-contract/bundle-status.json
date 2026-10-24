@@ -1,8 +1,8 @@
 {
   "bundle_id": "currency_leveling-bundle:d3dea6a8de0b612f",
-  "revision": "10ddc64e58da7a120079ca5f6a33af97",
+  "revision": "927c77fb7be5fd7cd871dbd81e8e4612",
   "preparation_id": "sLCwsLCwsLCwsLCwsLCwsA",
-  "terms_digest": "sha256:b120c11059b3ffe21dedb61a84b75d34ed81c1fbdcc58f4c10d547c93607533a",
+  "terms_digest": "sha256:ef2a9b75d1d3cfdc850c397b37c0837399a5684991448cc95ee6c7ba17d30f61",
   "expires_at": "2026-05-28T08:55:00Z",
   "outcome": "sent",
   "sent": 2,
@@ -16,7 +16,7 @@
       "preparation": {
         "id": "oaGhoaGhoaGhoaGhoaGhoQ",
         "key": "currency_leveling:4d80cd1444744be4",
-        "revision": "sha256:a824b026d9276cc7f0eb11426b33e13eb661c746821a397b2efe67337882e789",
+        "revision": "sha256:18258e4c766950426cfb9077e5351b3e5b42f702050d16e4412c6709ec90fe2e",
         "draft_fingerprint": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
         "expires_at": "2026-05-28T08:55:00Z",
         "state": "consumed",
@@ -183,7 +183,7 @@
       "preparation": {
         "id": "oqKioqKioqKioqKioqKiog",
         "key": "currency_leveling:14b769cd67fdded3",
-        "revision": "sha256:a824b026d9276cc7f0eb11426b33e13eb661c746821a397b2efe67337882e789",
+        "revision": "sha256:18258e4c766950426cfb9077e5351b3e5b42f702050d16e4412c6709ec90fe2e",
         "draft_fingerprint": "d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2",
         "expires_at": "2026-05-28T08:55:00Z",
         "state": "consumed",

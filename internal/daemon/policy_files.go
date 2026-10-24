@@ -750,6 +750,8 @@ func migrateProtectionPolicyFile(data []byte, release string) ([]byte, []string,
 	}
 	levelingChanges, levelingNotes := materialiseCurrencyLeveling(doc, md, release)
 	changes, notes = append(changes, levelingChanges...), append(notes, levelingNotes...)
+	exitChanges, exitNotes := materialiseOptionExitDefaults(doc, md, release)
+	changes, notes = append(changes, exitChanges...), append(notes, exitNotes...)
 	windowChanges, windowNotes := materialiseCashConfirmationWindow(doc, md, release)
 	changes, notes = append(changes, windowChanges...), append(notes, windowNotes...)
 	if len(windowChanges) > 0 {
@@ -822,6 +824,37 @@ func cashConfirmationWindowLines(release string) []string {
 // confirmation the way the owner decided without a step of its own. Until it
 // is written, every save from Desk asks the device. A new [cash] table goes
 // before the first [cash.*] table, with the comments above it.
+// optionExitWrittenDefaults are the long-option harvest and stock-trail
+// numbers (internal-docs/design/long-option-exits.md LO-H2, LO-H4) written
+// into an existing [buckets.trailing_stop.options] at their defaults, so a
+// file states what the exit replay and the exits read (owner 2026-10-24
+// 08:55 CEST). The in-memory default is the same value, so writing it changes
+// no policy in force and policy_version stays.
+var optionExitWrittenDefaults = []struct{ key, value, why string }{
+	{"recover_cost_gain_pct", "100", "once a long option's gain reaches this percent of cost, sell enough to recover the cost; the rest runs"},
+	{"stock_trail_range_multiple", "2.5", "exit when the stock closes this many 20-day average true ranges below its highest close since entry"},
+}
+
+func materialiseOptionExitDefaults(doc *tomlDoc, md toml.MetaData, release string) (changes, notes []string) {
+	if !md.IsDefined("buckets", "trailing_stop", "options") {
+		return nil, nil
+	}
+	if doc.headerLine("buckets.trailing_stop.options") < 0 {
+		return nil, []string{"[buckets.trailing_stop.options] is not a plain section, so the harvest and stock-trail numbers were not written; their defaults apply"}
+	}
+	for _, d := range optionExitWrittenDefaults {
+		if md.IsDefined("buckets", "trailing_stop", "options", d.key) {
+			continue
+		}
+		doc.insert("buckets.trailing_stop.options", []string{
+			fmt.Sprintf("# Added by Canary %s at its default: %s. Owner decision 2026-10-24 08:55 CEST.", release, d.why),
+			d.key + " = " + d.value,
+		})
+		changes = append(changes, "added buckets.trailing_stop.options."+d.key+" = "+d.value)
+	}
+	return changes, notes
+}
+
 func materialiseCashConfirmationWindow(doc *tomlDoc, md toml.MetaData, release string) (changes, notes []string) {
 	if md.IsDefined("cash", "confirmation_window") {
 		return nil, nil
@@ -1031,6 +1064,8 @@ min_pct = %s
 max_pct = %s
 max_spread_pct_of_mid = %s
 min_trail_abs = %s
+recover_cost_gain_pct = %s
+stock_trail_range_multiple = %s
 spread_multiple = %s
 allow_short_profit_trail = %t
 # Required before option exits can be enabled: the limit offset you approve.
@@ -1044,7 +1079,7 @@ allow_short_profit_trail = %t
 		p.Buckets.TrailingStop.Enabled,
 		se.Enabled, se.OrderType, tomlFloat(se.DefaultPct), tomlFloat(se.FallbackPct), tomlFloat(se.MinPct), tomlFloat(se.MaxPct), tomlFloat(se.MaxSpreadPctOfMid),
 		o.Enabled, o.DefaultLongCallsDirectional, o.DefaultIndexPutsProtection, o.MinDTE, tomlFloat(o.ProfitArmGainPct), tomlFloat(o.LockedGainPct), o.TIF, o.OrderType,
-		tomlFloat(o.DefaultPct), tomlFloat(o.MinPct), tomlFloat(o.MaxPct), tomlFloat(o.MaxSpreadPctOfMid), tomlFloat(o.MinTrailAbs), tomlFloat(o.SpreadMultiple), o.AllowShortProfitTrail,
+		tomlFloat(o.DefaultPct), tomlFloat(o.MinPct), tomlFloat(o.MaxPct), tomlFloat(o.MaxSpreadPctOfMid), tomlFloat(o.MinTrailAbs), tomlFloat(o.RecoverCostGainPct), tomlFloat(o.StockTrailRangeMultiple), tomlFloat(o.SpreadMultiple), o.AllowShortProfitTrail,
 		tomlFloat(o.LimitOffsetAbs))
 	b.WriteString(`
 # Premium budget governor: cuts long option premium back to a share of the
