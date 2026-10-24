@@ -76,6 +76,7 @@ type groupedTrade struct {
 	tradeIDs              []string
 	underlyingConID       int64
 	underlyingSymbol      string
+	statementDay          time.Time
 	queryComplete         bool
 	costFXMissing         bool
 }
@@ -147,7 +148,7 @@ func Analyze(input Input) (Result, error) {
 		parts := classifyChange(before, group.delta)
 		positions[group.conid] = before + group.delta
 		for _, part := range parts {
-			if group.executedAt.Before(windowStart) || group.executedAt.After(asOf) {
+			if !inStatementWindow(group.statementDay, windowStart, asOf) {
 				continue
 			}
 			pathReason := ""
@@ -467,6 +468,9 @@ func groupTrades(trades []flexstmt.Trade, baseCurrency string, fxRates []flexstm
 			}
 			if row.ExecutedAt.After(g.executedAt) {
 				g.executedAt = row.ExecutedAt
+			}
+			if day := tradeStatementDay(row); day.After(g.statementDay) {
+				g.statementDay = day
 			}
 			if row.Quantity != nil {
 				q := math.Abs(*row.Quantity)
@@ -1092,7 +1096,7 @@ func buildOptionReview(ev evidence, from, to time.Time, base string, fxRates []f
 	groups := map[string][]flexstmt.Trade{}
 	tradeIDs := map[string]bool{}
 	for _, trade := range ev.trades {
-		if !strings.EqualFold(trade.AssetClass, "OPT") || trade.ConID == 0 || trade.ExecutedAt.Before(from) || trade.ExecutedAt.After(to) {
+		if !strings.EqualFold(trade.AssetClass, "OPT") || trade.ConID == 0 || !inStatementWindow(tradeStatementDay(trade), from, to) {
 			continue
 		}
 		// Summary rows repeat execution economics and cannot form episodes.
@@ -1146,7 +1150,7 @@ func buildOptionReview(ev evidence, from, to time.Time, base string, fxRates []f
 		review.Realized.Episodes = append(review.Realized.Episodes, episode)
 	}
 	for _, event := range ev.optionEvents {
-		if event.ConID == 0 || event.Date.Before(from) || event.Date.After(to) || event.TradeID != "" && tradeIDs[event.TradeID] {
+		if event.ConID == 0 || !inStatementWindow(dayStart(event.Date), from, to) || event.TradeID != "" && tradeIDs[event.TradeID] {
 			continue
 		}
 		review.Coverage.EventEpisodes++
@@ -1641,6 +1645,27 @@ func dayStart(v time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 func endOfDay(v time.Time) time.Time { return dayStart(v).Add(24*time.Hour - time.Nanosecond) }
+// tradeStatementDay is the statement day an execution belongs to: its Flex
+// reportDate, or, for a row without one, its trade date on the statement
+// clock. It is never the UTC date of the execution instant: a fill late in
+// the New York session or in the overnight session crosses midnight UTC on
+// the statement day it is reported in.
+func tradeStatementDay(t flexstmt.Trade) time.Time {
+	if !t.ReportDate.IsZero() {
+		return dayStart(t.ReportDate)
+	}
+	y, m, d := t.ExecutedAt.In(flexstmt.StatementLocation()).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+// inStatementWindow reports whether a statement day lies in the review
+// window: from the window's first day through the as-of statement day, both
+// inclusive. The as-of value is a date at 00:00Z, so comparing execution
+// instants with it dropped the whole last statement day.
+func inStatementWindow(day, from, to time.Time) bool {
+	return !day.Before(dayStart(from)) && !day.After(dayStart(to))
+}
+
 func afterStartThroughEnd(v, start, end time.Time) bool {
 	return v.After(endOfDay(start)) && !v.After(endOfDay(end))
 }

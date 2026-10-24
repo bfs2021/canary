@@ -10,6 +10,8 @@ It describes the price consequences of covered decisions. It does not grade the 
 
 The normal experience is automatic. Open the Edge tab, run `canary edge`, or call `canary_edge` with no arguments. Canary reviews the retained 365-day broker history, chooses the longest adequately covered horizon, and returns no more than three concrete findings. There is no analysis form to configure and no trade-intent journal to maintain. The shorter window and explicit horizon flags remain optional CLI/MCP inspection lenses, not prerequisites for getting the result.
 
+The window counts statement days. An execution belongs to the day its broker statement reports it, and the review runs from the window's first day through the evidence date, both inclusive; an execution reported after the evidence date is not in it.
+
 ## Account P/L
 
 For the selected 90- or 365-day window, account P/L is:

@@ -40,7 +40,7 @@ func buildOptionCycles(ev evidence, from, to time.Time, base string, protection 
 	out := OptionCycles{Reasons: map[string]int{}, Cycles: []OptionCycle{}}
 	byContract := map[int64][]flexstmt.Trade{}
 	for _, trade := range ev.trades {
-		if !strings.EqualFold(trade.AssetClass, "OPT") || trade.ConID == 0 || trade.ExecutedAt.After(to) {
+		if !strings.EqualFold(trade.AssetClass, "OPT") || trade.ConID == 0 || tradeStatementDay(trade).After(dayStart(to)) {
 			continue
 		}
 		if trade.LevelOfDetail != "" && trade.LevelOfDetail != "EXECUTION" && trade.LevelOfDetail != "EXECUTIONS" {
@@ -113,7 +113,7 @@ func buildOptionCycles(ev evidence, from, to time.Time, base string, protection 
 				active = nil
 				continue
 			}
-			if active[0].ExecutedAt.Before(from) {
+			if tradeStatementDay(active[0]).Before(dayStart(from)) {
 				out.Reasons["opened_before_window"]++
 				active = nil
 				continue

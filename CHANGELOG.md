@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The project adheres to 
 - Statement reconciliation keeps the day's last complete account reading. A reading taken just before midnight that caught a later price can no longer leave the day's statement uncomparable.
 - Edge no longer restarts its monthly statement download every night. A section without rows that day is no longer read as a change to the Flex query.
 - Edge accepts IBKR's stored copy of a statement period it already built, instead of retrying every 30 minutes because a newer daily report exists.
+- Edge includes the executions of its last statement day. The review stopped at midnight UTC at the start of that day, so the newest day's fills were missing from option episodes, completed option positions and decision changes.
 
 ## v3.27.1 — 2026-10-23 12:16 WEST
 
