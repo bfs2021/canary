@@ -50,6 +50,28 @@ const (
 	EdgeReplayHistoryNotRetained           = "not_retained"
 	EdgeReplayHistoryInstrumentUnavailable = "instrument_unavailable"
 	EdgeReplayHistoryReadFailed            = "read_failed"
+
+	// EdgeReplayReconciledFully and the two after it are the reconciliation
+	// statuses: every check within tolerance and every contract with an Edge
+	// cycle compared; within tolerance on the contracts compared, with
+	// others named in not_compared; a check beyond tolerance.
+	EdgeReplayReconciledFully  = "reconciled"
+	EdgeReplayReconciledPartly = "partial"
+	EdgeReplayUnreconciled     = "unreconciled"
+
+	// EdgeReplayNotComparedHeldAtStart and the three after it say why a
+	// contract with an Edge cycle is not compared with it: held at the
+	// window's start; traded outside the cycle; incomplete broker P/L; closed
+	// by exercise or assignment, where the broker's realized P/L on the
+	// option carries value moved to or from the stock.
+	EdgeReplayNotComparedHeldAtStart  = "held_at_start"
+	EdgeReplayNotComparedOutsideCycle = "traded_outside_cycle"
+	EdgeReplayNotComparedBrokerPNL    = "broker_pnl_incomplete"
+	EdgeReplayNotComparedExercised    = "exercised"
+
+	// EdgeReplayResidualCashVsRealized marks a compared contract whose cash
+	// flows differ from the broker's realized P/L in its own currency.
+	EdgeReplayResidualCashVsRealized = "cash_differs_from_broker_realized"
 )
 
 // EdgeReplayRules lists the single rules in render order.
@@ -314,18 +336,35 @@ type EdgeReplayReconciliation struct {
 	EndValueBase    float64 `json:"end_value_base"`
 	// BrokerRealizedBase is the broker's realized P/L on the window's
 	// executions in scope, converted as Edge converts it.
-	BrokerRealizedBase  *float64 `json:"broker_realized_base,omitempty"`
-	BrokerRealizedGaps  int      `json:"broker_realized_gaps"`
-	EdgeCycles          int      `json:"edge_cycles"`
-	EdgeCycleContracts  int      `json:"edge_cycle_contracts"`
-	ComparedContracts   int      `json:"compared_contracts"`
-	EdgeCyclesPNLBase   float64  `json:"edge_cycles_pnl_base"`
-	ActualOnCyclesBase  float64  `json:"actual_on_cycles_base"`
-	FXTranslationBase   float64  `json:"fx_translation_base"`
-	ResidualBase        float64  `json:"residual_base"`
-	CycleCashResidual   float64  `json:"cycle_cash_residual"`
-	Reconciled          bool     `json:"reconciled"`
-	ReconciliationNotes []string `json:"notes"`
+	BrokerRealizedBase *float64 `json:"broker_realized_base,omitempty"`
+	BrokerRealizedGaps int      `json:"broker_realized_gaps"`
+	EdgeCycles         int      `json:"edge_cycles"`
+	EdgeCycleContracts int      `json:"edge_cycle_contracts"`
+	ComparedContracts  int      `json:"compared_contracts"`
+	EdgeCyclesPNLBase  float64  `json:"edge_cycles_pnl_base"`
+	ActualOnCyclesBase float64  `json:"actual_on_cycles_base"`
+	FXTranslationBase  float64  `json:"fx_translation_base"`
+	ResidualBase       float64  `json:"residual_base"`
+	CycleCashResidual  float64  `json:"cycle_cash_residual"`
+	// Reconciled is true when every check is within tolerance on the
+	// contracts compared; Status adds whether every contract with an Edge
+	// cycle was compared (one of the EdgeReplayReconciled statuses).
+	Reconciled bool   `json:"reconciled"`
+	Status     string `json:"status"`
+	// NotCompared names each contract with an Edge cycle the comparison
+	// leaves out and why; ResidualContracts each compared contract whose
+	// cash flows differ from the broker's realized P/L.
+	NotCompared         []EdgeReplayReconContract `json:"not_compared"`
+	ResidualContracts   []EdgeReplayReconContract `json:"residual_contracts"`
+	ReconciliationNotes []string                  `json:"notes"`
+}
+
+// EdgeReplayReconContract names one contract in the reconciliation: its
+// underlying, its expiry, strike and right, and the reason it is listed.
+type EdgeReplayReconContract struct {
+	Underlying string `json:"underlying"`
+	Contract   string `json:"contract"`
+	Reason     string `json:"reason"`
 }
 
 // EdgeReplayMethod discloses how the replay prices and decides.

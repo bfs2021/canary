@@ -52,12 +52,14 @@ By underlying  recorded prices
   SYNA        € 3,000.00      € 900.00    € 3,500.00    € 1,400.00
   SYNB        € 1,200.00      € 600.00    € 1,300.00      € 700.00
 
-Reconciliation  reconciled
+Reconciliation  balanced on 2 of 3 contracts
   Actual · € 4,200.00 = cash flows -€ 3,800.00 + end value € 10,000.00 − start
     value € 2,000.00
   Edge cycles · 3 proven flat-to-flat in scope, 2 of 3 contracts compared ·
     Edge € 2,500.00 + FX translation -€ 50.00 = actual € 2,450.00 · residual
     € 0.00
+  Not compared · SYNB 2026-09-18 90 P: exercised or assigned, so the broker's
+    P/L on the option carries value moved into or out of the stock
   Realized · broker realized on the window's executions € 3,900.00
 
 Details: canary edge replay --json · the method and every amount
@@ -115,12 +117,14 @@ By underlying  \x1b[2mrecorded prices\x1b[0m
   SYNA        \x1b[32m€ 3,000.00\x1b[0m      \x1b[32m€ 900.00\x1b[0m    \x1b[32m€ 3,500.00\x1b[0m    \x1b[32m€ 1,400.00\x1b[0m
   SYNB        \x1b[32m€ 1,200.00\x1b[0m      \x1b[32m€ 600.00\x1b[0m    \x1b[32m€ 1,300.00\x1b[0m      \x1b[32m€ 700.00\x1b[0m
 
-Reconciliation  \x1b[32mreconciled\x1b[0m
+Reconciliation  \x1b[32mbalanced\x1b[0m on 2 of 3 contracts
   Actual · \x1b[32m€ 4,200.00\x1b[0m = cash flows \x1b[31m-€ 3,800.00\x1b[0m + end value € 10,000.00 − start
     value € 2,000.00
   Edge cycles · 3 proven flat-to-flat in scope, 2 of 3 contracts compared ·
     Edge \x1b[32m€ 2,500.00\x1b[0m + FX translation \x1b[31m-€ 50.00\x1b[0m = actual \x1b[32m€ 2,450.00\x1b[0m · residual
     € 0.00
+  Not compared · SYNB 2026-09-18 90 P: exercised or assigned, so the broker's
+    P/L on the option carries value moved into or out of the stock
   Realized · broker realized on the window's executions \x1b[32m€ 3,900.00\x1b[0m
 
 Details: canary edge replay --json · the method and every amount

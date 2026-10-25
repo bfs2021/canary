@@ -224,7 +224,7 @@ func ExitReplay(in ExitReplayInput) rpc.EdgeReplayResult {
 		SchemaVersion: rpc.EdgeReplaySchemaVersion, State: rpc.EdgeStateCurrent, NotExecution: true,
 		Runs: []rpc.EdgeReplayRun{}, Method: exitReplayMethod(in.HistorySource), MissingHistory: []rpc.EdgeReplayMissingHistory{},
 		Scope:          rpc.EdgeReplayScope{Underlyings: []string{}, ExcludedOther: map[string]int{}},
-		Reconciliation: rpc.EdgeReplayReconciliation{ReconciliationNotes: []string{}},
+		Reconciliation: rpc.EdgeReplayReconciliation{ReconciliationNotes: []string{}, NotCompared: []rpc.EdgeReplayReconContract{}, ResidualContracts: []rpc.EdgeReplayReconContract{}},
 	}
 	out.Parameters = exitReplayParameters(in)
 	ev, err := collectEvidence(in.Statements)
@@ -1621,7 +1621,7 @@ func (s *replaySim) settleExpiry(c *replayContract, day, prev string) {
 // the window's cash flows and start and end values, and the contracts Edge
 // proves flat to flat inside the window against Edge's own option cycles.
 func (r *replay) reconcile(actualPNL float64) rpc.EdgeReplayReconciliation {
-	out := rpc.EdgeReplayReconciliation{ActualUnitsBase: actualPNL, ReconciliationNotes: []string{}}
+	out := rpc.EdgeReplayReconciliation{ActualUnitsBase: actualPNL, ReconciliationNotes: []string{}, NotCompared: []rpc.EdgeReplayReconContract{}, ResidualContracts: []rpc.EdgeReplayReconContract{}}
 	realized, gaps := 0.0, 0
 	for _, c := range r.contracts {
 		for _, trade := range c.executions {
@@ -1697,14 +1697,17 @@ func (r *replay) reconcile(actualPNL float64) rpc.EdgeReplayReconciliation {
 	for _, unit := range r.units {
 		outcomes[unit.lot.c.conid] += unit.actBase - unit.startBase
 	}
+	tolerance := 0.01 * float64(max(1, len(r.units)))
 	for _, conid := range slices.Sorted(maps.Keys(byContract)) {
 		sum, c := byContract[conid], r.contracts[conid]
-		if !sum.complete || c.preheld || sum.executions != len(c.executions) {
+		if reason := r.notComparedReason(c, sum.complete, sum.executions); reason != "" {
+			out.NotCompared = append(out.NotCompared, rpc.EdgeReplayReconContract{Underlying: c.underlying, Contract: replayContractLabel(c), Reason: reason})
 			continue
 		}
 		out.ComparedContracts++
 		out.EdgeCyclesPNLBase += sum.pnl
 		out.ActualOnCyclesBase += outcomes[conid]
+		gap := 0.0
 		for _, trade := range c.executions {
 			fx, _ := r.executionFX(trade)
 			realizedRow := 0.0
@@ -1712,19 +1715,63 @@ func (r *replay) reconcile(actualPNL float64) rpc.EdgeReplayReconciliation {
 				realizedRow = *trade.RealizedPNL
 			}
 			out.FXTranslationBase += (*trade.NetCash - realizedRow) * fx
-			out.CycleCashResidual += *trade.NetCash - realizedRow
+			gap += *trade.NetCash - realizedRow
+		}
+		out.CycleCashResidual += gap
+		if math.Abs(gap) > 0.01*float64(max(1, c.units())) {
+			out.ResidualContracts = append(out.ResidualContracts, rpc.EdgeReplayReconContract{Underlying: c.underlying, Contract: replayContractLabel(c), Reason: rpc.EdgeReplayResidualCashVsRealized})
 		}
 	}
 	out.ResidualBase = out.ActualOnCyclesBase - out.EdgeCyclesPNLBase - out.FXTranslationBase
-	tolerance := 0.01 * float64(max(1, len(r.units)))
 	out.Reconciled = math.Abs(out.ActualUnitsBase-out.ActualCashBase) <= tolerance && math.Abs(out.ResidualBase) <= tolerance && math.Abs(out.CycleCashResidual) <= tolerance
+	switch {
+	case !out.Reconciled:
+		out.Status = rpc.EdgeReplayUnreconciled
+	case len(out.NotCompared) > 0:
+		out.Status = rpc.EdgeReplayReconciledPartly
+	default:
+		out.Status = rpc.EdgeReplayReconciledFully
+	}
 	out.ReconciliationNotes = append(out.ReconciliationNotes,
 		"Actual by units equals the window's broker cash flows plus the end value of contracts still held, less the start value of contracts held at the start.",
-		"On contracts Edge proves flat to flat inside the window, the actual baseline equals Edge's realized P/L plus FX translation: Edge converts the broker's realized P/L at each closing execution's rate, the replay converts every cash flow at its own rate.")
-	if out.EdgeCycleContracts > out.ComparedContracts {
-		out.ReconciliationNotes = append(out.ReconciliationNotes, "Contracts with an Edge cycle that also traded outside it, were held at the start or lack complete broker P/L are not compared.")
+		"On contracts Edge proves flat to flat inside the window, the actual baseline equals Edge's realized P/L plus FX translation: Edge converts the broker's realized P/L at each closing execution's rate, the replay converts every cash flow at its own rate. In each contract's own currency its cash flows equal the broker's realized P/L.")
+	if len(out.NotCompared) > 0 {
+		out.ReconciliationNotes = append(out.ReconciliationNotes, "Contracts with an Edge cycle are not compared when they were held at the start, also traded outside the cycle, lack complete broker P/L, or closed by exercise or assignment, where the broker's realized P/L on the option carries value moved to or from the stock that no option cash flow shows; not_compared names each.")
 	}
 	return out
+}
+
+// notComparedReason says why a contract with an Edge cycle cannot be
+// compared with it, or "" when it can.
+func (r *replay) notComparedReason(c *replayContract, complete bool, executions int) string {
+	switch {
+	case c.preheld:
+		return rpc.EdgeReplayNotComparedHeldAtStart
+	case executions != len(c.executions):
+		return rpc.EdgeReplayNotComparedOutsideCycle
+	case !complete:
+		return rpc.EdgeReplayNotComparedBrokerPNL
+	}
+	for _, trade := range c.executions {
+		if kind := r.lifecycle[lifecycleTradeKey(trade.ConID, trade.TradeID)]; kind == "exercise" || kind == "assignment" {
+			return rpc.EdgeReplayNotComparedExercised
+		}
+	}
+	return ""
+}
+
+func (c *replayContract) units() int {
+	n := 0
+	for _, lot := range c.lots {
+		n += len(lot.units)
+	}
+	return n
+}
+
+// replayContractLabel names a contract for a reader: underlying, expiry,
+// strike and right.
+func replayContractLabel(c *replayContract) string {
+	return fmt.Sprintf("%s %s %s %s", c.underlying, c.expiry, strconv.FormatFloat(c.strike, 'f', -1, 64), c.right)
 }
 
 func exitReplayParameters(in ExitReplayInput) rpc.EdgeReplayParameters {

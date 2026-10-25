@@ -312,14 +312,23 @@ func renderEdgeReplayReconciliation(env *Env, result rpc.EdgeReplayResult) {
 	rec := result.Reconciliation
 	ccy := result.BaseCurrency
 	status := env.green("reconciled")
-	if !rec.Reconciled {
+	switch {
+	case !rec.Reconciled || rec.Status == rpc.EdgeReplayUnreconciled:
 		status = env.yellow("does not reconcile")
+	case rec.Status == rpc.EdgeReplayReconciledPartly:
+		status = env.green("balanced") + fmt.Sprintf(" on %d of %d contracts", rec.ComparedContracts, rec.EdgeCycleContracts)
 	}
 	fmt.Fprintln(out, "\nReconciliation  "+status)
 	edgeRow(env, "Actual", edgeSignedMoney(env, rec.ActualUnitsBase, ccy)+" = cash flows "+edgeSignedMoney(env, rec.FlowsBase, ccy)+" + end value "+formatMoneyCcyForPnL(rec.EndValueBase, ccy)+" − start value "+formatMoneyCcyForPnL(rec.StartValueBase, ccy))
 	edgeRow(env, "Edge cycles", fmt.Sprintf("%d proven flat-to-flat in scope, %d of %d contracts compared", rec.EdgeCycles, rec.ComparedContracts, rec.EdgeCycleContracts),
 		"Edge "+edgeSignedMoney(env, rec.EdgeCyclesPNLBase, ccy)+" + FX translation "+edgeSignedMoney(env, rec.FXTranslationBase, ccy)+" = actual "+edgeSignedMoney(env, rec.ActualOnCyclesBase, ccy),
 		"residual "+formatMoneyCcyForPnL(rec.ResidualBase, ccy))
+	if len(rec.ResidualContracts) > 0 {
+		edgeRow(env, env.yellow("Residual on"), edgeReplayReconContracts(rec.ResidualContracts)...)
+	}
+	if len(rec.NotCompared) > 0 {
+		edgeRow(env, "Not compared", edgeReplayReconContracts(rec.NotCompared)...)
+	}
 	if rec.BrokerRealizedBase != nil {
 		realized := "broker realized on the window's executions " + edgeSignedMoney(env, *rec.BrokerRealizedBase, ccy)
 		if rec.BrokerRealizedGaps > 0 {
@@ -327,4 +336,34 @@ func renderEdgeReplayReconciliation(env *Env, result rpc.EdgeReplayResult) {
 		}
 		edgeRow(env, "Realized", realized)
 	}
+}
+
+// edgeReplayReconContracts lists reconciliation contracts by reason: the
+// contracts, then why.
+func edgeReplayReconContracts(rows []rpc.EdgeReplayReconContract) []string {
+	byReason := map[string][]string{}
+	for _, row := range rows {
+		byReason[row.Reason] = append(byReason[row.Reason], sanitizeRunText(row.Contract))
+	}
+	var parts []string
+	for _, reason := range slices.Sorted(maps.Keys(byReason)) {
+		parts = append(parts, strings.Join(byReason[reason], ", ")+": "+edgeReplayReconReasonText(reason))
+	}
+	return parts
+}
+
+func edgeReplayReconReasonText(reason string) string {
+	switch reason {
+	case rpc.EdgeReplayNotComparedHeldAtStart:
+		return "held at the window's start"
+	case rpc.EdgeReplayNotComparedOutsideCycle:
+		return "also traded outside Edge's cycle"
+	case rpc.EdgeReplayNotComparedBrokerPNL:
+		return "the broker's P/L is incomplete"
+	case rpc.EdgeReplayNotComparedExercised:
+		return "exercised or assigned, so the broker's P/L on the option carries value moved into or out of the stock"
+	case rpc.EdgeReplayResidualCashVsRealized:
+		return "cash flows differ from the broker's realized P/L"
+	}
+	return strings.ReplaceAll(sanitizeRunText(reason), "_", " ")
 }

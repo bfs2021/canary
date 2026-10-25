@@ -245,6 +245,12 @@ day's NLV (a set that needs more capital than the book had shows here), and
 its price coverage. Set A is reconciled to the window's broker cash flows, and
 to the completed option positions above on the same contracts, where the only
 difference is the currency move between buy and sale; the result shows both.
+Some contracts cannot be compared with a completed position and are named
+with the reason: held at the window's start, traded outside the position,
+missing the broker's P/L, or exercised or assigned, where the broker's P/L on
+the option includes value that moved into or out of the stock. The heading
+then reads "balanced on 8 of 10 contracts"; "does not reconcile" is kept for
+an amount that does not balance, and names the contracts it is on.
 
 ## Local protection context
 

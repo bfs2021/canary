@@ -364,6 +364,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "edge_option_page", argv: []string{"edge", "--option-offset", "3", "--option-limit", "3"}, conn: goldenConn{rpc.MethodEdgeSnapshot: goldenEdge(3, 3)}},
 		{name: "edge_replay", argv: []string{"edge", "replay", "--from", "2026-08-03"}, conn: goldenConn{rpc.MethodEdgeReplay: goldenEdgeReplay()}},
 		{name: "edge_replay_incomplete", argv: []string{"edge", "replay", "--from", "2026-08-03"}, conn: goldenConn{rpc.MethodEdgeReplay: goldenEdgeReplayIncomplete()}},
+		{name: "edge_replay_unreconciled", argv: []string{"edge", "replay", "--from", "2026-08-03"}, conn: goldenConn{rpc.MethodEdgeReplay: goldenEdgeReplayUnreconciled()}},
 	}
 }
 
@@ -405,7 +406,9 @@ func goldenEdgeReplay() rpc.EdgeReplayResult {
 		},
 		Reconciliation: rpc.EdgeReplayReconciliation{
 			ActualUnitsBase: 4200, ActualCashBase: 4200, FlowsBase: -3800, StartValueBase: 2000, EndValueBase: 10000, BrokerRealizedBase: new(3900.0),
-			EdgeCycles: 3, EdgeCycleContracts: 3, ComparedContracts: 2, EdgeCyclesPNLBase: 2500, ActualOnCyclesBase: 2450, FXTranslationBase: -50, Reconciled: true, ReconciliationNotes: []string{},
+			EdgeCycles: 3, EdgeCycleContracts: 3, ComparedContracts: 2, EdgeCyclesPNLBase: 2500, ActualOnCyclesBase: 2450, FXTranslationBase: -50, Reconciled: true,
+			Status: rpc.EdgeReplayReconciledPartly, NotCompared: []rpc.EdgeReplayReconContract{{Underlying: "SYNB", Contract: "SYNB 2026-09-18 90 P", Reason: rpc.EdgeReplayNotComparedExercised}},
+			ResidualContracts: []rpc.EdgeReplayReconContract{}, ReconciliationNotes: []string{},
 		},
 	}
 }
@@ -426,6 +429,16 @@ func goldenEdgeReplayIncomplete() rpc.EdgeReplayResult {
 	for i := 1; i <= 4; i++ {
 		result.Runs[i].Coverage.ClosedSessionDays = 6
 	}
+	return result
+}
+
+// goldenEdgeReplayUnreconciled is goldenEdgeReplay with one compared
+// contract whose cash flows differ from the broker's realized P/L.
+func goldenEdgeReplayUnreconciled() rpc.EdgeReplayResult {
+	result := goldenEdgeReplay()
+	rec := &result.Reconciliation
+	rec.Reconciled, rec.Status, rec.CycleCashResidual = false, rpc.EdgeReplayUnreconciled, -18
+	rec.ResidualContracts = []rpc.EdgeReplayReconContract{{Underlying: "SYNA", Contract: "SYNA 2026-09-18 120 C", Reason: rpc.EdgeReplayResidualCashVsRealized}}
 	return result
 }
 

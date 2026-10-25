@@ -39,7 +39,7 @@ func (s *Server) handleEdgeReplay(ctx context.Context, req *rpc.Request) (*rpc.E
 	stateOnly := func(state, reason string) *rpc.EdgeReplayResult {
 		return &rpc.EdgeReplayResult{SchemaVersion: rpc.EdgeReplaySchemaVersion, State: state, Reason: reason, NotExecution: true,
 			Runs: []rpc.EdgeReplayRun{}, Scope: rpc.EdgeReplayScope{Underlyings: []string{}, ExcludedOther: map[string]int{}},
-			Reconciliation: rpc.EdgeReplayReconciliation{ReconciliationNotes: []string{}}}
+			Reconciliation: rpc.EdgeReplayReconciliation{ReconciliationNotes: []string{}, NotCompared: []rpc.EdgeReplayReconContract{}, ResidualContracts: []rpc.EdgeReplayReconContract{}}}
 	}
 	if s.cfg == nil || !s.cfg.Flex.Enabled || strings.TrimSpace(s.cfg.Flex.QueryID) == "" {
 		return stateOnly(rpc.EdgeStateActionRequired, "flex_configuration_required"), nil

@@ -474,6 +474,75 @@ func TestExitReplayReconcilesWithEdgeAndExcludesHedgesAndShorts(t *testing.T) {
 	near(t, "actual P/L", actual.PNLBase, -201*0.90+299*0.80+450*0.80-400*0.90)
 }
 
+// exercise books the last execution as the broker's exercise of the option.
+func (b *replayBook) exercise(conid int64, day string) {
+	last := b.main.Trades[len(b.main.Trades)-1]
+	b.main.OptionEvents = append(b.main.OptionEvents, flexstmt.OptionEvent{RecordID: "eae-" + last.TradeID, AccountID: "U-SYNTH", ConID: conid, AssetClass: "OPT", Currency: "USD",
+		Date: replayDay(day), TransactionType: "EXERCISE", Quantity: last.Quantity, RealizedPNL: new(0.0), TradeID: last.TradeID})
+}
+
+// An exercised option closes with the broker's realized P/L on the option
+// leg, not with the cash flows, since its value moves into the stock: the
+// contract is named as not compared, and the comparison balances on the
+// rest instead of reading as a failure.
+func TestExitReplayReconciliationNamesWhatItCouldNotCompare(t *testing.T) {
+	b := newReplayBook(t, "EUR")
+	b.option(9013, "SYNX", "C", 100, "20261120")
+	b.option(9014, "SYNY", "C", 50, "20261120")
+	b.steadyBars("SYNX", 105, nil)
+	b.steadyBars("SYNY", 55, nil)
+	b.rate("2026-09-01", 0.90)
+	b.rate("2026-09-08", 0.80)
+	b.held("2026-09-01")
+	b.trade(9013, "2026-09-02", 2, 1.00, 1, "O", 0.90, 0)
+	b.trade(9014, "2026-09-02", 1, 2.00, 1, "O", 0.90, 0)
+	b.held("2026-09-02", position(9013, 2, 1.00, 201), position(9014, 1, 2.00, 201))
+	b.held("2026-09-03", position(9013, 2, 5.00, 201), position(9014, 1, 2.50, 201))
+	// The exercise is a booked sale at zero; the broker moves the premium
+	// into the stock's basis and books no realized P/L on the option.
+	b.trade(9013, "2026-09-08", -2, 0, 0, "C", 0.80, 0)
+	b.exercise(9013, "2026-09-08")
+	b.trade(9014, "2026-09-08", -1, 2.50, 1, "C", 0.80, 48)
+	b.held("2026-09-08")
+	res := b.run("B")
+
+	rec := res.Reconciliation
+	if !rec.Reconciled || rec.EdgeCycleContracts != 2 || rec.ComparedContracts != 1 {
+		t.Fatalf("reconciliation = %+v; the exercised contract must be named, not fail the rest", rec)
+	}
+	near(t, "residual", rec.ResidualBase, 0)
+	near(t, "cash against broker realized", rec.CycleCashResidual, 0)
+	if rec.Status != rpc.EdgeReplayReconciledPartly || len(rec.NotCompared) != 1 {
+		t.Fatalf("status %q not compared %+v", rec.Status, rec.NotCompared)
+	}
+	if got := rec.NotCompared[0]; got.Underlying != "SYNX" || got.Contract != "SYNX 2026-11-20 100 C" || got.Reason != rpc.EdgeReplayNotComparedExercised {
+		t.Fatalf("not compared = %+v", got)
+	}
+}
+
+// A residual beyond tolerance on a contract the comparison covers is the one
+// failure: the status says so and names the contract.
+func TestExitReplayReconciliationFailsOnAResidual(t *testing.T) {
+	b := newReplayBook(t, "USD")
+	b.option(9015, "SYNX", "C", 100, "20261120")
+	b.steadyBars("SYNX", 105, nil)
+	b.held("2026-09-01")
+	b.trade(9015, "2026-09-02", 1, 1.00, 1, "O", 0, 0)
+	b.held("2026-09-02", position(9015, 1, 1.00, 101))
+	// Sold for 149 net against a cost of 101; the broker books 30, not 48.
+	b.trade(9015, "2026-09-08", -1, 1.50, 1, "C", 0, 30)
+	b.held("2026-09-08")
+	res := b.run("B")
+
+	rec := res.Reconciliation
+	if rec.Reconciled || rec.Status != rpc.EdgeReplayUnreconciled || rec.ComparedContracts != 1 {
+		t.Fatalf("reconciliation = %+v; an 18 residual must fail", rec)
+	}
+	if len(rec.ResidualContracts) != 1 || rec.ResidualContracts[0].Contract != "SYNX 2026-11-20 100 C" {
+		t.Fatalf("residual contracts = %+v", rec.ResidualContracts)
+	}
+}
+
 func TestExitReplayNeedsAStartSnapshot(t *testing.T) {
 	b := newReplayBook(t, "USD")
 	b.option(9001, "SYNX", "C", 100, "20261016")
