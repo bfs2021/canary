@@ -95,19 +95,20 @@ without a bar stays untestable (2026-10-25). Code: `internal/daemon/replay_histo
 ## Findings (2026-10-24 and 25)
 
 Replay of the owner's long options, 2025-11-25 to 2026-10-23, recorded
-prices; a backtest chose parameters on Nov–Jun and judged them on Jul–Oct,
-with the owner's exits kept. The owner made 139k EUR.
+prices, Canary 4dcec757 (holiday sessions carried, VIX read as an index;
+earlier runs kept the owner's outcome after holidays and flattered the
+owner). The owner made 139k EUR with option value peaking at 89% of NLV.
+Single-rule runs replace all the owner's exits.
 
-- LO-H1 trim to cap: about the owner's result with less capital at peak
-  (76% vs 89% of NLV). Candidate.
-- LO-H2 recover cost: about a tie. Candidate.
+- LO-H1 trim to cap: −17.8k vs the owner with peak option value 76% of NLV.
+  The only rule that stays within the book. Candidate.
+- LO-H2 recover cost: −3.8k, but only by holding up to 175% of NLV. Test
+  beside the owner, not instead.
 - LO-T1 expiry close: helped where it fired. Candidate.
-- LO-P2 premium loss exit: no setting (40–90% of cost, or from the high)
-  beats the owner in both periods; on daily closes it sells after gaps that
-  recover. The requirement stands; refine the mechanism, likely toward LO-P1
-  (the stock breaking the idea) rather than the option's price.
-- LO-H4 stock trail: the best value (2.5 × ATR20) is a spike that fails out
-  of sample. Unproven; refine before building.
-- Replacing the owner's exits outright loses for every rule and needs more
-  than 100% of NLV; rules belong beside the owner, not instead.
-
+- LO-P2 premium loss exit: costs most of all (−304k replacing the owner); an
+  out-of-sample backtest beside the owner (on the earlier build) found no
+  setting of 40–90% of cost, or from the high, that wins in both periods. The
+  requirement stands; refine the mechanism, likely toward LO-P1.
+- LO-H4 stock trail: best value (2.5 × ATR20) was a spike that failed out of
+  sample. Unproven.
+- Next: rerun the overlay backtest on this build before deciding any rule.
