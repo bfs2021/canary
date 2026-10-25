@@ -17,8 +17,8 @@ Scope
     the median of 12 measured option fills · commission € 0.55 a contract, your
     average
   Coverage in B today's rules · held contract-days priced by 40 statement
-    marks, 6 execution closing prices and 0 recorded chain quotes · 2 untestable
-    days
+    marks, 6 execution closing prices and 0 recorded chain quotes · 6 carried
+    over days the exchange was closed · 2 untestable days
 
 Rules in force
   Policies · Rulebook rulebook-default v1 (compiled-default) · protection
@@ -87,8 +87,8 @@ Scope
     the median of 12 measured option fills · commission € 0.55 a contract, your
     average
   Coverage in B today's rules · held contract-days priced by 40 statement
-    marks, 6 execution closing prices and 0 recorded chain quotes · 2 untestable
-    days
+    marks, 6 execution closing prices and 0 recorded chain quotes · 6 carried
+    over days the exchange was closed · 2 untestable days
 
 Rules in force
   Policies · Rulebook rulebook-default v1 (compiled-default) · protection

@@ -215,7 +215,11 @@ Open Positions mark, else the execution's closing price, else the mid of a
 recorded two-sided chain quote. A rule exit sells at that mark less the median
 half-spread of your measured option fills and your average commission. In the
 recorded run, a day without a recorded mark is untestable: the contracts still
-held keep your actual outcome from then on. A separate modelled run fills such
+held keep your actual outcome from then on. A statement day on which the
+underlying's exchange was closed, a US holiday say, is not a gap: by Canary's
+official exchange calendar no rule can act on it, so the contracts carry the
+previous close and mark to the next session, and the coverage line counts
+those days. A separate modelled run fills such
 days with Black-Scholes at the underlying's close, the volatility backed out of
 the last recorded mark, and says so on every row. Long puts on a hedge symbol
 and short options are excluded and counted.

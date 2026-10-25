@@ -2,6 +2,7 @@ package edge
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ type replayBook struct {
 	bars      map[string][]UnderlyingBar
 	chain     []RecordedOptionMark
 	notes     map[string]ExitReplayHistoryNote
+	closed    map[string][]time.Time
 	seq       int
 }
 
@@ -139,7 +141,7 @@ func (b *replayBook) run(rules ...string) rpc.EdgeReplayResult {
 	if err != nil {
 		b.t.Fatal(err)
 	}
-	res := ExitReplay(ExitReplayInput{Statements: b.statements(), BaseCurrency: b.base, Rules: params.Rules, Policy: replayTestPolicy(), Underlyings: b.bars, HistoryNotes: b.notes, ChainMarks: b.chain})
+	res := ExitReplay(ExitReplayInput{Statements: b.statements(), BaseCurrency: b.base, Rules: params.Rules, Policy: replayTestPolicy(), Underlyings: b.bars, HistoryNotes: b.notes, ClosedSessions: b.closed, ChainMarks: b.chain})
 	if res.State != rpc.EdgeStateCurrent {
 		b.t.Fatalf("replay state %s (%s)", res.State, res.Reason)
 	}
@@ -382,6 +384,52 @@ func TestExitReplayUntestableDayKeepsTheOwnersOutcome(t *testing.T) {
 		t.Fatalf("modelled run exits = %+v, want the loss exit at the 2026-09-04 mark", modelled.ExitsByReason)
 	}
 	near(t, "modelled loss exit", modelled.PNLBase, 30-100)
+}
+
+// holiday makes day a closed session of the underlying's exchange: no bar,
+// and listed as closed.
+func (b *replayBook) holiday(symbol, day string) {
+	b.bars[symbol] = slices.DeleteFunc(b.bars[symbol], func(bar UnderlyingBar) bool { return dayKey(bar.Day) == day })
+	if b.closed == nil {
+		b.closed = map[string][]time.Time{}
+	}
+	b.closed[symbol] = append(b.closed[symbol], replayDay(day))
+}
+
+// A closed session carries the previous mark: trim cannot sell on it, and a
+// later gap is modelled off a mark recorded on the holiday at the last close
+// before it.
+func TestExitReplayClosedSessionCarriesAndActsOnNoRule(t *testing.T) {
+	b := newReplayBook(t, "USD")
+	b.option(9012, "SYNX", "C", 100, "20261120")
+	b.steadyBars("SYNX", 98, nil)
+	b.holiday("SYNX", "2026-09-07")
+	b.held("2026-09-01")
+	b.nlv("2026-09-01", 10000)
+	b.trade(9012, "2026-09-02", 4, 1.00, 0, "O", 0, 0)
+	b.held("2026-09-02", position(9012, 4, 1.00, 400))
+	b.nlv("2026-09-02", 10000)
+	b.held("2026-09-04", position(9012, 4, 1.00, 400))
+	b.nlv("2026-09-04", 10000)
+	// The holiday's statement repeats the mark; the name cap (15% of NLV)
+	// would trim if a rule could act on the day.
+	b.held("2026-09-07", position(9012, 4, 1.00, 400))
+	b.nlv("2026-09-07", 1000)
+	b.nlv("2026-09-08", 10000) // no mark: modelled off the holiday's mark
+	b.held("2026-09-09", position(9012, 4, 0.30, 400))
+	b.nlv("2026-09-09", 10000)
+	b.trade(9012, "2026-09-10", -4, 0.35, 0, "C", 0, -260)
+	b.held("2026-09-10")
+	res := b.run("trim_to_cap", "loss_exit")
+
+	trim := replayRun(t, res, rpc.EdgeReplayRuleTrimToCap, rpc.EdgeReplayPricesRecorded)
+	if trim.Exits != 0 || trim.Coverage.ClosedSessionDays != 1 {
+		t.Fatalf("trim on a closed session = %+v", trim)
+	}
+	modelled := replayRun(t, res, rpc.EdgeReplayRuleLossExit, rpc.EdgeReplayPricesModelled)
+	if modelled.Coverage.ClosedSessionDays != 1 || modelled.Coverage.ModelledDays != 1 || modelled.Coverage.UntestableEvents != 0 {
+		t.Fatalf("modelled coverage = %+v", modelled.Coverage)
+	}
 }
 
 func TestExitReplayReconcilesWithEdgeAndExcludesHedgesAndShorts(t *testing.T) {

@@ -74,7 +74,12 @@ type ExitReplayInput struct {
 	Underlyings   map[string][]UnderlyingBar
 	HistoryNotes  map[string]ExitReplayHistoryNote
 	HistorySource string
-	ChainMarks    []RecordedOptionMark
+	// ClosedSessions lists, by underlying symbol, the days its exchange held
+	// no session by Canary's official exchange calendar (a holiday or a
+	// weekend). Such a statement day without a bar carries the previous close
+	// and option mark; a day not listed without a bar stays untestable.
+	ClosedSessions map[string][]time.Time
+	ChainMarks     []RecordedOptionMark
 	// HalfSpreadPct is the measured half-spread in percent of the price; nil
 	// when no measured option fill exists.
 	HalfSpreadPct     *float64
@@ -199,6 +204,7 @@ type replay struct {
 	markDays   map[int64][]string
 	bars       map[string]map[string]UnderlyingBar
 	barDays    map[string][]string
+	closed     map[string]map[string]bool
 	lifecycle  map[string]string
 	halfSpread float64
 	commBase   float64
@@ -438,6 +444,36 @@ func (r *replay) buildBars() {
 		r.bars[key] = byDay
 		r.barDays[key] = slices.Sorted(maps.Keys(byDay))
 	}
+	r.closed = map[string]map[string]bool{}
+	for symbol, days := range r.in.ClosedSessions {
+		key := strings.ToUpper(strings.TrimSpace(symbol))
+		if r.closed[key] == nil {
+			r.closed[key] = map[string]bool{}
+		}
+		for _, day := range days {
+			r.closed[key][dayKey(day)] = true
+		}
+	}
+}
+
+// closedSession reports whether the underlying's exchange held no session on
+// day by the official calendar and the history carries no bar for it: no
+// rule can act on such a day.
+func (r *replay) closedSession(symbol, day string) bool {
+	_, bar := r.bars[symbol][day]
+	return r.closed[symbol][day] && !bar
+}
+
+// spotOn is the underlying close a day is priced with: the day's own bar,
+// or on a closed session the last close before it.
+func (r *replay) spotOn(symbol, day string) (float64, bool) {
+	if spot, ok := r.close(symbol, day); ok {
+		return spot, true
+	}
+	if r.closedSession(symbol, day) {
+		return r.closeAtOrBefore(symbol, day)
+	}
+	return 0, false
 }
 
 func (r *replay) close(symbol, day string) (float64, bool) {
@@ -980,7 +1016,7 @@ func (r *replay) mark(c *replayContract, day string, modelled bool) (replayMark,
 		return replayMark{}, false
 	}
 	prior := days[i-1]
-	priorSpot, ok := r.close(c.underlying, prior)
+	priorSpot, ok := r.spotOn(c.underlying, prior)
 	if !ok {
 		return replayMark{}, false
 	}
@@ -1195,7 +1231,7 @@ func (r *replay) simulate(id string, rules []string, modelled bool) rpc.EdgeRepl
 			for _, conid := range r.bySymbol[symbol] {
 				s.evaluate(r.contracts[conid], day, prev)
 			}
-			if s.rules[rpc.EdgeReplayRuleTrimToCap] {
+			if s.rules[rpc.EdgeReplayRuleTrimToCap] && !r.closedSession(symbol, day) {
 				s.trim(symbol, day)
 			}
 		}
@@ -1304,6 +1340,15 @@ func (s *replaySim) evaluate(c *replayContract, day, prev string) {
 		// outcome.
 		return
 	}
+	if s.r.closedSession(c.underlying, day) {
+		// The exchange was closed: nothing traded, no rule can act, and the
+		// contract carries its last mark into the next session.
+		if last, ok := s.carriedMark(c, day); ok {
+			s.lastMark[c.conid] = replayDayPrice{day: day, price: last}
+			s.run.Coverage.ClosedSessionDays++
+			return
+		}
+	}
 	mark, ok := s.r.mark(c, day, s.modelled)
 	if !ok {
 		// On expiry day a contract marked the session before settles from
@@ -1344,6 +1389,20 @@ func (s *replaySim) evaluate(c *replayContract, day, prev string) {
 	if s.rules[rpc.EdgeReplayRuleStockTrail] {
 		s.stockTrail(c, day, mark.price, spot, fx)
 	}
+}
+
+// carriedMark is the option mark a closed session carries: the last price
+// the run decided the contract on, else its last recorded mark before day.
+func (s *replaySim) carriedMark(c *replayContract, day string) (float64, bool) {
+	if last, ok := s.lastMark[c.conid]; ok {
+		return last.price, true
+	}
+	days := s.r.markDays[c.conid]
+	i := sort.SearchStrings(days, day)
+	if i == 0 {
+		return 0, false
+	}
+	return s.r.marks[c.conid][days[i-1]].price, true
 }
 
 // coreExit runs risk.EvaluateOptionExit on the day's state: the closing mark
@@ -1701,7 +1760,7 @@ func exitReplayMethod(historySource string) rpc.EdgeReplayMethod {
 		Evaluation: "Rules are evaluated once per statement day at that day's recorded closing mark: the Open Positions mark, else an execution row's closing price, else the mid of a two-sided recorded chain quote. Today's loss line, expiry close and profit trail run through risk.EvaluateOptionExit with the mark as bid and ask.",
 		History:    history,
 		Exits:      "A rule exit sells at the mark less the measured half-spread and the owner's average commission per contract, converted at the day's broker rate.",
-		Untestable: "In the recorded run a held contract on a day without a recorded mark, or on a session inside its underlying's history without a bar, keeps the owner's actual outcome from that day on.",
+		Untestable: "In the recorded run a held contract on a day without a recorded mark, or on a session inside its underlying's history without a bar, keeps the owner's actual outcome from that day on. A statement day on which the underlying's exchange held no session by Canary's official exchange calendar carries the previous close and option mark; no rule acts on it, and such contract-days are counted.",
 		Modelled:   "The modelled run fills such days with Black-Scholes at the underlying close, the volatility backed out of the last recorded mark, rate zero; a volatility that cannot be backed out prices at intrinsic value.",
 		HighWater:  "The profit trail's high water is carried from day to day and resets when the cost basis or quantity changes, as the daemon's does; the daemon carries it within a session only.",
 		Harvest:    "Recover cost sells, once per buy lot, enough contracts to recover the lot's cost when the lot's value reaches the harvest gain; trim sells the largest holding on a name one contract at a time until the name's long options are worth no more than the name cap of that day's NLV.",

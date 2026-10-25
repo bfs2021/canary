@@ -75,7 +75,12 @@ P/L on it; the result is marked `incomplete`. Index underlyings (SPX, NDX,
 RUT, VIX) are read as `IND` with the market tape's identity. A bar without a
 high and low enters the stock trail's ATR as the close-only true range and
 is counted (`close_only_range_days`); days with under 21 sessions are counted
-as `trail_unmeasured_days`. Code: `internal/daemon/replay_history.go`,
+as `trail_unmeasured_days`. A statement day on which the underlying's
+exchange held no session by Canary's official exchange calendar
+(`internal/marketcal`, for USD, GBP, JPY and HKD names; its coverage starts
+2026-01-01) and which has no bar carries the previous close and option mark,
+acts on no rule and is counted (`closed_session_days`); an open session
+without a bar stays untestable (2026-10-25). Code: `internal/daemon/replay_history.go`,
 `internal/edge/exit_replay.go`.
 
 ## Findings (2026-10-24 and 25)

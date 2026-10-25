@@ -120,8 +120,12 @@ func renderEdgeReplay(env *Env, result rpc.EdgeReplayResult) {
 			continue
 		}
 		cov := run.Coverage
-		edgeRow(env, "Coverage in "+edgeReplayLabel(run.ID), fmt.Sprintf("held contract-days priced by %s statement marks, %s execution closing prices and %s recorded chain quotes", edgeCount(cov.StatementDays), edgeCount(cov.TradeCloseDays), edgeCount(cov.ChainMidDays)),
-			fmt.Sprintf("%d untestable %s", cov.UntestableEvents, pluralWord(cov.UntestableEvents, "day", "days")))
+		parts := []string{fmt.Sprintf("held contract-days priced by %s statement marks, %s execution closing prices and %s recorded chain quotes", edgeCount(cov.StatementDays), edgeCount(cov.TradeCloseDays), edgeCount(cov.ChainMidDays))}
+		if cov.ClosedSessionDays > 0 {
+			parts = append(parts, fmt.Sprintf("%s carried over days the exchange was closed", edgeCount(cov.ClosedSessionDays)))
+		}
+		parts = append(parts, fmt.Sprintf("%d untestable %s", cov.UntestableEvents, pluralWord(cov.UntestableEvents, "day", "days")))
+		edgeRow(env, "Coverage in "+edgeReplayLabel(run.ID), parts...)
 		break
 	}
 

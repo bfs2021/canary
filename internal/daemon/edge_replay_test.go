@@ -120,6 +120,13 @@ func TestEdgeReplayReadsTheProjectionHistoryAndPolicyInForce(t *testing.T) {
 // reads, as the market view would have left it.
 func seedReplayHistory(t *testing.T, srv *Server, store *corestore.Store, now time.Time) {
 	t.Helper()
+	seedReplayHistoryWithout(t, srv, store, now, nil)
+}
+
+// seedReplayHistoryWithout is seedReplayHistory without a bar on the days
+// named.
+func seedReplayHistoryWithout(t *testing.T, srv *Server, store *corestore.Store, now time.Time, without map[string]bool) {
+	t.Helper()
 	p := rpc.MarketHistoryParams{Contract: rpc.ContractParams{Symbol: "SYNX", SecType: "STK", Exchange: "SMART", Currency: "USD"}, Range: "6M"}
 	key, normalized, err := marketHistoryIdentity(p)
 	if err != nil {
@@ -128,7 +135,7 @@ func seedReplayHistory(t *testing.T, srv *Server, store *corestore.Store, now ti
 	result := rpc.MarketHistoryResult{TimestampKind: "session_date", PriceBasis: "TRADES", RegularHoursOnly: true, Contract: normalized.Contract, Range: "6M", Interval: "1 day", Source: "hmds", AsOf: now, CoverageStatus: "complete"}
 	result.Contract.ConID = 4242
 	for day := now.AddDate(0, -5, 0); day.Before(now.AddDate(0, 0, -1)); day = day.AddDate(0, 0, 1) {
-		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
+		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday || without[day.Format(time.DateOnly)] {
 			continue
 		}
 		at := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
@@ -356,5 +363,91 @@ func TestMergeReplaySourcesRestatementAndRanges(t *testing.T) {
 	})
 	if len(split) != 2 || split[0].Close != 100 {
 		t.Fatalf("merged across a restatement = %+v; the older basis must go", split)
+	}
+}
+
+// replayServerWith is replayTestServer over the statement days given.
+func replayServerWith(t *testing.T, now time.Time, days []replayFlexDay) (*Server, *corestore.Store) {
+	t.Helper()
+	const account = "UREPLAYSYNTH"
+	for i := range days {
+		days[i].trades = strings.ReplaceAll(days[i].trades, "ACCOUNT", account)
+	}
+	raw := []byte(replayFlexXML(account, days))
+	statements, err := flexstmt.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryFingerprint := flexQueryFingerprint("424242")
+	files, projectionDays, records, versions, err := buildStatementProjection([]statementProjectionFile{{name: "replay.xml", size: int64(len(raw)), digest: sha256.Sum256(raw), data: raw, statements: statements}}, now, queryFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := corestore.Open(t.Context(), corestore.Options{Path: filepath.Join(privateTestDir(t), "daemon.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.ReplaceStatementProjection(t.Context(), statementProjectionScopeForSelection(flexEvidenceSelection{ActiveQueryFingerprint: queryFingerprint}), files, projectionDays, records, versions); err != nil {
+		t.Fatal(err)
+	}
+	port := 4001
+	return &Server{
+		cfg:       &config.Resolved{Gateway: config.Gateway{Account: account, Port: &port}, Flex: config.Flex{Enabled: true, QueryID: "424242"}},
+		coreStore: store, now: func() time.Time { return now },
+	}, store
+}
+
+// A statement day on which the underlying's exchange was closed (Labor Day
+// 2026-09-07 on the US calendar) has no daily bar. No rule can act on a
+// closed session, so the day carries the previous close and option mark and
+// the replay goes on: the loss line still fires on 2026-09-08. A session the
+// exchange held without a bar (2026-09-09 here) stays untestable.
+func TestEdgeReplayCarriesAClosedExchangeSession(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	held := func(day string, mark float64) replayFlexDay { return replayFlexDay{day: day, quantity: 2, mark: mark} }
+	srv, store := replayServerWith(t, now, []replayFlexDay{
+		{day: "2026-09-01"},
+		{day: "2026-09-02", quantity: 2, mark: 2.00, trades: replayFlexTrade("ACCOUNT", "buy", "2026-09-02", "BUY", 2, 2.00, -401, 0, "O")},
+		held("2026-09-03", 1.80),
+		held("2026-09-04", 1.70),
+		held("2026-09-07", 1.70),
+		held("2026-09-08", 0.70),
+		{day: "2026-09-10", trades: replayFlexTrade("ACCOUNT", "sell", "2026-09-10", "SELL", -2, 0.50, 99, -302, "C")},
+	})
+	seedReplayHistoryWithout(t, srv, store, now, map[string]bool{"2026-09-07": true})
+	result, err := srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit"]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != rpc.EdgeStateCurrent || result.Incomplete {
+		t.Fatalf("replay = %s %s missing=%+v", result.State, result.Reason, result.MissingHistory)
+	}
+	run := replayLossRun(t, result)
+	if run.Coverage.UntestableEvents != 0 || len(run.ExitsByReason) != 1 || run.ExitsByReason[0].Units != 2 {
+		t.Fatalf("loss-exit run = %+v; the holiday must carry, and the loss line fire on 2026-09-08", run)
+	}
+	if want := (2*(70-0.5) - 401) * 0.9; math.Abs(run.PNLBase-want) > 1e-6 {
+		t.Fatalf("loss-exit P/L = %.4f, want %.4f", run.PNLBase, want)
+	}
+	if run.Coverage.ClosedSessionDays != 1 || run.Coverage.StatementDays != 4 {
+		t.Fatalf("coverage = %+v, want one closed-session day carried and four marked days", run.Coverage)
+	}
+
+	// The same book without a bar on an open session stays untestable.
+	srv, store = replayServerWith(t, now, []replayFlexDay{
+		{day: "2026-09-01"},
+		{day: "2026-09-02", quantity: 2, mark: 2.00, trades: replayFlexTrade("ACCOUNT", "buy", "2026-09-02", "BUY", 2, 2.00, -401, 0, "O")},
+		held("2026-09-03", 1.80),
+		held("2026-09-08", 0.70),
+		{day: "2026-09-10", trades: replayFlexTrade("ACCOUNT", "sell", "2026-09-10", "SELL", -2, 0.50, 99, -302, "C")},
+	})
+	seedReplayHistoryWithout(t, srv, store, now, map[string]bool{"2026-09-08": true})
+	result, err = srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit"]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run := replayLossRun(t, result); run.Coverage.UntestableEvents != 1 || run.Coverage.ClosedSessionDays != 0 || len(run.ExitsByReason) != 0 {
+		t.Fatalf("open session without a bar = %+v, want untestable", run)
 	}
 }

@@ -423,6 +423,9 @@ func goldenEdgeReplayIncomplete() rpc.EdgeReplayResult {
 		{Underlying: "SYNE", Reason: rpc.EdgeReplayHistoryInstrumentUnavailable, Detail: "no security definition for contract", NeededFrom: day("2026-08-10"), NeededTo: day("2026-08-21"), Contracts: 1, ActualPNLBase: -120},
 	}
 	result.Runs[3].Coverage.CloseOnlyRangeDays, result.Runs[3].Coverage.TrailUnmeasuredDays = 14, 3
+	for i := 1; i <= 4; i++ {
+		result.Runs[i].Coverage.ClosedSessionDays = 6
+	}
 	return result
 }
 

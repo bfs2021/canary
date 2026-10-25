@@ -10,6 +10,7 @@ import (
 	"github.com/osauer/canary/v2/internal/chainrec"
 	edgecore "github.com/osauer/canary/v2/internal/edge"
 	"github.com/osauer/canary/v2/internal/flexstmt"
+	"github.com/osauer/canary/v2/internal/marketcal"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
@@ -101,12 +102,13 @@ func (s *Server) handleEdgeReplay(ctx context.Context, req *rpc.Request) (*rpc.E
 			notes[underlying.Symbol] = note
 		}
 	}
+	closed := replayClosedSessions(underlyings)
 	chainMarks := s.replayChainMarks(ctx, symbols, from, to)
 	halfSpread, samples, source := s.replayHalfSpread()
 
 	result := edgecore.ExitReplay(edgecore.ExitReplayInput{
 		Statements: statements, BaseCurrency: inferEdgeBaseCurrency(statements), From: from, To: to, Rules: params.Rules,
-		Policy: replayPolicy, Underlyings: bars, HistoryNotes: notes, HistorySource: replayHistorySource, ChainMarks: chainMarks,
+		Policy: replayPolicy, Underlyings: bars, HistoryNotes: notes, HistorySource: replayHistorySource, ClosedSessions: closed, ChainMarks: chainMarks,
 		HalfSpreadPct: halfSpread, HalfSpreadSamples: samples, HalfSpreadSource: source,
 	})
 	if !sameBrokerScope(scope, s.currentBrokerStateScope()) {
@@ -138,6 +140,59 @@ func replayHistoryRange(statements []flexstmt.Statement, from, now time.Time) st
 		}
 	}
 	return "5Y"
+}
+
+// replayClosedSessions lists, for each underlying, the days from its first
+// to its last needed day on which its exchange held no session (a holiday or
+// a weekend) by Canary's official exchange calendar (internal/marketcal, the
+// calendar behind options_session and the market sessions). A name whose
+// exchange the trade currency does not identify, or a day outside the
+// calendar's verified coverage, lists nothing: such a day without a bar
+// stays untestable.
+func replayClosedSessions(underlyings []edgecore.ExitReplayUnderlying) map[string][]time.Time {
+	const span = 366
+	cal := marketcal.New()
+	out := map[string][]time.Time{}
+	for _, u := range underlyings {
+		market, ok := replayUnderlyingMarket(u.Currency)
+		if !ok || u.First.IsZero() || u.Last.Before(u.First) {
+			continue
+		}
+		first, last := u.First.Format(time.DateOnly), u.Last.Format(time.DateOnly)
+		for day := u.First; !day.After(u.Last); day = day.AddDate(0, 0, span) {
+			res, err := cal.Query(marketcal.Query{Market: market, Date: day.Format(time.DateOnly), Days: span})
+			if err != nil {
+				break
+			}
+			for _, session := range res.Sessions {
+				if session.Date < first || session.Date > last || session.State != marketcal.StateHoliday && session.State != marketcal.StateClosed {
+					continue
+				}
+				if at, err := time.Parse(time.DateOnly, session.Date); err == nil {
+					out[u.Symbol] = append(out[u.Symbol], at)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// replayUnderlyingMarket is the exchange calendar of an underlying traded in
+// a currency that names one: the US for dollars (stocks, ETFs and the Cboe
+// indexes keep the same holidays), London, Tokyo and Hong Kong. The euro
+// spans exchanges with different holidays and names none.
+func replayUnderlyingMarket(currency string) (marketcal.Market, bool) {
+	switch strings.ToUpper(strings.TrimSpace(currency)) {
+	case "", "USD":
+		return marketcal.MarketUSEquity, true
+	case "GBP":
+		return marketcal.MarketUKLSE, true
+	case "JPY":
+		return marketcal.MarketJPTSE, true
+	case "HKD":
+		return marketcal.MarketHKHKEX, true
+	}
+	return "", false
 }
 
 // replayChainMarks reads the recorded two-sided quotes of the underlyings in

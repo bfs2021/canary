@@ -291,6 +291,10 @@ type EdgeReplayCoverage struct {
 	// for want of 21 sessions of history. Both are zero without the trail.
 	CloseOnlyRangeDays  int `json:"close_only_range_days"`
 	TrailUnmeasuredDays int `json:"trail_unmeasured_days"`
+	// ClosedSessionDays counts the held contract-days on which the
+	// underlying's exchange held no session (a holiday, by Canary's official
+	// exchange calendar): the previous close and mark carry, no rule acts.
+	ClosedSessionDays int `json:"closed_session_days"`
 }
 
 // EdgeReplayNameRow is one underlying's P/L in a run.
