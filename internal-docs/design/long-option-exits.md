@@ -75,7 +75,12 @@ included, and is listed with the reason (`gateway_offline`,
 `incomplete`. Broker reads start together and the replay waits for them at
 most 25 s and half of what remains of its 60 s budget; a read still running
 then leaves its name out as `history_fetching`, goes on for up to four
-minutes on its own and keeps the bars for the next run (2026-10-25). Index underlyings (SPX, NDX,
+minutes on its own and keeps the bars for the next run (2026-10-25).
+The mandate's closes are read through its identity-bound keys
+(`mandate_history_identity.go`): the key of the contract the replay asks
+(stock, or index), a legacy symbol-only document only where its contract
+matches, and for a held stock, whose key binds the position's contract ID,
+the series the mandate has loaded when they name one contract (2026-10-25). Index underlyings (SPX, NDX,
 RUT, VIX) are read as `IND` with the market tape's identity. A bar without a
 high and low enters the stock trail's ATR as the close-only true range and
 is counted (`close_only_range_days`); days with under 21 sessions are counted

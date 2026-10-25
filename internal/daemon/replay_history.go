@@ -157,16 +157,14 @@ func (s *Server) replayHistoryRetained(ctx context.Context, underlying edgecore.
 	read := &replayRead{underlying: underlying, contract: contract, params: rpc.MarketHistoryParams{Contract: contract, Range: historyRange}}
 	read.retained, read.revision = s.loadReplayHistory(ctx, contract)
 	read.sources = []replaySource{read.retained}
-	if contract.SecType == "STK" {
-		if series := s.mandateHistorySeries(ctx, "u:"+contract.Symbol); series != nil && (series.Contract.Currency == "" || series.Contract.Currency == contract.Currency) {
-			src := replaySource{asOf: series.FetchedAt, bars: map[string]edgecore.UnderlyingBar{}}
-			for i, day := range series.Dates {
-				if at, err := time.Parse(time.DateOnly, day); err == nil {
-					src.bars[day] = edgecore.UnderlyingBar{Day: at, Close: series.Closes[i]}
-				}
+	if series := s.replayMandateCloses(ctx, contract); series != nil {
+		src := replaySource{asOf: series.FetchedAt, bars: map[string]edgecore.UnderlyingBar{}}
+		for i, day := range series.Dates {
+			if at, err := time.Parse(time.DateOnly, day); err == nil {
+				src.bars[day] = edgecore.UnderlyingBar{Day: at, Close: series.Closes[i]}
 			}
-			read.sources = append(read.sources, src)
 		}
+		read.sources = append(read.sources, src)
 	}
 	key, _, identityErr := marketHistoryIdentity(read.params)
 	if identityErr == nil {
@@ -186,6 +184,40 @@ func (s *Server) replayHistoryRetained(ctx context.Context, underlying edgecore.
 		read.fetch = s.startReplayFetch(ctx, read)
 	}
 	return read
+}
+
+// replayMandateCloses is the mandate's retained daily series for the
+// contract the replay reads, through the mandate's own identity rules
+// (mandate_history_identity.go): the document under the identity-bound key
+// of that contract, which is where the mandate keeps an underlying held only
+// through options (mandateOptionUnderlyingContract asks the same contract),
+// else a legacy symbol-only document whose contract matches, as the mandate
+// accepts it. A held stock's series is bound to the position's contract ID
+// and listing, which the replay does not know: the series the mandate has
+// loaded for the symbol serve when they match the contract and all name one
+// contract ID, and two distinct contracts serve none.
+func (s *Server) replayMandateCloses(ctx context.Context, contract rpc.ContractParams) *mandateHistorySeries {
+	need := bindMandateHistoryNeed(mandateHistoryNeed{Key: "u:" + contract.Symbol, Contract: contract})
+	if series := s.mandateHistoryForNeed(ctx, need); series != nil {
+		return series
+	}
+	logical := mandateHistoryLogicalKey(need.Key)
+	st := &s.mandateHistory
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var found *mandateHistorySeries
+	for key, candidate := range st.series {
+		if candidate == nil || mandateHistoryLogicalKey(key) != logical || !mandateSeriesMatchesNeed(candidate, need) {
+			continue
+		}
+		if found != nil && found.Contract.ConID != candidate.Contract.ConID {
+			return nil
+		}
+		if found == nil || candidate.FetchedAt.After(found.FetchedAt) {
+			found = candidate
+		}
+	}
+	return found
 }
 
 // startReplayFetch starts the broker read for an underlying, or returns the

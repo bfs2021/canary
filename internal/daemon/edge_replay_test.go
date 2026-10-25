@@ -296,20 +296,32 @@ func TestEdgeReplayNamesHistoryMissingWithTheGatewayOffline(t *testing.T) {
 	}
 }
 
-// The mandate's decision-grade closes are retained and never evicted: with
-// no chart series and the gateway offline the replay reads them, ranges
-// from closes only, and keeps the bars it used.
-func TestEdgeReplayReadsTheMandatesRetainedClosesFirst(t *testing.T) {
-	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
-	srv, store := replayTestServer(t, now)
-	series := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: "u:SYNX", Contract: rpc.ContractParams{ConID: 4242, Symbol: "SYNX", SecType: "STK", Exchange: "SMART", Currency: "USD"}, FetchedAt: now, Source: "synthetic"}
+// replayMandateSeries is a daily SYNX close series as the mandate keeps it,
+// under key and for contract.
+func replayMandateSeries(now time.Time, key string, contract rpc.ContractParams) *mandateHistorySeries {
+	series := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: key, Contract: contract, FetchedAt: now, Source: "synthetic"}
 	for day := now.AddDate(0, -5, 0); day.Before(now.AddDate(0, 0, -1)); day = day.AddDate(0, 0, 1) {
 		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
 			continue
 		}
 		series.Dates, series.Closes = append(series.Dates, day.Format(time.DateOnly)), append(series.Closes, 95)
 	}
-	if err := srv.saveMandateSeries(t.Context(), series); err != nil {
+	return series
+}
+
+// The mandate's decision-grade closes are retained and never evicted: with
+// no chart series and the gateway offline the replay reads them, ranges
+// from closes only, and keeps the bars it used. The mandate keeps a series
+// under its identity-bound key (bindMandateHistoryNeed), here as its
+// background read leaves it for an underlying held only through options,
+// and written by an earlier process so the replay reads it from the store.
+func TestEdgeReplayReadsTheMandatesRetainedClosesFirst(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	srv, store := replayTestServer(t, now)
+	need := bindMandateHistoryNeed(mandateHistoryNeed{Key: "u:SYNX", Contract: mandateOptionUnderlyingContract("SYNX", "USD")})
+	series := replayMandateSeries(now, need.Key, need.Contract)
+	earlier := &Server{coreStore: store, now: srv.now}
+	if err := earlier.saveMandateSeries(t.Context(), series); err != nil {
 		t.Fatal(err)
 	}
 	result, err := srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit","stock_trail"]}`)})
@@ -317,7 +329,7 @@ func TestEdgeReplayReadsTheMandatesRetainedClosesFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	if result.State != rpc.EdgeStateCurrent || result.Incomplete || len(result.MissingHistory) != 0 {
-		t.Fatalf("replay = %s %s missing=%+v", result.State, result.Reason, result.MissingHistory)
+		t.Fatalf("replay = %s %s missing=%+v; the mandate's identity-bound closes must serve it", result.State, result.Reason, result.MissingHistory)
 	}
 	if run := replayLossRun(t, result); run.Coverage.StatementDays != 3 || len(run.ExitsByReason) != 1 {
 		t.Fatalf("loss-exit run = %+v; the mandate's closes must decide 2026-09-04", run)
@@ -335,6 +347,65 @@ func TestEdgeReplayReadsTheMandatesRetainedClosesFirst(t *testing.T) {
 	if err := json.Unmarshal(doc.JSON, &kept); err != nil || len(kept.Bars) != len(series.Dates) {
 		t.Fatalf("retained %d bars (%v), want the mandate's %d", len(kept.Bars), err, len(series.Dates))
 	}
+}
+
+// A held stock's series is bound to the position's contract ID and listing,
+// which the replay does not know; the series the mandate has loaded serves
+// it when one contract of that symbol, type and currency matches. A legacy
+// symbol-only document serves only when its contract matches, as the
+// mandate accepts it; one for another currency does not.
+func TestEdgeReplayReadsTheMandatesHeldStockAndLegacyCloses(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	replay := func(t *testing.T, srv *Server) *rpc.EdgeReplayResult {
+		t.Helper()
+		result, err := srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit"]}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	t.Run("held stock", func(t *testing.T) {
+		srv, _ := replayTestServer(t, now)
+		held := rpc.ContractParams{ConID: 4242, Symbol: "SYNX", SecType: "STK", Exchange: "SMART", PrimaryExch: "NASDAQ", Currency: "USD"}
+		need := bindMandateHistoryNeed(mandateHistoryNeed{Key: "u:SYNX", Contract: held})
+		if err := srv.saveMandateSeries(t.Context(), replayMandateSeries(now, need.Key, need.Contract)); err != nil {
+			t.Fatal(err)
+		}
+		if result := replay(t, srv); result.State != rpc.EdgeStateCurrent || result.Incomplete {
+			t.Fatalf("replay = %s missing=%+v; the loaded held-stock series must serve it", result.State, result.MissingHistory)
+		}
+		// A fresh book (the first run kept its bars) with two SYNX contracts.
+		srv, _ = replayTestServer(t, now)
+		other := held
+		other.ConID = 4343
+		for _, contract := range []rpc.ContractParams{held, other} {
+			need := bindMandateHistoryNeed(mandateHistoryNeed{Key: "u:SYNX", Contract: contract})
+			if err := srv.saveMandateSeries(t.Context(), replayMandateSeries(now, need.Key, need.Contract)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if result := replay(t, srv); !result.Incomplete {
+			t.Fatal("two SYNX contracts' series served the replay; distinct contracts must not")
+		}
+	})
+	t.Run("legacy", func(t *testing.T) {
+		srv, _ := replayTestServer(t, now)
+		if err := srv.saveMandateSeries(t.Context(), replayMandateSeries(now, "u:SYNX", rpc.ContractParams{ConID: 4242, Symbol: "SYNX", SecType: "STK", Exchange: "SMART", Currency: "USD"})); err != nil {
+			t.Fatal(err)
+		}
+		if result := replay(t, srv); result.State != rpc.EdgeStateCurrent || result.Incomplete {
+			t.Fatalf("replay = %s missing=%+v; a matching legacy document serves", result.State, result.MissingHistory)
+		}
+	})
+	t.Run("legacy other currency", func(t *testing.T) {
+		srv, _ := replayTestServer(t, now)
+		if err := srv.saveMandateSeries(t.Context(), replayMandateSeries(now, "u:SYNX", rpc.ContractParams{ConID: 4242, Symbol: "SYNX", SecType: "STK", Exchange: "SMART", Currency: "EUR"})); err != nil {
+			t.Fatal(err)
+		}
+		if result := replay(t, srv); !result.Incomplete {
+			t.Fatal("a euro SYNX series served a dollar underlying")
+		}
+	})
 }
 
 // A fresher read that restates an overlapping close (a split) replaces what
