@@ -15,7 +15,7 @@ as of Canary 278cc600.
 | ID | Requirement | Canary today |
 |---|---|---|
 | LO-P1 | An exit fires when the stock breaks the idea (a level on the underlying, or the event that was the thesis), not when the option's price wobbles. | missing |
-| LO-P2 | A last-resort loss on the premium backs it up. | built: loss exit at −60% (Rulebook loss line), full close, owner approval |
+| LO-P2 | A last-resort loss on the premium backs it up. | built: loss exit at −60% (Rulebook loss line), full close, owner approval. The requirement stands; the mechanism needs refining (see Findings) |
 | LO-P3 | A protect exit sells with a patient limit inside the spread, never at market. | partly: previews price patient limits; the profit trail is a broker trail that becomes a market order |
 | LO-P4 | Adding to a long option that is down more than 40% from its cost waits a cooling-off until the next session and shows the loss so far and the days left; it cannot be sent in the moment. No purpose is asked. (Owner 2026-10-24 08:33 CEST: 40%, cooling-off rather than a hard stop.) | missing |
 
@@ -53,4 +53,24 @@ names' actual joint moves.
 
 | ID | Requirement | Canary today |
 |---|---|---|
-| LO-V1 | Before a rule acts without the owner, it is replayed on the owner's own option trades and compared with what the owner did, net of spread and fees, every price marked as recorded or modelled. | built: `canary edge replay` (daemon `edge.replay`, read-only) replays sets A-D and each rule alone on recorded marks, with a separately labelled modelled run; not yet installed |
+| LO-V1 | Before a rule acts without the owner, it is replayed on the owner's own option trades and compared with what the owner did, net of spread and fees, every price marked as recorded or modelled. | built and installed: `canary edge replay` (read-only) replays sets A-D and each rule alone, recorded and modelled prices apart. Missing: overlay runs (the owner's exits kept, the rule acting when it fires first) and parameter ranges |
+
+## Findings (2026-10-24 and 25)
+
+Replay of the owner's long options, 2025-11-25 to 2026-10-23, recorded
+prices; a backtest chose parameters on Nov–Jun and judged them on Jul–Oct,
+with the owner's exits kept. The owner made 139k EUR.
+
+- LO-H1 trim to cap: about the owner's result with less capital at peak
+  (76% vs 89% of NLV). Candidate.
+- LO-H2 recover cost: about a tie. Candidate.
+- LO-T1 expiry close: helped where it fired. Candidate.
+- LO-P2 premium loss exit: no setting (40–90% of cost, or from the high)
+  beats the owner in both periods; on daily closes it sells after gaps that
+  recover. The requirement stands; refine the mechanism, likely toward LO-P1
+  (the stock breaking the idea) rather than the option's price.
+- LO-H4 stock trail: the best value (2.5 × ATR20) is a spike that fails out
+  of sample. Unproven; refine before building.
+- Replacing the owner's exits outright loses for every rule and needs more
+  than 100% of NLV; rules belong beside the owner, not instead.
+
