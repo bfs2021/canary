@@ -220,6 +220,21 @@ days with Black-Scholes at the underlying's close, the volatility backed out of
 the last recorded mark, and says so on every row. Long puts on a hedge symbol
 and short options are excluded and counted.
 
+The rules also need each underlying's daily closes. Canary reads them from
+history it already keeps before it asks the broker: the bars earlier replays
+kept, then the closes the mandate keeps for names you hold, then the
+market-history cache. It asks the broker only when those do not cover the
+days a name's options were held, and keeps the bars it used, so a later run
+gives the same answer while the gateway is offline. A cash-index underlying
+such as VIX is read as the index. A name whose history still does not cover
+those days is left out of every run, yours included: the view is marked
+incomplete at the top and names each such underlying, why its history is
+missing (gateway offline, not kept, or no history for the instrument) and
+your own P/L on it, which no total includes. Where a day's bar has a close but
+no high or low, the stock trail measures that day's range as the move from the
+previous close, and the run says how many days it did so and on how many
+days the trail could not be measured at all.
+
 Each run reports its P/L against set A, exits by reason, whether it sold
 earlier, later or on the same day as you, the peak value it held against that
 day's NLV (a set that needs more capital than the book had shows here), and

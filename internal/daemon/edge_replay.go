@@ -21,8 +21,9 @@ const replayHistoryLeadDays = 45
 
 // handleEdgeReplay replays long-option exit rules over the owner's own option
 // trades (long-option-exits LO-V1). It reads only what Canary retains: the
-// Flex statement projection Edge reads, the cached daily history of each
-// underlying, the recorded option chains and the measured fill costs. The
+// Flex statement projection Edge reads, the retained daily history of each
+// underlying (replay_history.go), the recorded option chains and the
+// measured fill costs. The
 // rule numbers come from the Rulebook and protection policies in force. It
 // is read-only and never reaches the order path.
 func (s *Server) handleEdgeReplay(ctx context.Context, req *rpc.Request) (*rpc.EdgeReplayResult, error) {
@@ -85,26 +86,27 @@ func (s *Server) handleEdgeReplay(ctx context.Context, req *rpc.Request) (*rpc.E
 	underlyings := edgecore.ExitReplayUnderlyings(statements, from, to, replayPolicy.HedgeSymbols)
 	historyRange := replayHistoryRange(statements, from, s.edgeNow())
 	bars := map[string][]edgecore.UnderlyingBar{}
+	notes := map[string]edgecore.ExitReplayHistoryNote{}
 	symbols := make([]string, 0, len(underlyings))
 	for _, underlying := range underlyings {
 		symbols = append(symbols, underlying.Symbol)
-		series, readErr := s.replayUnderlyingBars(ctx, underlying, historyRange)
-		if readErr != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			// A missing history leaves that underlying's days untestable;
-			// the coverage counts say so.
-			continue
+		series, note := s.replayHistory(ctx, underlying, historyRange)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
+		// A history that does not span the name's days leaves it out of
+		// every run; the note says why.
 		bars[underlying.Symbol] = series
+		if note.Reason != "" {
+			notes[underlying.Symbol] = note
+		}
 	}
 	chainMarks := s.replayChainMarks(ctx, symbols, from, to)
 	halfSpread, samples, source := s.replayHalfSpread()
 
 	result := edgecore.ExitReplay(edgecore.ExitReplayInput{
 		Statements: statements, BaseCurrency: inferEdgeBaseCurrency(statements), From: from, To: to, Rules: params.Rules,
-		Policy: replayPolicy, Underlyings: bars, ChainMarks: chainMarks,
+		Policy: replayPolicy, Underlyings: bars, HistoryNotes: notes, HistorySource: replayHistorySource, ChainMarks: chainMarks,
 		HalfSpreadPct: halfSpread, HalfSpreadSamples: samples, HalfSpreadSource: source,
 	})
 	if !sameBrokerScope(scope, s.currentBrokerStateScope()) {
@@ -136,48 +138,6 @@ func replayHistoryRange(statements []flexstmt.Statement, from, now time.Time) st
 		}
 	}
 	return "5Y"
-}
-
-// replayUnderlyingBars reads one underlying's daily bars through the market
-// history path: the retained series when one exists, else the same bounded
-// fetch the market view makes.
-func (s *Server) replayUnderlyingBars(ctx context.Context, underlying edgecore.ExitReplayUnderlying, historyRange string) ([]edgecore.UnderlyingBar, error) {
-	currency := underlying.Currency
-	if currency == "" {
-		currency = "USD"
-	}
-	p := rpc.MarketHistoryParams{Contract: rpc.ContractParams{Symbol: underlying.Symbol, SecType: "STK", Exchange: "SMART", Currency: currency}, Range: historyRange}
-	key, normalized, err := marketHistoryIdentity(p)
-	if err != nil {
-		return nil, err
-	}
-	var result *rpc.MarketHistoryResult
-	if saved, storedAt, loadErr := s.loadMarketHistory(ctx, key); loadErr != nil {
-		return nil, loadErr
-	} else if saved != nil {
-		result = selectStoredHistory(saved, storedAt, normalized, s.edgeNow(), "cache", "", false)
-	} else if result, err = s.marketHistoryRequest(ctx, p); err != nil {
-		return nil, err
-	}
-	if result == nil {
-		return nil, fmt.Errorf("no history for %s", underlying.Symbol)
-	}
-	out := make([]edgecore.UnderlyingBar, 0, len(result.Points))
-	for _, point := range result.Points {
-		if point.Value <= 0 || point.At.IsZero() {
-			continue
-		}
-		y, m, d := point.At.UTC().Date()
-		bar := edgecore.UnderlyingBar{Day: time.Date(y, m, d, 0, 0, 0, 0, time.UTC), Close: point.Value}
-		if point.High != nil {
-			bar.High = *point.High
-		}
-		if point.Low != nil {
-			bar.Low = *point.Low
-		}
-		out = append(out, bar)
-	}
-	return out, nil
 }
 
 // replayChainMarks reads the recorded two-sided quotes of the underlyings in

@@ -69,6 +69,14 @@ func fallbackUnderlyingQuoteContract(symbol, currency string) ContractParams {
 	return contract
 }
 
+// IndexUnderlyingContract is the index contract Canary reads for an option
+// underlying that is a cash index (SPX, NDX, RUT, VIX), as the market view
+// and the tape read it; false for every other symbol.
+func IndexUnderlyingContract(symbol string) (ContractParams, bool) {
+	contract, ok := indexUnderlyingContracts[normalizeMarketLabel(symbol)]
+	return contract, ok
+}
+
 var indexUnderlyingContracts = map[string]ContractParams{
 	"SPX": {Symbol: "SPX", SecType: "IND", Exchange: "CBOE", PrimaryExch: "CBOE", Currency: "USD"},
 	"NDX": {Symbol: "NDX", SecType: "IND", Exchange: "NASDAQ", PrimaryExch: "NASDAQ", Currency: "USD"},

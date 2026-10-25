@@ -15,7 +15,9 @@ import (
 const (
 	MethodEdgeReplay = "edge.replay"
 
-	EdgeReplaySchemaVersion = "edge-replay-v1"
+	// EdgeReplaySchemaVersion is v2 since names without the daily history
+	// their days need leave every run and are listed in missing_history.
+	EdgeReplaySchemaVersion = "edge-replay-v2"
 
 	// EdgeReplayRuleLossExit and the five rules after it are the single
 	// rules; each runs alone as well as inside the sets.
@@ -38,6 +40,16 @@ const (
 	EdgeReplayPricesActual   = "actual"
 	EdgeReplayPricesRecorded = "recorded"
 	EdgeReplayPricesModelled = "modelled"
+
+	// EdgeReplayHistoryGatewayOffline and the three after it say why an
+	// underlying's daily history is missing: the broker gateway is offline
+	// and Canary retains none for the days; the broker no longer serves the
+	// days and Canary did not retain them; the broker has no history for the
+	// instrument; the broker's read failed otherwise.
+	EdgeReplayHistoryGatewayOffline        = "gateway_offline"
+	EdgeReplayHistoryNotRetained           = "not_retained"
+	EdgeReplayHistoryInstrumentUnavailable = "instrument_unavailable"
+	EdgeReplayHistoryReadFailed            = "read_failed"
 )
 
 // EdgeReplayRules lists the single rules in render order.
@@ -147,13 +159,38 @@ type EdgeReplayResult struct {
 	StartStateDate time.Time `json:"start_state_date,omitzero"`
 	BaseCurrency   string    `json:"base_currency,omitempty"`
 	// StatementDays is the number of days the rules were evaluated on.
-	StatementDays  int                      `json:"statement_days"`
-	Parameters     EdgeReplayParameters     `json:"parameters"`
-	Scope          EdgeReplayScope          `json:"scope"`
-	Runs           []EdgeReplayRun          `json:"runs"`
-	Reconciliation EdgeReplayReconciliation `json:"reconciliation"`
-	Method         EdgeReplayMethod         `json:"method"`
-	NotExecution   bool                     `json:"not_execution"`
+	StatementDays int `json:"statement_days"`
+	// Incomplete is true when an underlying lacks the daily history its days
+	// need; MissingHistory names each one and every run leaves it out.
+	Incomplete     bool                       `json:"incomplete"`
+	MissingHistory []EdgeReplayMissingHistory `json:"missing_history"`
+	Parameters     EdgeReplayParameters       `json:"parameters"`
+	Scope          EdgeReplayScope            `json:"scope"`
+	Runs           []EdgeReplayRun            `json:"runs"`
+	Reconciliation EdgeReplayReconciliation   `json:"reconciliation"`
+	Method         EdgeReplayMethod           `json:"method"`
+	NotExecution   bool                       `json:"not_execution"`
+}
+
+// EdgeReplayMissingHistory is one underlying left out of every run because
+// its daily history does not span the days its options were held.
+type EdgeReplayMissingHistory struct {
+	Underlying string `json:"underlying"`
+	// Reason is one of the EdgeReplayHistory reasons; Detail says what
+	// Canary holds.
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
+	// NeededFrom and NeededTo are the first and last statement days the
+	// name's options were held in the window; HistoryFrom and HistoryTo the
+	// daily history the replay had, zero when it had none.
+	NeededFrom  time.Time `json:"needed_from"`
+	NeededTo    time.Time `json:"needed_to"`
+	HistoryFrom time.Time `json:"history_from,omitzero"`
+	HistoryTo   time.Time `json:"history_to,omitzero"`
+	Contracts   int       `json:"contracts"`
+	// ActualPNLBase is the owner's own P/L on the name's contracts in the
+	// window, which no run includes.
+	ActualPNLBase float64 `json:"actual_pnl_base"`
 }
 
 // EdgeReplayParameter is one rule number with the policy field it was read
@@ -248,6 +285,12 @@ type EdgeReplayCoverage struct {
 	ModelledDays     int     `json:"modelled_days"`
 	UntestableEvents int     `json:"untestable_events"`
 	UnitsKeptActual  float64 `json:"units_kept_actual"`
+	// CloseOnlyRangeDays counts the daily bars without a high and low whose
+	// true range entered the stock trail as the close-to-close move;
+	// TrailUnmeasuredDays the held contract-days the trail could not measure
+	// for want of 21 sessions of history. Both are zero without the trail.
+	CloseOnlyRangeDays  int `json:"close_only_range_days"`
+	TrailUnmeasuredDays int `json:"trail_unmeasured_days"`
 }
 
 // EdgeReplayNameRow is one underlying's P/L in a run.
@@ -284,6 +327,7 @@ type EdgeReplayReconciliation struct {
 // EdgeReplayMethod discloses how the replay prices and decides.
 type EdgeReplayMethod struct {
 	Evaluation string `json:"evaluation"`
+	History    string `json:"history"`
 	Exits      string `json:"exits"`
 	Untestable string `json:"untestable"`
 	Modelled   string `json:"modelled"`
@@ -310,6 +354,14 @@ func ValidateEdgeReplayResult(r EdgeReplayResult) error {
 			}
 		}
 		return true
+	}
+	if r.Incomplete != (len(r.MissingHistory) > 0) {
+		return fmt.Errorf("edge replay incomplete flag disagrees with its missing history")
+	}
+	for _, gap := range r.MissingHistory {
+		if strings.TrimSpace(gap.Underlying) == "" || gap.Reason == "" || !finite(gap.ActualPNLBase) {
+			return fmt.Errorf("edge replay missing history row is incomplete or non-finite")
+		}
 	}
 	rec := r.Reconciliation
 	if !finite(rec.ActualUnitsBase, rec.ActualCashBase, rec.FlowsBase, rec.StartValueBase, rec.EndValueBase, rec.EdgeCyclesPNLBase, rec.ActualOnCyclesBase, rec.FXTranslationBase, rec.ResidualBase, rec.CycleCashResidual) {

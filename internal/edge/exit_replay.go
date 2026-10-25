@@ -1,6 +1,7 @@
 package edge
 
 import (
+	"fmt"
 	"maps"
 	"math"
 	"slices"
@@ -67,14 +68,52 @@ type ExitReplayInput struct {
 	To     time.Time
 	Rules  []string
 	Policy ExitReplayPolicy
-	// Underlyings holds daily bars by underlying symbol.
-	Underlyings map[string][]UnderlyingBar
-	ChainMarks  []RecordedOptionMark
+	// Underlyings holds daily bars by underlying symbol. HistoryNotes says,
+	// by symbol, why the bars may fall short of the days the replay needs;
+	// HistorySource says where the bars came from.
+	Underlyings   map[string][]UnderlyingBar
+	HistoryNotes  map[string]ExitReplayHistoryNote
+	HistorySource string
+	ChainMarks    []RecordedOptionMark
 	// HalfSpreadPct is the measured half-spread in percent of the price; nil
 	// when no measured option fill exists.
 	HalfSpreadPct     *float64
 	HalfSpreadSamples int
 	HalfSpreadSource  string
+}
+
+// ExitReplayHistoryNote is the caller's account of an underlying whose daily
+// history may not span the days the replay needs: one of the
+// rpc.EdgeReplayHistory reasons and what Canary holds.
+type ExitReplayHistoryNote struct {
+	Reason string
+	Detail string
+}
+
+// ExitReplayHistorySlackDays is how far a name's daily history may stop short
+// of either end of the days it is needed and still span them: a long weekend
+// with a holiday. A session inside the span without a bar stays an untestable
+// day, counted in the run's coverage.
+const ExitReplayHistorySlackDays = 4
+
+// ExitReplayHistoryCovers reports whether daily bars span first through
+// last, within ExitReplayHistorySlackDays at either end.
+func ExitReplayHistoryCovers(bars []UnderlyingBar, first, last time.Time) bool {
+	days := make([]string, 0, len(bars))
+	for _, bar := range bars {
+		if bar.Close > 0 && !bar.Day.IsZero() {
+			days = append(days, dayKey(bar.Day))
+		}
+	}
+	slices.Sort(days)
+	return historySpans(days, dayKey(first), dayKey(last))
+}
+
+func historySpans(days []string, first, last string) bool {
+	if len(days) == 0 {
+		return false
+	}
+	return days[0] <= dayKey(parseDay(first).AddDate(0, 0, ExitReplayHistorySlackDays)) && days[len(days)-1] >= dayKey(parseDay(last).AddDate(0, 0, -ExitReplayHistorySlackDays))
 }
 
 // Mark sources, in the order a day's price is chosen.
@@ -165,6 +204,7 @@ type replay struct {
 	commBase   float64
 	units      []*replayUnit
 	scope      rpc.EdgeReplayScope
+	missing    []rpc.EdgeReplayMissingHistory
 	lotSeq     int
 	fxCache    map[string]float64
 }
@@ -176,7 +216,7 @@ type replay struct {
 func ExitReplay(in ExitReplayInput) rpc.EdgeReplayResult {
 	out := rpc.EdgeReplayResult{
 		SchemaVersion: rpc.EdgeReplaySchemaVersion, State: rpc.EdgeStateCurrent, NotExecution: true,
-		Runs: []rpc.EdgeReplayRun{}, Method: exitReplayMethod(),
+		Runs: []rpc.EdgeReplayRun{}, Method: exitReplayMethod(in.HistorySource), MissingHistory: []rpc.EdgeReplayMissingHistory{},
 		Scope:          rpc.EdgeReplayScope{Underlyings: []string{}, ExcludedOther: map[string]int{}},
 		Reconciliation: rpc.EdgeReplayReconciliation{ReconciliationNotes: []string{}},
 	}
@@ -187,7 +227,11 @@ func ExitReplay(in ExitReplayInput) rpc.EdgeReplayResult {
 		return out
 	}
 	r := &replay{in: in, ev: ev, base: strings.ToUpper(strings.TrimSpace(in.BaseCurrency))}
-	if reason := r.prepare(); reason != "" {
+	reason := r.prepare()
+	if len(r.missing) > 0 {
+		out.Incomplete, out.MissingHistory = true, r.missing
+	}
+	if reason != "" {
 		out.State, out.Reason = rpc.EdgeStateInsufficient, reason
 		out.Scope = r.scope
 		if out.Scope.ExcludedOther == nil {
@@ -332,6 +376,10 @@ func (r *replay) prepare() string {
 	if len(r.contracts) == 0 {
 		return "no_long_options_in_window"
 	}
+	r.leaveOutMissingHistory()
+	if len(r.contracts) == 0 {
+		return "underlying_history_unavailable"
+	}
 	r.halfSpread = 0
 	if r.in.HalfSpreadPct != nil && *r.in.HalfSpreadPct > 0 && *r.in.HalfSpreadPct < 100 {
 		r.halfSpread = *r.in.HalfSpreadPct / 100
@@ -408,22 +456,26 @@ func (r *replay) closeAtOrBefore(symbol, day string) (float64, bool) {
 }
 
 // atr is the simple average true range of the ExitReplayATRSessions sessions
-// ending on day; it needs one earlier close for the first range.
-func (r *replay) atr(symbol, day string) (float64, bool) {
+// ending on day; it needs one earlier close for the first range. A bar
+// without a high and low enters as the true range's close-only form, the
+// move from the previous close; closeOnly lists those bars' days.
+func (r *replay) atr(symbol, day string) (atr float64, closeOnly []string, ok bool) {
 	days := r.barDays[symbol]
 	i := sort.SearchStrings(days, day)
 	if i >= len(days) || days[i] != day || i < ExitReplayATRSessions {
-		return 0, false
+		return 0, nil, false
 	}
 	total := 0.0
 	for j := i - ExitReplayATRSessions + 1; j <= i; j++ {
 		bar, prev := r.bars[symbol][days[j]], r.bars[symbol][days[j-1]]
 		if bar.High <= 0 || bar.Low <= 0 {
-			return 0, false
+			total += math.Abs(bar.Close - prev.Close)
+			closeOnly = append(closeOnly, days[j])
+			continue
 		}
 		total += math.Max(bar.High-bar.Low, math.Max(math.Abs(bar.High-prev.Close), math.Abs(bar.Low-prev.Close)))
 	}
-	return total / ExitReplayATRSessions, true
+	return total / ExitReplayATRSessions, closeOnly, true
 }
 
 // highestClose is the highest close from first through day, both inclusive;
@@ -763,6 +815,83 @@ func (r *replay) settleOwnerEnd() {
 	}
 }
 
+// leaveOutMissingHistory removes every underlying whose daily history does
+// not span the statement days its options were held: such a name cannot be
+// tested, and keeping the owner's outcome for its days would change every
+// run's total without saying so. Each one is listed with the caller's reason
+// and the owner's own P/L on it.
+func (r *replay) leaveOutMissingHistory() {
+	type need struct {
+		first, last string
+		conids      []int64
+	}
+	needs := map[string]*need{}
+	for _, conid := range slices.Sorted(maps.Keys(r.contracts)) {
+		c := r.contracts[conid]
+		first, last := r.heldDays(c)
+		if first == "" {
+			continue
+		}
+		n := needs[c.underlying]
+		if n == nil {
+			n = &need{first: first, last: last}
+			needs[c.underlying] = n
+		}
+		n.first, n.last, n.conids = min(n.first, first), max(n.last, last), append(n.conids, conid)
+	}
+	for _, name := range slices.Sorted(maps.Keys(needs)) {
+		n, days := needs[name], r.barDays[name]
+		if historySpans(days, n.first, n.last) {
+			continue
+		}
+		note := r.in.HistoryNotes[name]
+		gap := rpc.EdgeReplayMissingHistory{Underlying: name, Reason: note.Reason, Detail: note.Detail, NeededFrom: parseDay(n.first), NeededTo: parseDay(n.last)}
+		if gap.Reason == "" {
+			gap.Reason = rpc.EdgeReplayHistoryNotRetained
+		}
+		if len(days) > 0 {
+			gap.HistoryFrom, gap.HistoryTo = parseDay(days[0]), parseDay(days[len(days)-1])
+		}
+		for _, conid := range n.conids {
+			for _, lot := range r.contracts[conid].lots {
+				for _, unit := range lot.units {
+					gap.ActualPNLBase += unit.actBase - unit.startBase
+				}
+			}
+			gap.Contracts++
+			delete(r.contracts, conid)
+		}
+		r.missing = append(r.missing, gap)
+	}
+}
+
+// heldDays is the first and last statement day a rule run can hold the
+// contract: from the window's start (held then) or its first buy, through its
+// expiry or the window's end.
+func (r *replay) heldDays(c *replayContract) (string, string) {
+	from, to := "", min(c.expiry, r.to)
+	for _, lot := range c.lots {
+		day := lot.day
+		if lot.pre {
+			day = r.from
+		}
+		if from == "" || day < from {
+			from = day
+		}
+	}
+	first, last := "", ""
+	for _, day := range r.days {
+		if day < from || day > to {
+			continue
+		}
+		if first == "" {
+			first = day
+		}
+		last = day
+	}
+	return first, last
+}
+
 func replayIntrinsic(right string, spot, strike float64) float64 {
 	if right == "C" {
 		return math.Max(0, spot-strike)
@@ -1016,6 +1145,9 @@ type replaySim struct {
 	lastMark  map[int64]replayDayPrice
 	recovered map[int]bool
 	reasons   map[string]*rpc.EdgeReplayReason
+	// closeOnly holds the underlying bars, by symbol and day, already
+	// counted as close-only ranges.
+	closeOnly map[string]bool
 }
 
 // simulate runs one rule set over the window. The owner's buys enter on
@@ -1028,7 +1160,7 @@ func (r *replay) simulate(id string, rules []string, modelled bool) rpc.EdgeRepl
 	run := rpc.EdgeReplayRun{ID: id, Rules: append([]string{}, rules...), Prices: prices, ExitsByReason: []rpc.EdgeReplayReason{}, ByUnderlying: []rpc.EdgeReplayNameRow{}}
 	s := &replaySim{r: r, run: &run, rules: map[string]bool{}, modelled: modelled, outcomes: map[*replayUnit]replayOutcome{},
 		held: map[int64][]*replayHeld{}, highWater: map[int64]risk.OptionExitHighWater{}, recovered: map[int]bool{}, reasons: map[string]*rpc.EdgeReplayReason{},
-		lastMark: map[int64]replayDayPrice{}}
+		lastMark: map[int64]replayDayPrice{}, closeOnly: map[string]bool{}}
 	for _, rule := range rules {
 		s.rules[rule] = true
 	}
@@ -1275,11 +1407,19 @@ func (s *replaySim) recoverCost(c *replayContract, day string, mark, fx float64)
 
 // stockTrail closes a buy lot when the underlying closes more than the
 // policy's multiple of its 20-session average true range below its highest
-// close since the lot was bought.
+// close since the lot was bought. A day the range cannot be measured is
+// counted, never skipped silently.
 func (s *replaySim) stockTrail(c *replayContract, day string, mark, spot, fx float64) {
-	atr, ok := s.r.atr(c.underlying, day)
+	atr, closeOnly, ok := s.r.atr(c.underlying, day)
 	if !ok {
+		s.run.Coverage.TrailUnmeasuredDays++
 		return
+	}
+	for _, d := range closeOnly {
+		if key := c.underlying + "\x00" + d; !s.closeOnly[key] {
+			s.closeOnly[key] = true
+			s.run.Coverage.CloseOnlyRangeDays++
+		}
 	}
 	for _, entry := range s.held[c.conid] {
 		if len(entry.units) == 0 {
@@ -1552,15 +1692,20 @@ func exitReplayParameters(in ExitReplayInput) rpc.EdgeReplayParameters {
 	return params
 }
 
-func exitReplayMethod() rpc.EdgeReplayMethod {
+func exitReplayMethod(historySource string) rpc.EdgeReplayMethod {
+	history := fmt.Sprintf("An underlying whose daily history does not span the statement days its options were held, within %d calendar days at either end, leaves every run, the actual one included, and is listed with the reason and your own P/L on it; its days are never kept at your outcome unannounced.", ExitReplayHistorySlackDays)
+	if source := strings.TrimSpace(historySource); source != "" {
+		history = source + " " + history
+	}
 	return rpc.EdgeReplayMethod{
 		Evaluation: "Rules are evaluated once per statement day at that day's recorded closing mark: the Open Positions mark, else an execution row's closing price, else the mid of a two-sided recorded chain quote. Today's loss line, expiry close and profit trail run through risk.EvaluateOptionExit with the mark as bid and ask.",
+		History:    history,
 		Exits:      "A rule exit sells at the mark less the measured half-spread and the owner's average commission per contract, converted at the day's broker rate.",
-		Untestable: "In the recorded run a held contract on a day without a recorded mark or underlying close keeps the owner's actual outcome from that day on.",
+		Untestable: "In the recorded run a held contract on a day without a recorded mark, or on a session inside its underlying's history without a bar, keeps the owner's actual outcome from that day on.",
 		Modelled:   "The modelled run fills such days with Black-Scholes at the underlying close, the volatility backed out of the last recorded mark, rate zero; a volatility that cannot be backed out prices at intrinsic value.",
 		HighWater:  "The profit trail's high water is carried from day to day and resets when the cost basis or quantity changes, as the daemon's does; the daemon carries it within a session only.",
 		Harvest:    "Recover cost sells, once per buy lot, enough contracts to recover the lot's cost when the lot's value reaches the harvest gain; trim sells the largest holding on a name one contract at a time until the name's long options are worth no more than the name cap of that day's NLV.",
-		StockTrail: "A buy lot closes when its underlying closes more than the multiple of its 20-session average true range below its highest close since the lot was bought.",
+		StockTrail: "A buy lot closes when its underlying closes more than the multiple of its 20-session average true range below its highest close since the lot was bought. A daily bar without a high and low enters the range as the move from the previous close, the true range's close-only form, and is counted; a day with fewer than 21 sessions of history cannot measure the range and is counted as unmeasured.",
 		Actual:     "Set A is the owner's actual path: buys at cost, sales at their proceeds, contracts still held at the end at the end day's mark, contracts held at the start at the start day's mark.",
 		Exclusions: "Long puts on a Rulebook hedge symbol and short options are excluded; an exercise or assignment counts the option leg only, as Edge does.",
 	}
@@ -1584,10 +1729,13 @@ type replayDayPrice struct {
 }
 
 // ExitReplayUnderlying is one underlying whose daily history the replay
-// needs.
+// needs, from First (its first option trade or position in range) through
+// Last (its last contract's expiry or the range's end, whichever is earlier).
 type ExitReplayUnderlying struct {
 	Symbol   string
 	Currency string
+	First    time.Time
+	Last     time.Time
 }
 
 // ExitReplayUnderlyings lists the underlyings of the options traded or held
@@ -1605,30 +1753,63 @@ func ExitReplayUnderlyings(statements []flexstmt.Statement, from, to time.Time, 
 	inRange := func(day time.Time) bool {
 		return (from.IsZero() || !day.Before(dayStart(from).AddDate(0, 0, -10))) && (to.IsZero() || !day.After(dayStart(to)))
 	}
-	found := map[string]string{}
-	add := func(conid int64, underlying, currency string) {
+	found := map[string]*ExitReplayUnderlying{}
+	unknownExpiry := map[string]bool{}
+	latest := time.Time{}
+	add := func(conid int64, underlying, currency string, day time.Time) {
 		inst := instruments[conid]
 		symbol := strings.ToUpper(firstNonEmpty(inst.UnderlyingSymbol, underlying))
+		day = dayStart(day)
 		if symbol == "" || optionPutCall(inst.PutCall) == "put" && slices.ContainsFunc(hedgeSymbols, func(s string) bool { return strings.EqualFold(strings.TrimSpace(s), symbol) }) {
 			return
 		}
-		if _, ok := found[symbol]; !ok {
-			found[symbol] = strings.ToUpper(firstNonEmpty(currency, inst.Currency))
+		u := found[symbol]
+		if u == nil {
+			u = &ExitReplayUnderlying{Symbol: symbol, Currency: strings.ToUpper(firstNonEmpty(currency, inst.Currency)), First: day}
+			found[symbol] = u
 		}
+		if day.Before(u.First) {
+			u.First = day
+		}
+		expiry := parseDay(optionExpiry(inst.Expiry))
+		unknownExpiry[symbol] = unknownExpiry[symbol] || expiry.IsZero()
+		u.Last = maxTime(u.Last, expiry)
 	}
 	for _, trade := range ev.trades {
 		if strings.EqualFold(trade.AssetClass, "OPT") && trade.ConID != 0 && inRange(tradeStatementDay(trade)) {
-			add(trade.ConID, trade.UnderlyingSymbol, trade.Currency)
+			add(trade.ConID, trade.UnderlyingSymbol, trade.Currency, tradeStatementDay(trade))
 		}
 	}
 	for _, row := range ev.positions {
 		if strings.EqualFold(row.AssetClass, "OPT") && row.ConID != 0 && !row.ReportDate.IsZero() && inRange(row.ReportDate) {
-			add(row.ConID, row.UnderlyingSymbol, row.Currency)
+			add(row.ConID, row.UnderlyingSymbol, row.Currency, row.ReportDate)
 		}
+	}
+	// The range ends at to, or at the latest statement day when it is open;
+	// no contract is needed past its expiry.
+	for _, st := range statements {
+		if !st.ToDate.IsZero() && inRange(st.ToDate) {
+			latest = maxTime(latest, dayStart(st.ToDate))
+		}
+	}
+	end := latest
+	if !to.IsZero() {
+		end = dayStart(to)
 	}
 	out := make([]ExitReplayUnderlying, 0, len(found))
 	for _, symbol := range slices.Sorted(maps.Keys(found)) {
-		out = append(out, ExitReplayUnderlying{Symbol: symbol, Currency: found[symbol]})
+		u := *found[symbol]
+		if unknownExpiry[symbol] || u.Last.After(end) {
+			u.Last = end
+		}
+		out = append(out, u)
 	}
 	return out
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }

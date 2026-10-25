@@ -12,6 +12,7 @@ import (
 
 	"github.com/osauer/canary/v2/internal/config"
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
+	edgecore "github.com/osauer/canary/v2/internal/edge"
 	"github.com/osauer/canary/v2/internal/flexstmt"
 	"github.com/osauer/canary/v2/internal/rpc"
 )
@@ -154,5 +155,206 @@ func TestEdgeReplayNeedsFlex(t *testing.T) {
 	}
 	if _, err := srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["E"]}`)}); err == nil {
 		t.Fatal("unknown rule accepted")
+	}
+}
+
+// replayTestServer is the SYNX replay book of
+// TestEdgeReplayReadsTheProjectionHistoryAndPolicyInForce on a server
+// without a broker gateway.
+func replayTestServer(t *testing.T, now time.Time) (*Server, *corestore.Store) {
+	t.Helper()
+	const account = "UREPLAYSYNTH"
+	raw := []byte(replayFlexXML(account, []replayFlexDay{
+		{day: "2026-09-01"},
+		{day: "2026-09-02", quantity: 2, mark: 2.00, trades: replayFlexTrade(account, "buy", "2026-09-02", "BUY", 2, 2.00, -401, 0, "O")},
+		{day: "2026-09-03", quantity: 2, mark: 1.50},
+		{day: "2026-09-04", quantity: 2, mark: 0.70},
+		{day: "2026-09-07", trades: replayFlexTrade(account, "sell", "2026-09-07", "SELL", -2, 0.50, 99, -302, "C")},
+	}))
+	statements, err := flexstmt.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryFingerprint := flexQueryFingerprint("424242")
+	files, days, records, versions, err := buildStatementProjection([]statementProjectionFile{{name: "replay.xml", size: int64(len(raw)), digest: sha256.Sum256(raw), data: raw, statements: statements}}, now, queryFingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := corestore.Open(t.Context(), corestore.Options{Path: filepath.Join(privateTestDir(t), "daemon.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.ReplaceStatementProjection(t.Context(), statementProjectionScopeForSelection(flexEvidenceSelection{ActiveQueryFingerprint: queryFingerprint}), files, days, records, versions); err != nil {
+		t.Fatal(err)
+	}
+	port := 4001
+	return &Server{
+		cfg:       &config.Resolved{Gateway: config.Gateway{Account: account, Port: &port}, Flex: config.Flex{Enabled: true, QueryID: "424242"}},
+		coreStore: store, now: func() time.Time { return now },
+	}, store
+}
+
+func replayLossRun(t *testing.T, result *rpc.EdgeReplayResult) rpc.EdgeReplayRun {
+	t.Helper()
+	for _, run := range result.Runs {
+		if run.ID == rpc.EdgeReplayRuleLossExit && run.Prices == rpc.EdgeReplayPricesRecorded {
+			return run
+		}
+	}
+	t.Fatalf("no recorded loss-exit run in %+v", result)
+	return rpc.EdgeReplayRun{}
+}
+
+// A replay run once must give the same answer later with the gateway
+// offline, after the market-history cache has evicted the series it read.
+func TestEdgeReplayReproducesAfterTheChartCacheEvicts(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	srv, store := replayTestServer(t, now)
+	seedReplayHistory(t, srv, store, now)
+	params := &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit"]}`)}
+	first, err := srv.handleEdgeReplay(t.Context(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := replayLossRun(t, first)
+	if before.Coverage.StatementDays != 3 || len(before.ExitsByReason) != 1 {
+		t.Fatalf("first run = %+v; the cached history must decide 2026-09-04", before)
+	}
+
+	// The display cache evicts its oldest series at 750; fill it past that
+	// with other symbols so the SYNX series goes.
+	for i := range 750 {
+		p := rpc.MarketHistoryParams{Contract: rpc.ContractParams{Symbol: fmt.Sprintf("SYNF%03d", i), SecType: "STK", Exchange: "SMART", Currency: "USD"}, Range: "6M"}
+		key, _, err := marketHistoryIdentity(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.SaveChartCache(t.Context(), key, []byte(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	synx, _, _ := marketHistoryIdentity(rpc.MarketHistoryParams{Contract: rpc.ContractParams{Symbol: "SYNX", SecType: "STK", Exchange: "SMART", Currency: "USD"}, Range: "6M"})
+	if saved, _, err := srv.loadMarketHistory(t.Context(), synx); err != nil || saved != nil {
+		t.Fatalf("SYNX chart series still cached (%v); the fixture did not evict it", err)
+	}
+
+	second, err := srv.handleEdgeReplay(t.Context(), params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := replayLossRun(t, second)
+	if math.Abs(after.PNLBase-before.PNLBase) > 1e-9 || after.Coverage != before.Coverage {
+		t.Fatalf("replay after eviction = %.4f %+v, want the first run's %.4f %+v", after.PNLBase, after.Coverage, before.PNLBase, before.Coverage)
+	}
+}
+
+// An index underlying's history is an index series, as the market tape reads
+// it, never a stock of the same name.
+func TestEdgeReplayAsksIndexHistoryAsAnIndex(t *testing.T) {
+	index := func(symbol string) (rpc.ContractParams, bool) {
+		if symbol == "SYNIX" {
+			return rpc.ContractParams{Symbol: "SYNIX", SecType: "IND", Exchange: "CBOE", PrimaryExch: "CBOE", Currency: "USD"}, true
+		}
+		return rpc.ContractParams{}, false
+	}
+	got := replayHistoryContract(edgecore.ExitReplayUnderlying{Symbol: "SYNIX", Currency: "USD"}, index)
+	if want := (rpc.ContractParams{Symbol: "SYNIX", SecType: "IND", Exchange: "CBOE", Currency: "USD"}); got != want {
+		t.Fatalf("index history contract = %+v, want the index on CBOE as the market tape names it", got)
+	}
+	if stock := replayHistoryContract(edgecore.ExitReplayUnderlying{Symbol: "SYNX", Currency: "USD"}, index); stock.SecType != "STK" || stock.Exchange != "SMART" {
+		t.Fatalf("stock history contract = %+v", stock)
+	}
+}
+
+// With the gateway offline and nothing retained for SYNX, the replay names
+// it and why instead of keeping the owner's outcome for its days.
+func TestEdgeReplayNamesHistoryMissingWithTheGatewayOffline(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	srv, _ := replayTestServer(t, now)
+	result, err := srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit"]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != rpc.EdgeStateInsufficient || result.Reason != "underlying_history_unavailable" || !result.Incomplete || len(result.MissingHistory) != 1 {
+		t.Fatalf("replay = %s %s incomplete=%v missing=%+v", result.State, result.Reason, result.Incomplete, result.MissingHistory)
+	}
+	gap := result.MissingHistory[0]
+	if gap.Underlying != "SYNX" || gap.Reason != rpc.EdgeReplayHistoryGatewayOffline || gap.Detail != "no retained history" || gap.Contracts != 1 {
+		t.Fatalf("missing history = %+v", gap)
+	}
+	if err := rpc.ValidateEdgeReplayResult(*result); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The mandate's decision-grade closes are retained and never evicted: with
+// no chart series and the gateway offline the replay reads them, ranges
+// from closes only, and keeps the bars it used.
+func TestEdgeReplayReadsTheMandatesRetainedClosesFirst(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	srv, store := replayTestServer(t, now)
+	series := &mandateHistorySeries{Version: mandateHistoryDocVer, Key: "u:SYNX", Contract: rpc.ContractParams{ConID: 4242, Symbol: "SYNX", SecType: "STK", Exchange: "SMART", Currency: "USD"}, FetchedAt: now, Source: "synthetic"}
+	for day := now.AddDate(0, -5, 0); day.Before(now.AddDate(0, 0, -1)); day = day.AddDate(0, 0, 1) {
+		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
+			continue
+		}
+		series.Dates, series.Closes = append(series.Dates, day.Format(time.DateOnly)), append(series.Closes, 95)
+	}
+	if err := srv.saveMandateSeries(t.Context(), series); err != nil {
+		t.Fatal(err)
+	}
+	result, err := srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit","stock_trail"]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != rpc.EdgeStateCurrent || result.Incomplete || len(result.MissingHistory) != 0 {
+		t.Fatalf("replay = %s %s missing=%+v", result.State, result.Reason, result.MissingHistory)
+	}
+	if run := replayLossRun(t, result); run.Coverage.StatementDays != 3 || len(run.ExitsByReason) != 1 {
+		t.Fatalf("loss-exit run = %+v; the mandate's closes must decide 2026-09-04", run)
+	}
+	for _, run := range result.Runs {
+		if run.ID == rpc.EdgeReplayRuleStockTrail && run.Prices == rpc.EdgeReplayPricesRecorded && run.Coverage.CloseOnlyRangeDays == 0 {
+			t.Fatalf("stock trail over closes only counts no close-only range: %+v", run.Coverage)
+		}
+	}
+	doc, ok, err := store.GetStateDocument(t.Context(), replayHistoryScope(rpc.ContractParams{Symbol: "SYNX", SecType: "STK", Currency: "USD"}), stateKindReplayHistory)
+	if err != nil || !ok {
+		t.Fatalf("replay history not retained: %v %v", ok, err)
+	}
+	var kept replayHistoryDoc
+	if err := json.Unmarshal(doc.JSON, &kept); err != nil || len(kept.Bars) != len(series.Dates) {
+		t.Fatalf("retained %d bars (%v), want the mandate's %d", len(kept.Bars), err, len(series.Dates))
+	}
+}
+
+// A fresher read that restates an overlapping close (a split) replaces what
+// was read before it; a close-only bar with the same close keeps the range.
+func TestMergeReplaySourcesRestatementAndRanges(t *testing.T) {
+	day := func(s string) time.Time { v, _ := time.Parse(time.DateOnly, s); return v }
+	bar := func(d string, c, h, l float64) edgecore.UnderlyingBar {
+		return edgecore.UnderlyingBar{Day: day(d), Close: c, High: h, Low: l}
+	}
+	src := func(asOf string, bars ...edgecore.UnderlyingBar) replaySource {
+		out := replaySource{asOf: day(asOf), bars: map[string]edgecore.UnderlyingBar{}}
+		for _, b := range bars {
+			out.bars[b.Day.Format(time.DateOnly)] = b
+		}
+		return out
+	}
+	kept := mergeReplaySources([]replaySource{
+		src("2026-09-10", bar("2026-09-01", 100.2, 0, 0), bar("2026-09-02", 101, 0, 0)),
+		src("2026-09-05", bar("2026-09-01", 100, 101, 99), bar("2026-08-31", 99, 100, 98)),
+	})
+	if len(kept) != 3 || kept[1].High != 101 || kept[1].Close != 100 || kept[2].Close != 101 {
+		t.Fatalf("merged = %+v; the close-only 09-01 bar must keep the range", kept)
+	}
+	split := mergeReplaySources([]replaySource{
+		src("2026-09-05", bar("2026-08-31", 200, 0, 0), bar("2026-09-01", 200, 0, 0)),
+		src("2026-09-10", bar("2026-09-01", 100, 0, 0), bar("2026-09-02", 101, 0, 0)),
+	})
+	if len(split) != 2 || split[0].Close != 100 {
+		t.Fatalf("merged across a restatement = %+v; the older basis must go", split)
 	}
 }

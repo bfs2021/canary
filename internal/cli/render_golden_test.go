@@ -363,6 +363,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "edge", argv: []string{"edge"}, conn: goldenConn{rpc.MethodEdgeSnapshot: goldenEdge(0, 3)}},
 		{name: "edge_option_page", argv: []string{"edge", "--option-offset", "3", "--option-limit", "3"}, conn: goldenConn{rpc.MethodEdgeSnapshot: goldenEdge(3, 3)}},
 		{name: "edge_replay", argv: []string{"edge", "replay", "--from", "2026-08-03"}, conn: goldenConn{rpc.MethodEdgeReplay: goldenEdgeReplay()}},
+		{name: "edge_replay_incomplete", argv: []string{"edge", "replay", "--from", "2026-08-03"}, conn: goldenConn{rpc.MethodEdgeReplay: goldenEdgeReplayIncomplete()}},
 	}
 }
 
@@ -407,6 +408,22 @@ func goldenEdgeReplay() rpc.EdgeReplayResult {
 			EdgeCycles: 3, EdgeCycleContracts: 3, ComparedContracts: 2, EdgeCyclesPNLBase: 2500, ActualOnCyclesBase: 2450, FXTranslationBase: -50, Reconciled: true, ReconciliationNotes: []string{},
 		},
 	}
+}
+
+// goldenEdgeReplayIncomplete is goldenEdgeReplay with three underlyings left
+// out for want of daily history, and set D's stock trail measured partly
+// from closes only.
+func goldenEdgeReplayIncomplete() rpc.EdgeReplayResult {
+	day := func(s string) time.Time { v, _ := time.Parse(time.DateOnly, s); return v }
+	result := goldenEdgeReplay()
+	result.Incomplete = true
+	result.MissingHistory = []rpc.EdgeReplayMissingHistory{
+		{Underlying: "SYNC", Reason: rpc.EdgeReplayHistoryGatewayOffline, Detail: "no retained history", NeededFrom: day("2026-08-03"), NeededTo: day("2026-08-28"), Contracts: 2, ActualPNLBase: -1800},
+		{Underlying: "SYND", Reason: rpc.EdgeReplayHistoryGatewayOffline, Detail: "history from 2026-05-04 to 2026-08-14", NeededFrom: day("2026-08-05"), NeededTo: day("2026-08-28"), HistoryFrom: day("2026-05-04"), HistoryTo: day("2026-08-14"), Contracts: 1, ActualPNLBase: 650},
+		{Underlying: "SYNE", Reason: rpc.EdgeReplayHistoryInstrumentUnavailable, Detail: "no security definition for contract", NeededFrom: day("2026-08-10"), NeededTo: day("2026-08-21"), Contracts: 1, ActualPNLBase: -120},
+	}
+	result.Runs[3].Coverage.CloseOnlyRangeDays, result.Runs[3].Coverage.TrailUnmeasuredDays = 14, 3
+	return result
 }
 
 func goldenEdge(offset, limit int) rpc.EdgeResult {

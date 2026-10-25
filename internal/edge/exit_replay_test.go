@@ -20,6 +20,7 @@ type replayBook struct {
 	snapshots map[string][]flexstmt.OpenPosition
 	bars      map[string][]UnderlyingBar
 	chain     []RecordedOptionMark
+	notes     map[string]ExitReplayHistoryNote
 	seq       int
 }
 
@@ -138,7 +139,7 @@ func (b *replayBook) run(rules ...string) rpc.EdgeReplayResult {
 	if err != nil {
 		b.t.Fatal(err)
 	}
-	res := ExitReplay(ExitReplayInput{Statements: b.statements(), BaseCurrency: b.base, Rules: params.Rules, Policy: replayTestPolicy(), Underlyings: b.bars, ChainMarks: b.chain})
+	res := ExitReplay(ExitReplayInput{Statements: b.statements(), BaseCurrency: b.base, Rules: params.Rules, Policy: replayTestPolicy(), Underlyings: b.bars, HistoryNotes: b.notes, ChainMarks: b.chain})
 	if res.State != rpc.EdgeStateCurrent {
 		b.t.Fatalf("replay state %s (%s)", res.State, res.Reason)
 	}
@@ -344,8 +345,8 @@ func TestExitReplayStockTrailUsesTheRangeOfTheStock(t *testing.T) {
 	}
 	r := &replay{in: ExitReplayInput{Underlyings: b.bars}}
 	r.buildBars()
-	atr7, _ := r.atr("SYNX", "2026-09-07")
-	atr8, _ := r.atr("SYNX", "2026-09-08")
+	atr7, _, _ := r.atr("SYNX", "2026-09-07")
+	atr8, _, _ := r.atr("SYNX", "2026-09-08")
 	if 110-106 >= 2.5*atr7 || 110-103 <= 2.5*atr8 {
 		t.Fatalf("fixture ranges moved: ATR %.3f and %.3f", atr7, atr8)
 	}
@@ -459,5 +460,123 @@ func TestExitReplayChainQuotesCarryTheRunToExpirySettlement(t *testing.T) {
 	near(t, "settled at intrinsic", run.PNLBase, (97-90)*100-500)
 	if run.VsOwner.Later != 1 {
 		t.Fatalf("timing = %+v, want later than the owner", run.VsOwner)
+	}
+}
+
+// A name whose underlying history is missing cannot be tested. It must leave
+// every run, named, instead of keeping the owner's outcome unannounced.
+func TestExitReplayLeavesOutANameWithoutHistory(t *testing.T) {
+	b := newReplayBook(t, "USD")
+	b.option(9101, "SYNA", "C", 100, "20261016")
+	b.option(9102, "SYNB", "C", 100, "20261016")
+	b.steadyBars("SYNA", 95, nil) // SYNB has no history at all
+	b.held("2026-09-01")
+	b.trade(9101, "2026-09-02", 1, 2.00, 0, "O", 0, 0)
+	b.trade(9102, "2026-09-02", 1, 2.00, 0, "O", 0, 0)
+	b.held("2026-09-02", position(9101, 1, 2.00, 200), position(9102, 1, 2.00, 200))
+	b.held("2026-09-03", position(9101, 1, 0.70, 200), position(9102, 1, 0.70, 200)) // both past the -60% line
+	b.trade(9101, "2026-09-08", -1, 1.50, 0, "C", 0, -50)
+	b.trade(9102, "2026-09-08", -1, 1.50, 0, "C", 0, -50)
+	b.held("2026-09-08")
+	b.notes = map[string]ExitReplayHistoryNote{"SYNB": {Reason: rpc.EdgeReplayHistoryGatewayOffline, Detail: "no retained history"}}
+	res := b.run("loss_exit")
+
+	if !res.Incomplete || len(res.MissingHistory) != 1 {
+		t.Fatalf("incomplete = %v, missing = %+v; SYNB must be named", res.Incomplete, res.MissingHistory)
+	}
+	gap := res.MissingHistory[0]
+	if gap.Underlying != "SYNB" || gap.Reason != rpc.EdgeReplayHistoryGatewayOffline || gap.Detail != "no retained history" || gap.Contracts != 1 ||
+		dayKey(gap.NeededFrom) != "2026-09-02" || dayKey(gap.NeededTo) != "2026-09-08" || !gap.HistoryFrom.IsZero() {
+		t.Fatalf("missing history = %+v", gap)
+	}
+	near(t, "owner's P/L on SYNB, left out", gap.ActualPNLBase, 150-200)
+	near(t, "actual P/L on SYNA alone", replayRun(t, res, rpc.EdgeReplaySetActual, rpc.EdgeReplayPricesActual).PNLBase, 150-200)
+	if got := res.Scope.Underlyings; len(got) != 1 || got[0] != "SYNA" {
+		t.Fatalf("scope underlyings = %v; SYNB has no history and must leave the runs", got)
+	}
+	run := replayRun(t, res, rpc.EdgeReplayRuleLossExit, rpc.EdgeReplayPricesRecorded)
+	if run.VsOwner.Untestable != 0 || run.Coverage.UnitsKeptActual != 0 {
+		t.Fatalf("loss-exit run kept the owner's outcome silently: %+v / %+v", run.VsOwner, run.Coverage)
+	}
+	near(t, "loss-exit P/L on SYNA alone", run.PNLBase, 70-200)
+}
+
+// Some names carry closes without a high and low. The stock trail must then
+// measure those days by the close-only true range, not go blind.
+func TestExitReplayStockTrailMeasuresCloseOnlyDays(t *testing.T) {
+	b := newReplayBook(t, "USD")
+	b.option(9103, "SYNX", "C", 100, "20261218")
+	// Closes alternate 99 and 101 (a close-to-close range of two), then the
+	// stock peaks at 110 on 2026-09-04, closes 4 below on 2026-09-07 and
+	// 8 below on 2026-09-08; no bar carries a high or a low.
+	set := map[string]float64{"2026-09-02": 102, "2026-09-03": 106, "2026-09-04": 110, "2026-09-07": 106, "2026-09-08": 102, "2026-09-09": 102}
+	i := 0
+	for day := replayDay("2026-07-01"); day.Before(replayDay("2026-12-31")); day = day.AddDate(0, 0, 1) {
+		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
+			continue
+		}
+		value := 99.0 + 2*float64(i%2)
+		i++
+		if v, ok := set[dayKey(day)]; ok {
+			value = v
+		}
+		b.bars["SYNX"] = append(b.bars["SYNX"], UnderlyingBar{Day: day, Close: value})
+	}
+	b.held("2026-09-01")
+	b.trade(9103, "2026-09-02", 1, 3.00, 0, "O", 0, 0)
+	for _, day := range []string{"2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07", "2026-09-08", "2026-09-09"} {
+		b.held(day, position(9103, 1, 3.00, 300))
+	}
+	run := replayRun(t, b.run("stock_trail"), rpc.EdgeReplayRuleStockTrail, rpc.EdgeReplayPricesRecorded)
+	if got := replayReason(run, rpc.EdgeReplayRuleStockTrail); got.Events != 1 {
+		t.Fatalf("stock-trail exits = %+v; closes without a range must still measure the trail", run.ExitsByReason)
+	}
+	// Five evaluated days, 2026-09-02 to 09-08, each over 20 sessions: 24
+	// distinct bars, every one without a range.
+	if run.Coverage.CloseOnlyRangeDays != 24 || run.Coverage.TrailUnmeasuredDays != 0 {
+		t.Fatalf("coverage = %+v, want 24 close-only ranges and no unmeasured day", run.Coverage)
+	}
+	r := &replay{in: ExitReplayInput{Underlyings: b.bars}}
+	r.buildBars()
+	atr7, _, ok7 := r.atr("SYNX", "2026-09-07")
+	atr8, _, ok8 := r.atr("SYNX", "2026-09-08")
+	if !ok7 || !ok8 || 110-106 >= 2.5*atr7 || 110-102 <= 2.5*atr8 {
+		t.Fatalf("fixture ranges moved: ATR %.3f (%v) and %.3f (%v)", atr7, ok7, atr8, ok8)
+	}
+}
+
+// A trail without 21 sessions of history cannot measure its range; the run
+// counts those days instead of leaving the trail silently off.
+func TestExitReplayStockTrailCountsUnmeasuredDays(t *testing.T) {
+	b := newReplayBook(t, "USD")
+	b.option(9104, "SYNX", "C", 100, "20261218")
+	for _, day := range []string{"2026-08-27", "2026-08-28", "2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03"} {
+		b.bars["SYNX"] = append(b.bars["SYNX"], UnderlyingBar{Day: replayDay(day), Close: 100, High: 101, Low: 99})
+	}
+	b.held("2026-09-01")
+	b.trade(9104, "2026-09-02", 1, 3.00, 0, "O", 0, 0)
+	b.held("2026-09-02", position(9104, 1, 3.00, 300))
+	b.held("2026-09-03", position(9104, 1, 3.00, 300))
+	run := replayRun(t, b.run("stock_trail"), rpc.EdgeReplayRuleStockTrail, rpc.EdgeReplayPricesRecorded)
+	if run.Coverage.TrailUnmeasuredDays != 2 || run.Exits != 0 {
+		t.Fatalf("coverage = %+v, exits %d; both held days lack 21 sessions", run.Coverage, run.Exits)
+	}
+}
+
+// The daily history a caller reads spans each underlying's first option
+// record through its last expiry or the latest statement, whichever is
+// earlier.
+func TestExitReplayUnderlyingsNameTheDaysNeeded(t *testing.T) {
+	b := newReplayBook(t, "USD")
+	b.option(9105, "SYNA", "C", 100, "20261016")
+	b.option(9106, "SYNB", "C", 100, "20260904")
+	b.held("2026-09-01")
+	b.trade(9105, "2026-09-02", 1, 2.00, 0, "O", 0, 0)
+	b.trade(9106, "2026-09-03", 1, 2.00, 0, "O", 0, 0)
+	b.held("2026-09-08", position(9105, 1, 2.00, 200))
+	got := ExitReplayUnderlyings(b.statements(), time.Time{}, time.Time{}, nil)
+	if len(got) != 2 || got[0].Symbol != "SYNA" || dayKey(got[0].First) != "2026-09-02" || dayKey(got[0].Last) != "2026-09-08" ||
+		got[1].Symbol != "SYNB" || dayKey(got[1].First) != "2026-09-03" || dayKey(got[1].Last) != "2026-09-04" {
+		t.Fatalf("underlyings = %+v", got)
 	}
 }

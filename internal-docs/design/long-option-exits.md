@@ -55,6 +55,29 @@ names' actual joint moves.
 |---|---|---|
 | LO-V1 | Before a rule acts without the owner, it is replayed on the owner's own option trades and compared with what the owner did, net of spread and fees, every price marked as recorded or modelled. | built and installed: `canary edge replay` (read-only) replays sets A-D and each rule alone, recorded and modelled prices apart. Missing: overlay runs (the owner's exits kept, the rule acting when it fires first) and parameter ranges |
 
+Underlying history for the replay (2026-10-25 16:34 CET, at the owner's
+request through the orchestrating session). A replay must not change its
+answer because history is missing, and must give the same answer later
+without the gateway. Sources, in order: the replay's own retained bars
+(state document `edge_replay_history`, one per underlying, the union of what
+earlier runs read, never evicted); the mandate's decision-grade closes
+(retained and never evicted, but only names held now, the newest 320
+sessions, closes without a high or low); the market-history chart cache
+(high and low, but a display cache that evicts its oldest series at 750);
+the broker only when these do not span a name's days. Neither existing
+store was extended: the mandate series is a rolling window its verdict
+judges freshness on, and eviction is what bounds the chart cache. A name
+whose history still does not span the statement days its options were held
+(four calendar days of slack at either end) leaves every run, set A
+included, and is listed with the reason (`gateway_offline`,
+`not_retained`, `instrument_unavailable`, `read_failed`) and the owner's
+P/L on it; the result is marked `incomplete`. Index underlyings (SPX, NDX,
+RUT, VIX) are read as `IND` with the market tape's identity. A bar without a
+high and low enters the stock trail's ATR as the close-only true range and
+is counted (`close_only_range_days`); days with under 21 sessions are counted
+as `trail_unmeasured_days`. Code: `internal/daemon/replay_history.go`,
+`internal/edge/exit_replay.go`.
+
 ## Findings (2026-10-24 and 25)
 
 Replay of the owner's long options, 2025-11-25 to 2026-10-23, recorded

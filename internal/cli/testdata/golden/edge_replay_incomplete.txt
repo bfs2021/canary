@@ -1,0 +1,140 @@
+# canary edge replay --from 2026-08-03 · COLUMNS=80 · colour off
+Canary Edge · exit replay · 2026-08-03 to 2026-08-28 · incomplete
+  Incomplete · 3 of 5 underlyings left out of every run, yours included: their
+    daily history does not span the days their options were held
+  Left out · SYNC, SYND: the broker gateway is offline and Canary has not
+    retained these days · SYNE: the broker has no history for the instrument ·
+    your own P/L on them, -€ 1,270.00, is in no total below
+  Your own long-option buys, with each rule set's exits in place of yours. A
+    review of past trades; it places nothing.
+
+Scope
+  Contracts · 4 long options on SYNA, SYNB · 6 buy lots, 1 held at the start
+    of 2026-07-31 · 120 contracts bought
+  Excluded · 2 hedge puts (5 executions) · 0 short options (0 executions) · 1
+    instrument unavailable · 3 underlyings without daily history (4 contracts)
+  Prices · 20 statement days · exits pay a half-spread of 0.20% of the mark,
+    the median of 12 measured option fills · commission € 0.55 a contract, your
+    average
+  Coverage in B today's rules · held contract-days priced by 40 statement
+    marks, 6 execution closing prices and 0 recorded chain quotes · 2 untestable
+    days
+
+Rules in force
+  Policies · Rulebook rulebook-default v1 (compiled-default) · protection
+    protection-mvp v3
+  Today's · loss exit at -60% · expiry close in the money at 7 days · profit
+    trail arms at +50%, trails 30%, keeps +5%, from 14 days
+  Harvest · recover cost at +100% · trim each name to 15% of NLV
+  Stock trail · 2.5 × the 20-session average true range below the high since
+    the buy
+
+Recorded prices  a day without a recorded mark keeps your actual outcome
+  RUN                         P/L      VS ACTUAL  EXITS   PEAK VALUE  OF NLV
+  A actual             € 4,200.00              —      5     € 30,000     15%
+    sold 4 · expired 1
+  B today's rules      € 1,500.00    -€ 2,700.00      3     € 52,000     26%
+    loss exit 2 · expiry close 1 · contracts sold 20 earlier, 60 later, 38
+    same as you · 12 kept your outcome after 2 untestable days
+  C harvest            € 4,800.00       € 600.00      7     € 30,500     15%
+    loss exit 2 · trim to cap 4 · recover cost 1 · contracts sold 45 earlier,
+    40 later, 33 same as you · 12 kept your outcome after 2 untestable days
+  D stock trail        € 2,100.00    -€ 2,100.00      4     € 52,000     26%
+    loss exit 2 · stock trail 2 · contracts sold 30 earlier, 50 later, 38 same
+    as you · 12 kept your outcome after 2 untestable days · 14 daily ranges
+    measured from closes only · trail unmeasured on 3 contract-days, under 21
+    sessions of history
+  loss exit             -€ 800.00    -€ 5,000.00      2     € 61,000     30%
+    loss exit 2 · contracts sold 30 earlier, 70 later, 18 same as you · 12
+    kept your outcome after 2 untestable days
+
+Modelled prices  gaps priced by Black-Scholes off the last mark, rate 0%
+  RUN                         P/L      VS ACTUAL  EXITS   PEAK VALUE  OF NLV
+  B today's rules      € 2,600.00    -€ 1,600.00      4     € 58,000     29%
+    loss exit 2 · profit trail 2 · contracts sold 20 earlier, 98 later, 12
+    same as you · 18 modelled contract-days
+
+By underlying  recorded prices
+  NAME             SET A         SET B         SET C         SET D
+  SYNA        € 3,000.00      € 900.00    € 3,500.00    € 1,400.00
+  SYNB        € 1,200.00      € 600.00    € 1,300.00      € 700.00
+
+Reconciliation  reconciled
+  Actual · € 4,200.00 = cash flows -€ 3,800.00 + end value € 10,000.00 − start
+    value € 2,000.00
+  Edge cycles · 3 proven flat-to-flat in scope, 2 of 3 contracts compared ·
+    Edge € 2,500.00 + FX translation -€ 50.00 = actual € 2,450.00 · residual
+    € 0.00
+  Realized · broker realized on the window's executions € 3,900.00
+
+Details: canary edge replay --json · the method and every amount
+# canary edge replay --from 2026-08-03 · COLUMNS=80 · colour on, ESC written as \x1b
+Canary Edge · exit replay · 2026-08-03 to 2026-08-28 · \x1b[33mincomplete\x1b[0m
+  \x1b[33mIncomplete\x1b[0m · 3 of 5 underlyings left out of every run, yours included: their
+    daily history does not span the days their options were held
+  Left out · SYNC, SYND: the broker gateway is offline and Canary has not
+    retained these days · SYNE: the broker has no history for the instrument ·
+    your own P/L on them, \x1b[31m-€ 1,270.00\x1b[0m, is in no total below
+  \x1b[2mYour own long-option buys, with each rule set's exits in place of yours. A
+    review of past trades; it places nothing.\x1b[0m
+
+Scope
+  Contracts · 4 long options on SYNA, SYNB · 6 buy lots, 1 held at the start
+    of 2026-07-31 · 120 contracts bought
+  Excluded · 2 hedge puts (5 executions) · 0 short options (0 executions) · 1
+    instrument unavailable · 3 underlyings without daily history (4 contracts)
+  Prices · 20 statement days · exits pay a half-spread of 0.20% of the mark,
+    the median of 12 measured option fills · commission € 0.55 a contract, your
+    average
+  Coverage in B today's rules · held contract-days priced by 40 statement
+    marks, 6 execution closing prices and 0 recorded chain quotes · 2 untestable
+    days
+
+Rules in force
+  Policies · Rulebook rulebook-default v1 (compiled-default) · protection
+    protection-mvp v3
+  Today's · loss exit at -60% · expiry close in the money at 7 days · profit
+    trail arms at +50%, trails 30%, keeps +5%, from 14 days
+  Harvest · recover cost at +100% · trim each name to 15% of NLV
+  Stock trail · 2.5 × the 20-session average true range below the high since
+    the buy
+
+Recorded prices  \x1b[2ma day without a recorded mark keeps your actual outcome\x1b[0m
+  RUN                         P/L      VS ACTUAL  EXITS   PEAK VALUE  OF NLV
+  A actual             \x1b[32m€ 4,200.00\x1b[0m              —      5     € 30,000     15%
+    \x1b[2msold 4 · expired 1\x1b[0m
+  B today's rules      \x1b[32m€ 1,500.00\x1b[0m    \x1b[31m-€ 2,700.00\x1b[0m      3     € 52,000     26%
+    \x1b[2mloss exit 2 · expiry close 1 · contracts sold 20 earlier, 60 later, 38
+    same as you · 12 kept your outcome after 2 untestable days\x1b[0m
+  C harvest            \x1b[32m€ 4,800.00\x1b[0m       \x1b[32m€ 600.00\x1b[0m      7     € 30,500     15%
+    \x1b[2mloss exit 2 · trim to cap 4 · recover cost 1 · contracts sold 45 earlier,
+    40 later, 33 same as you · 12 kept your outcome after 2 untestable days\x1b[0m
+  D stock trail        \x1b[32m€ 2,100.00\x1b[0m    \x1b[31m-€ 2,100.00\x1b[0m      4     € 52,000     26%
+    \x1b[2mloss exit 2 · stock trail 2 · contracts sold 30 earlier, 50 later, 38 same
+    as you · 12 kept your outcome after 2 untestable days · 14 daily ranges
+    measured from closes only · trail unmeasured on 3 contract-days, under 21
+    sessions of history\x1b[0m
+  loss exit             \x1b[31m-€ 800.00\x1b[0m    \x1b[31m-€ 5,000.00\x1b[0m      2     € 61,000     30%
+    \x1b[2mloss exit 2 · contracts sold 30 earlier, 70 later, 18 same as you · 12
+    kept your outcome after 2 untestable days\x1b[0m
+
+Modelled prices  \x1b[2mgaps priced by Black-Scholes off the last mark, rate 0%\x1b[0m
+  RUN                         P/L      VS ACTUAL  EXITS   PEAK VALUE  OF NLV
+  B today's rules      \x1b[32m€ 2,600.00\x1b[0m    \x1b[31m-€ 1,600.00\x1b[0m      4     € 58,000     29%
+    \x1b[2mloss exit 2 · profit trail 2 · contracts sold 20 earlier, 98 later, 12
+    same as you · 18 modelled contract-days\x1b[0m
+
+By underlying  \x1b[2mrecorded prices\x1b[0m
+  NAME             SET A         SET B         SET C         SET D
+  SYNA        \x1b[32m€ 3,000.00\x1b[0m      \x1b[32m€ 900.00\x1b[0m    \x1b[32m€ 3,500.00\x1b[0m    \x1b[32m€ 1,400.00\x1b[0m
+  SYNB        \x1b[32m€ 1,200.00\x1b[0m      \x1b[32m€ 600.00\x1b[0m    \x1b[32m€ 1,300.00\x1b[0m      \x1b[32m€ 700.00\x1b[0m
+
+Reconciliation  \x1b[32mreconciled\x1b[0m
+  Actual · \x1b[32m€ 4,200.00\x1b[0m = cash flows \x1b[31m-€ 3,800.00\x1b[0m + end value € 10,000.00 − start
+    value € 2,000.00
+  Edge cycles · 3 proven flat-to-flat in scope, 2 of 3 contracts compared ·
+    Edge \x1b[32m€ 2,500.00\x1b[0m + FX translation \x1b[31m-€ 50.00\x1b[0m = actual \x1b[32m€ 2,450.00\x1b[0m · residual
+    € 0.00
+  Realized · broker realized on the window's executions \x1b[32m€ 3,900.00\x1b[0m
+
+Details: canary edge replay --json · the method and every amount

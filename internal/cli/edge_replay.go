@@ -74,12 +74,16 @@ func renderEdgeReplay(env *Env, result rpc.EdgeReplayResult) {
 	}
 	if result.State != rpc.EdgeStateCurrent {
 		title = append(title, env.yellow(result.State))
+	} else if result.Incomplete {
+		title = append(title, env.yellow("incomplete"))
 	}
 	fmt.Fprintln(out, strings.Join(title, " · "))
 	if result.State != rpc.EdgeStateCurrent {
 		edgeProse(env, "No replay: "+edgeReplayReasonText(result.Reason)+".", width)
+		renderEdgeReplayMissing(env, result)
 		return
 	}
+	renderEdgeReplayMissing(env, result)
 	edgeProse(env, env.dim("Your own long-option buys, with each rule set's exits in place of yours. A review of past trades; it places nothing."), width)
 
 	scope := result.Scope
@@ -90,6 +94,13 @@ func renderEdgeReplay(env *Env, result rpc.EdgeReplayResult) {
 	excluded := []string{fmt.Sprintf("%d hedge puts (%d executions)", scope.ExcludedHedgeContracts, scope.ExcludedHedgeExecutions), fmt.Sprintf("%d short options (%d executions)", scope.ExcludedShortContracts, scope.ExcludedShortExecutions)}
 	for _, reason := range slices.Sorted(maps.Keys(scope.ExcludedOther)) {
 		excluded = append(excluded, fmt.Sprintf("%d %s", scope.ExcludedOther[reason], strings.ReplaceAll(reason, "_", " ")))
+	}
+	if n := len(result.MissingHistory); n > 0 {
+		contracts := 0
+		for _, gap := range result.MissingHistory {
+			contracts += gap.Contracts
+		}
+		excluded = append(excluded, fmt.Sprintf("%d %s without daily history (%d %s)", n, pluralWord(n, "underlying", "underlyings"), contracts, pluralWord(contracts, "contract", "contracts")))
 	}
 	edgeRow(env, "Excluded", excluded...)
 	params := result.Parameters
@@ -151,6 +162,8 @@ func edgeReplayReasonText(reason string) string {
 		return "no statement before the window gives a starting position"
 	case "no_long_options_in_window":
 		return "no long option was held or bought in the window"
+	case "underlying_history_unavailable":
+		return "no underlying in the window has the daily history its days need"
 	}
 	return strings.ReplaceAll(sanitizeRunText(reason), "_", " ")
 }
@@ -197,6 +210,12 @@ func renderEdgeReplayRuns(env *Env, result rpc.EdgeReplayResult, prices string, 
 			if cov.ModelledDays > 0 {
 				detail = append(detail, fmt.Sprintf("%s modelled contract-days", edgeCount(cov.ModelledDays)))
 			}
+			if cov.CloseOnlyRangeDays > 0 {
+				detail = append(detail, fmt.Sprintf("%s daily %s measured from closes only", edgeCount(cov.CloseOnlyRangeDays), pluralWord(cov.CloseOnlyRangeDays, "range", "ranges")))
+			}
+			if cov.TrailUnmeasuredDays > 0 {
+				detail = append(detail, fmt.Sprintf("trail unmeasured on %s contract-%s, under 21 sessions of history", edgeCount(cov.TrailUnmeasuredDays), pluralWord(cov.TrailUnmeasuredDays, "day", "days")))
+			}
 		}
 		if len(detail) == 0 {
 			continue
@@ -206,6 +225,42 @@ func renderEdgeReplayRuns(env *Env, result rpc.EdgeReplayResult, prices string, 
 			fmt.Fprintln(out, "    "+line)
 		}
 	}
+}
+
+// renderEdgeReplayMissing heads the view when names were left out for want of
+// daily history: which, why, and the owner's own P/L the totals leave out.
+func renderEdgeReplayMissing(env *Env, result rpc.EdgeReplayResult) {
+	if !result.Incomplete || len(result.MissingHistory) == 0 {
+		return
+	}
+	n := len(result.MissingHistory)
+	edgeRow(env, env.yellow("Incomplete"), fmt.Sprintf("%d of %d underlyings left out of every run, yours included: their daily history does not span the days their options were held", n, len(result.Scope.Underlyings)+n))
+	byReason := map[string][]string{}
+	pnl := 0.0
+	for _, gap := range result.MissingHistory {
+		byReason[gap.Reason] = append(byReason[gap.Reason], sanitizeRunText(gap.Underlying))
+		pnl += gap.ActualPNLBase
+	}
+	var parts []string
+	for _, reason := range slices.Sorted(maps.Keys(byReason)) {
+		parts = append(parts, strings.Join(byReason[reason], ", ")+": "+edgeReplayHistoryReasonText(reason))
+	}
+	parts = append(parts, "your own P/L on "+pluralWord(n, "it", "them")+", "+edgeSignedMoney(env, pnl, result.BaseCurrency)+", is in no total below")
+	edgeRow(env, "Left out", parts...)
+}
+
+func edgeReplayHistoryReasonText(reason string) string {
+	switch reason {
+	case rpc.EdgeReplayHistoryGatewayOffline:
+		return "the broker gateway is offline and Canary has not retained these days"
+	case rpc.EdgeReplayHistoryNotRetained:
+		return "the broker no longer serves these days and Canary did not retain them"
+	case rpc.EdgeReplayHistoryInstrumentUnavailable:
+		return "the broker has no history for the instrument"
+	case rpc.EdgeReplayHistoryReadFailed:
+		return "the broker's history read failed"
+	}
+	return strings.ReplaceAll(sanitizeRunText(reason), "_", " ")
 }
 
 // edgeReplayWhole is a peak value in whole currency units.
