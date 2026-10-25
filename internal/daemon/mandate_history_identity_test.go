@@ -156,3 +156,38 @@ func TestHistoryIdentityHeldStockBindsOptionUnderlying(t *testing.T) {
 		t.Fatal("option ID accepted as stock history identity")
 	}
 }
+
+// An option on a cash index (VIX) moves with the index: the book reads its
+// daily history as the index, the identity the replay and the market tape
+// use, never as a stock of the same name, which the broker does not list.
+// An order on such an option asks for the same series the book reads.
+func TestHistoryIdentityIndexOptionUnderlyingIsTheIndex(t *testing.T) {
+	pos := mandateTestPositions(100)
+	iv := 0.9
+	pos.Options = append(pos.Options, rpc.PositionView{Symbol: "VIX", SecType: rpc.SecTypeOption, ConID: 9005, Currency: "USD", Quantity: 1, Multiplier: 100, Mark: 2, Expiry: "20270120", Strike: 20, Right: "C", IV: &iv, Underlying: new(18.0)})
+	want := rpc.ContractParams{Symbol: "VIX", SecType: "IND", Exchange: "CBOE", Currency: "USD"}
+	var vix, syna *mandateHistoryNeed
+	for _, need := range mandateHistoryNeeds(pos, "EUR", nil) {
+		switch need.Key {
+		case "u:VIX":
+			vix = &need
+		case "u:SYNA":
+			syna = &need
+		}
+	}
+	if vix == nil || vix.Contract != want {
+		t.Fatalf("VIX option underlying need = %+v, want the index %+v", vix, want)
+	}
+	if syna == nil || syna.Contract.SecType != "STK" {
+		t.Fatalf("stock option underlying need = %+v, want the stock", syna)
+	}
+
+	srv := &Server{now: func() time.Time { return mandateTestNow }}
+	draft := mandateBuy(1)
+	draft.Contract = rpc.ContractParams{Symbol: "VIX", SecType: "OPT", Currency: "USD", ConID: 9005}
+	in := &mandate.Input{BaseCurrency: "USD", Series: map[string]mandate.Series{}, FX: map[string]mandate.Series{}, FXNow: map[string]float64{}}
+	_, missing := srv.mandateOrderBook(draft, in, mandateTestNow)
+	if len(missing) != 1 || missing[0].need.Contract != want {
+		t.Fatalf("order on a VIX option asks for %+v, want the index %+v", missing, want)
+	}
+}

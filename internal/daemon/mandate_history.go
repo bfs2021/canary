@@ -212,7 +212,7 @@ func mandateHistoryNeeds(pos *rpc.PositionsResult, base string, lines map[string
 		}
 		for _, row := range pos.Options {
 			sym := normSym(row.Symbol)
-			add(mandateHistoryNeed{Key: "u:" + sym, Contract: rpc.ContractParams{Symbol: sym, SecType: "STK", Currency: normCcy(row.Currency), Exchange: "SMART"}})
+			add(mandateHistoryNeed{Key: "u:" + sym, Contract: mandateOptionUnderlyingContract(sym, normCcy(row.Currency))})
 			currencies[normCcy(row.Currency)] = true
 		}
 	}
@@ -228,6 +228,20 @@ func mandateHistoryNeeds(pos *rpc.PositionsResult, base string, lines map[string
 	}
 	slices.SortFunc(out, func(a, b mandateHistoryNeed) int { return strings.Compare(a.Key, b.Key) })
 	return out
+}
+
+// mandateOptionUnderlyingContract is the contract an option's underlying
+// history is read for: a cash index (rpc.IndexUnderlyingContract: SPX, NDX,
+// RUT, VIX) as the index, with the identity the replay and the market tape
+// read it by; every other underlying as a stock. The broker lists no stock
+// named VIX, so a stock read leaves the series missing and the verdict
+// unknown.
+func mandateOptionUnderlyingContract(sym, ccy string) rpc.ContractParams {
+	if index, ok := rpc.IndexUnderlyingContract(sym); ok {
+		index.PrimaryExch = ""
+		return index
+	}
+	return rpc.ContractParams{Symbol: sym, SecType: "STK", Currency: ccy, Exchange: "SMART"}
 }
 
 func (s *Server) mandateHistorySeries(ctx context.Context, key string) *mandateHistorySeries {

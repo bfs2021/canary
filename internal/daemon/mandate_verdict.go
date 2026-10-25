@@ -959,6 +959,9 @@ func (s *Server) mandateOrderBook(draft rpc.OrderDraft, in *mandate.Input, now t
 		contract := rpc.ContractParams{Symbol: sym, SecType: "STK", Currency: ccy, Exchange: "SMART"}
 		if strings.EqualFold(draft.Contract.SecType, "STK") || strings.EqualFold(draft.Contract.SecType, "ETF") {
 			contract.ConID, contract.PrimaryExch = draft.Contract.ConID, strings.ToUpper(strings.TrimSpace(draft.Contract.PrimaryExch))
+		} else {
+			// An option reads the series the book reads for its underlying.
+			contract = mandateOptionUnderlyingContract(sym, ccy)
 		}
 		// Options use the held stock's underlying identity when available,
 		// never the option contract ID. Multiple same-symbol stocks conflict.
