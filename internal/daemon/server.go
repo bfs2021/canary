@@ -475,6 +475,11 @@ type Server struct {
 	// mandatePositionsForTest the positions read behind the mandate.
 	mandateHistoryFetchForTest func(context.Context, rpc.MarketHistoryParams, int, time.Time) (*rpc.MarketHistoryResult, error)
 	mandatePositionsForTest    func(context.Context) (*rpc.PositionsResult, error)
+	// replayHistoryFetchForTest replaces the broker history read behind the
+	// Edge replay (replay_history.go) and stands in for an online gateway.
+	replayHistoryFetchForTest func(context.Context, rpc.MarketHistoryParams) (*rpc.MarketHistoryResult, error)
+	// replayFetches holds the replay's broker history reads in flight.
+	replayFetches replayFetchStore
 	// orderLimitsNLV is the latest current account reading the order cap
 	// in force scales with ([order_limits], order_limits.go).
 	orderLimitsNLV orderLimitsNLVState

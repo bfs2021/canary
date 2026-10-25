@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -449,5 +450,102 @@ func TestEdgeReplayCarriesAClosedExchangeSession(t *testing.T) {
 	}
 	if run := replayLossRun(t, result); run.Coverage.UntestableEvents != 1 || run.Coverage.ClosedSessionDays != 0 || len(run.ExitsByReason) != 0 {
 		t.Fatalf("open session without a bar = %+v, want untestable", run)
+	}
+}
+
+// replayHistoryResult is a daily SYNX series as the broker's chart read
+// answers it.
+func replayHistoryResult(t *testing.T, now time.Time) *rpc.MarketHistoryResult {
+	t.Helper()
+	p := rpc.MarketHistoryParams{Contract: rpc.ContractParams{Symbol: "SYNX", SecType: "STK", Exchange: "SMART", Currency: "USD"}, Range: "6M"}
+	_, normalized, err := marketHistoryIdentity(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := &rpc.MarketHistoryResult{TimestampKind: "session_date", PriceBasis: "TRADES", RegularHoursOnly: true, Contract: normalized.Contract, Range: "6M", Interval: "1 day", Source: "hmds", AsOf: now, CoverageStatus: "complete"}
+	for day := now.AddDate(0, -5, 0); day.Before(now.AddDate(0, 0, -1)); day = day.AddDate(0, 0, 1) {
+		if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
+			continue
+		}
+		at := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
+		result.Points = append(result.Points, rpc.MarketHistoryPoint{At: at, Value: 95, Open: new(95.0), High: new(96.0), Low: new(94.0)})
+	}
+	return result
+}
+
+// After a history gap the broker may take longer to send a name's history
+// than the replay's budget allows. The replay answers within its budget
+// with the name left out as still fetching, the read goes on, and the next
+// run finds the bars kept without asking the broker again.
+func TestEdgeReplayAnswersWhileTheBrokerIsStillSendingHistory(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	srv, store := replayTestServer(t, now)
+	release := make(chan struct{})
+	reads := make(chan struct{}, 4)
+	srv.replayHistoryFetchForTest = func(ctx context.Context, p rpc.MarketHistoryParams) (*rpc.MarketHistoryResult, error) {
+		reads <- struct{}{}
+		select {
+		case <-release:
+			return replayHistoryResult(t, now), nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	started := time.Now()
+	result, err := srv.handleEdgeReplay(ctx, &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit"]}`)})
+	if err != nil {
+		t.Fatalf("replay with a slow history read = %v after %s; it must answer within its budget", err, time.Since(started).Round(time.Millisecond))
+	}
+	if !result.Incomplete || len(result.MissingHistory) != 1 || result.MissingHistory[0].Reason != rpc.EdgeReplayHistoryFetching || result.MissingHistory[0].Underlying != "SYNX" {
+		t.Fatalf("replay = %s %s missing=%+v, want SYNX left out as still fetching", result.State, result.Reason, result.MissingHistory)
+	}
+	if err := rpc.ValidateEdgeReplayResult(*result); err != nil {
+		t.Fatal(err)
+	}
+
+	// The read finishes in the background and its bars are kept.
+	close(release)
+	scope := replayHistoryScope(rpc.ContractParams{Symbol: "SYNX", SecType: "STK", Currency: "USD"})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok, err := store.GetStateDocument(t.Context(), scope, stateKindReplayHistory); err == nil && ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the background history read kept nothing")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := len(reads)
+	second, err := srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit"]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.State != rpc.EdgeStateCurrent || second.Incomplete || len(reads) != before {
+		t.Fatalf("second replay = %s incomplete=%v broker reads %d→%d; the kept bars must serve it", second.State, second.Incomplete, before, len(reads))
+	}
+	if run := replayLossRun(t, second); run.Coverage.StatementDays != 3 || len(run.ExitsByReason) != 1 {
+		t.Fatalf("loss-exit run = %+v", run)
+	}
+}
+
+// A broker read that answers within the budget serves the same run.
+func TestEdgeReplayUsesABrokerReadThatAnswersInTime(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 12, 0, 0, 0, time.UTC)
+	srv, _ := replayTestServer(t, now)
+	srv.replayHistoryFetchForTest = func(context.Context, rpc.MarketHistoryParams) (*rpc.MarketHistoryResult, error) {
+		return replayHistoryResult(t, now), nil
+	}
+	result, err := srv.handleEdgeReplay(t.Context(), &rpc.Request{Params: json.RawMessage(`{"rules":["loss_exit"]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.State != rpc.EdgeStateCurrent || result.Incomplete {
+		t.Fatalf("replay = %s %s missing=%+v", result.State, result.Reason, result.MissingHistory)
+	}
+	if run := replayLossRun(t, result); run.Coverage.StatementDays != 3 || len(run.ExitsByReason) != 1 {
+		t.Fatalf("loss-exit run = %+v", run)
 	}
 }

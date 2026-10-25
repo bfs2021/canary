@@ -11,6 +11,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/osauer/canary/v2/internal/daemon/corestore"
@@ -50,6 +51,12 @@ const (
 	// replaySameClosePct is the difference under which a close-only bar
 	// leaves an earlier bar's high and low in place.
 	replaySameClosePct = 0.5
+	// replayHistoryWait bounds how long one replay waits for the broker's
+	// history reads (replayHistoryBudget takes at most half of the request's
+	// remaining deadline); replayHistoryFetchWindow bounds one read, which
+	// goes on after the replay has answered.
+	replayHistoryWait        = 25 * time.Second
+	replayHistoryFetchWindow = 4 * time.Minute
 )
 
 // replayHistorySource is the method line the result carries.
@@ -99,13 +106,57 @@ func replayHistoryScope(c rpc.ContractParams) string {
 	return "edge/replay/history/" + hex.EncodeToString(sum[:])
 }
 
-// replayHistory returns one underlying's daily bars and, when they do not
-// span the days it needs, why. Retained sources come first; the broker is
-// asked only when they fall short, and the merged bars are kept.
-func (s *Server) replayHistory(ctx context.Context, underlying edgecore.ExitReplayUnderlying, historyRange string) ([]edgecore.UnderlyingBar, edgecore.ExitReplayHistoryNote) {
+// replayRead is one underlying's history as the replay gathers it: the
+// retained sources read first and, when they fall short, the broker read
+// started for it.
+type replayRead struct {
+	underlying edgecore.ExitReplayUnderlying
+	contract   rpc.ContractParams
+	params     rpc.MarketHistoryParams
+	retained   replaySource
+	revision   int64
+	sources    []replaySource
+	merged     []edgecore.UnderlyingBar
+	note       edgecore.ExitReplayHistoryNote
+	fetch      *replayFetch
+}
+
+// replayFetch is one broker history read for the replay. It runs on its own
+// deadline, so a replay that stops waiting leaves it to finish and keep its
+// bars for the next run; done closes once result and err are set.
+type replayFetch struct {
+	done   chan struct{}
+	result *rpc.MarketHistoryResult
+	err    error
+}
+
+// replayFetchStore holds the broker reads in flight, one per underlying and
+// range, so a run that starts while an earlier run's read is still going
+// joins it instead of asking the broker again.
+type replayFetchStore struct {
+	mu       sync.Mutex
+	inflight map[string]*replayFetch
+}
+
+// replayHistoryBudget is how long one replay waits for the broker's history
+// reads: replayHistoryWait, and at most half of what remains of the
+// request's own deadline, so the replay answers within it.
+func replayHistoryBudget(ctx context.Context) time.Duration {
+	wait := replayHistoryWait
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = min(wait, time.Until(deadline)/2)
+	}
+	return max(wait, 0)
+}
+
+// replayHistoryRetained reads one underlying's retained daily bars and, when
+// they do not span the days it needs, starts the broker read (or joins the
+// one in flight). Nothing here waits on the broker.
+func (s *Server) replayHistoryRetained(ctx context.Context, underlying edgecore.ExitReplayUnderlying, historyRange string) *replayRead {
 	contract := replayHistoryContract(underlying, rpc.IndexUnderlyingContract)
-	retained, revision := s.loadReplayHistory(ctx, contract)
-	sources := []replaySource{retained}
+	read := &replayRead{underlying: underlying, contract: contract, params: rpc.MarketHistoryParams{Contract: contract, Range: historyRange}}
+	read.retained, read.revision = s.loadReplayHistory(ctx, contract)
+	read.sources = []replaySource{read.retained}
 	if contract.SecType == "STK" {
 		if series := s.mandateHistorySeries(ctx, "u:"+contract.Symbol); series != nil && (series.Contract.Currency == "" || series.Contract.Currency == contract.Currency) {
 			src := replaySource{asOf: series.FetchedAt, bars: map[string]edgecore.UnderlyingBar{}}
@@ -114,27 +165,84 @@ func (s *Server) replayHistory(ctx context.Context, underlying edgecore.ExitRepl
 					src.bars[day] = edgecore.UnderlyingBar{Day: at, Close: series.Closes[i]}
 				}
 			}
-			sources = append(sources, src)
+			read.sources = append(read.sources, src)
 		}
 	}
-	p := rpc.MarketHistoryParams{Contract: contract, Range: historyRange}
-	note := edgecore.ExitReplayHistoryNote{}
-	key, _, identityErr := marketHistoryIdentity(p)
+	key, _, identityErr := marketHistoryIdentity(read.params)
 	if identityErr == nil {
 		if saved, _, err := s.loadMarketHistory(ctx, key); err == nil && saved != nil {
-			sources = append(sources, replayHistorySourceOf(saved.Result))
+			read.sources = append(read.sources, replayHistorySourceOf(saved.Result))
 		}
 	}
-	merged := mergeReplaySources(sources)
+	read.merged = mergeReplaySources(read.sources)
 	first := underlying.First.AddDate(0, 0, -replayHistoryLeadDays)
-	if !edgecore.ExitReplayHistoryCovers(merged, first, underlying.Last) {
-		switch {
-		case identityErr != nil:
-			note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryInstrumentUnavailable, Detail: identityErr.Error()}
-		case s.gatewayConnector() == nil:
-			note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryGatewayOffline, Detail: replayHeldText(merged)}
-		default:
-			result, err := s.marketHistoryRequest(ctx, p)
+	switch {
+	case edgecore.ExitReplayHistoryCovers(read.merged, first, underlying.Last):
+	case identityErr != nil:
+		read.note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryInstrumentUnavailable, Detail: identityErr.Error()}
+	case s.gatewayConnector() == nil && s.replayHistoryFetchForTest == nil:
+		read.note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryGatewayOffline, Detail: replayHeldText(read.merged)}
+	default:
+		read.fetch = s.startReplayFetch(ctx, read)
+	}
+	return read
+}
+
+// startReplayFetch starts the broker read for an underlying, or returns the
+// one already in flight. The read runs for up to replayHistoryFetchWindow
+// whether or not a replay still waits for it, and keeps what it read merged
+// with the retained sources, so the next run finds the bars without the
+// broker.
+func (s *Server) startReplayFetch(ctx context.Context, read *replayRead) *replayFetch {
+	key := replayHistoryScope(read.contract) + "|" + read.params.Range
+	st := &s.replayFetches
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if f := st.inflight[key]; f != nil {
+		return f
+	}
+	if st.inflight == nil {
+		st.inflight = map[string]*replayFetch{}
+	}
+	f := &replayFetch{done: make(chan struct{})}
+	st.inflight[key] = f
+	fetch := s.marketHistoryRequest
+	if s.replayHistoryFetchForTest != nil {
+		fetch = s.replayHistoryFetchForTest
+	}
+	contract, params := read.contract, read.params
+	others := slices.Clone(read.sources[1:])
+	go func() {
+		fetchCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), replayHistoryFetchWindow)
+		defer cancel()
+		result, err := fetch(fetchCtx, params)
+		retained, revision := s.loadReplayHistory(fetchCtx, contract)
+		sources := append([]replaySource{retained}, others...)
+		if err == nil && result != nil && (result.Cache == nil || !result.Cache.RefreshFailed) {
+			sources = append(sources, replayHistorySourceOf(*result))
+		}
+		s.saveReplayHistory(fetchCtx, contract, retained, revision, mergeReplaySources(sources), sources)
+		st.mu.Lock()
+		f.result, f.err = result, err
+		delete(st.inflight, key)
+		st.mu.Unlock()
+		close(f.done)
+	}()
+	return f
+}
+
+// replayHistoryFinish waits for an underlying's broker read until wait is
+// done and returns its daily bars and, when they do not span the days it
+// needs, why. A read still running when wait ends leaves the name out as
+// history_fetching; the read goes on and keeps its bars.
+func (s *Server) replayHistoryFinish(ctx, wait context.Context, read *replayRead) ([]edgecore.UnderlyingBar, edgecore.ExitReplayHistoryNote) {
+	note, merged := read.note, read.merged
+	if read.fetch == nil {
+		s.saveReplayHistory(ctx, read.contract, read.retained, read.revision, merged, read.sources)
+	} else {
+		select {
+		case <-read.fetch.done:
+			result, err := read.fetch.result, read.fetch.err
 			switch {
 			case err != nil && errors.Is(err, ibkrlib.ErrIBKRUnavailable):
 				note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryGatewayOffline, Detail: replayHeldText(merged)}
@@ -145,14 +253,14 @@ func (s *Server) replayHistory(ctx context.Context, underlying edgecore.ExitRepl
 			case result != nil && result.Cache != nil && result.Cache.RefreshFailed:
 				note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryReadFailed, Detail: "the broker's read failed; " + replayHeldText(merged)}
 			case result != nil:
-				sources = append(sources, replayHistorySourceOf(*result))
-				merged = mergeReplaySources(sources)
+				merged = mergeReplaySources(append(slices.Clone(read.sources), replayHistorySourceOf(*result)))
 				note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryNotRetained, Detail: replayHeldText(merged)}
 			}
+		case <-wait.Done():
+			note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryFetching, Detail: "the broker is still sending it; " + replayHeldText(merged)}
 		}
 	}
-	s.saveReplayHistory(ctx, contract, retained, revision, merged, sources)
-	if edgecore.ExitReplayHistoryCovers(merged, underlying.First, underlying.Last) {
+	if edgecore.ExitReplayHistoryCovers(merged, read.underlying.First, read.underlying.Last) {
 		note = edgecore.ExitReplayHistoryNote{}
 	} else if note.Reason == "" {
 		note = edgecore.ExitReplayHistoryNote{Reason: rpc.EdgeReplayHistoryNotRetained, Detail: replayHeldText(merged)}

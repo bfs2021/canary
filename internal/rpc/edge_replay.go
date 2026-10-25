@@ -41,15 +41,18 @@ const (
 	EdgeReplayPricesRecorded = "recorded"
 	EdgeReplayPricesModelled = "modelled"
 
-	// EdgeReplayHistoryGatewayOffline and the three after it say why an
+	// EdgeReplayHistoryGatewayOffline and the four after it say why an
 	// underlying's daily history is missing: the broker gateway is offline
 	// and Canary retains none for the days; the broker no longer serves the
 	// days and Canary did not retain them; the broker has no history for the
-	// instrument; the broker's read failed otherwise.
+	// instrument; the broker's read failed otherwise; the broker was still
+	// sending it when the replay's budget for history ran out (the read goes
+	// on and the next run uses the bars it keeps).
 	EdgeReplayHistoryGatewayOffline        = "gateway_offline"
 	EdgeReplayHistoryNotRetained           = "not_retained"
 	EdgeReplayHistoryInstrumentUnavailable = "instrument_unavailable"
 	EdgeReplayHistoryReadFailed            = "read_failed"
+	EdgeReplayHistoryFetching              = "history_fetching"
 
 	// EdgeReplayReconciledFully and the two after it are the reconciliation
 	// statuses: every check within tolerance and every contract with an Edge

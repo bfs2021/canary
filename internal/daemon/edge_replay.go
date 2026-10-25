@@ -89,19 +89,29 @@ func (s *Server) handleEdgeReplay(ctx context.Context, req *rpc.Request) (*rpc.E
 	bars := map[string][]edgecore.UnderlyingBar{}
 	notes := map[string]edgecore.ExitReplayHistoryNote{}
 	symbols := make([]string, 0, len(underlyings))
+	// Broker reads start together and get a bounded share of the request's
+	// budget; a name whose read is still running when it ends is left out
+	// as still fetching, and its read goes on to keep the bars.
+	reads := make([]*replayRead, 0, len(underlyings))
 	for _, underlying := range underlyings {
 		symbols = append(symbols, underlying.Symbol)
-		series, note := s.replayHistory(ctx, underlying, historyRange)
+		reads = append(reads, s.replayHistoryRetained(ctx, underlying, historyRange))
+	}
+	wait, cancelWait := context.WithTimeout(ctx, replayHistoryBudget(ctx))
+	for _, read := range reads {
+		series, note := s.replayHistoryFinish(ctx, wait, read)
 		if ctx.Err() != nil {
+			cancelWait()
 			return nil, ctx.Err()
 		}
 		// A history that does not span the name's days leaves it out of
 		// every run; the note says why.
-		bars[underlying.Symbol] = series
+		bars[read.underlying.Symbol] = series
 		if note.Reason != "" {
-			notes[underlying.Symbol] = note
+			notes[read.underlying.Symbol] = note
 		}
 	}
+	cancelWait()
 	closed := replayClosedSessions(underlyings)
 	chainMarks := s.replayChainMarks(ctx, symbols, from, to)
 	halfSpread, samples, source := s.replayHalfSpread()

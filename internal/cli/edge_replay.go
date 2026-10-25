@@ -263,6 +263,8 @@ func edgeReplayHistoryReasonText(reason string) string {
 		return "the broker has no history for the instrument"
 	case rpc.EdgeReplayHistoryReadFailed:
 		return "the broker's history read failed"
+	case rpc.EdgeReplayHistoryFetching:
+		return "the broker is still sending this history; the next run includes it"
 	}
 	return strings.ReplaceAll(sanitizeRunText(reason), "_", " ")
 }

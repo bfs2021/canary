@@ -70,8 +70,12 @@ judges freshness on, and eviction is what bounds the chart cache. A name
 whose history still does not span the statement days its options were held
 (four calendar days of slack at either end) leaves every run, set A
 included, and is listed with the reason (`gateway_offline`,
-`not_retained`, `instrument_unavailable`, `read_failed`) and the owner's
-P/L on it; the result is marked `incomplete`. Index underlyings (SPX, NDX,
+`not_retained`, `instrument_unavailable`, `read_failed`,
+`history_fetching`) and the owner's P/L on it; the result is marked
+`incomplete`. Broker reads start together and the replay waits for them at
+most 25 s and half of what remains of its 60 s budget; a read still running
+then leaves its name out as `history_fetching`, goes on for up to four
+minutes on its own and keeps the bars for the next run (2026-10-25). Index underlyings (SPX, NDX,
 RUT, VIX) are read as `IND` with the market tape's identity. A bar without a
 high and low enters the stock trail's ATR as the close-only true range and
 is counted (`close_only_range_days`); days with under 21 sessions are counted

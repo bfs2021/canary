@@ -1,10 +1,11 @@
 # canary edge replay --from 2026-08-03 · COLUMNS=80 · colour off
 Canary Edge · exit replay · 2026-08-03 to 2026-08-28 · incomplete
-  Incomplete · 3 of 5 underlyings left out of every run, yours included: their
+  Incomplete · 4 of 6 underlyings left out of every run, yours included: their
     daily history does not span the days their options were held
   Left out · SYNC, SYND: the broker gateway is offline and Canary has not
-    retained these days · SYNE: the broker has no history for the instrument ·
-    your own P/L on them, -€ 1,270.00, is in no total below
+    retained these days · SYNF: the broker is still sending this history; the
+    next run includes it · SYNE: the broker has no history for the instrument ·
+    your own P/L on them, -€ 1,195.00, is in no total below
   Your own long-option buys, with each rule set's exits in place of yours. A
     review of past trades; it places nothing.
 
@@ -12,7 +13,7 @@ Scope
   Contracts · 4 long options on SYNA, SYNB · 6 buy lots, 1 held at the start
     of 2026-07-31 · 120 contracts bought
   Excluded · 2 hedge puts (5 executions) · 0 short options (0 executions) · 1
-    instrument unavailable · 3 underlyings without daily history (4 contracts)
+    instrument unavailable · 4 underlyings without daily history (5 contracts)
   Prices · 20 statement days · exits pay a half-spread of 0.20% of the mark,
     the median of 12 measured option fills · commission € 0.55 a contract, your
     average
@@ -72,11 +73,12 @@ Reconciliation  balanced on 2 of 3 contracts
 Details: canary edge replay --json · the method and every amount
 # canary edge replay --from 2026-08-03 · COLUMNS=80 · colour on, ESC written as \x1b
 Canary Edge · exit replay · 2026-08-03 to 2026-08-28 · \x1b[33mincomplete\x1b[0m
-  \x1b[33mIncomplete\x1b[0m · 3 of 5 underlyings left out of every run, yours included: their
+  \x1b[33mIncomplete\x1b[0m · 4 of 6 underlyings left out of every run, yours included: their
     daily history does not span the days their options were held
   Left out · SYNC, SYND: the broker gateway is offline and Canary has not
-    retained these days · SYNE: the broker has no history for the instrument ·
-    your own P/L on them, \x1b[31m-€ 1,270.00\x1b[0m, is in no total below
+    retained these days · SYNF: the broker is still sending this history; the
+    next run includes it · SYNE: the broker has no history for the instrument ·
+    your own P/L on them, \x1b[31m-€ 1,195.00\x1b[0m, is in no total below
   \x1b[2mYour own long-option buys, with each rule set's exits in place of yours. A
     review of past trades; it places nothing.\x1b[0m
 
@@ -84,7 +86,7 @@ Scope
   Contracts · 4 long options on SYNA, SYNB · 6 buy lots, 1 held at the start
     of 2026-07-31 · 120 contracts bought
   Excluded · 2 hedge puts (5 executions) · 0 short options (0 executions) · 1
-    instrument unavailable · 3 underlyings without daily history (4 contracts)
+    instrument unavailable · 4 underlyings without daily history (5 contracts)
   Prices · 20 statement days · exits pay a half-spread of 0.20% of the mark,
     the median of 12 measured option fills · commission € 0.55 a contract, your
     average
