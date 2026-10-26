@@ -99,7 +99,9 @@ func TestEdgeRouteRequiresReadAuthAndForwardsOnlyBoundedTypedInputs(t *testing.T
 	if res.Code != http.StatusOK {
 		t.Fatalf("Edge status=%d body=%s", res.Code, res.Body.String())
 	}
-	want := (rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 5, Limit: 2, ChangeID: "change_opaque"})
+	// The route forwards normalized params: an absent option_limit is the
+	// default option page since 19d91c1a (option lists page).
+	want := (rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 5, Limit: 2, OptionLimit: rpc.MaxEdgeOptionResults, ChangeID: "change_opaque"})
 	if client.params != want || client.calls != 1 {
 		t.Fatalf("Edge params=%+v calls=%d want %+v/1", client.params, client.calls, want)
 	}
@@ -114,7 +116,7 @@ func TestEdgeRouteRequiresReadAuthAndForwardsOnlyBoundedTypedInputs(t *testing.T
 	if automaticRes.Code != http.StatusOK {
 		t.Fatalf("automatic Edge status=%d body=%s", automaticRes.Code, automaticRes.Body.String())
 	}
-	automaticWant := rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: rpc.MaxEdgeFindings}
+	automaticWant := rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: rpc.MaxEdgeFindings, OptionLimit: rpc.MaxEdgeOptionResults}
 	if client.params != automaticWant || client.calls != 2 {
 		t.Fatalf("automatic Edge params=%+v calls=%d want %+v/2", client.params, client.calls, automaticWant)
 	}
@@ -122,7 +124,7 @@ func TestEdgeRouteRequiresReadAuthAndForwardsOnlyBoundedTypedInputs(t *testing.T
 	option.AddCookie(cookie)
 	optionRes := httptest.NewRecorder()
 	handler.ServeHTTP(optionRes, option)
-	optionWant := rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: rpc.MaxEdgeFindings, OptionID: "option_opaque"}
+	optionWant := rpc.EdgeSnapshotParams{Window: "365d", HorizonSessions: 20, AutomaticHorizon: true, Limit: rpc.MaxEdgeFindings, OptionLimit: rpc.MaxEdgeOptionResults, OptionID: "option_opaque"}
 	if optionRes.Code != http.StatusOK || client.params != optionWant || client.calls != 3 {
 		t.Fatalf("option Edge params=%+v status=%d calls=%d want %+v/3", client.params, optionRes.Code, client.calls, optionWant)
 	}
