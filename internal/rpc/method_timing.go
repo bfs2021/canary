@@ -42,6 +42,7 @@ func (t MethodTiming) ClientTimeout(headroom time.Duration) time.Duration {
 // only the lifetime class and outer request budget shared by adapters.
 var methodTimings = []MethodTiming{
 	{Method: MethodAccountSummary, Lifetime: MethodLifetimeUnary, DaemonTimeout: 10 * time.Second},
+	{Method: MethodAccountIntraday, Lifetime: MethodLifetimeUnary, DaemonTimeout: 5 * time.Second},
 	{Method: MethodPositionsList, Lifetime: MethodLifetimeUnary, DaemonTimeout: 30 * time.Second},
 	{Method: MethodPositionsRisk, Lifetime: MethodLifetimeUnary, DaemonTimeout: 30 * time.Second},
 	{Method: MethodPortfolioSnapshot, Lifetime: MethodLifetimeUnary, DaemonTimeout: 35 * time.Second},

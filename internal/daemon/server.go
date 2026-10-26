@@ -158,6 +158,8 @@ type Server struct {
 	// dailyPnLCloseCaptures pins each scope's account Daily P&L at the
 	// official close, the only figure that may serve as the last completed
 	dailyPnLCloseCaptures dailyPnLCloseCaptureAuthority
+	// accountIntraday records each session's net liquidation for display.
+	accountIntraday accountIntradayAuthority
 	// pushDeliveryProof retains the app host's latest Web Push delivery
 	// proof; the daemon itself never sends a push.
 	pushDeliveryProof pushDeliveryProofAuthority
@@ -1596,6 +1598,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.startDataHealthChecks(serverCtx)
 	go s.runCoreStoreRecoveryLoop(serverCtx)
 	go s.runAccountPnLAuthorityLoop(serverCtx)
+	go s.runAccountIntradayLoop(serverCtx)
 	go s.runAnswerPathSupervisor(serverCtx)
 	go s.acceptLoop(ctx, s.listener)
 	if s.initialAcceptLoopStartedForTest != nil {
@@ -2932,6 +2935,8 @@ func (s *Server) dispatch(ctx context.Context, req *rpc.Request, enc *json.Encod
 		s.unary(req, enc, func() (any, error) { return s.handlePositionsRisk(ctx, req) })
 	case rpc.MethodPositionsList:
 		s.unary(req, enc, func() (any, error) { return s.handlePositionsList(ctx, req) })
+	case rpc.MethodAccountIntraday:
+		s.unary(req, enc, func() (any, error) { return s.handleAccountIntraday(ctx, req) })
 	case rpc.MethodPortfolioSnapshot:
 		s.unary(req, enc, func() (any, error) { return s.handlePortfolioSnapshot(ctx) })
 	case rpc.MethodPortfolioPlan:

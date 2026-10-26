@@ -85,6 +85,14 @@
       }
     },
     {
+      "name": "canary_account_intraday",
+      "description": "Read how the account's net liquidation moved through the current and the previous US-equity regular session, as the daemon recorded it: one broker account read per five-minute bucket from the open, in the account base currency, with today's calendar session so a session not yet open reads apart from a closed day. A bucket with no admissible read has no point and is a gap, never a carried value; opening_value is present only when the first bucket was recorded. Use canary_account for the current figures and Day P\u0026L, canary_reporting_performance for statement returns. Display evidence only: no valuation clock from the broker, no history before recording began, and no effect on any decision or order.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
       "name": "canary_short_interest_screen",
       "description": "Discover US equities (including listed funds and OTC) with large reported short positions using FINRA's twice-monthly public publication. Filters and sorting apply before limiting results; default ranks short shares, not percent of float. Free float is unavailable. Settlement date is distinct from fetch time; failed refreshes retain stale publication provenance. FINRA days to cover is floored at 1 and average daily shares covers the reporting interval. Optional recent price and 20-session dollar-turnover context is bounded background acquisition with explicit partial coverage, not an all-market liquidity guarantee. Short interest is neither daily short-sale volume nor borrowing cost. Use canary_lending_screen for borrower fees, canary_lending_fees for earned lending income. Read-only; no orders, enrollment, subscriptions or policy changes.",
       "inputSchema": {

@@ -4,7 +4,7 @@
 
 These are the tools `canary mcp` exposes to MCP clients (Claude Code, Claude Desktop, or any other MCP host). Every public tool uses the canonical `canary_*` namespace. Each entry lists the tool name an LLM picks against, the description the LLM reads to decide whether to invoke, and the parameter schema the LLM binds against.
 
-**42 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
+**43 tools** total. Listed in registration order, aligned with the agent-appropriate CLI commands. Local lifecycle commands such as `setup`, `update`, `restart`, `mcp`, `daemon`, and `version` are intentionally excluded from MCP tools.
 
 ## `canary_add`
 
@@ -24,6 +24,12 @@ Calculate the permitted whole-share addition to a selected stock, including open
 ## `canary_portfolio_plan`
 
 Read the next portfolio action under an explicit owner-approved target-band mandate. Canary combines current holdings and the accepted watchlist, applies target bands, entry regimes and priority, and considers existing reductions and protection before sizing one stock addition. Returns hold or cannot-evaluate reasons, desired quantities separately from the checked next order, source evidence and unassigned stocks. Recalculate after each broker outcome; later candidates have no reserved allowance and projected sale proceeds are not spendable cash. Takes no caller-supplied holdings, targets, limits or authority. Read-only; may request bounded broker WhatIf fee and margin checks, but never refreshes the proposal executor, mints an order token, reserves cash or submits. Use canary_portfolio for composition and canary_add for one selected stock's sizing. Not autonomous trading or support for new option, bond or short positions.
+
+*No parameters.*
+
+## `canary_account_intraday`
+
+Read how the account's net liquidation moved through the current and the previous US-equity regular session, as the daemon recorded it: one broker account read per five-minute bucket from the open, in the account base currency, with today's calendar session so a session not yet open reads apart from a closed day. A bucket with no admissible read has no point and is a gap, never a carried value; opening_value is present only when the first bucket was recorded. Use canary_account for the current figures and Day P&L, canary_reporting_performance for statement returns. Display evidence only: no valuation clock from the broker, no history before recording began, and no effect on any decision or order.
 
 *No parameters.*
 

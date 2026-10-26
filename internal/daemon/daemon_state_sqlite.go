@@ -100,6 +100,9 @@ func (s *Server) bindAuthoritativeDaemonState(ctx context.Context, core *coresto
 	if err := s.dailyPnLCloseCaptures.bindCore(ctx, core); err != nil {
 		return err
 	}
+	if err := s.accountIntraday.bindCore(ctx, core); err != nil {
+		return err
+	}
 	if err := s.pushDeliveryProof.bindCore(ctx, core); err != nil {
 		if !errors.Is(err, errPushDeliveryProofDiscarded) {
 			return err
