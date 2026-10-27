@@ -344,7 +344,11 @@ func stockAddRiskRows(in StockAddInput, quantity int) []RuleRow {
 }
 
 func stockAddRiskReason(in StockAddInput, quantity int) string {
+	before := stockAddNetExposureBefore(in)
 	for _, row := range stockAddRiskRows(in, quantity) {
+		if !stockAddWorksAgainst(row, before) {
+			continue
+		}
 		// FX and event findings retain their advisory semantics. The issuer loss
 		// check already constrains earnings-related size; absent clusters are not
 		// invented. An intentionally disabled rule grants no measurement.
@@ -361,18 +365,48 @@ func stockAddRiskReason(in StockAddInput, quantity int) string {
 
 func stockAddWarnings(in StockAddInput, quantity int) []StockAddBlocker {
 	var out []StockAddBlocker
+	before := stockAddNetExposureBefore(in)
 	for _, row := range stockAddRiskRows(in, quantity) {
-		if row.Status == RuleStatusWatch || row.Status == RuleStatusAct {
+		if (row.Status == RuleStatusWatch || row.Status == RuleStatusAct) && stockAddWorksAgainst(row, before) {
 			out = append(out, StockAddBlocker{Kind: "warning", Code: row.ID, Message: stockAddWarningMessage(row)})
 		}
 	}
 	return out
 }
 
-func stockAddWarningMessage(row RuleRow) string {
+// stockAddNetExposureBefore is rule 15's row on the book as it stands.
+func stockAddNetExposureBefore(in StockAddInput) RuleRow {
+	for _, row := range stockAddRiskRows(in, 0) {
+		if row.ID == RuleNetExposure {
+			return row
+		}
+	}
+	return RuleRow{}
+}
+
+// stockAddWorksAgainst reports whether a post-trade row can hold the add
+// (owner, 2026-10-27 17:24 CET). Rule 3 budgets option premium, which a stock
+// buy never adds. Rule 15 holds only an add that leaves net exposure further
+// from zero than the book stands now; on a net-short book a stock buy brings
+// it back until it would overshoot. Without a measured row before and after,
+// the add is held as before: a gap never acquits.
+func stockAddWorksAgainst(row, before RuleRow) bool {
 	switch row.ID {
 	case RuleCashSellOnly:
-		return "Option premium is above the policy warning level; new buying works against sell-only guidance."
+		return false
+	case RuleNetExposure:
+		measured := func(r RuleRow) bool {
+			return (r.Status == RuleStatusPass || r.Status == RuleStatusWatch || r.Status == RuleStatusAct) && !r.ObservedIsLowerBound && r.Observed != nil
+		}
+		if measured(row) && measured(before) {
+			return row.ImpactBase > before.ImpactBase
+		}
+	}
+	return true
+}
+
+func stockAddWarningMessage(row RuleRow) string {
+	switch row.ID {
 	case RuleHedgeIntegrity:
 		return "This purchase leaves index protection outside its policy range."
 	case RuleMarginHeadroom:

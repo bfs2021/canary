@@ -16,7 +16,7 @@ import (
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
-// sellOnlyLine states the result-level sell-only fact under the header,
+// sellOnlyLine states the result-level hold fact under the header,
 // naming the rules behind it by number and title; "" while it is inactive.
 func sellOnlyLine(res rpc.RulesResult) string {
 	if !res.SellOnly.Active {
@@ -33,7 +33,7 @@ func sellOnlyLine(res rpc.RulesResult) string {
 		}
 		names = append(names, name)
 	}
-	return "  sell-only  " + strings.Join(names, " and ") + " at watch or act: buys work against the Rulebook (advisory)"
+	return "  holds      " + strings.Join(names, " and ") + " at watch or act: orders that add to them are held (advisory)"
 }
 
 // runRules renders the daemon's advisory trading-rulebook checklist

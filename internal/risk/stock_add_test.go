@@ -249,3 +249,49 @@ func TestStockAddAdmissionExplanationPreservesApprovalSource(t *testing.T) {
 		}
 	}
 }
+
+// Rules 3 and 15 hold a stock add only when it works against them (owner,
+// 2026-10-27 17:24 CET): a stock buy adds no option premium, so rule 3 never
+// holds it, and on a net-short book it brings net exposure back toward zero,
+// so rule 15 lets it through until the book would sit further from zero than
+// before. On a net-long book the same buy adds to the side rule 15 flags.
+func TestStockAddIsHeldOnlyWhenItMovesNetExposureAwayFromZero(t *testing.T) {
+	book := func(delta float64) StockAddInput {
+		in := stockAddFixture()
+		in.FreeCash = 100000
+		in.Fee = 0
+		in.Rulebook.RegimeCalm.NetExposureWatchPct, in.Rulebook.RegimeCalm.NetExposureActPct = 75, 100
+		in.Rulebook.RegimeCalm.PremiumBudgetWatchPct, in.Rulebook.RegimeCalm.PremiumBudgetActPct = 25, 35
+		// Thirty index puts: 45% of NLV in premium and 150% of NLV of delta.
+		in.Rules.Names = []NameInput{{Symbol: "IDXH", ExposureBaseComplete: true, ExposureBase: delta, MarketValueBase: 45000,
+			Legs: []LegInput{{Right: "P", Strike: 100, Quantity: 30, Multiplier: 100, Mark: 15, Underlying: new(100.), Delta: new(delta / 300000), FXToBase: new(1.), MarketValueBase: 45000, Expiry: in.Rules.AsOf.AddDate(0, 3, 0), DTE: 90}}}}
+		return in
+	}
+	for _, id := range []string{RuleCashSellOnly, RuleNetExposure} {
+		row := ruleRowByID(stockAddRiskRows(book(-150000), 0), id)
+		if row.Status != RuleStatusAct {
+			t.Fatalf("fixture: %s = %s (%s), want act", id, row.Status, row.Evidence)
+		}
+	}
+	short := SizeStockAdd(book(-150000))
+	if short.Quantity == 0 || len(short.Blockers) != 0 {
+		t.Fatalf("a stock buy that brings a net short back was held: %+v", short)
+	}
+	if reason := stockAddRiskReason(book(-150000), 1); reason != "" {
+		t.Fatalf("one share on the net-short book: %s", reason)
+	}
+	long := book(150000)
+	long.Rules.Names[0].Legs[0].Right = "C"
+	if got := SizeStockAdd(long); got.Quantity != 0 || len(got.Blockers) == 0 || got.Blockers[0].Code != "add_risk_hold" {
+		t.Fatalf("a stock buy that adds to a net long was not held: %+v", got)
+	}
+}
+
+func ruleRowByID(rows []RuleRow, id string) RuleRow {
+	for _, row := range rows {
+		if row.ID == id {
+			return row
+		}
+	}
+	return RuleRow{}
+}

@@ -1751,20 +1751,20 @@ func netExposureSide(r risk.RuleRow) string {
 	return "long"
 }
 
-// draftAddsNetExposure reports whether a buy opening or increasing a position
-// adds to the side rule 15 flags: on a net-long book everything but a put
-// adds long exposure, and a put reduces it; on a net-short book only a put
-// adds. A bill or bond never enters rule 15's measure, so it adds nothing.
-// Close and reduce never reach here.
-func draftAddsNetExposure(r risk.RuleRow, draft rpc.OrderDraft) bool {
+// draftNetExposureSide is the side an opening or adding order pushes the
+// book's net exposure (owner, 2026-10-27 17:24 CET): a stock or call bought
+// and a put sold add long, a stock or call sold and a put bought add short.
+// A bill or bond never enters rule 15's measure and pushes no side. Close
+// and reduce never reach here.
+func draftNetExposureSide(draft rpc.OrderDraft) string {
 	if ibkrlib.IsBillOrBond(draft.Contract.SecType) {
-		return false
+		return ""
 	}
 	put := strings.EqualFold(draft.Contract.SecType, "OPT") && strings.HasPrefix(strings.ToUpper(strings.TrimSpace(draft.Contract.Right)), "P")
-	if netExposureSide(r) == "short" {
-		return put
+	if strings.EqualFold(draft.Action, "BUY") != put {
+		return "long"
 	}
-	return !put
+	return "short"
 }
 
 // rulebookPercentText renders a row figure for a preview sentence: "31.2%",
@@ -1861,15 +1861,17 @@ func rulebookPreviewWarnings(res *rpc.RulesResult, draft rpc.OrderDraft, positio
 	if r, ok := breached(risk.RuleOptionLinePremium); ok && isBuy && isOption && offends(r) {
 		out = append(out, warn(r, fmt.Sprintf("%s already holds an option line over the premium cap; this adds premium.", sym)))
 	}
-	// Rules 3 and 15 put the Rulebook in sell-only (amendment 17). Rule 3
-	// warns every buy; rule 15 warns a buy that adds to the side it flags.
-	if r, ok := breached(risk.RuleCashSellOnly); ok && isBuy {
-		out = append(out, warn(r, fmt.Sprintf("Option premium at risk is %s of NLV, at or above the premium budget's %s %s; the Rulebook reads sell-only, so this buy works against it.",
+	// Rules 3 and 15 hold the orders that work against them (owner,
+	// 2026-10-27 17:24 CET; amendment 17 read every buy). Rule 3 warns a buy
+	// that adds option premium; rule 15 warns an opening or adding order,
+	// bought or sold, that pushes the side it flags.
+	if r, ok := breached(risk.RuleCashSellOnly); ok && isBuy && isOption {
+		out = append(out, warn(r, fmt.Sprintf("Option premium at risk is %s of NLV, at or above the premium budget's %s %s; this option buy adds premium.",
 			rulebookPercentText(r.Observed, r.ObservedIsLowerBound), rulebookPercentText(r.Threshold, false), rulebookLevelWord(r.Status))))
 	}
-	if r, ok := breached(risk.RuleNetExposure); ok && isBuy && draftAddsNetExposure(r, draft) {
-		out = append(out, warn(r, fmt.Sprintf("The book is net %s %s of NLV, at or above the net-exposure %s %s; the Rulebook reads sell-only, so this buy adds to it.",
-			netExposureSide(r), rulebookPercentText(r.Observed, r.ObservedIsLowerBound), rulebookPercentText(r.Threshold, false), rulebookLevelWord(r.Status))))
+	if r, ok := breached(risk.RuleNetExposure); ok && draftNetExposureSide(draft) == netExposureSide(r) {
+		out = append(out, warn(r, fmt.Sprintf("The book is net %s %s of NLV, at or above the net-exposure %s %s; this order adds to the net %s.",
+			netExposureSide(r), rulebookPercentText(r.Observed, r.ObservedIsLowerBound), rulebookPercentText(r.Threshold, false), rulebookLevelWord(r.Status), netExposureSide(r))))
 	}
 	if r, ok := breached(risk.RuleExtrinsicBudget); ok && isBuy && isOption {
 		out = append(out, warn(r, "Portfolio extrinsic already exceeds its budget; buying options adds nightly decay."))

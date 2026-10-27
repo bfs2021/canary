@@ -190,17 +190,21 @@ type RuleRow struct {
 	// worse of the carried and calm sets for a carried stage. Absent on rows
 	// that stopped before a comparison and on every other rule.
 	RegimeSet string `json:"regime_set,omitempty"`
-	// SellOnly marks a row that puts the Rulebook in sell-only: rule 3 or
-	// rule 15 at watch or act (amendment 17). Advisory; it never changes
-	// submit eligibility.
+	// SellOnly marks a row that holds the buys working against it: rule 3
+	// (option buys) or rule 15 (orders adding to the side it flags) at watch
+	// or act (amendment 17, narrowed by amendment 20). Advisory; it never
+	// changes submit eligibility.
 	SellOnly bool `json:"sell_only,omitempty"`
 }
 
-// RuleSellOnly is the result-level sell-only fact (amendment 17): active
-// while rule 3 (premium budget) or rule 15 (net exposure) is at watch or act,
-// naming those rules in rulebook order. Advisory by construction: order
-// previews warn buys that work against it, and nothing about submit
-// eligibility changes.
+// RuleSellOnly is the result-level hold fact (amendment 17): active while
+// rule 3 (premium budget) or rule 15 (net exposure) is at watch or act,
+// naming those rules in rulebook order. Since amendment 20 (owner,
+// 2026-10-27 17:24 CET) neither holds every buy: rule 3 holds buys that add
+// option premium, rule 15 opening or adding orders that push the side it
+// flags; closes and reductions are never held. Advisory by construction:
+// order previews warn the orders that work against it, and nothing about
+// submit eligibility changes. The field keeps its name for its readers.
 type RuleSellOnly struct {
 	Active bool     `json:"active"`
 	Rules  []string `json:"rules,omitempty"`
@@ -883,9 +887,9 @@ func (c *ruleContext) premiumBudget() RuleRow {
 		name := RegimeSetWords(set)
 		switch r.Status {
 		case RuleStatusAct:
-			r.Evidence = fmt.Sprintf("Option premium at risk is %.1f%% of NLV, at or above the %s set's %s%% act level (budget %s%%); sell-only until it is back under the budget.%s", round1(p), name, limitText(act), limitText(watch), funds)
+			r.Evidence = fmt.Sprintf("Option premium at risk is %.1f%% of NLV, at or above the %s set's %s%% act level (budget %s%%); option buys are held until it is back under the budget.%s", round1(p), name, limitText(act), limitText(watch), funds)
 		case RuleStatusWatch:
-			r.Evidence = fmt.Sprintf("Option premium at risk is %.1f%% of NLV, at or above the %s set's %s%% budget (act at %s%%); sell-only until it is back under the budget.%s", round1(p), name, limitText(watch), limitText(act), funds)
+			r.Evidence = fmt.Sprintf("Option premium at risk is %.1f%% of NLV, at or above the %s set's %s%% budget (act at %s%%); option buys are held until it is back under the budget.%s", round1(p), name, limitText(watch), limitText(act), funds)
 		default:
 			r.Evidence = fmt.Sprintf("Option premium at risk is %.1f%% of NLV, under the %s set's %s%% budget.%s", round1(p), name, limitText(watch), funds)
 		}
@@ -1990,9 +1994,9 @@ func (c *ruleContext) netExposure() RuleRow {
 		r.ImpactBase = proven
 		switch status {
 		case RuleStatusAct:
-			r.Evidence = fmt.Sprintf("The book is net %s%s %.1f%% of NLV, at or above the %s set's %s%% act level; sell-only until it is back under %s%%.", direction, bound, round1(p), name, limitText(act), limitText(watch))
+			r.Evidence = fmt.Sprintf("The book is net %s%s %.1f%% of NLV, at or above the %s set's %s%% act level; orders that add to the net %s are held until it is back under %s%%.", direction, bound, round1(p), name, limitText(act), direction, limitText(watch))
 		case RuleStatusWatch:
-			r.Evidence = fmt.Sprintf("The book is net %s%s %.1f%% of NLV; the %s set's watch starts at %s%% and act at %s%%. Sell-only until it is back under the watch level.", direction, bound, round1(p), name, limitText(watch), limitText(act))
+			r.Evidence = fmt.Sprintf("The book is net %s%s %.1f%% of NLV; the %s set's watch starts at %s%% and act at %s%%. Orders that add to the net %s are held until it is back under the watch level.", direction, bound, round1(p), name, limitText(watch), limitText(act), direction)
 		default:
 			r.Evidence = fmt.Sprintf("The book is net %s %.1f%% of NLV, under the %s set's %s%% watch level.", direction, round1(p), name, limitText(watch))
 		}

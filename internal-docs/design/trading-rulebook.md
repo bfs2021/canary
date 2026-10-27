@@ -419,6 +419,19 @@ contradiction:
       bought against a net-long book reduces it and does not warn; close and
       reduce never warn). `canary rules` prints one sell-only line under its
       header. Advisory by construction: submit eligibility is untouched.
+    - R3 narrowed by amendment 20 (owner, 2026-10-27 17:24 CET: "change
+      rule 15 so an order that moves net exposure toward zero is allowed and
+      one that moves it away is blocked"; closes exempt and rule 3 limited to
+      premium-adding buys by the owner's answers in the same turn). Rule 3
+      holds a buy that adds option premium, never a stock, bill or bond buy.
+      Rule 15 holds an opening or adding order, bought or sold, that pushes
+      the side it flags (stock or call bought and put sold push long; stock or
+      call sold and put bought push short); an order on the other side brings
+      net exposure back and passes. Close and reduce are never held. The
+      stock addition planner holds an add on rule 15 only when the book after
+      it sits further from zero than before (`impact_base` compared; an
+      unmeasured row still holds) and never on rule 3. The `sell_only` field
+      keeps its name; `canary rules` prints it as a `holds` line.
     - R4, rule 15's bands are regime-conditional: keys
       `net_exposure_watch_pct` and `net_exposure_act_pct` move into the
       `[regime_*]` tables (calm 100/150, early warning 100/130, confirmed

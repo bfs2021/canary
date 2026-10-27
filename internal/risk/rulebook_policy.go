@@ -27,7 +27,7 @@ const (
 // rules: rule 3 premium budget and rule 4 extrinsic budget (both
 // ex-protection), rule 12 protection band, rule 15 net exposure.
 type RegimeThresholds struct {
-	// PremiumBudgetWatchPct is rule 3's watch level, the budget for new buying: premium at risk in long options outside protection (the higher of price paid and current value, summed) as a percent of NLV. It tightens with the regime; at watch or act the Rulebook reads sell-only.
+	// PremiumBudgetWatchPct is rule 3's watch level, the budget for new buying: premium at risk in long options outside protection (the higher of price paid and current value, summed) as a percent of NLV. It tightens with the regime; at watch or act option buys are held.
 	PremiumBudgetWatchPct float64 `toml:"premium_budget_watch_pct" json:"premium_budget_watch_pct"`
 	// PremiumBudgetActPct is rule 3's act level, the cap on the same measure. Canary's default is the same in every regime set, so a rise in volatility alone never forces a sale; tighten it per set if you want. Under basis = rulebook the budget governor sells back to the set's watch level once the total reaches it.
 	PremiumBudgetActPct float64 `toml:"premium_budget_act_pct" json:"premium_budget_act_pct"`
@@ -39,7 +39,7 @@ type RegimeThresholds struct {
 	HedgeBandMinPct float64 `toml:"hedge_band_min_pct" json:"hedge_band_min_pct"`
 	// HedgeBandMaxPct is rule 12's upper bound: index protection as a percent of gross long exposure.
 	HedgeBandMaxPct float64 `toml:"hedge_band_max_pct" json:"hedge_band_max_pct"`
-	// NetExposureWatchPct is rule 15's watch level: the magnitude of the whole book's signed stock-equivalent exposure, hedges included, as a percent of NLV. Material missing delta may prove a breach by a lower bound but cannot prove a pass. At watch or act the Rulebook reads sell-only.
+	// NetExposureWatchPct is rule 15's watch level: the magnitude of the whole book's signed stock-equivalent exposure, hedges included, as a percent of NLV. Material missing delta may prove a breach by a lower bound but cannot prove a pass. At watch or act, orders that add to the flagged side are held.
 	NetExposureWatchPct float64 `toml:"net_exposure_watch_pct" json:"net_exposure_watch_pct"`
 	// NetExposureActPct is rule 15's act level for the same measure; the stress read calls it urgent while the regime set is confirmed.
 	NetExposureActPct float64 `toml:"net_exposure_act_pct" json:"net_exposure_act_pct"`

@@ -22,7 +22,7 @@ var presentations = map[rpc.AlertPresentationCode]Presentation{
 	rpc.AlertPresentationRegimeMarketStress:               {Title: "Market warning", Body: "Broad-market conditions crossed a warning level."},
 	rpc.AlertPresentationRulebookSingleNameExposure:       {Title: "Worst-case loss on one issuer", Body: "One issuer's worst-case loss is above its Rulebook level."},
 	rpc.AlertPresentationRulebookOptionLinePremium:        {Title: "Premium at risk", Body: "One option position holds more premium than its Rulebook level."},
-	rpc.AlertPresentationRulebookCashSellOnly:             {Title: "Premium budget", Body: "Long option premium at risk is at or above the Rulebook budget; the Rulebook reads sell-only."},
+	rpc.AlertPresentationRulebookCashSellOnly:             {Title: "Premium budget", Body: "Long option premium at risk is at or above the Rulebook budget; option buys are held until it is back under budget."},
 	rpc.AlertPresentationRulebookExtrinsicBudget:          {Title: "Option time value at risk", Body: "The amount paid for time remaining in long options is above the Rulebook budget."},
 	rpc.AlertPresentationRulebookExpiryRunway:             {Title: "Option nearing expiry", Body: "A long option is inside the Rulebook expiry window."},
 	rpc.AlertPresentationRulebookCatalystCoverage:         {Title: "Earnings timing", Body: "An option expires before the next earnings announcement."},

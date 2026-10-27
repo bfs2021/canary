@@ -37,15 +37,21 @@ component as a measurement: authority, freshness, and evidence reuse.
 creating alerts, and `off` rules are not evaluated. Rules 16 to 18 only watch:
 they never act, never count toward act totals, and never drive a trim.
 
-## Sell-only
+## Held orders
 
 While rule 3 or rule 15 is at watch or act, whatever its mode, the result
 carries `sell_only: {active: true, rules: [...]}` naming them, the two rows
-carry `sell_only: true`, and `canary rules` prints a `sell-only` line under its
-header. An order preview then warns every buy with `rule_cash_sell_only`, and a
-buy that adds to the side rule 15 flags with `rule_net_exposure` (a put bought
-against a net-long book does not). Like every Rulebook verdict it is advisory:
-nothing about submit eligibility changes. Rule 15 tracks by default; to have
+carry `sell_only: true`, and `canary rules` prints a `holds` line under its
+header. Each rule holds only the orders that work against it. Rule 3 holds a
+buy that adds option premium; a stock or bond buy adds none. Rule 15 holds an
+opening or adding order that pushes net exposure further to the side it flags,
+a sale included: on a net-short book a stock or call bought, or a put sold,
+brings it back and passes, while a put bought or a stock or call sold short is
+held. A close or reduce is never held. An order preview warns a held order with
+`rule_cash_sell_only` or `rule_net_exposure`, and a stock addition plan is held
+only by an add that leaves net exposure further from zero than the book stands.
+Like every Rulebook verdict it is advisory: nothing about submit eligibility
+changes. Rule 15 tracks by default; to have
 it raise alerts as well, run `canary rules policy set modes.net_exposure=alert`.
 
 Rule 19 does not put the Rulebook in sell-only, but while margin headroom is

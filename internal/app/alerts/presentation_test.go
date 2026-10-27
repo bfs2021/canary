@@ -25,7 +25,7 @@ func TestActionablePresentationsUseShortHumanCopy(t *testing.T) {
 		{rpc.AlertPresentationRulebookOptionLinePremium, "Premium at risk", "One option position"},
 		{rpc.AlertPresentationRulebookCatalystCoverage, "Earnings timing", "expires before the next earnings announcement"},
 		{rpc.AlertPresentationRulebookHedgeIntegrity, "Index protection size", "missing or outside its Rulebook sizing range"},
-		{rpc.AlertPresentationRulebookCashSellOnly, "Premium budget", "reads sell-only"},
+		{rpc.AlertPresentationRulebookCashSellOnly, "Premium budget", "option buys are held"},
 		{rpc.AlertPresentationRulebookFXExposure, "Foreign-currency exposure", "above its Rulebook level"},
 		{rpc.AlertPresentationRulebookExtrinsicBudget, "Option time value at risk", "time remaining in long options"},
 		{rpc.AlertPresentationRiskPolicyDrawdownLatched, "Drawdown latch open", "has not confirmed"},

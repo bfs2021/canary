@@ -34,51 +34,70 @@ func previewCodes(ws []rpc.DataWarning) map[string]rpc.DataWarning {
 	return out
 }
 
-// While the Rulebook reads sell-only (amendment 17), the preview keeps
-// rule_cash_sell_only on every buy, now in the premium budget's words, and
-// adds rule_net_exposure on a buy that adds to the side rule 15 flags. A
-// close or reduce never warns; the warnings are advisory only.
-func TestPreviewWarnsBuysWhileTheRulebookReadsSellOnly(t *testing.T) {
-	stock := rpc.OrderDraft{Action: "BUY", Contract: rpc.ContractParams{Symbol: "BBB", SecType: "STK"}}
+// Rules 3 and 15 judge each order by what it adds (owner, 2026-10-27 17:24
+// CET): rule 3 warns a buy that adds option premium, never a stock buy;
+// rule 15 warns an opening or adding order that moves net exposure further
+// from zero on the side it flags, a sale included, and never one that brings
+// it back. A close or reduce never warns; the warnings are advisory only.
+func TestPreviewJudgesEachOrderByItsDirection(t *testing.T) {
+	stock := func(action string) rpc.OrderDraft {
+		return rpc.OrderDraft{Action: action, Contract: rpc.ContractParams{Symbol: "BBB", SecType: "STK"}}
+	}
 	option := func(action, right string) rpc.OrderDraft {
 		return rpc.OrderDraft{Action: action, Contract: rpc.ContractParams{Symbol: "SPY", SecType: "OPT", Right: right, Expiry: "20261218", Strike: 500}}
 	}
 	open := rpc.OrderPositionImpact{Effect: "open"}
+	warns := func(side float64, draft rpc.OrderDraft, position rpc.OrderPositionImpact) (budget, net rpc.DataWarning) {
+		got := previewCodes(rulebookPreviewWarnings(sellOnlyTestResult(side), draft, position))
+		return got["rule_"+risk.RuleCashSellOnly], got["rule_"+risk.RuleNetExposure]
+	}
 
-	got := previewCodes(rulebookPreviewWarnings(sellOnlyTestResult(120), stock, open))
-	budget, net := got["rule_"+risk.RuleCashSellOnly], got["rule_"+risk.RuleNetExposure]
+	budget, net := warns(120, option("BUY", "C"), open)
 	if budget.Severity != risk.RuleStatusWatch || budget.Scope != "rulebook" ||
-		budget.Message != "Option premium at risk is 27% of NLV, at or above the premium budget's 25% watch level; the Rulebook reads sell-only, so this buy works against it." {
+		budget.Message != "Option premium at risk is 27% of NLV, at or above the premium budget's 25% watch level; this option buy adds premium." {
 		t.Fatalf("premium budget warning = %+v", budget)
 	}
-	if net.Severity != risk.RuleStatusAct || !strings.Contains(net.Message, "The book is net long 120% of NLV, at or above the net-exposure 100% act level") ||
+	if net.Severity != risk.RuleStatusAct || net.Message != "The book is net long 120% of NLV, at or above the net-exposure 100% act level; this order adds to the net long." ||
 		!strings.Contains(net.Impact, "submit eligibility is unaffected") {
 		t.Fatalf("net exposure warning = %+v", net)
 	}
 
-	// A bought put hedges a net-long book: the premium budget still warns,
-	// net exposure does not; on a net-short book it is the call that is quiet.
-	if got := previewCodes(rulebookPreviewWarnings(sellOnlyTestResult(120), option("BUY", "P"), open)); got["rule_"+risk.RuleNetExposure].Code != "" || got["rule_"+risk.RuleCashSellOnly].Code == "" {
-		t.Fatalf("put on a net-long book: %+v", got)
+	for _, c := range []struct {
+		name        string
+		side        float64
+		draft       rpc.OrderDraft
+		budget, net bool
+	}{
+		{"stock buy on a net-long book", 120, stock("BUY"), false, true},
+		{"stock buy on a net-short book", -120, stock("BUY"), false, false},
+		{"short sale on a net-short book", -120, stock("SELL"), false, true},
+		{"short sale on a net-long book", 120, stock("SELL"), false, false},
+		{"put buy on a net-long book", 120, option("BUY", "P"), true, false},
+		{"put buy on a net-short book", -120, option("BUY", "P"), true, true},
+		{"call buy on a net-short book", -120, option("BUY", "C"), true, false},
+		{"call sale on a net-short book", -120, option("SELL", "C"), false, true},
+		{"put sale on a net-long book", 120, option("SELL", "P"), false, true},
+		{"put sale on a net-short book", -120, option("SELL", "P"), false, false},
+	} {
+		budget, net := warns(c.side, c.draft, open)
+		if (budget.Code != "") != c.budget || (net.Code != "") != c.net {
+			t.Errorf("%s: premium warned %v (want %v), net warned %v (want %v)", c.name, budget.Code != "", c.budget, net.Code != "", c.net)
+		}
 	}
-	if got := previewCodes(rulebookPreviewWarnings(sellOnlyTestResult(-120), option("BUY", "P"), open)); !strings.Contains(got["rule_"+risk.RuleNetExposure].Message, "net short") {
-		t.Fatalf("put on a net-short book: %+v", got)
-	}
-	if got := previewCodes(rulebookPreviewWarnings(sellOnlyTestResult(-120), option("BUY", "C"), open)); got["rule_"+risk.RuleNetExposure].Code != "" {
-		t.Fatalf("call on a net-short book: %+v", got)
+	if _, net := warns(-120, stock("SELL"), open); !strings.HasSuffix(net.Message, "this order adds to the net short.") {
+		t.Fatalf("short-side wording = %q", net.Message)
 	}
 
 	for _, effect := range []string{"close", "reduce"} {
-		if ws := rulebookPreviewWarnings(sellOnlyTestResult(120), stock, rpc.OrderPositionImpact{Effect: effect}); len(ws) != 0 {
-			t.Fatalf("%s warned: %+v", effect, ws)
+		for _, draft := range []rpc.OrderDraft{stock("SELL"), option("BUY", "P"), option("SELL", "C")} {
+			if ws := rulebookPreviewWarnings(sellOnlyTestResult(-120), draft, rpc.OrderPositionImpact{Effect: effect}); len(ws) != 0 {
+				t.Fatalf("%s %s warned: %+v", effect, draft.Action, ws)
+			}
 		}
-	}
-	if got := previewCodes(rulebookPreviewWarnings(sellOnlyTestResult(120), option("SELL", "C"), open)); len(got) != 0 {
-		t.Fatalf("a sale warned: %+v", got)
 	}
 	quiet := sellOnlyTestResult(120)
 	quiet.Rules[1].Status = risk.RuleStatusPass
-	if got := previewCodes(rulebookPreviewWarnings(quiet, stock, open)); got["rule_"+risk.RuleNetExposure].Code != "" {
+	if got := previewCodes(rulebookPreviewWarnings(quiet, stock("BUY"), open)); got["rule_"+risk.RuleNetExposure].Code != "" {
 		t.Fatalf("rule 15 below watch warned: %+v", got)
 	}
 }
@@ -155,14 +174,14 @@ func TestCloneRulesResultCopiesTheSellOnlyFact(t *testing.T) {
 }
 
 // Rule 15 measures equity and option exposure only; a bill or bond never
-// enters it, so buying one does not add to the side it flags. The premium
-// budget's sell-only warning still applies to any buy.
+// enters it, so buying one does not add to the side it flags, and it adds
+// no option premium for rule 3 either.
 func TestPreviewDoesNotCountABondBuyAsNetExposure(t *testing.T) {
 	open := rpc.OrderPositionImpact{Effect: "open"}
 	for _, secType := range []string{"BOND", "BILL"} {
 		bond := rpc.OrderDraft{Action: "BUY", Contract: rpc.ContractParams{Symbol: "SYNB", SecType: secType}}
 		got := previewCodes(rulebookPreviewWarnings(sellOnlyTestResult(120), bond, open))
-		if got["rule_"+risk.RuleNetExposure].Code != "" || got["rule_"+risk.RuleCashSellOnly].Code == "" {
+		if got["rule_"+risk.RuleNetExposure].Code != "" || got["rule_"+risk.RuleCashSellOnly].Code != "" {
 			t.Fatalf("%s buy warnings = %+v", secType, got)
 		}
 	}

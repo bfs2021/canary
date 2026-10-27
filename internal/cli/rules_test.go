@@ -64,9 +64,11 @@ func TestSellOnlyLineNamesTheRules(t *testing.T) {
 			{ID: risk.RuleNetExposure, Number: 15, Title: "Net market exposure"},
 		},
 	}
-	want := "  sell-only  rule 3 premium budget and rule 15 net market exposure at watch or act: buys work against the Rulebook (advisory)"
-	if got := sellOnlyLine(res); got != want {
-		t.Fatalf("sell-only line = %q, want %q", got, want)
+	// The line names both rules and says what they hold, never every buy
+	// (amendment 20, owner 2026-10-27 17:24 CET).
+	if got := sellOnlyLine(res); !strings.Contains(got, "rule 3 premium budget and rule 15 net market exposure") ||
+		!strings.Contains(got, "held") || strings.Contains(got, "buys work against") {
+		t.Fatalf("holds line = %q", got)
 	}
 	res.SellOnly = risk.RuleSellOnly{}
 	if got := sellOnlyLine(res); got != "" {

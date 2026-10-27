@@ -50,7 +50,7 @@ func TestPremiumBudgetMeasuresPremiumAtRiskOutsideProtection(t *testing.T) {
 	if r.ImpactBase != 27000 {
 		t.Fatalf("ranking impact = %v, want the offending premium in base currency, 27000", r.ImpactBase)
 	}
-	want := "Option premium at risk is 27.0% of NLV, at or above the calm set's 25% budget (act at 35%); sell-only until it is back under the budget. Available funds are 90.0% of NLV."
+	want := "Option premium at risk is 27.0% of NLV, at or above the calm set's 25% budget (act at 35%); option buys are held until it is back under the budget. Available funds are 90.0% of NLV."
 	if r.Evidence != want {
 		t.Fatalf("evidence = %q\nwant       %q", r.Evidence, want)
 	}

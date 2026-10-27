@@ -521,8 +521,9 @@ func RulebookPolicyTemplate(release string) []byte {
 		"Regime premium, extrinsic and net exposure bands use % of NLV; hedge bands",
 		"use % of gross long exposure. Watch/act edges are inclusive (at or above).",
 		"Rule 12: inside edges passes, below the bottom or above the top watches (no",
-		"protection at all is 0%), above its overhedge multiple acts. Rule 3 or 15 at",
-		"watch or act reads sell-only. Rule 19 reads downward: it watches and acts",
+		"protection at all is 0%), above its overhedge multiple acts. Rule 3 at watch",
+		"or act holds option buys; rule 15 holds orders adding to the side it flags.",
+		"Rule 19 reads downward: it watches and acts",
 		"strictly below its levels, and a reading exactly at a level passes it.")
 	fmt.Fprintf(&b, "kind = %q\nschema_version = 1\npolicy_id = %q\npolicy_version = %d\n", risk.RulebookPolicyKind, p.ID, p.Version)
 	for _, k := range rulebookTemplateKeys {
