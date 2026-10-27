@@ -931,8 +931,8 @@ func (s *Server) snapshotHeldStockQuote(ctx context.Context, c *ibkrlib.Connecto
 		return rpc.Quote{}, false, false
 	}
 	q.AsOf = time.Now()
-	if quoteNeedsHistoryForSession(&q, sessionMarket, hasSessionMarket) {
-		s.fillQuoteHistoricalFallback(ctx, c, &q, sessionMarket, timeout)
+	if market, ok := quoteHistoryMarket(&q, sessionMarket, hasSessionMarket); ok {
+		s.fillQuoteHistoricalFallback(ctx, c, &q, market, timeout)
 	}
 	if hasSessionMarket {
 		s.attachQuoteSessionContext(&q, sessionMarket)
@@ -2072,8 +2072,8 @@ func (s *Server) handleQuoteSnapshot(ctx context.Context, req *rpc.Request) (res
 	}
 	q.AsOf = time.Now()
 	var historicalBars []ibkrlib.HistoricalBar
-	if quoteNeedsHistoryForSession(q, sessionMarket, hasSessionMarket) {
-		historicalBars = s.fillQuoteHistoricalFallback(ctx, c, q, sessionMarket, timeout)
+	if market, ok := quoteHistoryMarket(q, sessionMarket, hasSessionMarket); ok {
+		historicalBars = s.fillQuoteHistoricalFallback(ctx, c, q, market, timeout)
 	}
 	if p.IncludeLiquidity && strings.EqualFold(q.Contract.SecType, "STK") {
 		s.fillQuoteLiquidity(ctx, c, q, sessionMarket, timeout, historicalBars)
@@ -2536,6 +2536,27 @@ func quoteNeedsHistoricalContext(q *rpc.Quote, market marketcal.Market) bool {
 		q.Week52High == nil ||
 		q.Week52Low == nil ||
 		q.AvgVolume == nil
+}
+
+// quoteHistoryMarket names the calendar whose daily bars a quote needs, if
+// any. A US cash index has no session calendar of its own, but outside the
+// US equity session IBKR's close tick on it is that day's own close, so its
+// change read zero (VIX 0.00% on 2026-10-27). Its regular close and the close
+// before it then come from the daily bars, dated by the US equity close, as
+// an ETF's do. Inside the session its quote is current and needs none.
+func quoteHistoryMarket(q *rpc.Quote, market marketcal.Market, hasSessionMarket bool) (marketcal.Market, bool) {
+	if quoteNeedsHistoryForSession(q, market, hasSessionMarket) {
+		return market, true
+	}
+	if q != nil && !hasSessionMarket && quoteUSCashIndex(q.Contract) && q.RegularClose == nil &&
+		!quoteMarketIsOpen(q, marketcal.MarketUSEquity) {
+		return marketcal.MarketUSEquity, true
+	}
+	return market, false
+}
+
+func quoteUSCashIndex(c rpc.ContractParams) bool {
+	return strings.EqualFold(strings.TrimSpace(c.SecType), "IND") && strings.EqualFold(strings.TrimSpace(c.Currency), "USD")
 }
 
 func quoteNeedsHistoryForSession(q *rpc.Quote, market marketcal.Market, hasSessionMarket bool) bool {
