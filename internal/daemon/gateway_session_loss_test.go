@@ -580,6 +580,10 @@ func TestPoisonedOpenOrderSnapshotRedialsThePrimarySession(t *testing.T) {
 
 			mark := len(out.String())
 			s.redialPoisonedOpenOrderSnapshot(old, now)
+			// A tick that read the session before another tick dropped it
+			// still holds the dropped connector, whose poison never clears;
+			// it is not the redialled connection and says nothing.
+			s.redialPoisonedOpenOrderSnapshot(old, now)
 			waitSessionLost(t, old)
 			reconnectForTest(t, s)
 			logged := settledLog(out, mark)

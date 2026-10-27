@@ -189,6 +189,12 @@ func (s *Server) redialPoisonedOpenOrderSnapshot(c *ibkrlib.Connector, now time.
 	}
 	s.answerPath.mu.Lock()
 	lane := s.answerPath.lane(rpc.AnswerPathLanePrimary)
+	if c == lane.snapshotDropped {
+		// A tick that read the session before the redial dropped it: the
+		// redialled connection is a different one, so nothing is said.
+		s.answerPath.mu.Unlock()
+		return
+	}
 	if !lane.snapshotRedialedAt.IsZero() && now.Sub(lane.snapshotRedialedAt) < answerPathRedialQuiet {
 		warn := !lane.snapshotQuietWarned
 		lane.snapshotQuietWarned = true
