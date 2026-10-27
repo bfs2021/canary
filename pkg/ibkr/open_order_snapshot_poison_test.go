@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -67,6 +68,12 @@ func TestLateOldSessionCallbacksCannotCompleteANewSnapshot(t *testing.T) {
 	}
 	conn.resetOrderIDReadiness()
 	c.openOrderSnapshotTimeout = 2 * time.Second
+	// The flight takes its modify-preview tokens just before it sends; a slow
+	// flight goroutine must not change the outcome, so wait for the send.
+	c.openOrderSnapshotBeforeSend = func() { time.Sleep(10 * time.Millisecond) }
+	sent := make(chan struct{})
+	signalSent := sync.OnceFunc(func() { close(sent) })
+	c.requestAllOpenOrders = func() error { signalSent(); return nil }
 
 	type result struct {
 		snap OpenOrderSnapshot
@@ -77,18 +84,10 @@ func TestLateOldSessionCallbacksCannotCompleteANewSnapshot(t *testing.T) {
 		snap, err := c.SnapshotOpenOrders(t.Context())
 		done <- result{snap, err}
 	}()
-	deadline := time.Now().Add(time.Second)
-	for {
-		c.openOrderSnapshotMu.Lock()
-		installed := c.openOrderSnapshot != nil
-		c.openOrderSnapshotMu.Unlock()
-		if installed {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the new snapshot flight was not installed")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("the new snapshot flight sent no request")
 	}
 
 	stale := startupBurstOrder(0)
@@ -236,24 +235,22 @@ func TestPoisonClearsTheSessionsCompletion(t *testing.T) {
 	setServerVersionReady(conn, maxClientVersion)
 	c.ensureHandlersRegistered(conn)
 	c.openOrderSnapshotTimeout = 2 * time.Second
-	c.requestAllOpenOrders = func() error { return nil }
+	// The flight takes its modify-preview tokens just before it sends; an
+	// openOrderEnd that arrives earlier reads as an overlapping preview. A slow
+	// flight goroutine must not change the outcome, so wait for the send.
+	c.openOrderSnapshotBeforeSend = func() { time.Sleep(10 * time.Millisecond) }
+	sent := make(chan struct{})
+	signalSent := sync.OnceFunc(func() { close(sent) })
+	c.requestAllOpenOrders = func() error { signalSent(); return nil }
 	done := make(chan error, 1)
 	go func() {
 		_, err := c.SnapshotOpenOrders(t.Context())
 		done <- err
 	}()
-	deadline := time.Now().Add(time.Second)
-	for {
-		c.openOrderSnapshotMu.Lock()
-		installed := c.openOrderSnapshot != nil
-		c.openOrderSnapshotMu.Unlock()
-		if installed {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the snapshot flight was not installed")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("the snapshot flight sent no request")
 	}
 	conn.processMessage(conn.encodeMsg(msgOpenOrderEnd, "1"))
 	if err := <-done; err != nil || c.OpenOrderSnapshotCompletedAt().IsZero() {

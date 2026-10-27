@@ -92,7 +92,7 @@ RELEASE_WORKTREE_ROOT ?= $(abspath $(CURDIR)/..)
 MCP_REGISTRY_AUTO_LOGIN ?= 1
 MCP_REGISTRY_LOGIN_METHOD ?= github
 
-.PHONY: help reduction-metrics reduction-metrics-check regression-spine-check regression-spine-contract-check build install restart-daemon uninstall test test-pkg test-support test-internal test-daemon test-daemon-default test-daemon-trading test-integration test-integration-live trading-package-scope-check clean install-plugin install-plugin-refresh install-skill uninstall-skill all check commit-check product-identity-check go-dependencies-check go-doc-check gofmt-check vet-check staticcheck-check govulncheck-check fmt app-check app-log-contract-check scheduled-monitor-check app-contract-check app-syntax-check app-browser-helper-check app-auth-check app-behavior-check app-service-worker-check app-render-check remote-relay-check release-packaging-check app-refresh app-refresh-smoke app-smoke app-smoke-read-only release _release-run _release-publish release-resume _release-resume-run release-binaries release-mcpb release-checksums release-payload-inventory-check release-registry-server registry-login release-auth-preflight release-origin-check release-ci-wait _release-ci-wait-historical release-main-candidate-check release-source-candidate-check release-controller-source-check release-source-mode-check release-tag-candidate-check release-plugin-tag-candidate-check release-github-candidate-check release-github-assets registry-publish registry-publish-verify-first release-verify release-smoke release-site-check smoke smoke-build smoke-contract-check smoke-only smoke-fast version plugin-check parity-check modernize modernize-check refresh-spx-members hook-version-check registry-version-check changelog-check changelog-lint changelog-lint-historical docs-html-check pages-build account-data-check hook-behavior-check agent-config-check
+.PHONY: help ci-gate-scope-check reduction-metrics reduction-metrics-check regression-spine-check regression-spine-contract-check build install restart-daemon uninstall test test-pkg test-support test-internal test-daemon test-daemon-default test-daemon-trading test-integration test-integration-live trading-package-scope-check clean install-plugin install-plugin-refresh install-skill uninstall-skill all check commit-check product-identity-check go-dependencies-check go-doc-check gofmt-check vet-check staticcheck-check govulncheck-check fmt app-check app-log-contract-check scheduled-monitor-check app-contract-check app-syntax-check app-browser-helper-check app-auth-check app-behavior-check app-service-worker-check app-render-check remote-relay-check release-packaging-check app-refresh app-refresh-smoke app-smoke app-smoke-read-only release _release-run _release-publish release-resume _release-resume-run release-binaries release-mcpb release-checksums release-payload-inventory-check release-registry-server registry-login release-auth-preflight release-origin-check release-ci-wait _release-ci-wait-historical release-main-candidate-check release-source-candidate-check release-controller-source-check release-source-mode-check release-tag-candidate-check release-plugin-tag-candidate-check release-github-candidate-check release-github-assets registry-publish registry-publish-verify-first release-verify release-smoke release-site-check smoke smoke-build smoke-contract-check smoke-only smoke-fast version plugin-check parity-check modernize modernize-check refresh-spx-members hook-version-check registry-version-check changelog-check changelog-lint changelog-lint-historical docs-html-check pages-build account-data-check hook-behavior-check agent-config-check
 
 help: ## List available targets
 	@awk 'BEGIN {FS = ":.*##"; print "Available targets (default: help):\n"} \
@@ -305,7 +305,7 @@ build check test test-pkg test-support test-internal test-daemon test-daemon-def
 test: ## Full gate: check + render + pkg, support, and daemon/integration tests (-race), overlapped
 	@start=$$(date +%s); timing=$$(mktemp "$${TMPDIR:-/tmp}/canary-gate-timing.XXXXXX") || exit 1; \
 	GATE_TIMING_FILE="$$timing" $(MAKE) $(TEST_MAKEFLAGS) test-daemon check app-render-check test-pkg test-support \
-		CHECK_DEPS='$(filter-out test-daemon-trading,$(CHECK_DEPS))'; \
+		CHECK_DEPS='$(filter-out $(CHECK_TEST_LEGS),$(CHECK_DEPS))'; \
 	status=$$?; $(LEG) --summary "$$timing" "$$start"; rm -f "$$timing"; exit $$status
 	$(call gate-stamp,test)
 
@@ -328,25 +328,49 @@ commit-check: check ## Compatibility alias for the canonical repository gate
 # that path here keeps analysis rooted at the product module.
 #
 # CHECK_DEPS gates the optional pieces of the check matrix. Default is the
-# full strict gate (plugin-check + parity-check + the trading-build daemon
-# tests). CI without the `claude` CLI on PATH overrides with
+# full strict gate (plugin-check + parity-check + every Go test leg CI runs).
+# CI without the `claude` CLI on PATH overrides with
 # CHECK_DEPS=parity-check — the MCP↔CLI drift gate (parity-check) is what we
 # cannot skip; plugin-manifest validation is recoverable because the schema
-# is small and changes go through PR review anyway, and CI runs
-# test-daemon-trading as its own job.
+# is small and changes go through PR review anyway, and CI runs each test
+# leg as its own job.
 #
-# test-daemon-trading is here because the trading build is the one installed
-# (GO_TAGS=trading): until 2026-10-23 this gate ran no daemon tests, and a
-# cash-sweep test still asserting a superseded decision passed it. `make test`
-# drops it from its check leg, since its test-daemon leg runs the same suite.
-CHECK_DEPS ?= plugin-check parity-check test-daemon-trading
+# CHECK_TEST_LEGS are CI's Go test jobs, so a tree that passes check cannot
+# turn CI red on a test. They joined one at a time after each miss: the
+# trading daemon suite on 2026-10-23 (a cash-sweep test asserting a superseded
+# decision), the rest on 2026-10-27 (an Edge route test in internal/app/http
+# broken by 19d91c1a kept CI red from 2026-10-24 to 2026-10-26).
+# ci-gate-scope-check now fails when ci.yml runs a make target that is neither
+# here nor in CI_ONLY_TARGETS. `make test` drops these legs from its check
+# leg, since it runs the same suites itself.
+CHECK_TEST_LEGS = test-daemon-trading test-daemon-default test-internal test-pkg test-support
+# CI-only, with the reason check skips each: app-render-check needs
+# Playwright's Chromium (`make test` runs it); regression-spine-check mutates
+# committed HEAD, so before a commit it would prove the previous commit (see
+# the note above `test`).
+CI_ONLY_TARGETS = app-render-check regression-spine-check
+CHECK_DEPS ?= plugin-check parity-check $(CHECK_TEST_LEGS)
 CHECK_JOBS ?= 8
-CHECK_TARGETS = $(CHECK_DEPS) agent-config-check reduction-metrics-check regression-spine-contract-check go-dependencies-check modernize-check docs-check docs-html-check changelog-check account-data-check product-identity-check release-packaging-check smoke-contract-check app-log-contract-check scheduled-monitor-check app-contract-check app-syntax-check app-browser-helper-check app-auth-check app-behavior-check app-service-worker-check remote-relay-check go-doc-check gofmt-check vet-check staticcheck-check govulncheck-check
+CHECK_TARGETS = $(CHECK_DEPS) ci-gate-scope-check agent-config-check reduction-metrics-check regression-spine-contract-check go-dependencies-check modernize-check docs-check docs-html-check changelog-check account-data-check product-identity-check release-packaging-check smoke-contract-check app-log-contract-check scheduled-monitor-check app-contract-check app-syntax-check app-browser-helper-check app-auth-check app-behavior-check app-service-worker-check remote-relay-check go-doc-check gofmt-check vet-check staticcheck-check govulncheck-check
 CHECK_TARGETS += build-space-contract-check timed-leg-contract-check
 CHECK_MAKEFLAGS = $(if $(filter 0,$(MAKELEVEL)),-j$(CHECK_JOBS),)
-check: ## agent config/hooks + Go docs/format/vet/staticcheck/vulns + modernize/plugin/parity/docs/changelog/account/app checks + trading-build daemon tests (binding pre-commit gate)
+check: ## agent config/hooks + Go docs/format/vet/staticcheck/vulns + modernize/plugin/parity/docs/changelog/account/app checks + CI's Go test legs (binding pre-commit gate)
 	$(LEG) check $(MAKE) $(CHECK_MAKEFLAGS) $(CHECK_TARGETS)
 	$(call gate-stamp,check)
+
+ci-gate-scope-check: ## Every make target the ci workflow runs is a check leg or a named CI-only target
+	@set -eu; \
+		ran="$$(sed -n 's/^[[:space:]]*\(run: \)\{0,1\}make \([a-z0-9-]*\).*/\2/p' .github/workflows/ci.yml | sort -u)"; \
+		[ -n "$$ran" ] || { echo "ci-gate-scope-check: no make targets found in .github/workflows/ci.yml" >&2; exit 1; }; \
+		missing=""; \
+		for t in $$ran; do \
+			case " check $(CHECK_TEST_LEGS) $(CI_ONLY_TARGETS) " in *" $$t "*) ;; *) missing="$$missing $$t";; esac; \
+		done; \
+		if [ -n "$$missing" ]; then \
+			echo "ci-gate-scope-check: ci.yml runs make targets that make check does not:$$missing" >&2; \
+			echo "add each to CHECK_TEST_LEGS, or to CI_ONLY_TARGETS with the reason check skips it" >&2; \
+			exit 1; \
+		fi
 
 product-identity-check: ## Reject retired product/module/site/CLI/MCP identities outside reviewed continuity exceptions
 	@./scripts/check-product-identity.sh

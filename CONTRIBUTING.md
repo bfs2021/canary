@@ -50,8 +50,9 @@ make check
 
 `make check` is the binding gate: formatting, vet, staticcheck, govulncheck,
 modernization, plus parity checks that keep MCP tools, generated references,
-and plugin metadata aligned with the CLI surface, and the daemon's tests in
-the trading build that `make install` ships. It fails on stdlib
+and plugin metadata aligned with the CLI surface, and every Go test suite CI
+runs (`internal/...`, `pkg/ibkr/...`, commands and the Go client, the daemon
+in both builds, hermetic lifecycle integration). It fails on stdlib
 vulnerabilities, so an outdated Go toolchain is a build failure.
 
 For anything touching Go or runtime behavior:
