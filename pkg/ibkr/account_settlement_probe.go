@@ -3,6 +3,7 @@ package ibkr
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -29,6 +30,7 @@ type summaryProbeFlight struct {
 type accountSummarySchedule struct {
 	mu                     sync.Mutex
 	ordinary               map[int]uint64
+	stranded               map[int]uint64
 	pending                int
 	uncertainProbe         bool
 	uncertainCurrencyProbe bool
@@ -80,7 +82,26 @@ func (s *accountSummarySchedule) leaveOrdinary(reqID int, epoch uint64) {
 	defer s.mu.Unlock()
 	if got, ok := s.ordinary[reqID]; ok && got == epoch {
 		delete(s.ordinary, reqID)
+		delete(s.stranded, reqID)
+		if len(s.stranded) == 0 {
+			s.uncertainProbe = false
+		}
 	}
+}
+
+// strandedFor lists the session's subscriptions whose owner returned without
+// a sent cancellation; IBKR keeps them open until the socket ends.
+func (s *accountSummarySchedule) strandedFor(epoch uint64) []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []int
+	for reqID, got := range s.stranded {
+		if got == epoch {
+			ids = append(ids, reqID)
+		}
+	}
+	slices.Sort(ids)
+	return ids
 }
 func (s *accountSummarySchedule) beginProbe(cancel context.CancelFunc) *summaryProbeFlight {
 	s.mu.Lock()
@@ -106,6 +127,7 @@ func (s *accountSummarySchedule) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	clear(s.ordinary)
+	clear(s.stranded)
 	s.uncertainProbe = false
 	s.uncertainCurrencyProbe = false
 	if s.probe != nil {
@@ -218,13 +240,10 @@ func (c *Connector) RequestSettlementCashProbe(ctx context.Context, timeout time
 			}
 			out.CancelStatus = "failed"
 			out.Observation = nil
-			// An uncertain cancellation cannot admit another diagnostic subscription.
+			// An uncertain cancellation cannot admit another diagnostic
+			// subscription until the next ordinary read re-sends it.
 			conn.summarySchedule.mu.Lock()
-			if conn.summarySchedule.ordinary == nil {
-				conn.summarySchedule.ordinary = make(map[int]uint64)
-			}
 			if conn.BrokerSessionEpoch() == origin.epoch {
-				conn.summarySchedule.ordinary[reqID] = origin.epoch
 				conn.summarySchedule.uncertainProbe = true
 			}
 			conn.summarySchedule.mu.Unlock()

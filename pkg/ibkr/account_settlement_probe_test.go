@@ -274,19 +274,28 @@ func TestSettlementProbeFailedCancelPreservesBoundedOrdinaryCapacity(t *testing.
 	if got := c.RequestSettlementCashProbe(t.Context(), time.Second); got.Status != "skipped_busy" {
 		t.Fatal("uncertain cancel admitted another probe", got)
 	}
+	// While the cancellation is still owed, one ordinary read remains
+	// admissible and its competitor holds.
+	epoch := conn.BrokerSessionEpoch()
+	if err := conn.summarySchedule.enterOrdinary(t.Context(), 100, epoch); err != nil {
+		t.Fatal("ordinary capacity starved", err)
+	}
+	if err := conn.summarySchedule.enterOrdinary(t.Context(), 101, epoch); !errors.Is(err, ErrAccountSummaryProbeCancelUncertain) {
+		t.Fatal("third potential broker subscription not held", err)
+	}
+	conn.summarySchedule.leaveOrdinary(100, epoch)
+	// The next ordinary read re-sends the owed cancellation first, which
+	// frees the probe's slot for a second ordinary subscription.
 	conn.transportMu.Lock()
 	conn.writer = bufio.NewWriter(wire)
 	conn.transportMu.Unlock()
-	if err := conn.RequestAccountSummaryForAccount(100, "NetLiquidation", "DU1234567"); err != nil {
-		t.Fatal("ordinary capacity starved", err)
-	}
-	if err := conn.RequestAccountSummaryForAccount(101, "NetLiquidation", "DU1234567"); !errors.Is(err, ErrAccountSummaryProbeCancelUncertain) {
-		t.Fatal("third potential broker subscription not held", err)
-	}
-	if err := conn.CancelAccountSummary(100); err != nil {
+	if err := conn.RequestAccountSummaryForAccount(102, "NetLiquidation", "DU1234567"); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.RequestAccountSummaryForAccount(102, "NetLiquidation", "DU1234567"); err != nil {
+	if frames := wire.frames(conn); len(frames) != 3 || frames[1][0] != "63" || frames[1][2] != strconv.Itoa(id) || frames[2][2] != "102" {
+		t.Fatal("owed probe cancellation not re-sent before the next read", frames)
+	}
+	if err := conn.RequestAccountSummaryForAccount(103, "NetLiquidation", "DU1234567"); err != nil {
 		t.Fatal("ordinary capacity did not recover", err)
 	}
 }

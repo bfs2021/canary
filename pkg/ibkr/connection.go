@@ -7169,6 +7169,7 @@ func (c *Connection) requestAccountSummaryForAccountContext(ctx context.Context,
 		tags = "NetLiquidation,BuyingPower,TotalCashValue,GrossPositionValue,UnrealizedPnL,RealizedPnL"
 	}
 	epoch := c.BrokerSessionEpoch()
+	c.cancelStrandedSummaries(ctx, epoch)
 	if err := c.summarySchedule.enterOrdinary(ctx, reqID, epoch); err != nil {
 		return err
 	}
@@ -7192,6 +7193,8 @@ func (c *Connection) requestAccountSummaryForAccountContext(ctx context.Context,
 		c.dropSummarySnapshot(reqID)
 		if SendDispositionOf(err) == SendDispositionDefinitelyUnsent {
 			c.summarySchedule.leaveOrdinary(reqID, epoch)
+		} else {
+			c.strandSummary(reqID, epoch)
 		}
 		return err
 	}
@@ -7262,8 +7265,45 @@ func (c *Connection) cancelAccountSummaryForEpoch(ctx context.Context, reqID int
 	err := c.sendMessageWithTypeContextForEpochGuarded(ctx, msg, RequestTypeGeneral, epoch, true, guard)
 	if err == nil {
 		c.summarySchedule.leaveOrdinary(reqID, epoch)
+	} else {
+		c.strandSummary(reqID, epoch)
 	}
 	return err
+}
+
+// strandSummary records a subscription that may be open at IBKR with no
+// cancellation sent. Only the current session's are kept: a socket change
+// ends them at IBKR and resets the schedule.
+func (c *Connection) strandSummary(reqID int, epoch uint64) {
+	s := &c.summarySchedule
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c.BrokerSessionEpoch() != epoch {
+		return
+	}
+	if s.ordinary == nil {
+		s.ordinary = make(map[int]uint64)
+	}
+	if s.stranded == nil {
+		s.stranded = make(map[int]uint64)
+	}
+	s.ordinary[reqID] = epoch
+	s.stranded[reqID] = epoch
+}
+
+// cancelStrandedSummaries re-sends this session's failed cancellations before
+// a new subscription. IBKR allows a client two account-summary subscriptions;
+// two stranded ones refuse every later read with code 322 until the socket
+// ends. It stops at the first failure: the transport is still not accepting.
+func (c *Connection) cancelStrandedSummaries(ctx context.Context, epoch uint64) {
+	for _, reqID := range c.summarySchedule.strandedFor(epoch) {
+		cancelCtx, cancel := context.WithTimeout(ctx, time.Second)
+		err := c.cancelAccountSummaryForEpoch(cancelCtx, reqID, epoch, nil)
+		cancel()
+		if err != nil {
+			return
+		}
+	}
 }
 
 // GetPositions returns a detached map containing the current position cache.
