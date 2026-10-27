@@ -329,3 +329,20 @@ func TestReconClosingBasisComesFromTheSingleDayStatement(t *testing.T) {
 		t.Fatalf("a window without a closing basis passed: %+v", got)
 	}
 }
+
+// The statement keeps sub-cent FX dust in currencies the live account stream
+// never publishes (CHF and HKD under a thousandth on 2026-10-26). A closing
+// balance that rounds to zero at the cent, the broker's monetary precision, is
+// no balance; anything at a cent or more still needs a runtime slice.
+func TestReconSubCentClosingDustNeedsNoRuntimeSlice(t *testing.T) {
+	row, st, sample := reconValuationFixture()
+	st.FX.Book["CHF"], st.FX.Rates["CHF"] = 0.000004, 1.07
+	st.FX.Book["HKD"], st.FX.Rates["HKD"] = 0.0009, 0.11
+	if got := compareReconValuation(row, st, sample); got.Comparability != "comparable" {
+		t.Fatalf("sub-cent dust blocked the comparison: %+v", got)
+	}
+	st.FX.Book["CHF"] = 0.01
+	if got := compareReconValuation(row, st, sample); got.Comparability != "runtime_currency_basis_missing" || got.DivergencePct != nil {
+		t.Fatalf("a one-cent balance without a runtime slice passed: %+v", got)
+	}
+}

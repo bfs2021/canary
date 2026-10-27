@@ -187,9 +187,11 @@ func compareReconValuation(row flexstmt.EquityRow, st flexstmt.Statement, sample
 		return check
 	}
 	// Every currency in either closing book needs an observed runtime slice.
-	// A missing slice is not an assumed zero balance.
+	// A missing slice is not an assumed zero balance. A closing balance that
+	// rounds to zero at the cent, the broker's monetary precision, is FX dust
+	// the live stream never publishes, not a balance.
 	for c, value := range f.Book {
-		if _, ok := sample.Currencies[c]; !ok && value != 0 {
+		if _, ok := sample.Currencies[c]; !ok && math.Round(value*100) != 0 {
 			return check
 		}
 	}
