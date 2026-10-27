@@ -192,6 +192,45 @@ func TestOutboundSessionRevocationRejectsSendersStartingBeforeTransportLock(t *t
 	}
 }
 
+// A paused transport resumes only when the same Connection reconnects, and
+// the daemon redials on a new one. A history read admitted to the session
+// that ended must fail unsent, not wait for that resume: on 2026-10-27 one
+// such read held the breadth refresh open past TWS's restart.
+func TestSenderQueuedBehindAPausedTransportEndsWithItsSession(t *testing.T) {
+	cfg := &ConnectionConfig{Host: "127.0.0.1", Port: 7497, ClientID: 42, Account: "DU7654321"}
+	conn := NewConnection(cfg)
+	t.Cleanup(conn.rateLimiter.Stop)
+	conn.config.AutoReconnect = false
+	conn.status = StatusConnected
+	setServerVersionReady(conn, maxClientVersion)
+	socket := &bytes.Buffer{}
+	conn.writer = bufio.NewWriter(socket)
+
+	before := conn.rateLimiter.GetMetrics().TotalRequests
+	conn.pauseTransport()
+	t.Cleanup(conn.resumeTransport) // before the limiter stops: frees a stuck send
+	done := make(chan error, 1)
+	go func() {
+		done <- conn.sendMessageWithTypeContext(context.Background(), conn.encodeMsg(reqHistoricalData, 1), RequestTypeHistorical)
+	}()
+	waitForProtectedDispatch(t, conn, before)
+	conn.handleDisconnection(io.EOF)
+	select {
+	case err := <-done:
+		if !errors.Is(err, errOutboundSessionEnded) {
+			t.Fatalf("send queued behind the ended session err=%v, want refused as ended", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a send queued behind a paused transport outlived its session")
+	}
+	if got := conn.rateLimiter.GetMetrics().TotalRequests - before; got != 1 {
+		t.Fatalf("dispatches=%d, want one: an ended session is not retried", got)
+	}
+	if socket.Len() != 0 || conn.writer.Buffered() != 0 {
+		t.Fatal("the ended session's send reached the socket")
+	}
+}
+
 func (w *partialOrderWriteError) Write(p []byte) (int, error) {
 	w.calls.Add(1)
 	if len(p) == 0 {

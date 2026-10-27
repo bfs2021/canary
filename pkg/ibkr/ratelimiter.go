@@ -607,6 +607,9 @@ func (rl *RateLimiter) shouldRetry(req *RateLimitedRequest, err error) bool {
 	if isContextDone(err) || rl.ctx.Err() != nil {
 		return false
 	}
+	if errors.Is(err, errOutboundSessionEnded) {
+		return false // the session the send was admitted to does not come back
+	}
 	if req.Context != nil && req.Context.Err() != nil {
 		return false
 	}

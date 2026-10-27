@@ -4021,7 +4021,7 @@ func (c *Connection) sendBoundFrames(ctx context.Context, msg []byte, reqType Re
 		if err := dispatchCtx.Err(); err != nil {
 			return brokerSendError(err, SendDispositionDefinitelyUnsent, protectedSend)
 		}
-		return c.withTransport(false, func() error {
+		err := c.withSessionTransport(outboundState, func() error {
 			if protectedSend && c.publicationBarrier != nil {
 				// Daemon connector publication takes the exclusive side before it
 				// after pacing and transport admission: a queued sender must never
@@ -4135,6 +4135,10 @@ func (c *Connection) sendBoundFrames(ctx context.Context, msg []byte, reqType Re
 
 			return nil
 		})
+		if errors.Is(err, errOutboundSessionEnded) {
+			return brokerSendError(err, SendDispositionDefinitelyUnsent, protectedSend)
+		}
+		return err
 	}, maxRetries)
 	// SubmitWithRetriesContext has its own completion deadline. Cancel its
 	// child before returning so a queued dispatch cannot later reach the wire.
@@ -7416,6 +7420,7 @@ func (c *Connection) beginOutboundSession() uint64 {
 	}
 	c.transportMu.Lock()
 	c.transportPaused = true
+	c.transportCond.Broadcast() // senders of the revoked generation stop waiting
 	c.transportMu.Unlock()
 	return state
 }
@@ -7444,9 +7449,8 @@ func (c *Connection) invalidateOutboundSession(pause bool) {
 	}
 	c.transportMu.Lock()
 	c.transportPaused = pause
-	if !pause {
-		c.transportCond.Broadcast()
-	}
+	// Paused or not, senders of the revoked generation stop waiting.
+	c.transportCond.Broadcast()
 	c.transportMu.Unlock()
 }
 
@@ -7486,6 +7490,33 @@ func (c *Connection) withTransport(allowDuringPause bool, fn func() error) error
 		c.transportCond.Wait()
 	}
 	defer c.transportMu.Unlock()
+	return fn()
+}
+
+// errOutboundSessionEnded refuses a send whose session ended while it waited
+// behind a paused transport.
+var errOutboundSessionEnded = errors.New("broker session ended while the send waited for the transport")
+
+// withSessionTransport is withTransport for a send admitted while the
+// outbound session generation was admitted's. A paused transport resumes
+// only when this Connection reconnects, and the daemon redials on a new
+// Connection, so a sender of an ended generation would wait forever: on
+// 2026-10-27 one such history read held the breadth refresh open past the
+// session loss. It fails unsent instead; its request id belonged to the ended
+// session's namespace anyway. A pause within the admitted generation (a
+// handshake not yet activated) is still waited out.
+func (c *Connection) withSessionTransport(admitted uint64, fn func() error) error {
+	if c.transportCond == nil {
+		return fn()
+	}
+	c.transportMu.Lock()
+	defer c.transportMu.Unlock()
+	for c.transportPaused && c.outboundSessionState.Load()>>1 == admitted>>1 {
+		c.transportCond.Wait()
+	}
+	if c.transportPaused {
+		return errOutboundSessionEnded
+	}
 	return fn()
 }
 
