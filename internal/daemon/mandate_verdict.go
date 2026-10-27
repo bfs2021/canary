@@ -19,12 +19,15 @@ import (
 )
 
 // The mandate verdict (internal-docs/design/mandate-risk-budget.md): the
-// daemon gathers the capital state, one current positions read and its
-// decision-grade series, runs mandate.Evaluate and keeps the result. The
-// additions gate reads the kept verdict (never a broker read on the order
-// path) and refuses a risk-adding order while it is not within, is older
-// than mandateVerdictMaxAge, or the order itself would take the risk over
-// the budget.
+// daemon gathers the capital state, one current positions read with its
+// premiums and armed stops (mandate_loss.go) and its decision-grade series,
+// runs mandate.Evaluate and keeps the result. The headline is the loss
+// measure against the loss room (spec TM-04.12); the volatility sizes the
+// sleeve allocations. The additions gate reads the kept verdict (never a
+// broker read on the order path) and refuses a risk-adding order while it
+// is not within, is older than mandateVerdictMaxAge, or the order itself
+// would take the loss measure over the room, a gap over its cap or its
+// sleeve over its allocation.
 
 const (
 	// mandateVerdictMaxAge is how old a verdict the gate still trusts.
@@ -250,6 +253,13 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		evidence.PositionsAsOf = pos.AsOf
 		var reasons []string
 		in.Legs, in.NotModelled, in.FXNow, reasons = mandateLegsFromPositions(pos, base, now)
+		// The share lines' stops, for the loss measure (mandate_loss.go).
+		stops, stopsWhy := s.mandateArmedStops(ctx, pos, scope)
+		var stopNote string
+		in.Legs, stopNote = mandateApplyStops(in.Legs, pos, base, stops, stopsWhy)
+		if stopNote != "" {
+			in.NotModelled = append(in.NotModelled, stopNote)
+		}
 		in.LineISINs = s.registerFundLines(ctx)
 		in.Reasons = append(in.Reasons, reasons...)
 		for _, need := range mandateHistoryNeeds(pos, base, in.LineISINs) {
@@ -367,10 +377,12 @@ func mandateLegsFromPositions(pos *rpc.PositionsResult, base string, now time.Ti
 		} else if row.PrevClose != nil && *row.PrevClose > 0 {
 			spot = *row.PrevClose
 		}
-		legs = append(legs, mandate.Leg{ID: legID(row), Symbol: fmt.Sprintf("%s %s %g %s", normSym(row.Symbol), row.Expiry, row.Strike, strings.ToUpper(row.Right)),
+		leg := mandate.Leg{ID: legID(row), Symbol: fmt.Sprintf("%s %s %g %s", normSym(row.Symbol), row.Expiry, row.Strike, strings.ToUpper(row.Right)),
 			Underlying: normSym(row.Symbol), Kind: mandate.KindOption, Quantity: row.Quantity, Multiplier: float64(optionMultiplier(row)),
 			Currency: normCcy(row.Currency), Spot: spot, Right: strings.ToUpper(strings.TrimSpace(row.Right)), Strike: row.Strike,
-			TimeToExpiryYears: mandateYearsToExpiry(row.Expiry, now), IV: row.IV})
+			TimeToExpiryYears: mandateYearsToExpiry(row.Expiry, now), IV: row.IV}
+		mandateOptionLoss(&leg, row, base)
+		legs = append(legs, leg)
 	}
 	return legs, notModelled, fxNow, reasons
 }
@@ -467,21 +479,35 @@ func mandateStatusSentence(v *mandate.Verdict, ccy string) string {
 		}
 		return "the mandate risk cannot be measured: " + why
 	case mandate.StatusOver, mandate.StatusReduce:
-		if v.Risk == nil {
-			return "the mandate risk is " + v.Status + " budget"
-		}
-		sentence := fmt.Sprintf("the mandate risk %s a year is over the budget %s", mandateMoney(v.Risk.SDAnnualBase, ccy), mandateMoney(v.Capital.BudgetAnnualSD, ccy))
-		if !math.IsInf(v.Risk.RatioToBudget, 0) && v.Capital.BudgetAnnualSD > 0 {
-			sentence += fmt.Sprintf(" (%.0f%%)", v.Risk.RatioToBudget*100)
-		} else if v.Capital.Known && v.Capital.BudgetAnnualSD <= 0 {
-			sentence += " (the loss has reached the mandate's maximum, so no risk is in budget)"
+		var parts []string
+		if l := v.Loss; l != nil && (l.TotalBase > l.RoomBase || v.Capital.Known && !(v.Capital.Room > 0)) {
+			parts = append(parts, mandateLossSentence(l, ccy))
+		} else if l == nil && v.Risk != nil {
+			// A verdict kept by an older daemon: the volatility was its headline.
+			parts = append(parts, fmt.Sprintf("the mandate risk %s a year is over the budget %s", mandateMoney(v.Risk.SDAnnualBase, ccy), mandateMoney(v.Capital.BudgetAnnualSD, ccy)))
 		}
 		if v.Stresses != nil && len(v.Stresses.GapBreaches) > 0 {
-			sentence += "; a gap in " + strings.Join(v.Stresses.GapBreaches, ", ") + " would lose more than the gap cap " + mandateMoney(v.Stresses.GapCapBase, ccy)
+			parts = append(parts, "a gap in "+strings.Join(v.Stresses.GapBreaches, ", ")+" would lose more than the gap cap "+mandateMoney(v.Stresses.GapCapBase, ccy))
 		}
-		return sentence
+		if len(parts) == 0 {
+			return "the mandate reads " + v.Status
+		}
+		return strings.Join(parts, "; ")
 	}
-	return "the mandate risk is within budget"
+	return "the loss measure is within the mandate's maximum loss"
+}
+
+// mandateLossSentence states the loss measure against the loss room: "the
+// loss measure 140,000 EUR (premium at risk 120,000 EUR, stop loss 20,000
+// EUR) is over the mandate's loss room 69,000 EUR (203%)".
+func mandateLossSentence(l *mandate.LossMeasure, ccy string) string {
+	sentence := fmt.Sprintf("the loss measure %s (premium at risk %s, stop loss %s) is over the mandate's loss room %s", mandateMoney(l.TotalBase, ccy), mandateMoney(l.PremiumBase, ccy), mandateMoney(l.StopLossBase, ccy), mandateMoney(l.RoomBase, ccy))
+	if l.RoomBase > 0 && !math.IsInf(l.RatioToRoom, 0) {
+		sentence += fmt.Sprintf(" (%.0f%%)", l.RatioToRoom*100)
+	} else if !(l.RoomBase > 0) {
+		sentence += " (the loss has reached the mandate's maximum, so no loss room is left)"
+	}
+	return sentence
 }
 
 func mandateMoney(v float64, ccy string) string {
@@ -681,13 +707,18 @@ func (s *Server) mandateVolatilityGate(draft rpc.OrderDraft, position rpc.OrderP
 		}
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: with this order the book cannot be measured: " + why + "." + open, Action: action}
 	}
-	// The whole book with the order must stay inside the budget, unless the
+	// The whole book with the order must stay inside the loss room (spec
+	// TM-04.12: the loss measure is the headline the gate reads), unless the
 	// book is over it already and the order's sleeve adds inside its own
-	// allocation (checked below).
-	budget := with.Capital.BudgetAnnualSD
-	if !overBudget && with.Risk.SDAnnualBase > budget {
+	// allocation (checked below). The volatility with the order is measured
+	// for the allocation check, never judged against the volatility budget.
+	if l := with.Loss; !overBudget && l != nil && l.TotalBase > l.RoomBase+mandateReductionEpsilon {
+		now := 0.0
+		if result.Verdict.Loss != nil {
+			now = result.Verdict.Loss.TotalBase
+		}
 		return &rpc.TradingBlocker{Code: mandateBudgetCode,
-			Message: fmt.Sprintf("Mandate budget: with this order the risk would be %s a year, over the budget %s (now %s).", mandateMoney(with.Risk.SDAnnualBase, ccy), mandateMoney(budget, ccy), mandateMoney(result.Verdict.Risk.SDAnnualBase, ccy)) + open,
+			Message: fmt.Sprintf("Mandate budget: with this order the loss measure would be %s, over the mandate's loss room %s (now %s).", mandateMoney(l.TotalBase, ccy), mandateMoney(l.RoomBase, ccy), mandateMoney(now, ccy)) + open,
 			Action:  "Size it smaller, or reduce elsewhere first; `canary mandate` has the measurement."}
 	}
 	// The gap caps bind an addition as the budget does: an order that
@@ -1073,9 +1104,23 @@ func mandateOrderLeg(draft rpc.OrderDraft, in *mandate.Input) (mandate.Leg, bool
 		}
 		return mandate.Leg{ID: id, Symbol: sym, Underlying: sym, Kind: mandate.KindStock, Quantity: qty, Multiplier: 1, Currency: ccy, Spot: spot}, true
 	case "OPT":
+		// A buy's premium at its limit is the loss it adds (contracts ×
+		// multiplier × limit, in base currency); a sale adds none.
+		premium := 0.0
+		if qty > 0 && draft.LimitPrice > 0 {
+			mult := float64(draft.Contract.Multiplier)
+			if mult <= 0 {
+				mult = 100
+			}
+			fx := 1.0
+			if ccy != "" && ccy != strings.ToUpper(in.BaseCurrency) {
+				fx = in.FXNow[ccy]
+			}
+			premium = draft.LimitPrice * mult * fx
+		}
 		if held != nil && held.Kind == mandate.KindOption && held.IV != nil {
 			leg := *held
-			leg.Quantity = qty
+			leg.Quantity, leg.LossPerUnitBase, leg.LossUnknown = qty, premium, ""
 			return leg, true
 		}
 		right := strings.ToUpper(strings.TrimSpace(draft.Contract.Right))
@@ -1095,7 +1140,7 @@ func mandateOrderLeg(draft rpc.OrderDraft, in *mandate.Input) (mandate.Leg, bool
 			id = fmt.Sprintf("order:%s:%s:%g:%s", sym, draft.Contract.Expiry, draft.Contract.Strike, right)
 		}
 		return mandate.Leg{ID: id, Symbol: fmt.Sprintf("%s %s %g %s", sym, draft.Contract.Expiry, draft.Contract.Strike, right), Underlying: sym, Kind: mandate.KindOption,
-			Quantity: qty, Multiplier: mult, Currency: ccy, Spot: underlyingSpot, Right: right, Strike: draft.Contract.Strike, TimeToExpiryYears: t, IV: &iv}, true
+			Quantity: qty, Multiplier: mult, Currency: ccy, Spot: underlyingSpot, Right: right, Strike: draft.Contract.Strike, TimeToExpiryYears: t, IV: &iv, LossPerUnitBase: premium}, true
 	}
 	return mandate.Leg{}, false
 }

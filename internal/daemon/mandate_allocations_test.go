@@ -5,7 +5,6 @@ import (
 	"errors"
 	"math"
 	"math/rand/v2"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -247,111 +246,44 @@ func mandateAllocationedFixture(t *testing.T, pos *rpc.PositionsResult, ratio fl
 	return mandateReductionVerdict(book, 2)
 }
 
-func mandateContribution(v *mandate.Verdict, conID int) float64 {
-	for _, l := range v.Legs {
-		if l.ID == mandateLegID(rpc.PositionView{ConID: conID}) {
-			return l.ContributionPct
-		}
-	}
-	return 0
-}
-
-// Over budget, the sleeve furthest over its allocation is cut first, and within it
-// the largest contributor: here the core, holding its fund while it has no
-// allocation, is cut before the owner's larger line; then the owner's.
-func TestMandateReductionCutsTheSleeveFurthestOverItsAllocationFirst(t *testing.T) {
+// The reduction is ordered by premium at risk per name, whatever the sleeve
+// (spec TM-04.12, owner decision 2026-10-27 19:50 CET; until then the sleeve
+// furthest over its allocation was cut first, owner 2026-10-18 08:06 CEST):
+// here the core's fund holds the largest loss to its stop and goes first,
+// inside its allocation or not, then the owner's lines by theirs. The sleeve
+// is still carried on every row and plan order.
+func TestMandateReductionCutsTheLargestPremiumAtRiskWhateverTheSleeve(t *testing.T) {
 	pos := mandateReductionBook(mandateReductionStock("SYNA", 8101, 900, 100), mandateReductionStock("SYNB", 8102, 300, 100), mandateReductionStock("IBCF", 8103, 1100, 100))
-	in := mandateAllocationedFixture(t, pos, 1.3, 0, 8103)
-	v := in.Result.Verdict
-	core, _ := v.Allocation(mandate.SleeveCore)
-	owner, _ := v.Allocation(mandate.SleeveOwner)
-	if !(mandateContribution(v, 8101) > mandateContribution(v, 8103)) || !(core.ExcessBase > owner.ExcessBase) {
-		t.Fatalf("fixture: SYNA %.1f%% IBCF %.1f%%, core excess %.0f owner excess %.0f", mandateContribution(v, 8101), mandateContribution(v, 8103), core.ExcessBase, owner.ExcessBase)
-	}
-	rows, st := mandateReductionRun(t, in, pos)
-	if st.State != rpc.MandateReductionReducing || len(rows) == 0 {
-		t.Fatalf("state %s rows %d: %s", st.State, len(rows), st.Reason)
-	}
-	assertMandateRowsReduceOnly(t, rows, pos)
-	first := rows[0]
-	if first.Contract.ConID != 8103 || first.Mandate.Rank != 1 || first.Mandate.Sleeve != mandate.SleeveCore || !strings.Contains(first.Reason, "the core's sleeve, the sleeve furthest over its allocation") {
-		t.Fatalf("first row %d %+v: %s", first.Contract.ConID, first.Mandate, first.Reason)
-	}
-	for _, row := range rows[1:] {
-		if row.Mandate.Sleeve != mandate.SleeveOwner {
-			t.Fatalf("after the core, the owner's lines: %+v", row.Mandate)
+	for _, coreAllocation := range []float64{0, 0.9} {
+		in := mandateAllocationedFixture(t, pos, 1.3, coreAllocation, 8103)
+		v := in.Result.Verdict
+		core, _ := v.Allocation(mandate.SleeveCore)
+		if (coreAllocation == 0) != core.Over {
+			t.Fatalf("fixture: core allocation %.1f, core %+v", coreAllocation, core)
 		}
-	}
-	if st.Plan[0].Sleeve != mandate.SleeveCore {
-		t.Fatalf("plan %+v", st.Plan)
-	}
-}
-
-// A machine sleeve whose own risk fits its allocation is not cut for the owner's
-// excess, even as the largest contributor: the old rule would have cut the
-// core's fund first, the allocations cut only the owner's lines.
-func TestMandateReductionLeavesASleeveInsideItsAllocation(t *testing.T) {
-	pos := mandateReductionBook(mandateReductionStock("SYNA", 8201, 420, 100), mandateReductionStock("SYNB", 8202, 300, 100), mandateReductionStock("IBCF", 8203, 1080, 100))
-	probe := mandateAllocationedFixture(t, pos, 1.3, 0, 8203)
-	coreAlone, _ := probe.Result.Verdict.Allocation(mandate.SleeveCore)
-	allocation := 1.02 * coreAlone.StandaloneBase / probe.Result.Verdict.Capital.BudgetAnnualSD
-	in := mandateAllocationedFixture(t, pos, 1.3, allocation, 8203)
-	v := in.Result.Verdict
-	core, _ := v.Allocation(mandate.SleeveCore)
-	if core.Over || allocation >= 0.95 || mandateContribution(v, 8203) < mandateContribution(v, 8201) || mandateContribution(v, 8203) < mandateContribution(v, 8202) {
-		t.Fatalf("fixture: allocation %.2f of the budget, core %+v, IBCF %.1f%% SYNA %.1f%% SYNB %.1f%%", allocation, core, mandateContribution(v, 8203), mandateContribution(v, 8201), mandateContribution(v, 8202))
-	}
-	rows, st := mandateReductionRun(t, in, pos)
-	if st.State != rpc.MandateReductionReducing || len(rows) == 0 {
-		t.Fatalf("state %s: %s", st.State, st.Reason)
-	}
-	assertMandateRowsReduceOnly(t, rows, pos)
-	for _, row := range rows {
-		if row.Contract.ConID == 8203 || row.Mandate.Sleeve != mandate.SleeveOwner {
-			t.Fatalf("the core inside its allocation was cut: %+v", row.Mandate)
+		rows, st := mandateReductionRun(t, in, pos)
+		if st.State != rpc.MandateReductionReducing || len(rows) == 0 {
+			t.Fatalf("state %s rows %d: %s", st.State, len(rows), st.Reason)
 		}
-	}
-	// Without allocations the old rule takes the largest contributor, the fund.
-	old := mandateReductionFixture(t, pos, 1.3, 1e9, 2)
-	if rows, _ := mandateReductionRun(t, old, pos); len(rows) == 0 || rows[0].Contract.ConID != 8203 {
-		t.Fatalf("fixture: without allocations the fund is not cut first: %+v", rows)
-	}
-}
-
-// A sleeve over its allocation is cut toward its allocation, not past it for another
-// sleeve's excess: the core goes first, by less than the old rule took from
-// it, and the owner's lines carry the owner's excess.
-func TestMandateReductionStopsASleevesCutAtItsAllocation(t *testing.T) {
-	pos := mandateReductionBook(mandateReductionStock("SYNA", 8301, 600, 100), mandateReductionStock("SYNB", 8302, 300, 100), mandateReductionStock("IBCF", 8303, 3000, 100))
-	probe := mandateAllocationedFixture(t, pos, 1.3, 0, 8303)
-	coreUse, _ := probe.Result.Verdict.Allocation(mandate.SleeveCore)
-	// The core over its allocation by 70% of the book's excess: the furthest over,
-	// but its allocation is reached before the book's target.
-	budget := probe.Result.Verdict.Capital.BudgetAnnualSD
-	allocation := (coreUse.UseBase - 0.7*(probe.Result.Verdict.Risk.SDAnnualBase-budget)) / budget
-	in := mandateAllocationedFixture(t, pos, 1.3, allocation, 8303)
-	v := in.Result.Verdict
-	core, _ := v.Allocation(mandate.SleeveCore)
-	owner, _ := v.Allocation(mandate.SleeveOwner)
-	if !core.Over || core.ExcessBase <= owner.ExcessBase {
-		t.Fatalf("fixture: core %+v owner %+v", core, owner)
-	}
-	rows, st := mandateReductionRun(t, in, pos)
-	assertMandateRowsReduceOnly(t, rows, pos)
-	cutOf := func(plan []rpc.TradeProposalMandatePlanOrder) int {
-		for _, p := range plan {
-			if p.Contract.ConID == 8303 {
-				return p.Units
+		assertMandateRowsReduceOnly(t, rows, pos)
+		first := rows[0]
+		if first.Contract.ConID != 8103 || first.Mandate.Rank != 1 || first.Mandate.Sleeve != mandate.SleeveCore || first.Mandate.Phase != rpc.MandatePhasePremium ||
+			!strings.Contains(first.Reason, "the largest premium at risk left, IBCF in the core's sleeve") {
+			t.Fatalf("core allocation %.1f: first row %d %+v: %s", coreAllocation, first.Contract.ConID, first.Mandate, first.Reason)
+		}
+		for i, row := range rows[1:] {
+			if row.Mandate.Sleeve != mandate.SleeveOwner || row.Mandate.LegLossBase > rows[i].Mandate.LegLossBase {
+				t.Fatalf("after the core, the owner's lines by their loss: %+v", row.Mandate)
 			}
 		}
-		return 0
-	}
-	if len(rows) == 0 || rows[0].Contract.ConID != 8303 || !slices.ContainsFunc(rows, func(r rpc.TradeProposal) bool { return r.Mandate.Sleeve == mandate.SleeveOwner }) {
-		t.Fatalf("the core first, then the owner: %+v", st.Plan)
-	}
-	_, old := mandateReductionRun(t, mandateReductionFixture(t, pos, 1.3, 1e9, 2), pos)
-	if cut, was := cutOf(st.Plan), cutOf(old.Plan); cut <= 0 || cut >= was {
-		t.Fatalf("the core's cut %d, the old rule's %d", cut, was)
+		if st.Plan[0].Sleeve != mandate.SleeveCore || st.Plan[0].LossBase != first.Mandate.LegLossBase {
+			t.Fatalf("plan %+v", st.Plan)
+		}
+		// The same order without any allocation plan.
+		plain, _ := mandateReductionRun(t, mandateReductionFixture(t, pos, 1.3, 1e9, 2), pos)
+		if len(plain) != len(rows) || plain[0].Contract.ConID != 8103 || plain[0].Mandate.Units != first.Mandate.Units {
+			t.Fatalf("without allocations: %+v", plain)
+		}
 	}
 }
 
@@ -372,9 +304,9 @@ func TestMandateReductionWithAnEmptyMachineIsUnchanged(t *testing.T) {
 	}
 }
 
-// Property: on synthetic books with a machine allocation, the allocations' batch
-// reaches the target wherever the old order does, and every row the batch
-// may send alone lowers the book's risk.
+// Property: on synthetic books with a machine allocation, the batch reaches
+// the target wherever the plain book's does, and every row the batch may
+// send alone lowers the loss measure and the book's risk.
 func TestMandateReductionAllocationsNeverStopShort(t *testing.T) {
 	r := rand.New(rand.NewPCG(11, 12))
 	for trial := range 16 {
@@ -391,10 +323,14 @@ func TestMandateReductionAllocationsNeverStopShort(t *testing.T) {
 			t.Fatalf("trial %d: the old order reaches the target, the allocations' does not: %s", trial, st.Reason)
 		}
 		rows, _ := mandateReductionRun(t, in, pos)
-		before := mandateRiskAfter(t, in, nil)
+		before, lossBefore := mandateRiskAfter(t, in, nil), mandateLossAfter(t, in, nil)
 		for _, row := range rows {
-			if after := mandateRiskAfter(t, in, map[int]float64{row.Contract.ConID: float64(row.Quantity)}); after >= before {
+			cut := map[int]float64{row.Contract.ConID: float64(row.Quantity)}
+			if after := mandateRiskAfter(t, in, cut); after >= before {
 				t.Fatalf("trial %d: selling %d of %d alone leaves the risk %.0f, not under %.0f", trial, row.Quantity, row.Contract.ConID, after, before)
+			}
+			if after := mandateLossAfter(t, in, cut); after >= lossBefore {
+				t.Fatalf("trial %d: selling %d of %d alone leaves the loss measure %.0f, not under %.0f", trial, row.Quantity, row.Contract.ConID, after, lossBefore)
 			}
 		}
 	}

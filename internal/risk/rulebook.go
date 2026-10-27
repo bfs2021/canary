@@ -812,7 +812,10 @@ func (c *ruleContext) optionLinePremium() RuleRow {
 // book of long options without a margin loan or short options, the former
 // available-funds reserve read the same constraint the other way round and
 // relaxed as the calls lost, so this measures the premium directly.
-// Protection legs are governed by rule 2's hedge tier and rule 12.
+// Protection legs count at their premium like every other bought option
+// (owner decision 2026-10-27 19:52 CET, "Count it"; spec TM-04.12; until then
+// they were left out), their share disclosed in a note; rule 2's hedge tier
+// and rule 12 still govern the hedge's own band.
 func (c *ruleContext) premiumBudget() RuleRow {
 	row := RuleRow{ID: RuleCashSellOnly, Number: 3, Title: "Premium budget", Unit: "% NLV"}
 	if g := c.portfolioGate(row.ID, row.Number, row.Title); g != nil {
@@ -833,16 +836,13 @@ func (c *ruleContext) premiumBudget() RuleRow {
 			// the exchange rate, and a leg with neither a cost nor a value
 			// is simply not known: zero would be a quiet pass.
 			atRisk, note, ok, why := PremiumAtRiskLeg(l)
-			// Protection is outside the budget whatever its base value.
-			if rule12HedgeLeg(l) {
-				if ok {
-					hedgeTotal += atRisk
-				}
-				continue
-			}
 			if !ok {
 				unmeasured = append(unmeasured, RuleOffender{Symbol: n.Symbol, Leg: l.Desc, Status: RuleStatusUnknown, Note: why})
 				continue
+			}
+			// Protection counts in the budget; its share is named below.
+			if rule12HedgeLeg(l) {
+				hedgeTotal += atRisk
 			}
 			total += atRisk
 			offenders = append(offenders, RuleOffender{Symbol: n.Symbol, Leg: l.Desc,
@@ -871,7 +871,7 @@ func (c *ruleContext) premiumBudget() RuleRow {
 	}
 	row.Offenders = offenders
 	if hedgeTotal > 0 {
-		row.Notes = append(row.Notes, fmt.Sprintf("protection premium %.1f%% of NLV excluded from this budget (rule 2 hedge tier / rule 12 govern the hedge)", round1(pct(hedgeTotal, c.nlv))))
+		row.Notes = append(row.Notes, fmt.Sprintf("of which protection premium %.1f%% of NLV, counted in this budget since 2026-10-27 (rule 2 hedge tier / rule 12 govern the hedge's own band)", round1(pct(hedgeTotal, c.nlv))))
 	}
 	// Context only: on a long-premium book without a margin loan, available
 	// funds are roughly NLV less this premium, so the owner sees both.

@@ -352,7 +352,7 @@ func TestMandateOwnerStopCutsHalfTheOwnersRiskAndNothingOfTheMachine(t *testing.
 		}
 		cuts[row.Contract.ConID] = float64(row.Mandate.Units)
 	}
-	if !strings.Contains(st.Reason, "the book is within the budget, but your sleeve is 26% below its high-water mark") || !strings.Contains(st.Reason, "the sleeve's risk to its stop target") {
+	if !strings.Contains(st.Reason, "the loss measure is within the mandate's maximum loss, but your sleeve is 26% below its high-water mark") || !strings.Contains(st.Reason, "the sleeve's risk to its stop target") {
 		t.Fatalf("status reason: %s", st.Reason)
 	}
 	// After the whole batch the owner's use is at or under half, by the
@@ -397,9 +397,9 @@ func mandateOwnerUseAfter(t *testing.T, in mandateReductionInput, cuts map[int]f
 	return mandateOwnerUse(&v)
 }
 
-// Over budget and stopped at once, the batch takes the book to its target in
-// the allocations' order and then carries the owner's sleeve on to the stop's
-// target; the core's excess is still the core's to cut.
+// Over the loss room and stopped at once, the batch takes the loss measure
+// to its target by the largest premium at risk first and then carries the
+// owner's sleeve on to the stop's target by its volatility.
 func TestMandateOwnerStopInsideABudgetBreach(t *testing.T) {
 	pos := mandateReductionBook(mandateReductionStock("SYNA", 8701, 900, 100), mandateReductionStock("SYNB", 8702, 400, 100), mandateReductionStock("IBCF", 8703, 1500, 100))
 	in := ownerStopFixture(t, pos, 1.3, 8703)
@@ -419,8 +419,8 @@ func TestMandateOwnerStopInsideABudgetBreach(t *testing.T) {
 	if after := mandateOwnerUseAfter(t, in, cuts); after > v.OwnerStop.TargetUseBase+1e-6 {
 		t.Fatalf("owner use after the batch %.0f, target %.0f", after, v.OwnerStop.TargetUseBase)
 	}
-	if risk := mandateRiskAfter(t, in, cuts); risk > mandateReductionTargetFactor*v.Capital.BudgetAnnualSD+1e-6 {
-		t.Fatalf("risk after the batch %.0f, budget %.0f", risk, v.Capital.BudgetAnnualSD)
+	if loss := mandateLossAfter(t, in, cuts); loss > mandateReductionTargetFactor*mandateLossRoom(in)+1e-6 {
+		t.Fatalf("loss after the batch %.0f, room %.0f", loss, mandateLossRoom(in))
 	}
 }
 

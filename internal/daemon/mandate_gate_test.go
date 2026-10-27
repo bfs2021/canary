@@ -142,25 +142,71 @@ func mandateTestUngrouped(synaShares float64) *rpc.PositionsResult {
 	}
 }
 
+// mandateTestPositionsOverLoss is the small stock fixture with bought calls
+// on two names, each line priced at its mark with the price paid beside it:
+// 18 SYNB calls (36,000 EUR of value, 32,400 paid) and 18 SYNA calls
+// (32,400 EUR of value, 35,640 EUR paid, in USD at 0.9), 71,640 EUR of
+// premium at risk against the 69,000 EUR loss room (30% of the 230,000 EUR
+// budget base at full room). With the gap room at 100% no name breaches
+// its gap cap, so the loss measure alone reads reduce (spec TM-04.12).
+func mandateTestPositionsOverLoss() *rpc.PositionsResult {
+	pos := mandateTestUngrouped(100)
+	iv := 0.3
+	fx := 0.9
+	bmv := 18 * 100 * 20.0
+	amv := 18 * 100 * 20.0 * fx
+	pos.Options = append(pos.Options,
+		rpc.PositionView{Symbol: "SYNB", SecType: rpc.SecTypeOption, ConID: 9005, Currency: "EUR", Quantity: 18, Multiplier: 100, Mark: 20, AvgCost: 1800,
+			MarketValue: bmv, MarketValueBase: &bmv, Expiry: "20270115", Strike: 80, Right: "C", IV: &iv, Underlying: new(80.0),
+			Delta: new(0.6), Gamma: new(0.02), Theta: new(-0.05), Vega: new(0.3)},
+		rpc.PositionView{Symbol: "SYNA", SecType: rpc.SecTypeOption, ConID: 9007, Currency: "USD", Quantity: 18, Multiplier: 100, Mark: 20, AvgCost: 2200, FXRate: &fx,
+			MarketValue: 18 * 100 * 20, MarketValueBase: &amv, Expiry: "20270115", Strike: 100, Right: "C", IV: &iv, Underlying: new(100.0),
+			Delta: new(0.6), Gamma: new(0.02), Theta: new(-0.05), Vega: new(0.3)})
+	return mandateTestGrouped(pos)
+}
+
+// mandateTestOverLossServer is a server whose book reads reduce on the loss
+// measure alone: the premium at risk over the loss room, no gap breach.
+func mandateTestOverLossServer(t *testing.T) (*Server, *rpc.MandateRiskResult) {
+	t.Helper()
+	c := testMandateConstitution()
+	c.Mandate.GapRoomPct = new(100.0)
+	srv, _ := mandateTestServer(t, c)
+	seedMandateHistory(t, srv, 0)
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositionsOverLoss(), nil }
+	res := srv.evaluateMandate(t.Context(), false)
+	v := res.Verdict
+	if !res.Active || v == nil || v.Status != mandate.StatusReduce || v.Loss == nil || v.Loss.TotalBase <= v.Loss.RoomBase || v.Stresses == nil || len(v.Stresses.GapBreaches) != 0 {
+		t.Fatalf("fixture: %+v", v)
+	}
+	return srv, res
+}
+
 func mandateBuy(shares int) rpc.OrderDraft {
 	return rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: shares, LimitPrice: 100, Contract: rpc.ContractParams{ConID: 9001, Symbol: "SYNA", SecType: "STK", Currency: "USD"}}
 }
 
 var mandateOpen = rpc.OrderPositionImpact{Before: 0, After: 100, Effect: rpc.OrderPositionEffectOpen}
 
-// A book over budget refuses a risk-adding order at the preview, at
-// admission and at the wire guard with mandate_budget; a reduction, a close
-// and a hedge entry pass.
+// A book whose loss measure is over the loss room (spec TM-04.12; owner,
+// 2026-10-27 19:50 CET) refuses a risk-adding order at the preview, at
+// admission and at the wire guard with mandate_budget, naming the measure
+// and the room; a reduction, a close and a hedge entry pass. The share
+// stops the measure reads come from the open orders, which this server
+// cannot read, so the verdict says every share line counts as unstopped.
 func TestMandateGateRefusesAdditionsOverBudget(t *testing.T) {
-	srv, _ := mandateTestServer(t, testMandateConstitution())
-	seedMandateHistory(t, srv, 0)
-	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(3000), nil }
-	res := srv.evaluateMandate(t.Context(), false)
-	if !res.Active || res.Verdict == nil || res.Verdict.Status != mandate.StatusReduce {
-		t.Fatalf("verdict %+v", res.Verdict)
+	srv, res := mandateTestOverLossServer(t)
+	if math.Abs(res.Verdict.Loss.TotalBase-71640) > 1e-6 || math.Abs(res.Verdict.Loss.RoomBase-69000) > 1e-6 || res.Verdict.Loss.PremiumBase != res.Verdict.Loss.TotalBase {
+		t.Fatalf("loss %+v, want 71,640 EUR of premium against the 69,000 EUR room", res.Verdict.Loss)
 	}
-	if res.Gate == nil || !res.Gate.RefusesAdditions || len(res.Verdict.NotModelled) != 1 || !strings.Contains(res.Verdict.NotModelled[0], "bill") {
-		t.Fatalf("gate %+v not modelled %v", res.Gate, res.Verdict.NotModelled)
+	if res.Gate == nil || !res.Gate.RefusesAdditions || !strings.Contains(res.Gate.Reason, "the loss measure 71,640 EUR (premium at risk 71,640 EUR, stop loss 0 EUR) is over the mandate's loss room 69,000 EUR (104%)") {
+		t.Fatalf("gate %+v", res.Gate)
+	}
+	if nm := res.Verdict.NotModelled; len(nm) != 2 || !strings.Contains(nm[0], "bill") || !strings.Contains(nm[1], "share stops unread") || !strings.Contains(nm[1], "every share line counts as unstopped") {
+		t.Fatalf("not modelled %v", res.Verdict.NotModelled)
+	}
+	if u := res.Verdict.Loss.Unstopped; !slices.Equal(u, []string{"SYNA", "SYNB"}) {
+		t.Fatalf("unstopped %v", u)
 	}
 	if len(res.Evidence.Series) != 4 || res.Evidence.PositionsAsOf.IsZero() || res.Evidence.EquityAsOf.IsZero() {
 		t.Fatalf("evidence %+v", res.Evidence)
@@ -172,8 +218,8 @@ func TestMandateGateRefusesAdditionsOverBudget(t *testing.T) {
 	_, err := srv.previewOrder(t.Context(), rpc.OrderPreviewParams{Action: "buy", Quantity: 10, LimitPrice: &limit,
 		Contract: rpc.ContractParams{ConID: 9002, Symbol: "SYNB", SecType: "STK", Currency: "EUR"}})
 	blockers := previewFailureBlockers(err)
-	if err == nil || len(blockers) != 1 || blockers[0].Code != mandateBudgetCode || !strings.Contains(blockers[0].Message, "over the budget") || !strings.Contains(blockers[0].Message, "stay open") {
-		t.Fatalf("buy over budget: err %v blockers %+v, want mandate_budget", err, blockers)
+	if err == nil || len(blockers) != 1 || blockers[0].Code != mandateBudgetCode || !strings.Contains(blockers[0].Message, "over the mandate's loss room 69,000 EUR") || !strings.Contains(blockers[0].Message, "stay open") {
+		t.Fatalf("buy over the loss room: err %v blockers %+v, want mandate_budget", err, blockers)
 	}
 	if err := srv.mandateBudgetGateError(mandateBuy(10), mandateOpen); err == nil || !errors.Is(err, ErrTradingDisabled) || !strings.Contains(err.Error(), "Mandate budget") {
 		t.Fatalf("admission over budget: %v", err)
@@ -182,7 +228,7 @@ func TestMandateGateRefusesAdditionsOverBudget(t *testing.T) {
 	// TestMandateWireGuardRefusesAdditionsOverBudget (trading build).
 	for _, effect := range []string{rpc.OrderPositionEffectReduce, rpc.OrderPositionEffectClose} {
 		sell := rpc.OrderDraft{Action: rpc.OrderActionSell, Quantity: 50, Contract: rpc.ContractParams{ConID: 9001, Symbol: "SYNA", SecType: "STK", Currency: "USD"}}
-		if blocker := srv.mandateBudgetGate(sell, rpc.OrderPositionImpact{Before: 3000, After: 2950, Effect: effect}); blocker != nil {
+		if blocker := srv.mandateBudgetGate(sell, rpc.OrderPositionImpact{Before: 100, After: 50, Effect: effect}); blocker != nil {
 			t.Fatalf("%s over budget: %+v, want allowed", effect, blocker)
 		}
 	}
@@ -286,8 +332,10 @@ func TestMandateGateIncrementalCheckRefusesAnAdditionOverBudget(t *testing.T) {
 	if blocker := srv.mandateBudgetGate(mandateBuy(10), mandateOpen); blocker != nil {
 		t.Fatalf("small buy: %+v", blocker)
 	}
+	// A share buy carries no premium and no stop, so the loss measure does
+	// not see it; the gap cap bounds it (and the sleeve's allocation).
 	blocker := srv.mandateBudgetGate(mandateBuy(5000), mandateOpen)
-	if blocker == nil || blocker.Code != mandateBudgetCode || !strings.Contains(blocker.Message, "with this order the risk would be") {
+	if blocker == nil || blocker.Code != mandateBudgetCode || !strings.Contains(blocker.Message, "with this order a −25% gap in SYNA would lose") || !strings.Contains(blocker.Message, "over the gap cap") {
 		t.Fatalf("large buy: %+v", blocker)
 	}
 	// A new option is judged by the premium limits (owner, 2026-10-23 18:22
@@ -361,8 +409,8 @@ func TestMandateGateMeasuresANameTheBookDoesNotHold(t *testing.T) {
 	if blocker := srv.mandateBudgetGate(buy("SYNC", "EUR", 10), mandateOpen); blocker != nil {
 		t.Fatalf("an unheld name, history arrived, within budget: %+v", blocker)
 	}
-	if blocker := srv.mandateBudgetGate(buy("SYNC", "EUR", 20000), mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "with this order the risk would be") {
-		t.Fatalf("an unheld name, history arrived, over budget: %+v", blocker)
+	if blocker := srv.mandateBudgetGate(buy("SYNC", "EUR", 20000), mandateOpen); blocker == nil || !strings.Contains(blocker.Message, "with this order a −25% gap in SYNC would lose") {
+		t.Fatalf("an unheld name, history arrived, over the gap cap: %+v", blocker)
 	}
 	// A currency the book holds nothing in: the exchange rate's history too.
 	if err := srv.saveMandateSeries(t.Context(), mandateTestSeries("u:SYND", 0.25, 6, 0)); err != nil {
@@ -1042,21 +1090,22 @@ func TestMandateGatePassesBillPurchasesOnly(t *testing.T) {
 	bond := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 10000, LimitPrice: 99, Contract: rpc.ContractParams{ConID: 9007, Symbol: "SYNL", SecType: "BOND", Currency: "EUR"}}
 	heldBill := rpc.OrderPositionImpact{Before: 10000, After: 20000, Effect: rpc.OrderPositionEffectIncrease}
 	for _, tc := range []struct {
+		name    string
 		status  string
-		shares  float64
+		pos     *rpc.PositionsResult
 		gapRoom float64
 		lag     int
 	}{
-		{mandate.StatusOver, 1300, 100, 0},
-		{mandate.StatusReduce, 3000, 33.3, 0},
-		{mandate.StatusUnknown, 100, 33.3, 3},
+		{"reduce on the loss measure", mandate.StatusReduce, mandateTestPositionsOverLoss(), 100, 0},
+		{"reduce on a gap breach", mandate.StatusReduce, mandateTestPositions(3000), 33.3, 0},
+		{"unknown", mandate.StatusUnknown, mandateTestPositions(100), 33.3, 3},
 	} {
-		t.Run(tc.status, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			c := testMandateConstitution()
 			c.Mandate.GapRoomPct = new(tc.gapRoom)
 			srv, _ := mandateTestServer(t, c)
 			seedMandateHistory(t, srv, tc.lag)
-			srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return mandateTestPositions(tc.shares), nil }
+			srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) { return tc.pos, nil }
 			if res := srv.evaluateMandate(t.Context(), false); res.Verdict.Status != tc.status || !res.Gate.RefusesAdditions {
 				t.Fatalf("fixture verdict %s %v gate %+v, want %s refusing additions", res.Verdict.Status, res.Verdict.Reasons, res.Gate, tc.status)
 			}
@@ -1345,5 +1394,49 @@ func TestPolicyCheckMandateFollowsTheConstitution(t *testing.T) {
 	srv.riskPolicies.active = testConstitutionV3()
 	if got := srv.policyCheckMandate(mandateTestNow); got != nil {
 		t.Fatalf("figures without [mandate]: %+v", got)
+	}
+}
+
+// An option buy within the premium limits is still judged against the loss
+// room (spec TM-04.12): the book's premium at risk plus the order's, over
+// the room, is the buy's warning (an option buy is refused by the premium
+// limits alone, owner 2026-10-23 18:22 CEST), naming the measure with the
+// order, the room and the measure now; a smaller buy inside the room passes
+// clean.
+func TestMandateGateJudgesAnOptionBuyByTheLossRoom(t *testing.T) {
+	c := testMandateConstitution()
+	c.Mandate.GapRoomPct = new(100.0)
+	srv, _ := mandateTestServer(t, c)
+	seedMandateHistory(t, srv, 0)
+	// 15 SYNB calls: 30,000 EUR of value (27,000 paid), inside the 69,000 EUR
+	// room, the name inside its 45,000 EUR premium limit.
+	srv.mandatePositionsForTest = func(context.Context) (*rpc.PositionsResult, error) {
+		pos := mandateTestUngrouped(100)
+		iv := 0.3
+		mv := 15 * 100 * 20.0
+		pos.Options = append(pos.Options, rpc.PositionView{Symbol: "SYNB", SecType: rpc.SecTypeOption, ConID: 9005, Currency: "EUR", Quantity: 15, Multiplier: 100, Mark: 20, AvgCost: 1800,
+			MarketValue: mv, MarketValueBase: &mv, Expiry: "20270115", Strike: 80, Right: "C", IV: &iv, Underlying: new(80.0),
+			Delta: new(0.6), Gamma: new(0.02), Theta: new(-0.05), Vega: new(0.3)})
+		return mandateTestGrouped(pos), nil
+	}
+	res := srv.evaluateMandate(t.Context(), false)
+	if v := res.Verdict; v.Status != mandate.StatusWithin || v.Loss == nil || math.Abs(v.Loss.TotalBase-30000) > 1e-6 || res.Gate == nil || res.Gate.RefusesAdditions {
+		t.Fatalf("fixture: %s loss %+v gate %+v", res.Verdict.Status, res.Verdict.Loss, res.Gate)
+	}
+	// 20 SYNA calls at 22 USD: 39,600 EUR of premium, inside the name's
+	// limit and the 35% premium budget, over the loss room with the book
+	// (the total is not spelled out here: the holdings guard keeps figures
+	// near the live book out of Git).
+	call := rpc.OrderDraft{Action: rpc.OrderActionBuy, Quantity: 20, LimitPrice: 22, Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "OPT", Currency: "USD", Right: "C", Strike: 100, Expiry: "20270115", Multiplier: 100}}
+	blocker, warning := srv.mandateBudgetJudgement(call, mandateOpen)
+	if blocker != nil || warning == nil || warning.Code != mandateBudgetCode ||
+		!strings.Contains(warning.Message, "with this order the loss measure would be ") ||
+		!strings.Contains(warning.Message, " EUR, over the mandate's loss room 69,000 EUR (now 30,000 EUR)") {
+		t.Fatalf("an option buy over the loss room: blocker %+v warning %+v", blocker, warning)
+	}
+	// Ten calls, 19,800 EUR: inside the room.
+	call.Quantity = 10
+	if blocker, warning := srv.mandateBudgetJudgement(call, mandateOpen); blocker != nil || warning != nil {
+		t.Fatalf("an option buy inside the loss room: blocker %+v warning %+v", blocker, warning)
 	}
 }

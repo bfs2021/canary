@@ -1,21 +1,26 @@
 # canary mandate · COLUMNS=80 · colour off
 Mandate  REDUCE
 Since · Sat 5 Sep 12:58 TZ · 1h 02m
-Risk · 95,880 EUR a year · 1-day 6,040 EUR · 99% expected shortfall 16,480 EUR
-  · 299% of the budget 32,050 EUR
-Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
-  high-water mark 235,000 EUR
+Loss · 83,000 EUR = premium at risk 0 EUR + loss to armed stops 83,000 EUR ·
+  129% of the loss room 64,101 EUR · unstopped, counting nothing: SYNB
+Volatility · 95,880 EUR a year · 1-day swing 6,040 EUR · 99% expected
+  shortfall 16,480 EUR · 299% of the sizing budget 32,050 EUR
+Loss room · 30% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from
+  the high-water mark 235,000 EUR
+Sizing budget · 15% × 230,000 EUR at room 93% a year · sizes the sleeve
+  allocations, never the verdict
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
-Stock additions · refused · the mandate risk 95,880 EUR a year is over the
-                  budget 32,050 EUR (299%); a gap in SYNA, SYNB would lose more
-                  than the gap cap 22,940 EUR
+Stock additions · refused · the loss measure 83,000 EUR (premium at risk 0 EUR,
+                  stop loss 83,000 EUR) is over the mandate's loss room 64,101
+                  EUR (129%); a gap in SYNA, SYNB would lose more than the gap
+                  cap 22,940 EUR
 Reduction · reducing · 2 rows, pre-authorised: the daemon places 2 after the
             veto window, the last at 14:30:00 TZ
-  1. sell 3200 SYNA · gap over its cap · 71.4% of the risk · places itself at
-  14:30:00 TZ unless vetoed
-  2. sell 1200 SYNB · largest risk · 33.1% of the risk · places itself at
-  14:30:00 TZ unless vetoed
+  1. sell 3200 SYNA · gap over its cap · 83,000 EUR of the loss measure · 71.4%
+  of the risk · places itself at 14:30:00 TZ unless vetoed
+  2. sell 1200 SYNB · largest premium at risk · 33.1% of the risk · places
+  itself at 14:30:00 TZ unless vetoed
 
 Risk allocations  each sleeve's use against its allocation, a year · alone: its own risk
   Owner · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the
@@ -32,7 +37,7 @@ Contributions  share of the risk · beta to SPY · one-name gap against its cap
   SYNB · 33.1% · beta 0.64 · gap −25% loses 40,000 EUR (cap 22,940) · BREACH
 
 Positions
-  SYNA · 71.4% · 360,000 EUR
+  SYNA · 71.4% · 360,000 EUR · loss 83,000 EUR
   SYNB · 33.1% · 160,000 EUR
   SYNA 20261218 110 C · −4.5% · −2,160 EUR
 
@@ -51,28 +56,34 @@ Evidence
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
-The mandate refuses stock and ETF additions outside the volatility budget and
-  option buys outside the premium limits. Its reduction is a set of proposals
-  (canary proposals); the daemon places them itself only when mandate_reduction
-  is pre-authorised, after the veto window.
+The mandate refuses stock and ETF additions while the loss measure is over the
+  maximum loss or your sleeve is over its allocation, and option buys outside
+  the premium limits. Its reduction is a set of proposals (canary proposals);
+  the daemon places them itself only when mandate_reduction is pre-authorised,
+  after the veto window.
 # canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mMandate\x1b[0m  \x1b[31m\x1b[1mREDUCE\x1b[0m\x1b[0m
 Since · Sat 5 Sep 12:58 TZ · 1h 02m
-Risk · 95,880 EUR a year · 1-day 6,040 EUR · 99% expected shortfall 16,480 EUR
-  · 299% of the budget 32,050 EUR
-Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
-  high-water mark 235,000 EUR
+Loss · 83,000 EUR = premium at risk 0 EUR + loss to armed stops 83,000 EUR ·
+  129% of the loss room 64,101 EUR · unstopped, counting nothing: SYNB
+Volatility · 95,880 EUR a year · 1-day swing 6,040 EUR · 99% expected
+  shortfall 16,480 EUR · 299% of the sizing budget 32,050 EUR
+Loss room · 30% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from
+  the high-water mark 235,000 EUR
+Sizing budget · 15% × 230,000 EUR at room 93% a year · sizes the sleeve
+  allocations, never the verdict
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
-Stock additions · \x1b[31mrefused · the mandate risk 95,880 EUR a year is over the\x1b[0m
-                  \x1b[31mbudget 32,050 EUR (299%); a gap in SYNA, SYNB would lose more\x1b[0m
-                  \x1b[31mthan the gap cap 22,940 EUR\x1b[0m
+Stock additions · \x1b[31mrefused · the loss measure 83,000 EUR (premium at risk 0 EUR,\x1b[0m
+                  \x1b[31mstop loss 83,000 EUR) is over the mandate's loss room 64,101\x1b[0m
+                  \x1b[31mEUR (129%); a gap in SYNA, SYNB would lose more than the gap\x1b[0m
+                  \x1b[31mcap 22,940 EUR\x1b[0m
 Reduction · \x1b[33mreducing · 2 rows, pre-authorised: the daemon places 2 after the\x1b[0m
             \x1b[33mveto window, the last at 14:30:00 TZ\x1b[0m
-  1. sell 3200 SYNA · gap over its cap · 71.4% of the risk · places itself at
-  14:30:00 TZ unless vetoed
-  2. sell 1200 SYNB · largest risk · 33.1% of the risk · places itself at
-  14:30:00 TZ unless vetoed
+  1. sell 3200 SYNA · gap over its cap · 83,000 EUR of the loss measure · 71.4%
+  of the risk · places itself at 14:30:00 TZ unless vetoed
+  2. sell 1200 SYNB · largest premium at risk · 33.1% of the risk · places
+  itself at 14:30:00 TZ unless vetoed
 
 \x1b[1mRisk allocations\x1b[0m  each sleeve's use against its allocation, a year · alone: its own risk
   \x1b[31mOwner · 95,880 EUR of 32,050 EUR · alone 95,880 EUR · OVER by 63,830 EUR · the\x1b[0m
@@ -89,7 +100,7 @@ Reduction · \x1b[33mreducing · 2 rows, pre-authorised: the daemon places 2 aft
   \x1b[31mSYNB · 33.1% · beta 0.64 · gap −25% loses 40,000 EUR (cap 22,940) · BREACH\x1b[0m
 
 \x1b[1mPositions\x1b[0m
-  SYNA · 71.4% · 360,000 EUR
+  SYNA · 71.4% · 360,000 EUR · loss 83,000 EUR
   SYNB · 33.1% · 160,000 EUR
   SYNA 20261218 110 C · −4.5% · −2,160 EUR
 
@@ -108,7 +119,8 @@ Not modelled · SYNT (bill, no equity risk modelled)
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · 318 closes to 2026-09-04 · read 05:00:00 TZ
-The mandate refuses stock and ETF additions outside the volatility budget and
-  option buys outside the premium limits. Its reduction is a set of proposals
-  (canary proposals); the daemon places them itself only when mandate_reduction
-  is pre-authorised, after the veto window.
+The mandate refuses stock and ETF additions while the loss measure is over the
+  maximum loss or your sleeve is over its allocation, and option buys outside
+  the premium limits. Its reduction is a set of proposals (canary proposals);
+  the daemon places them itself only when mandate_reduction is pre-authorised,
+  after the veto window.

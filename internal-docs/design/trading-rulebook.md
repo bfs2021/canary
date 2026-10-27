@@ -356,10 +356,15 @@ contradiction:
     as not evaluated because no hedge existed.
     - R1, rule 3 is the **premium budget** (title "Premium budget"; the
       stable id `cash_sell_only`, the alert code `rulebook_cash_sell_only`
-      and history stay). Measure: the sum over every long option leg not
-      classified as protection (rule 12's classification) of premium at risk
-      — the higher of price paid and current value in base currency, the
-      per-leg figure of rule 2 and the budget governor — as % of NLV. Watch
+      and history stay). Measure: the sum over every long option leg of
+      premium at risk — the higher of price paid and current value in base
+      currency, the per-leg figure of rule 2 and the budget governor — as %
+      of NLV, protection included since 2026-10-27 19:52 CET (owner: "Count
+      it", spec TM-04.12; until then legs classified as protection by rule
+      12 were left out and "protection alone read 0%"). The evidence note
+      names the protection share. Rule 4 and rule 12's hedge band are
+      unchanged: rule 2's protection tier is tied to rule 12's act tier, not
+      to this rule. Watch
       and act per regime set, keys `premium_budget_watch_pct` and
       `premium_budget_act_pct` in each `[regime_*]` table beside
       `extrinsic_*`, at or above, with rule 4's regime evaluation (a carried
@@ -380,8 +385,7 @@ contradiction:
       counts), or a leg with neither a price paid nor a value is `unknown`
       (`premium_unmeasured`), never a pass, even beside a breach; no long
       option leg at all is `not_evaluated/no_long_options`, which the alert
-      authority accepts as a trusted negative. Protection alone reads 0%.
-      Mode stays `alert`.
+      authority accepts as a trusted negative. Mode stays `alert`.
     - R2, `cash_reserve_min_pct` is retired the way `cash_sell_only_pct`
       was: `set` refuses it, a file that still carries it loads with the key
       ignored and a `policy_status` note, any `set` or `reset` removes it,
@@ -591,7 +595,7 @@ regime-conditionality notes).
 |---|---|---|---|---|
 | 1 | `single_name_exposure` | worst-case loss per issuer / NLV, every leg netted from current marks (amendment 15) | watch ≥ 30%; act ≥ 40%; illiquid 20% / 30% | alert |
 | 2 | `option_line_premium` | each long option position's market value / NLV; protection positions use the protection tier | watch ≥ 5%; act ≥ 10%; protection watch ≥ 15%, act ≥ 25% | track |
-| 3 | `cash_sell_only` | premium budget: Σ premium at risk (higher of price paid and value) of long options outside protection / NLV; the stable id is retained for history compatibility (amendment 17) | watch ≥ 25 / 20 / 15% by regime (budget for new buying); act ≥ 35% in every regime by default (cap); sell-only at watch or act | alert |
+| 3 | `cash_sell_only` | premium budget: Σ premium at risk (higher of price paid and value) of every long option, protection included since 2026-10-27 / NLV; the stable id is retained for history compatibility (amendment 17) | watch ≥ 25 / 20 / 15% by regime (budget for new buying); act ≥ 35% in every regime by default (cap); sell-only at watch or act | alert |
 | 4 | `extrinsic_budget` | Σ long-option time value / NLV, excluding protection-classified legs | watch ≥ 10 / 7.5 / 5%; act ≥ 15 / 12 / 10% by regime | alert |
 | 5 | `expiry_runway` | long option DTE ≤ 14 unless ≥70-delta ITM or protection-classified | watch ≤ 14 DTE; act ≤ 7 DTE | alert |
 | 6 | `catalyst_coverage` | OTM long option expiring before the next earnings announcement | expiry < earnings | track |

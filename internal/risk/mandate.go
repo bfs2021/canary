@@ -18,10 +18,15 @@ import (
 // in the template's comments, never in code that acts.
 type ConstitutionMandate struct {
 	// MaxLossPct is D: the largest loss of the budget base the owner
-	// tolerates, in percent. Room runs from 1 at a new high to 0 at D.
+	// tolerates, in percent. Room runs from 1 at a new high to 0 at D. Since
+	// 2026-10-27 (spec TM-04.12) it is the verdict's measure: the loss room,
+	// D of the budget base at room, bounds the book's loss measure (premium
+	// at risk plus the loss to armed share stops).
 	MaxLossPct *float64 `toml:"max_loss_pct" json:"max_loss_pct"`
 	// VolTargetPct is the annualised volatility budget at full room, in
-	// percent of the budget base (the owner's choice: D/2).
+	// percent of the budget base (the owner's choice: D/2). It sizes the
+	// sleeve allocations and the machine strategies and is shown as the
+	// 1-day swing; since 2026-10-27 it is no longer the verdict's headline.
 	VolTargetPct *float64 `toml:"vol_target_pct" json:"vol_target_pct"`
 	// TaxReserveBase is the part of equity that is not risk base, in the
 	// account base currency ("Tax comes from this account").

@@ -28,10 +28,14 @@ func mandateReductionStock(symbol string, conID int, shares, mark float64) rpc.P
 		Quantity: shares, Multiplier: 1, Mark: mark, DataType: rpc.MarketDataLive}
 }
 
+// mandateReductionCall is an option line priced at its mark, the price paid
+// the mark too, so a bought line's premium at risk is its value.
 func mandateReductionCall(symbol string, conID int, contracts, strike, spot, mark float64, expiry string) rpc.PositionView {
 	iv := 0.4
+	mv := contracts * 100 * mark
 	return rpc.PositionView{Symbol: symbol, SecType: rpc.SecTypeOption, ConID: conID, Exchange: "SMART", Currency: "EUR",
-		Quantity: contracts, Multiplier: 100, Mark: mark, Expiry: expiry, Strike: strike, Right: "C", IV: &iv, Underlying: new(spot),
+		Quantity: contracts, Multiplier: 100, Mark: mark, AvgCost: mark * 100, MarketValue: mv, MarketValueBase: &mv,
+		Expiry: expiry, Strike: strike, Right: "C", IV: &iv, Underlying: new(spot),
 		TradingClass: symbol, DataType: rpc.MarketDataLive}
 }
 
@@ -47,10 +51,14 @@ func mandateReductionBook(rows ...rpc.PositionView) *rpc.PositionsResult {
 	return pos
 }
 
-// mandateReductionFixture measures pos with the evaluator and sets the
-// budget so the risk reads ratio times it: over between 1 and 1.25, reduce
-// above. budgetBase sets the gap cap (a tenth of it, at full room); a large
-// one keeps every name inside its cap.
+// mandateReductionFixture measures pos with the evaluator and arms a stop
+// under every share line so the loss measure reads ratio times the loss
+// room (0.3 × budgetBase at full room): within under 1, reduce above.
+// Bought options count at their premium (mandateReductionCall prices the
+// line at its mark). The volatility budget is set to the same ratio, so the
+// sleeve allocations and the owner sleeve's stop read beside it as before.
+// budgetBase sets the gap cap (a tenth of it, at full room); a large one
+// keeps every name inside its cap.
 func mandateReductionFixture(t *testing.T, pos *rpc.PositionsResult, ratio, budgetBase float64, streak int) mandateReductionInput {
 	t.Helper()
 	now := mandateTestNow
@@ -65,11 +73,90 @@ func mandateReductionFixture(t *testing.T, pos *rpc.PositionsResult, ratio, budg
 		in.Series[sym] = mandateSeriesInput(mandateTestSeries("u:"+sym, s.vol, s.seed, 0), now)
 	}
 	probe := mandate.Evaluate(in)
-	if probe.Risk == nil {
+	if probe.Risk == nil || probe.Loss == nil {
 		t.Fatalf("fixture unmeasured: %v", probe.Reasons)
 	}
 	in.Capital.BudgetAnnualSD = probe.Risk.SDAnnualBase / ratio
+	mandateArmTestStops(t, in.Legs, pos, ratio*mandate.LossRoomBase(in.Policy, in.Capital)-probe.Loss.TotalBase)
 	return mandateReductionVerdict(in, streak)
+}
+
+// mandateArmTestStops arms a stop under every share line of legs, the loss
+// to it the same share of each line's value, so the lines together lose
+// want in base currency (every fixture row is in EUR).
+func mandateArmTestStops(t *testing.T, legs []mandate.Leg, pos *rpc.PositionsResult, want float64) {
+	t.Helper()
+	marks := map[string]float64{}
+	value := 0.0
+	for _, row := range pos.Stocks {
+		marks[mandateLegID(row)] = row.Mark
+		value += math.Abs(row.Quantity) * row.Mark
+	}
+	if want < -1e-6 {
+		t.Fatalf("fixture: the bought options' premium alone is %.0f over ratio × room", -want)
+	}
+	if value == 0 {
+		return
+	}
+	f := want / value
+	for i := range legs {
+		if legs[i].Kind != mandate.KindStock {
+			continue
+		}
+		legs[i].LossPerUnitBase, legs[i].StopArmed = f*marks[legs[i].ID], true
+	}
+}
+
+// mandateReductionRelegs is the verdict's book with its legs read afresh
+// from pos, every line keeping the stop the fixture armed under it.
+func mandateReductionRelegs(t *testing.T, in mandateReductionInput, pos *rpc.PositionsResult) mandate.Input {
+	t.Helper()
+	book := *in.Input
+	legs, _, _, reasons := mandateLegsFromPositions(pos, "EUR", book.Now)
+	if len(reasons) > 0 {
+		t.Fatalf("fixture legs: %v", reasons)
+	}
+	for i := range legs {
+		if j := slices.IndexFunc(book.Legs, func(l mandate.Leg) bool { return l.ID == legs[i].ID }); j >= 0 && legs[i].Kind == mandate.KindStock {
+			legs[i].LossPerUnitBase, legs[i].StopArmed = book.Legs[j].LossPerUnitBase, book.Legs[j].StopArmed
+		}
+	}
+	book.Legs = legs
+	return book
+}
+
+// mandateLossRoom is the fixture's loss room.
+func mandateLossRoom(in mandateReductionInput) float64 {
+	return mandate.LossRoomBase(in.Input.Policy, in.Input.Capital)
+}
+
+// mandateLossAfter is the evaluator's loss measure with the given cuts
+// applied to the verdict's book.
+func mandateLossAfter(t *testing.T, in mandateReductionInput, cuts map[int]float64) float64 {
+	t.Helper()
+	v := mandate.Evaluate(mandateBookCut(in, cuts))
+	if v.Loss == nil || v.Status == mandate.StatusUnknown {
+		t.Fatalf("unmeasured after cuts: %v", v.Reasons)
+	}
+	return v.Loss.TotalBase
+}
+
+// mandateBookCut is the verdict's book with the cuts applied.
+func mandateBookCut(in mandateReductionInput, cuts map[int]float64) mandate.Input {
+	book := *in.Input
+	book.Legs = slices.Clone(book.Legs)
+	for i := range book.Legs {
+		for conID, units := range cuts {
+			if book.Legs[i].ID == mandateLegID(rpc.PositionView{ConID: conID}) {
+				if book.Legs[i].Quantity > 0 {
+					book.Legs[i].Quantity -= units
+				} else {
+					book.Legs[i].Quantity += units
+				}
+			}
+		}
+	}
+	return book
 }
 
 // mandateReductionVerdict evaluates in as the daemon's kept verdict.
@@ -90,20 +177,7 @@ func mandateReductionRun(t *testing.T, in mandateReductionInput, pos *rpc.Positi
 // verdict's book.
 func mandateRiskAfter(t *testing.T, in mandateReductionInput, cuts map[int]float64) float64 {
 	t.Helper()
-	book := *in.Input
-	book.Legs = slices.Clone(book.Legs)
-	for i := range book.Legs {
-		for conID, units := range cuts {
-			if book.Legs[i].ID == mandateLegID(rpc.PositionView{ConID: conID}) {
-				if book.Legs[i].Quantity > 0 {
-					book.Legs[i].Quantity -= units
-				} else {
-					book.Legs[i].Quantity += units
-				}
-			}
-		}
-	}
-	v := mandate.Evaluate(book)
+	v := mandate.Evaluate(mandateBookCut(in, cuts))
 	if v.Risk == nil {
 		t.Fatalf("unmeasured after cuts: %v", v.Reasons)
 	}
@@ -142,15 +216,16 @@ func mandateRowFor(rows []rpc.TradeProposal, conID int) (rpc.TradeProposal, bool
 	return rpc.TradeProposal{}, false
 }
 
-// The dominant name is ranked first and cut by the smallest share lot that
-// takes the risk to 0.95 × budget; the second name gets no row while the
-// first suffices, and does when it does not.
+// The name with the largest premium at risk (here the loss to its stop) is
+// ranked first and cut by the smallest share lot that takes the loss measure
+// to 0.95 × the loss room; the second name gets no row while the first
+// suffices, and does when it does not (spec TM-04.12).
 func TestMandateReductionDominantFirstSizedToTargetSecondOnlyWhenNeeded(t *testing.T) {
 	t.Parallel()
 	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
 	in := mandateReductionFixture(t, pos, 1.1, 1e7, 2)
-	if in.Result.Verdict.Status != mandate.StatusOver {
-		t.Fatalf("fixture verdict %s, want over", in.Result.Verdict.Status)
+	if v := in.Result.Verdict; v.Status != mandate.StatusReduce || v.Loss == nil || math.Abs(v.Loss.RatioToRoom-1.1) > 1e-6 {
+		t.Fatalf("fixture verdict %s loss %+v, want reduce at 110%% of the room", v.Status, v.Loss)
 	}
 	rows, st := mandateReductionRun(t, in, pos)
 	assertMandateRowsReduceOnly(t, rows, pos)
@@ -160,28 +235,34 @@ func TestMandateReductionDominantFirstSizedToTargetSecondOnlyWhenNeeded(t *testi
 	}
 	syna := rows[0]
 	m := syna.Mandate
-	target := 0.95 * in.Result.Verdict.Capital.BudgetAnnualSD
-	if syna.Contract.ConID != 9001 || m.Rank != 1 || m.BatchRows != 1 || m.Phase != rpc.MandatePhaseRisk || syna.Quantity != m.Units || m.Units%100 != 0 ||
-		syna.PositionEffect != rpc.OrderPositionEffectReduce || m.ContributionPct < 50 {
+	room := mandateLossRoom(in)
+	target := 0.95 * room
+	if syna.Contract.ConID != 9001 || m.Rank != 1 || m.BatchRows != 1 || m.Phase != rpc.MandatePhasePremium || syna.Quantity != m.Units || m.Units%100 != 0 ||
+		syna.PositionEffect != rpc.OrderPositionEffectReduce || m.LegLossBase < 0.5*m.LossBase || math.Abs(m.LossRoomBase-room) > 1e-6 || math.Abs(m.LossTargetBase-target) > 1e-6 {
 		t.Fatalf("SYNA row %+v mandate %+v", syna, m)
 	}
-	if after := mandateRiskAfter(t, in, map[int]float64{9001: float64(m.Units)}); after > target+1e-6 || math.Abs(after-m.RiskAfterAnnualBase) > 1e-6 {
-		t.Fatalf("risk after %d shares = %.2f (row says %.2f), target %.2f", m.Units, after, m.RiskAfterAnnualBase, target)
+	if after := mandateLossAfter(t, in, map[int]float64{9001: float64(m.Units)}); after > target+1e-6 || math.Abs(after-m.LossAfterBase) > 1e-6 || math.Abs(m.LossBase-after-m.LossCutBase) > 1e-6 {
+		t.Fatalf("loss after %d shares = %.2f (row says %.2f, cut %.2f of %.2f), target %.2f", m.Units, after, m.LossAfterBase, m.LossCutBase, m.LossBase, target)
 	}
-	if less := mandateRiskAfter(t, in, map[int]float64{9001: float64(m.Units - 100)}); less <= target {
+	if less := mandateLossAfter(t, in, map[int]float64{9001: float64(m.Units - 100)}); less <= target {
 		t.Fatalf("one lot less (%d shares) already reaches the target: %.2f <= %.2f", m.Units-100, less, target)
 	}
-	if m.VerdictFingerprint != mandateVerdictFingerprint(in.Result) || m.VerdictFingerprint == "" || m.VerdictStatus != mandate.StatusOver ||
+	if m.VerdictFingerprint != mandateVerdictFingerprint(in.Result) || m.VerdictFingerprint == "" || m.VerdictStatus != mandate.StatusReduce ||
 		!m.VerdictAt.Equal(in.Result.Verdict.AsOf) || st.VerdictFingerprint != m.VerdictFingerprint || m.Held {
 		t.Fatalf("row does not carry its verdict: %+v status %+v", m, st)
 	}
-	if !strings.Contains(syna.Reason, "largest risk contributor") || !strings.Contains(syna.Reason, "inside the") ||
-		!slices.ContainsFunc(syna.Details, func(d string) bool { return strings.Contains(d, "sized on the over verdict of") }) {
+	if !strings.Contains(syna.Reason, "the largest premium at risk left, SYNA") || !strings.Contains(syna.Reason, "inside the") ||
+		!slices.ContainsFunc(syna.Details, func(d string) bool { return strings.Contains(d, "sized on the reduce verdict of") }) {
 		t.Fatalf("reason %q details %q", syna.Reason, syna.Details)
 	}
+	// The volatility is reported beside the measure, no longer the headline.
+	if m.RiskAnnualBase <= 0 || m.BudgetAnnualSD <= 0 || m.RiskCutAnnualBase <= 0 || st.LossBase != m.LossBase || st.LossRoomBase != room || st.ProjectedLossBase == nil || *st.ProjectedLossBase != m.LossAfterBase ||
+		st.Plan[0].LossCutBase != m.LossCutBase || !strings.Contains(st.Reason, "sized to take the loss measure to") {
+		t.Fatalf("volatility beside the loss: mandate %+v status %+v", m, st)
+	}
 
-	// A budget the first name alone cannot meet: SYNA is closed (the cut that
-	// takes the most risk off), then SYNB is cut to the target.
+	// A room the first name alone cannot meet: SYNA is closed (the cut that
+	// takes the most off the measure), then SYNB is cut to the target.
 	in = mandateReductionFixture(t, pos, 10, 1e7, 2)
 	rows, st = mandateReductionRun(t, in, pos)
 	assertMandateRowsReduceOnly(t, rows, pos)
@@ -195,11 +276,11 @@ func TestMandateReductionDominantFirstSizedToTargetSecondOnlyWhenNeeded(t *testi
 		first.Quantity != 3000 || second.PositionEffect != rpc.OrderPositionEffectReduce || second.Mandate.Units%10 != 0 {
 		t.Fatalf("SYNA %+v / SYNB %+v", first.Mandate, second.Mandate)
 	}
-	target = 0.95 * in.Result.Verdict.Capital.BudgetAnnualSD
-	if after := mandateRiskAfter(t, in, map[int]float64{9001: 3000, 9002: float64(second.Mandate.Units)}); after > target+1e-6 {
+	target = 0.95 * mandateLossRoom(in)
+	if after := mandateLossAfter(t, in, map[int]float64{9001: 3000, 9002: float64(second.Mandate.Units)}); after > target+1e-6 {
 		t.Fatalf("batch leaves %.2f over the target %.2f", after, target)
 	}
-	if less := mandateRiskAfter(t, in, map[int]float64{9001: 3000, 9002: float64(second.Mandate.Units - 10)}); less <= target {
+	if less := mandateLossAfter(t, in, map[int]float64{9001: 3000, 9002: float64(second.Mandate.Units - 10)}); less <= target {
 		t.Fatalf("SYNB cut is not the smallest lot: %d - 10 already reaches it", second.Mandate.Units)
 	}
 }
@@ -258,7 +339,9 @@ func TestMandateReductionExpiryOptionCutByItsOwnNeed(t *testing.T) {
 		cuts[9001] = float64(syna.Mandate.Units)
 	}
 	// Sized by its own need, not closed: the exercised book, after the whole
-	// batch, stays within the budget, and without the expiry cut it would not.
+	// batch, stays within the volatility budget (delivered shares carry no
+	// premium, so the exercise is judged by the sizing input), and without
+	// the expiry cut it would not.
 	budget := in.Result.Verdict.Capital.BudgetAnnualSD
 	if risk := mandateExercisedRisk(t, in, cuts, 9005); risk > budget+1e-6 || !st.TargetReached || opt.Mandate.Units >= 20 {
 		t.Fatalf("exercised after the batch %.0f, budget %.0f, %d of 20 cut (status %+v)", risk, budget, opt.Mandate.Units, st)
@@ -307,10 +390,10 @@ func TestMandateReductionStartsOnConfirmedVerdicts(t *testing.T) {
 		episode string
 		state   string
 	}{
-		{"one over", 1.1, 1, "", rpc.MandateReductionWatching},
-		{"two over", 1.1, 2, "", rpc.MandateReductionReducing},
-		{"one reduce", 1.5, 1, "", rpc.MandateReductionWatching},
-		{"two reduce", 1.5, 2, "", rpc.MandateReductionReducing},
+		{"one reading just over", 1.1, 1, "", rpc.MandateReductionWatching},
+		{"two readings just over", 1.1, 2, "", rpc.MandateReductionReducing},
+		{"one reading far over", 1.5, 1, "", rpc.MandateReductionWatching},
+		{"two readings far over", 1.5, 2, "", rpc.MandateReductionReducing},
 		{"no scheduled reading, episode running", 1.1, 0, "mandate-ep", rpc.MandateReductionReducing},
 	} {
 		in := mandateReductionFixture(t, pos, tc.ratio, 1e7, tc.streak)
@@ -484,7 +567,7 @@ func mandateReductionNext(t *testing.T, pos *rpc.PositionsResult, ratio float64,
 	return next
 }
 
-// Every verdict sizes the batch afresh: once the risk eases, a standing cut
+// Every verdict sizes the batch afresh: once the loss measure eases, a standing cut
 // shrinks to what the new verdict needs (a reduce-sized sale never goes out
 // on a book that is now only just over); once it rises, the cut grows.
 func TestMandateReductionStandingBatchShrinksAndGrows(t *testing.T) {
@@ -501,8 +584,8 @@ func TestMandateReductionStandingBatchShrinksAndGrows(t *testing.T) {
 	if !ok || keptSyna.Mandate.Units != freshSyna.Mandate.Units || keptSyna.Mandate.Units >= bigSyna.Mandate.Units || !st.TargetReached {
 		t.Fatalf("eased: standing %d, fresh %d, served %d (status %+v)", bigSyna.Mandate.Units, freshSyna.Mandate.Units, keptSyna.Mandate.Units, st)
 	}
-	target := 0.95 * eased.Result.Verdict.Capital.BudgetAnnualSD
-	if over := mandateRiskAfter(t, eased, map[int]float64{9001: float64(keptSyna.Mandate.Units - 100)}); over <= target {
+	target := 0.95 * mandateLossRoom(eased)
+	if over := mandateLossAfter(t, eased, map[int]float64{9001: float64(keptSyna.Mandate.Units - 100)}); over <= target {
 		t.Fatalf("the served cut is larger than the eased verdict needs: %d", keptSyna.Mandate.Units)
 	}
 	if keptSyna.Mandate.Episode != bigSyna.Mandate.Episode || keptSyna.Mandate.VerdictFingerprint != mandateVerdictFingerprint(eased.Result) {
@@ -519,7 +602,7 @@ func TestMandateReductionStandingBatchShrinksAndGrows(t *testing.T) {
 	}
 }
 
-// A small ease of the risk does not re-size a standing cut: the fresh cut
+// A small ease of the loss measure does not re-size a standing cut: the fresh cut
 // one lot smaller keeps the standing order (and so its revision); a larger
 // ease takes the fresh one.
 func TestMandateReductionStandingCutDampsOneLot(t *testing.T) {
@@ -552,7 +635,7 @@ func TestMandateReductionStandingCutDampsOneLot(t *testing.T) {
 			return
 		}
 	}
-	t.Fatal("the risk never eased enough to shrink the cut")
+	t.Fatal("the loss measure never eased enough to shrink the cut")
 }
 
 // Every row is reduce-only and never flips: a short line is bought back, by
@@ -570,7 +653,7 @@ func TestMandateReductionReduceOnlyNeverFlips(t *testing.T) {
 		assertMandateStepsLowerRisk(t, in, rows)
 		short, ok := mandateRowFor(rows, 9003)
 		if !ok || short.Action != rpc.OrderActionBuy || short.Mandate.Rank != 1 {
-			t.Fatalf("ratio %g: the short line (largest contributor) is not bought back first: %+v", ratio, short)
+			t.Fatalf("ratio %g: the short line (the largest loss to its stop) is not bought back first: %+v", ratio, short)
 		}
 	}
 }
@@ -604,12 +687,7 @@ func TestMandateReductionOrderCapsCarryTheRemainder(t *testing.T) {
 		t.Fatalf("after the fill on the old verdict: rows %d status %+v", len(rows), st)
 	}
 	// The next verdict measures the book as it is: the remainder is cut.
-	next := mandateReductionVerdict(func() mandate.Input {
-		book := *in.Input
-		legs, _, _, _ := mandateLegsFromPositions(filled, "EUR", mandateTestNow)
-		book.Legs = legs
-		return book
-	}(), 3)
+	next := mandateReductionVerdict(mandateReductionRelegs(t, in, filled), 3)
 	next.MaxOrderNotional = 20000
 	next.Previous = rows
 	rows, _ = mandateReductionRun(t, next, filled)
@@ -620,15 +698,15 @@ func TestMandateReductionOrderCapsCarryTheRemainder(t *testing.T) {
 }
 
 // A name whose one-name gap would lose more than its cap is cut until it
-// does not, even while the variance is within the target.
+// does not, even while the loss measure is within the target.
 func TestMandateReductionGapBreachCutToCap(t *testing.T) {
 	t.Parallel()
 	pos := mandateReductionBook(mandateReductionStock("SYNA", 9001, 3000, 100), mandateReductionStock("SYNB", 9002, 500, 80))
 	// The gap cap is about a tenth of the budget base at full room; this
-	// base puts SYNA's 25% gap over it while the variance is inside target.
+	// base puts SYNA's 25% gap over it while the loss measure is inside target.
 	in := mandateReductionFixture(t, pos, 0.5, 600000, 2)
 	v := in.Result.Verdict
-	if v.Status != mandate.StatusReduce || v.Stresses == nil || !slices.Contains(v.Stresses.GapBreaches, "SYNA") || mandateRisk(*v) > 0.95*v.Capital.BudgetAnnualSD {
+	if v.Status != mandate.StatusReduce || v.Stresses == nil || !slices.Contains(v.Stresses.GapBreaches, "SYNA") || mandateLoss(*v) > 0.95*mandateLossRoom(in) {
 		t.Fatalf("fixture %s breaches %+v", v.Status, v.Stresses)
 	}
 	rows, st := mandateReductionRun(t, in, pos)
@@ -737,7 +815,7 @@ func TestMandateCycleQuantityKeptOrderNamesItsOwnSize(t *testing.T) {
 	}
 	// The row carries the clause: never an empty parenthesis.
 	engine := &proposalEngine{}
-	kept := &mandateCut{id: mandateLegID(row), leg: mandate.Leg{ID: mandateLegID(row), Kind: mandate.KindOption, Quantity: 150}, row: row, full: 150, step: 1, units: 150, prevUnits: 150, prevQty: 94, rank: 1, phase: rpc.MandatePhaseRisk}
+	kept := &mandateCut{id: mandateLegID(row), leg: mandate.Leg{ID: mandateLegID(row), Kind: mandate.KindOption, Quantity: 150}, row: row, full: 150, step: 1, units: 150, prevUnits: 150, prevQty: 94, rank: 1, phase: rpc.MandatePhasePremium}
 	fixture := mandateReductionFixture(t, mandateReductionBook(row), 1.3, 1e9, 2)
 	qty, waits = mandateCycleQuantity(kept, fixture, "EUR")
 	p := engine.mandateReductionRow(defaultProtectionPolicy(), rpc.ProtectionPolicyStatus{}, rpc.TradeProposalSourceFingerprints{}, mandateTestNow, fixture, &rpc.TradeProposalMandateStatus{}, mandateBatch{cuts: []*mandateCut{kept}}, kept, qty, waits, "EUR")

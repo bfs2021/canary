@@ -1,8 +1,12 @@
 # canary mandate · COLUMNS=80 · colour off
 Mandate  UNKNOWN
 Since · Thu 3 Sep 11:50 TZ · 2d 2h
-Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
-  high-water mark 235,000 EUR
+Loss · 20,750 EUR = premium at risk 0 EUR + loss to armed stops 20,750 EUR ·
+  32% of the loss room 64,101 EUR · unstopped, counting nothing: SYNB
+Loss room · 30% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from
+  the high-water mark 235,000 EUR
+Sizing budget · 15% × 230,000 EUR at room 93% a year · sizes the sleeve
+  allocations, never the verdict
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
 Stock additions · refused · the mandate risk cannot be measured: daily history
@@ -35,15 +39,20 @@ Evidence
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · stale: 318 closes to 2026-09-01 · read 05:00:00 TZ
-The mandate refuses stock and ETF additions outside the volatility budget and
-  option buys outside the premium limits. Its reduction is a set of proposals
-  (canary proposals); the daemon places them itself only when mandate_reduction
-  is pre-authorised, after the veto window.
+The mandate refuses stock and ETF additions while the loss measure is over the
+  maximum loss or your sleeve is over its allocation, and option buys outside
+  the premium limits. Its reduction is a set of proposals (canary proposals);
+  the daemon places them itself only when mandate_reduction is pre-authorised,
+  after the veto window.
 # canary mandate · COLUMNS=80 · colour on, ESC written as \x1b
 \x1b[1mMandate\x1b[0m  \x1b[33m\x1b[1mUNKNOWN\x1b[0m\x1b[0m
 Since · Thu 3 Sep 11:50 TZ · 2d 2h
-Budget · 15% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from the
-  high-water mark 235,000 EUR
+Loss · 20,750 EUR = premium at risk 0 EUR + loss to armed stops 20,750 EUR ·
+  32% of the loss room 64,101 EUR · unstopped, counting nothing: SYNB
+Loss room · 30% × 230,000 EUR at room 93% · loss 2% of the 30% maximum from
+  the high-water mark 235,000 EUR
+Sizing budget · 15% × 230,000 EUR at room 93% a year · sizes the sleeve
+  allocations, never the verdict
 Risk base · 225,000 EUR = equity 300,000 EUR − tax reserve 70,000 EUR · flows
   since 2026-09-01 −5,000 EUR
 Stock additions · \x1b[31mrefused · the mandate risk cannot be measured: daily history\x1b[0m
@@ -76,7 +85,8 @@ Not modelled · SYNT (bill, no equity risk modelled)
   u:SPY · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNA · 320 closes to 2026-09-04 · read 05:00:00 TZ
   u:SYNB · \x1b[33mstale: 318 closes to 2026-09-01\x1b[0m · read 05:00:00 TZ
-The mandate refuses stock and ETF additions outside the volatility budget and
-  option buys outside the premium limits. Its reduction is a set of proposals
-  (canary proposals); the daemon places them itself only when mandate_reduction
-  is pre-authorised, after the veto window.
+The mandate refuses stock and ETF additions while the loss measure is over the
+  maximum loss or your sleeve is over its allocation, and option buys outside
+  the premium limits. Its reduction is a set of proposals (canary proposals);
+  the daemon places them itself only when mandate_reduction is pre-authorised,
+  after the veto window.

@@ -13,9 +13,11 @@ import (
 )
 
 // runMandate reads the daemon's mandate risk verdict
-// (internal-docs/design/mandate-risk-budget.md): the book's ex-ante
-// volatility against the owner's budget, what drives it, the named stresses
-// and the evidence clocks. The daemon evaluates; this renders.
+// (internal-docs/design/mandate-risk-budget.md): the book's loss measure
+// (premium at risk plus the loss to armed stops) against the mandate's
+// maximum loss (spec TM-04.12), its ex-ante volatility beside it as the
+// sizing input, what drives it, the named stresses and the evidence clocks.
+// The daemon evaluates; this renders.
 func runMandate(ctx context.Context, env *Env, args []string) int {
 	fs := flagSet(env, "mandate")
 	jsonOut := fs.Bool("json", false, "emit the typed mandate verdict")
@@ -108,8 +110,9 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 	headline, tone := "UNKNOWN", "yellow"
 	switch v.Status {
 	case mandate.StatusWithin:
-		headline, tone = "WITHIN BUDGET", "green"
+		headline, tone = "WITHIN THE MAXIMUM LOSS", "green"
 	case mandate.StatusOver:
+		// A verdict kept by an older daemon, whose headline was the volatility.
 		headline, tone = "OVER BUDGET", "yellow"
 	case mandate.StatusReduce:
 		headline, tone = "REDUCE", "red"
@@ -118,16 +121,18 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 	if !res.StatusSince.IsZero() {
 		riskReadLine(env, "Since", res.StatusSince.Local().Format("Mon 2 Jan 15:04 MST"), mandateHeldWords(res.AsOf.Sub(res.StatusSince)))
 	}
+	renderMandateLoss(env, v.Loss, ccy)
 	if v.Risk != nil {
-		share := "budget 0"
+		share := "sizing budget 0"
 		if v.Capital.BudgetAnnualSD > 0 {
-			share = mandatePct(v.Risk.RatioToBudget*100) + " of the budget " + mandateAmount(v.Capital.BudgetAnnualSD, ccy)
+			share = mandatePct(v.Risk.RatioToBudget*100) + " of the sizing budget " + mandateAmount(v.Capital.BudgetAnnualSD, ccy)
 		}
-		riskReadLine(env, "Risk", mandateAmount(v.Risk.SDAnnualBase, ccy)+" a year", "1-day "+mandateAmount(v.Risk.SD1DBase, ccy), "99% expected shortfall "+mandateAmount(v.Risk.ES99Base, ccy), share)
+		riskReadLine(env, "Volatility", mandateAmount(v.Risk.SDAnnualBase, ccy)+" a year", "1-day swing "+mandateAmount(v.Risk.SD1DBase, ccy), "99% expected shortfall "+mandateAmount(v.Risk.ES99Base, ccy), share)
 	}
 	if c := v.Capital; c.Known && res.Policy != nil {
-		riskReadLine(env, "Budget", fmt.Sprintf("%s × %s at room %s", mandatePct(res.Policy.VolTargetPct), mandateAmount(c.BudgetBase, ccy), mandatePct(c.Room*100)),
+		riskReadLine(env, "Loss room", fmt.Sprintf("%s × %s at room %s", mandatePct(res.Policy.MaxLossPct), mandateAmount(c.BudgetBase, ccy), mandatePct(c.Room*100)),
 			fmt.Sprintf("loss %s of the %s maximum from the high-water mark %s", mandatePct(c.DrawdownPct), mandatePct(res.Policy.MaxLossPct), mandateAmount(c.HWMRiskBase, ccy)))
+		riskReadLine(env, "Sizing budget", fmt.Sprintf("%s × %s at room %s a year", mandatePct(res.Policy.VolTargetPct), mandateAmount(c.BudgetBase, ccy), mandatePct(c.Room*100)), "sizes the sleeve allocations, never the verdict")
 		flows := ""
 		if c.FlowsSinceStart != 0 {
 			flows = "flows since " + c.StartedAt + " " + mandateAmount(c.FlowsSinceStart, ccy)
@@ -174,7 +179,11 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 				riskDisplayLine(env, "  ", fmt.Sprintf("%s: %s", l.Symbol, l.Unknown), env.yellow)
 				continue
 			}
-			riskDisplayLine(env, "  ", briefJoin(l.Symbol, mandateShare(l.ContributionPct), mandateAmount(l.ValueBase, ccy)), nil)
+			loss := ""
+			if l.LossBase > 0 {
+				loss = "loss " + mandateAmount(l.LossBase, ccy)
+			}
+			riskDisplayLine(env, "  ", briefJoin(l.Symbol, mandateShare(l.ContributionPct), mandateAmount(l.ValueBase, ccy), loss), nil)
 		}
 	}
 	if s := v.Stresses; s != nil {
@@ -215,7 +224,25 @@ func renderMandate(env *Env, res rpc.MandateRiskResult) {
 			}
 		}
 	}
-	riskReadLine(env, "", "The mandate refuses stock and ETF additions outside the volatility budget and option buys outside the premium limits. Its reduction is a set of proposals (canary proposals); the daemon places them itself only when mandate_reduction is pre-authorised, after the veto window.")
+	riskReadLine(env, "", "The mandate refuses stock and ETF additions while the loss measure is over the maximum loss or your sleeve is over its allocation, and option buys outside the premium limits. Its reduction is a set of proposals (canary proposals); the daemon places them itself only when mandate_reduction is pre-authorised, after the veto window.")
+}
+
+// renderMandateLoss prints the loss measure the verdict is judged by (spec
+// TM-04.12): premium at risk plus the cash loss to armed stops against the
+// loss room, the names counting most and the share lines no stop bounds.
+func renderMandateLoss(env *Env, l *mandate.LossMeasure, ccy string) {
+	if l == nil {
+		return
+	}
+	room := "no loss room left"
+	if l.RoomBase > 0 {
+		room = mandatePct(l.RatioToRoom*100) + " of the loss room " + mandateAmount(l.RoomBase, ccy)
+	}
+	parts := []string{mandateAmount(l.TotalBase, ccy) + " = premium at risk " + mandateAmount(l.PremiumBase, ccy) + " + loss to armed stops " + mandateAmount(l.StopLossBase, ccy), room}
+	if len(l.Unstopped) > 0 {
+		parts = append(parts, "unstopped, counting nothing: "+strings.Join(l.Unstopped, ", "))
+	}
+	riskReadLine(env, "Loss", parts...)
 }
 
 // renderMandateGate prints the additions gate as it reads now: for stock
@@ -374,7 +401,11 @@ func renderMandateReduction(env *Env, r *rpc.MandateReductionView, ccy string) {
 	riskDisplayLine(env, "Reduction · ", briefJoin(state, head), style)
 	for _, o := range r.Orders {
 		verb := strings.ToLower(o.Action)
-		parts := []string{fmt.Sprintf("%d. %s %d %s", o.Rank, verb, o.Quantity, queuedContractLabel(o.Contract)), mandatePhaseWords(o.Phase), mandateShare(o.ContributionPct) + " of the risk"}
+		parts := []string{fmt.Sprintf("%d. %s %d %s", o.Rank, verb, o.Quantity, queuedContractLabel(o.Contract)), mandatePhaseWords(o.Phase)}
+		if o.LossBase > 0 {
+			parts = append(parts, mandateAmount(o.LossBase, ccy)+" of the loss measure")
+		}
+		parts = append(parts, mandateShare(o.ContributionPct)+" of the risk")
 		switch {
 		case o.Held:
 			parts = append(parts, "held")
@@ -479,6 +510,8 @@ func mandatePhaseWords(phase string) string {
 		return "expires in the money first"
 	case rpc.MandatePhaseGap:
 		return "gap over its cap"
+	case rpc.MandatePhasePremium:
+		return "largest premium at risk"
 	case rpc.MandatePhaseRisk:
 		return "largest risk"
 	case rpc.MandatePhaseStop:

@@ -728,7 +728,13 @@ const (
 	// MandatePhaseGap: a leg of an underlying whose one-name gap loss is over
 	// its cap.
 	MandatePhaseGap = "gap"
-	// MandatePhaseRisk: the largest contributor to the simulated variance.
+	// MandatePhasePremium: the largest premium at risk left, name by name,
+	// until the loss measure fits the loss room (spec TM-04.12, owner
+	// decision 2026-10-27 19:50 CET).
+	MandatePhasePremium = "premium"
+	// MandatePhaseRisk: the largest contributor to the simulated variance,
+	// the phase of batches sized before the loss measure headlined; kept for
+	// rows a reader may still hold.
 	MandatePhaseRisk = "risk"
 	// MandatePhaseStop: the largest contributor left in the owner's sleeve,
 	// cut for the sleeve's own drawdown stop while the book is inside the
@@ -754,10 +760,20 @@ type TradeProposalMandateStatus struct {
 	// Episode names the breach from the batch's first verdict until a
 	// verdict reads within; empty while none runs.
 	Episode string `json:"episode,omitempty"`
-	// RiskAnnualBase is the measured risk, BudgetAnnualSD the budget and
-	// TargetAnnualSD the figure the batch sizes to (0.95 × budget, so the
-	// next verdict reads within). ProjectedRiskAnnualBase is the risk once
-	// the whole batch has filled, as sized; nil while nothing is sized.
+	// LossBase is the verdict's loss measure (premium at risk plus the loss
+	// to armed stops), LossRoomBase the loss the mandate still allows and
+	// LossTargetBase the figure the batch sizes to (0.95 × the room, so the
+	// next verdict reads within). ProjectedLossBase is the measure once the
+	// whole batch has filled, as sized; nil while nothing is sized.
+	LossBase          float64  `json:"loss_base,omitempty"`
+	LossRoomBase      float64  `json:"loss_room_base,omitempty"`
+	LossTargetBase    float64  `json:"loss_target_base,omitempty"`
+	ProjectedLossBase *float64 `json:"projected_loss_base,omitempty"`
+	// RiskAnnualBase is the measured volatility and BudgetAnnualSD the
+	// volatility budget, reported beside the loss measure; TargetAnnualSD and
+	// ProjectedRiskAnnualBase are the volatility the batch sized to and left
+	// while the volatility was the headline, carried for readers of that
+	// contract (the volatility after the batch is still measured).
 	RiskAnnualBase          float64  `json:"risk_annual_base,omitempty"`
 	BudgetAnnualSD          float64  `json:"budget_annual_sd_base,omitempty"`
 	TargetAnnualSD          float64  `json:"target_annual_sd_base,omitempty"`
@@ -791,9 +807,13 @@ type TradeProposalMandatePlanOrder struct {
 	Units    int    `json:"units"`
 	Quantity int    `json:"quantity"`
 	Waits    string `json:"waits,omitempty"`
-	// Phase says why (MandatePhase*); ContributionPct the leg's share of the
-	// variance on the verdict; RiskCutAnnualBase the risk the cut removes.
+	// Phase says why (MandatePhase*); LossBase the leg's part of the loss
+	// measure on the verdict and LossCutBase what the cut takes off it;
+	// ContributionPct the leg's share of the variance and RiskCutAnnualBase
+	// the volatility the cut removes.
 	Phase             string  `json:"phase"`
+	LossBase          float64 `json:"loss_base,omitempty"`
+	LossCutBase       float64 `json:"loss_cut_base,omitempty"`
 	ContributionPct   float64 `json:"contribution_pct"`
 	RiskCutAnnualBase float64 `json:"risk_cut_annual_base"`
 	// Sleeve is the allocation the line is placed in (mandate.Sleeve*).
@@ -822,10 +842,21 @@ type TradeProposalMandate struct {
 	// moves in (one contract, or 1, 10 or 100 shares).
 	Units int `json:"units"`
 	Lot   int `json:"lot,omitempty"`
-	// RiskAnnualBase and BudgetAnnualSD are the verdict's figures;
-	// TargetAnnualSD what the batch sizes to; RiskCutAnnualBase the risk this
-	// cut removes in its place in the batch; RiskAfterAnnualBase the risk once
-	// the whole batch has filled.
+	// LossBase and LossRoomBase are the verdict's loss measure and the loss
+	// room; LossTargetBase what the batch sizes to; LegLossBase the leg's part
+	// of the measure; LossCutBase what this cut takes off it in its place in
+	// the batch; LossAfterBase the measure once the whole batch has filled.
+	LossBase       float64 `json:"loss_base,omitempty"`
+	LossRoomBase   float64 `json:"loss_room_base,omitempty"`
+	LossTargetBase float64 `json:"loss_target_base,omitempty"`
+	LegLossBase    float64 `json:"leg_loss_base,omitempty"`
+	LossCutBase    float64 `json:"loss_cut_base,omitempty"`
+	LossAfterBase  float64 `json:"loss_after_base,omitempty"`
+	// RiskAnnualBase and BudgetAnnualSD are the verdict's volatility figures,
+	// reported beside the loss measure; TargetAnnualSD the volatility target
+	// of batches sized before the loss measure headlined; RiskCutAnnualBase
+	// the volatility this cut removes in its place in the batch;
+	// RiskAfterAnnualBase the volatility once the whole batch has filled.
 	RiskAnnualBase      float64 `json:"risk_annual_base"`
 	BudgetAnnualSD      float64 `json:"budget_annual_sd_base"`
 	TargetAnnualSD      float64 `json:"target_annual_sd_base"`
@@ -844,8 +875,8 @@ type TradeProposalMandate struct {
 	// order that expired unfilled is proposed afresh the next session.
 	Episode string `json:"episode,omitempty"`
 	Session string `json:"session,omitempty"`
-	// Sleeve is the allocation the line is placed in (mandate.Sleeve*): the risk
-	// phase cuts the sleeve furthest over its allocation first.
+	// Sleeve is the allocation the line is placed in (mandate.Sleeve*); the
+	// stop phase cuts the owner's sleeve alone.
 	Sleeve string `json:"sleeve,omitempty"`
 	// Held says the row waits: the verdict cannot be measured right now, so
 	// the sizing cannot be confirmed; HoldReason says why. A held row is not

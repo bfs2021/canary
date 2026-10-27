@@ -20,11 +20,15 @@ proposal the owner confirms by writing it into the policy file.
 
 ## Decision
 
-- Goal and protected asset or behavior: keep the book's ex-ante risk inside
-  a volatility budget derived from the owner's maximum tolerated loss, so
-  that a loss of the whole budget stays inside the mandate's limit, and
-  refuse any order that adds risk while the book is outside the budget or
-  while the budget cannot be measured. Protected asset: the risk base
+- Goal and protected asset or behavior: keep the book's loss measure (the
+  premium every bought option can lose plus the cash loss to the stop of
+  every stopped share line) inside the loss room derived from the owner's
+  maximum tolerated loss, and refuse any order that adds risk while the
+  book is outside that room or while it cannot be measured. Until
+  2026-10-27 the headline was the book's ex-ante volatility against a
+  volatility budget derived from the same loss; the volatility stays
+  computed as the sizing input of the sleeve allocations ("The loss measure
+  as the verdict's headline" below). Protected asset: the risk base
   (account equity after the tax reserve). Protected behaviour: no
   risk-adding order while the book is over budget or unmeasured.
 - Policy owner: the desk owner (single-trader desk).
@@ -34,14 +38,19 @@ proposal the owner confirms by writing it into the policy file.
     ("Tax comes from this account"; the reserve is an owner number,
     currently estimated EUR 70,000), counted fresh from 2026-10-14 with a
     cash-flow-adjusted high-water mark ("Start fresh today").
-  - Volatility target = D/2 = 15% a year of the risk base.
+  - Volatility target = D/2 = 15% a year of the risk base. Since
+    2026-10-27 19:50 CET it sizes the sleeve allocations and the machine
+    strategies; the verdict compares the loss measure with the loss room
+    (spec TM-04.12, "The loss measure as the verdict's headline" below).
   - Protection that acts: on a budget breach, a reduce-only batch back to
     budget, largest risk contributor first, pre-authorised with the
     30-minute veto; release when risk is back in budget, not when P&L
     recovers. Built in increment 2 ("Forced reduction" below) on the
     measurement and the additions gate of increment 1. The order of the
     cuts was replaced on 2026-10-18 08:06 CEST (allocations, below): the sleeve
-    furthest over its allocation first, within it the largest contributor.
+    furthest over its allocation first, within it the largest contributor;
+    and again on 2026-10-27 19:50 CET (spec TM-04.12): the largest premium
+    at risk per name first, until the book fits the maximum loss.
   - Sleeve volatility shares of the 15%: owner 7, core 6, overlay 4. Recorded
     here as `[mandate.sleeves]`; enforcement per sleeve comes later. Since
     2026-10-18 the machine's `[mandate.sleeves]` numbers size its allocations
@@ -149,9 +158,11 @@ owner's is recorded and not read: "Risk allocations" below). The
   default that acts. A `[mandate]` table missing a material key is active
   and unknown: the verdict names the unapproved keys and additions are
   refused until the owner writes them (data absence never renders ok).
-- Verdict: `within` (risk ≤ budget and no gap breach), `over` (risk >
-  budget), `reduce` (risk > 1.25 × budget, or any gap-cap breach),
-  `unknown` (anything the measurement lacks). The result carries
+- Verdict: `within` (the loss measure ≤ the loss room and no gap breach),
+  `reduce` (the loss measure > the loss room, or any gap-cap breach),
+  `unknown` (anything the measurement lacks). Until 2026-10-27 the verdict
+  compared the volatility with its budget and read `over` between the
+  budget and 1.25 × budget; `over` is no longer produced. The result carries
   `status_since`, when the status last changed as the daemon has seen it
   across evaluations and restarts (a `mandate_status` state document; each
   change journaled as `mandate_status_changed` with how long the old status
@@ -269,22 +280,24 @@ What the daemon does (`internal/daemon/mandate_reduction.go`, bucket
   sizes anything.
 - **Episode.** The first batch opens a breach episode (`episode` on the
   status and on every row); it lasts until a verdict reads `within`.
-- **Target and hysteresis.** The batch is sized to risk ≤ 0.95 × budget with
-  every gap cap met, so the next verdict reads `within` rather than `over`
-  by a hair; release is at `within` (risk ≤ budget, no gap breach). The 5%
+- **Target and hysteresis.** The batch is sized to the loss measure ≤ 0.95 ×
+  the loss room with every gap cap met, so the next verdict reads `within`
+  rather than `reduce` by a hair; release is at `within` (the loss measure
+  ≤ the loss room, no gap breach). Until 2026-10-27 the target was 0.95 ×
+  the volatility budget. The 5%
   band is compiled (`mandateReductionTargetFactor`), not a policy key.
 - **Sizing, afresh at every verdict.** Greedy, with the daemon's own evaluator
   on the book the verdict measured; a standing batch is never carried forward
   as it was. Cut by cut, the book re-evaluated after each: a name over its gap
   cap has its largest gap loser cut until the name's gap loss is under the cap
-  (a gap cut never leaves the book riskier); with no breach left, the sleeve
-  furthest over its allocation is cut first and, within it, its largest Euler
-  contributor (2026-10-18, "Risk allocations" below), by the smallest whole
-  step that reaches the target or, while another sleeve is over its own
-  allocation, brings that sleeve to its allocation, whichever comes first, or,
-  when no step on that line does, by the step that takes the most risk off;
-  the next cut is chosen afresh on the book re-evaluated, and follows only
-  when needed. Steps are contracts for options and share lots for stocks (1
+  (a gap cut never leaves the book riskier); with no breach left, the name
+  with the most premium at risk is cut first and, within it, its largest leg
+  (2026-10-27, spec TM-04.12, "The loss measure as the verdict's headline"
+  below; from 2026-10-18 to 2026-10-27 the sleeve furthest over its
+  allocation first, "Risk allocations" below), by the smallest whole step
+  that reaches the target or, when no step on that line does, by the step
+  that takes the most loss off; the next cut is chosen afresh on the book
+  re-evaluated, and follows only when needed. Steps are contracts for options and share lots for stocks (1
   below 100 shares, 10 to 999, 100 from 1,000). Damping: a line whose position
   has not moved keeps the last generation's cut when the fresh cut is smaller
   by at most one step, so a steady risk does not re-size a row every verdict;
@@ -925,6 +938,11 @@ shadow record's paper decision reads the same way.
 
 ### The forced reduction
 
+Superseded 2026-10-27 19:50 CET (spec TM-04.12): the premium phase cuts the
+largest premium at risk per name whatever its sleeve ("The loss measure as
+the verdict's headline" below). The allocations' order below held from
+2026-10-18 to 2026-10-27 and is kept as the record of that decision.
+
 The trigger, the episode, the target (0.95 × budget), the gap phase, the
 expiry gate, covered and protected lines, the veto clock and every other
 rule are unchanged. Only the risk phase changes:
@@ -1192,6 +1210,96 @@ other mandate keys take none, the no-room hold stands, and an expired
 override reads as none; the rulebook migration writes
 `option_name_act_pct = 15` with its provenance and keeps the policy in
 force.
+
+## The loss measure as the verdict's headline
+
+Owner decision 2026-10-27 19:50–19:52 CET, on the trading machine spec's
+callout TM-04.12 (Desk, `docs/design/trading-machine/trading-machine.md`):
+the mandate's verdict is the loss measure against the maximum loss, not the
+book's yearly volatility against a volatility budget; and protection's
+premium counts in the premium budget ("Count it").
+
+- **The loss measure** (`mandate.LossMeasure`, `verdict.loss`): every
+  bought option at its premium at risk, the higher of the price paid and
+  today's value in base currency, as rule 2 measures a line
+  (`risk.PremiumAtRiskLeg`), protection included; plus, for every share
+  line a working stop or trail covers at the broker (STP, STP LMT, TRAIL,
+  TRAIL LIMIT on the reducing side, read from the open-order inventory,
+  `mandateArmedStops`), the cash loss from the mark to the stop over the
+  covered shares (a stop above a long line's mark loses nothing; a line
+  covered in part counts the covered shares and is named for the rest). A
+  share line without a stop counts nothing and is named as `unstopped`; the
+  measure says what it did not count rather than guessing. An option leg
+  whose premium cannot be measured (no price paid and no value, or no rate
+  to base) makes the verdict unknown, as a missing series does. A short
+  option carries no premium and counts nothing here; its risk stays in the
+  volatility and the gap stresses.
+- **The loss room** (`mandate.LossRoomBase`, `verdict.loss.room_base`):
+  `max_loss_pct / 100 × budget_base × room`, the maximum loss of the
+  budget base less the drawdown already taken (room runs from 1 at a new
+  high to 0 at the maximum loss). With D = 30 the room is 30% of the budget
+  base at a new high; at room 0 it is 0 and any measured loss is over it.
+- **Verdict.** `within` while the loss measure ≤ the loss room and no gap
+  cap is breached; `reduce` over the room or on a gap breach; `unknown`
+  when anything is missing. `over` is no longer produced (its 1.25 × band
+  belonged to the volatility). The additions gate reads the same: a stock or
+  ETF order is refused while the verdict reads reduce or unknown, while it
+  would create or deepen a gap breach, or while its sleeve is over its
+  allocation; a stock order that would take the loss measure over the room
+  is refused too (`mandate_budget`). An option buy keeps the premium limits
+  as its gate (2026-10-23 above) and carries the loss-room judgement as its
+  warning where the volatility was before.
+- **Volatility stays, as sizing.** The historical simulation, the Euler
+  contributions, the betas, the gap stresses and the owner sleeve's stop are
+  unchanged and still shown: the volatility budget
+  (`vol_target_pct × budget_base × room`) sizes the sleeve allocations and
+  the machine strategies, and `canary mandate` prints the book's volatility
+  as the 1-day swing beside the loss measure. The volatility is no longer
+  the headline and no longer the reduction's sort key.
+- **Forced reduction.** The trigger, the episode, the gap phase, the expiry
+  gate, covered and protected lines, the owner sleeve's stop phase, the
+  veto clock and the pre-authorisation are unchanged. The target is 0.95 ×
+  the loss room. After the gap breaches, the premium phase (phase `premium`)
+  cuts the name with the most premium at risk among its reducible legs,
+  within it the largest leg, by the smallest whole step that takes the loss
+  measure to the target or, when no step on that line does, by the step
+  that takes the most loss off, re-evaluated after every cut; whatever the
+  name's sleeve (the allocations' order of 2026-10-18 is superseded; a
+  sleeve over its allocation still refuses additions). The expiry gate is
+  still judged on volatility: shares an option delivers at exercise carry
+  no premium, so the loss measure cannot see an exercise. Each row carries
+  `loss_base` (the leg's share of the measure) and `loss_cut_base` (what
+  the cut takes off); the status carries `loss_base`, `loss_room_base`,
+  `loss_target_base` and `projected_loss_base`.
+- **Protection in the premium budget.** Rule 3 counts every bought option
+  at its premium at risk, protection included; the note names the
+  protection share ("of which protection premium N% of NLV, counted in this
+  budget since 2026-10-27"). The per-name cap `option_name_act_pct` reads
+  the same figure, so protection counts there too (one measure), while a
+  hedge buy keeps bypassing the premium gate as a hedge. Rule 4 (time
+  value) and rule 12's hedge band are unchanged: rule 2's protection tier
+  is tied to rule 12's act tier, not to rule 3.
+- **What Desk reads.** New fields on `rpc.MandateVerdict.Loss`
+  (`total_base`, `premium_base`, `stop_loss_base`, `room_base`,
+  `ratio_to_room`, `names`, `unstopped`), on each leg (`loss_base`), on the
+  reduction status (`loss_base`, `loss_room_base`, `loss_target_base`,
+  `projected_loss_base`) and on each reduction order (`loss_base`,
+  `loss_cut_base`); `TradeProposalMandate` carries the same for a row. Desk
+  compiles the verdict's handlers at its Canary pin and re-pins to read
+  them.
+
+Verification (`internal/mandate/loss_test.go`,
+`internal/daemon/mandate_gate_test.go`, `mandate_options_gate_test.go`,
+`mandate_reduction_test.go`, `mandate_allocations_test.go`,
+`internal/risk/rulebook_sell_only_test.go`; CLI goldens `mandate*`,
+`proposals_list_mandate*`): a book whose premium at risk is over the loss
+room reads reduce and refuses a stock buy naming the measure, the room and
+the unstopped names; an option buy that would take the measure over the
+room passes the premium limits with the loss-room warning; the reduction
+cuts the largest premium at risk first whatever its sleeve and lowers the
+measure row by row to 95% of the room; a stopped share line counts its loss
+to the stop and an unstopped one counts nothing and is named; the premium
+budget counts protection with its share in the note.
 
 ## Exceptions And Change Control
 

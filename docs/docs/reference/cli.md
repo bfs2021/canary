@@ -33,7 +33,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary macro`](#canary-macro) | Markets | Public economic calendar, official publications and source coverage | `read-only` | yes |
 | [`canary regime`](#canary-regime) | Markets | Detailed broad-market regime across volatility, credit, funding, FX, gamma, and breadth | `read-only` | yes |
 | [`canary stress`](#canary-stress) | Desk | Portfolio stress with margin, exposure, concentration, options, protection, and source evidence | `read-only` | yes |
-| [`canary mandate`](#canary-mandate) | Desk | Mandate risk budget: the book's ex-ante volatility against the owner's budget, what drives it, gap and index stresses, and whether additions are open | `read-only` | yes |
+| [`canary mandate`](#canary-mandate) | Desk | Mandate: the book's loss measure against the maximum loss, its volatility as the 1-day swing, what drives it, gap and index stresses, and whether additions are open | `read-only` | yes |
 | [`canary core`](#canary-core) | Desk | Core sleeve target: the month's trend and volatility decision, the target shares, the holding, the band and what the rule would trade; live, the month's row waiting for your confirmation and the last decision. Reads only | `read-only` | yes |
 | [`canary strategy`](#canary-strategy) | Desk | A registered strategy's target by its id in the strategy register: its month's decision, target, paper position and what its rule would trade, in the core's shape; with --replay, its rule run over the month-ends FROM TO on the daemon's own history, the table the lab's `replay-compare` reads; read-only, no orders | `read-only` | yes |
 | [`canary brief`](#canary-brief) | Desk | Combined post- and pre-trade operator brief with disclosed source degradation | `read-only` | yes |
@@ -537,7 +537,7 @@ canary stress [--details] [--json]
 
 ## `canary mandate`
 
-Mandate risk budget: the book's ex-ante volatility against the owner's budget, what drives it, gap and index stresses, and whether additions are open.
+Mandate: the book's loss measure against the maximum loss, its volatility as the 1-day swing, what drives it, gap and index stresses, and whether additions are open.
 
 Guard `read-only`. Also available as an MCP tool.
 

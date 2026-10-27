@@ -17,16 +17,19 @@ import (
 //     and the book's at most the premium budget's act level of the regime set
 //     in force. Either breach refuses the order with the figure, the limit
 //     and the name (mandate_premium).
-//   - The volatility budget (vol_target_pct) keeps gating stock and ETF
-//     additions. For an option buy its verdict, with the 1-day expected
+//   - The mandate's additions gate (since 2026-10-27, spec TM-04.12, the
+//     loss measure against the loss room, the gap caps and the sleeve
+//     allocations; before, the volatility budget) keeps gating stock and ETF
+//     additions. For an option buy its judgement, with the 1-day expected
 //     shortfall and the beta-adjusted exposure, is computed and shown, and
-//     carried on the preview as a warning, never a block.
+//     carried on the preview as a warning, never a block; the premium limits
+//     count protection since 2026-10-27 (the owner: "Count it").
 //   - The holds that bound a loss rather than a volatility stay for every
 //     addition: at the maximum loss (no room) nothing adds, and the owner
 //     sleeve's drawdown stop keeps the sleeve reduce-only while engaged.
 //   - The owner's one-shot override of mandate.vol_target_pct (canary policy
 //     override, human-only, journaled, expiring under
-//     override.max_duration_hours) lifts the volatility gate for the owner's
+//     override.max_duration_hours) lifts the additions gate for the owner's
 //     additions. What still bounds risk meanwhile: the drawdown brake and the
 //     no-room hold at the 30% maximum loss, the owner sleeve's stop, every
 //     order cap, the premium limits above, the device confirmation of every

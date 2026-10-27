@@ -1,7 +1,10 @@
-// Package mandate evaluates the owner's mandate risk budget: ex-ante
-// portfolio volatility by historical simulation with full revaluation of
-// every leg, named gap and index stresses, and the budget verdict
-// (internal-docs/design/mandate-risk-budget.md).
+// Package mandate evaluates the owner's mandate risk budget
+// (internal-docs/design/mandate-risk-budget.md): the loss measure, premium
+// at risk on every bought option plus the cash loss to every armed share
+// stop, against the loss the mandate still allows (the headline, spec
+// TM-04.12); and ex-ante portfolio volatility by historical simulation with
+// full revaluation of every leg, named gap and index stresses, which sizes
+// the sleeve allocations and reports the daily swing.
 //
 // Only the daemon evaluates: it gathers positions, equity and its
 // decision-grade daily closes, calls Evaluate and serves the result as
@@ -29,16 +32,18 @@ const (
 	ESLevel = 0.99
 	// IndexShockPct is the index stress, applied through each name's beta.
 	IndexShockPct = 10.0
-	// ReduceFactor is the multiple of the budget at which the verdict reads
-	// reduce rather than over.
-	ReduceFactor = 1.25
 	// DecayDays is the time decay applied to every option in a scenario.
 	DecayDays = 1.0
 	// IndexSymbol is the index proxy every name's beta is measured to.
 	IndexSymbol = "SPY"
 )
 
-// Verdict statuses.
+// Verdict statuses: within (the loss measure fits the loss room and no gap
+// cap is breached), reduce (it does not), unknown (something the
+// measurement lacks). StatusOver was the volatility headline's middle
+// reading (over the budget, under 1.25 times it); since the loss measure
+// headlines (spec TM-04.12, 2026-10-27) no verdict reads it, and readers
+// keep the name only for verdicts kept by an older daemon.
 const (
 	StatusWithin  = "within"
 	StatusOver    = "over"
@@ -78,7 +83,167 @@ type Leg struct {
 	// ISIN names the fund behind the line when the daemon knows it (a
 	// position row carries none): Evaluate fills it from Input.LineISINs.
 	ISIN string `json:"isin,omitempty"`
+	// LossPerUnitBase is the leg's share of the loss measure per unit held,
+	// in base currency (spec TM-04.12, owner decision 2026-10-27 19:50 CET):
+	// for a bought option the premium at risk per contract, the higher of
+	// the price paid and today's value (rule 2's line figure); for a share
+	// line with an armed stop the cash loss to the stop per share. Zero for
+	// a short option and for shares without a stop, whose loss the measure
+	// does not bound. The daemon fills it from the position row and the
+	// open-order inventory.
+	LossPerUnitBase float64 `json:"loss_per_unit_base,omitempty"`
+	// LossUnknown says why a bought option's premium cannot be measured; set,
+	// the verdict is unknown.
+	LossUnknown string `json:"loss_unknown,omitempty"`
+	// StopArmed marks a share line a working stop or trail bounds; one
+	// without is listed as unstopped on the verdict.
+	StopArmed bool `json:"stop_armed,omitempty"`
 }
+
+// LossMeasure is the mandate's headline (spec TM-04.12): what the book can
+// lose, as the owner measures it, against the loss the mandate still allows.
+type LossMeasure struct {
+	// TotalBase is PremiumBase + StopLossBase: the premium at risk on every
+	// bought option and the cash loss to the stop on every share line with an
+	// armed stop, in base currency.
+	TotalBase    float64 `json:"total_base"`
+	PremiumBase  float64 `json:"premium_base"`
+	StopLossBase float64 `json:"stop_loss_base"`
+	// RoomBase is the loss the mandate still allows: max_loss_pct of the
+	// budget base, less the drawdown already taken (room × D × budget base).
+	RoomBase float64 `json:"room_base"`
+	// RatioToRoom is TotalBase over RoomBase; +Inf when the room is zero and
+	// the measure is not (encoded as null).
+	RatioToRoom float64 `json:"ratio_to_room"`
+	// Names lists each underlying's part of the measure, largest first; the
+	// forced reduction cuts in this order.
+	Names []LossName `json:"names,omitempty"`
+	// Unstopped names the share lines without an armed stop: their loss is
+	// not bounded and not counted.
+	Unstopped []string `json:"unstopped,omitempty"`
+}
+
+// LossName is one underlying's part of the loss measure.
+type LossName struct {
+	Underlying   string  `json:"underlying"`
+	TotalBase    float64 `json:"total_base"`
+	PremiumBase  float64 `json:"premium_base"`
+	StopLossBase float64 `json:"stop_loss_base"`
+}
+
+// MarshalJSON writes an unbounded ratio as null, as Risk does.
+func (m LossMeasure) MarshalJSON() ([]byte, error) {
+	type plain LossMeasure
+	wire := struct {
+		plain
+		RatioToRoom *float64 `json:"ratio_to_room"`
+	}{plain: plain(m)}
+	if !math.IsInf(m.RatioToRoom, 0) && !math.IsNaN(m.RatioToRoom) {
+		wire.RatioToRoom = &m.RatioToRoom
+	}
+	return json.Marshal(wire)
+}
+
+// UnmarshalJSON reads a null ratio back as unbounded while the measure is
+// not zero.
+func (m *LossMeasure) UnmarshalJSON(raw []byte) error {
+	type plain LossMeasure
+	wire := struct {
+		*plain
+		RatioToRoom *float64 `json:"ratio_to_room"`
+	}{plain: (*plain)(m)}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	switch {
+	case wire.RatioToRoom != nil:
+		m.RatioToRoom = *wire.RatioToRoom
+	case m.TotalBase > 0:
+		m.RatioToRoom = math.Inf(1)
+	default:
+		m.RatioToRoom = 0
+	}
+	return nil
+}
+
+// LossRoomBase is the loss the mandate still allows: room × D × budget base.
+func LossRoomBase(p Policy, c Capital) float64 {
+	if !c.Known {
+		return 0
+	}
+	return c.Room * p.MaxLossPct / 100 * c.BudgetBase
+}
+
+// measureLoss sums the legs' loss figures (mergeLegs has normalised them)
+// against the loss room. The reasons name each bought option whose premium
+// cannot be measured; any makes the verdict unknown.
+func measureLoss(in Input, legs []Leg) (*LossMeasure, []string) {
+	out := &LossMeasure{RoomBase: LossRoomBase(in.Policy, in.Capital)}
+	var reasons []string
+	byName := map[string]*LossName{}
+	var order []string
+	for _, l := range legs {
+		if l.Quantity == 0 {
+			continue
+		}
+		if l.Kind == KindOption && l.Quantity > 0 && l.LossUnknown != "" {
+			reasons = append(reasons, fmt.Sprintf("%s: premium at risk unmeasured: %s", l.Symbol, l.LossUnknown))
+			continue
+		}
+		n, ok := byName[l.Underlying]
+		if !ok {
+			n = &LossName{Underlying: l.Underlying}
+			byName[l.Underlying] = n
+			order = append(order, l.Underlying)
+		}
+		loss := legLoss(l)
+		switch {
+		case l.Kind == KindOption && l.Quantity > 0:
+			n.PremiumBase += loss
+			out.PremiumBase += loss
+		case l.Kind == KindStock && l.StopArmed:
+			n.StopLossBase += loss
+			out.StopLossBase += loss
+		case l.Kind == KindStock:
+			out.Unstopped = append(out.Unstopped, l.Symbol)
+		}
+		n.TotalBase = n.PremiumBase + n.StopLossBase
+	}
+	out.TotalBase = out.PremiumBase + out.StopLossBase
+	for _, name := range order {
+		if n := byName[name]; n.TotalBase > 0 {
+			out.Names = append(out.Names, *n)
+		}
+	}
+	sort.SliceStable(out.Names, func(i, j int) bool { return out.Names[i].TotalBase > out.Names[j].TotalBase })
+	slices.Sort(out.Unstopped)
+	switch {
+	case out.RoomBase > 0:
+		out.RatioToRoom = out.TotalBase / out.RoomBase
+	case out.TotalBase > 0:
+		out.RatioToRoom = math.Inf(1)
+	}
+	return out, reasons
+}
+
+// legLoss is one leg's part of the loss measure, as measureLoss counts it.
+func legLoss(l Leg) float64 {
+	switch {
+	case l.Kind == KindOption && l.Quantity > 0 && l.LossUnknown == "":
+		return l.Quantity * l.LossPerUnitBase
+	case l.Kind == KindStock && l.StopArmed:
+		return math.Abs(l.Quantity) * l.LossPerUnitBase
+	}
+	return 0
+}
+
+// lossOverRoom reports a measure past the room; equal fits.
+func lossOverRoom(m *LossMeasure) bool {
+	return m != nil && m.TotalBase > m.RoomBase+lossEpsilon
+}
+
+// lossEpsilon absorbs floating-point dust at the room.
+const lossEpsilon = 1e-6
 
 // Series is one decision-grade daily close series, ascending by date.
 type Series struct {
@@ -184,6 +349,9 @@ type LegReport struct {
 	ContributionPct float64 `json:"contribution_pct"`
 	// Unknown names why the leg could not be priced; empty when it was.
 	Unknown string `json:"unknown,omitempty"`
+	// LossBase is the leg's part of the loss measure: its premium at risk,
+	// or the cash loss to its armed stop.
+	LossBase float64 `json:"loss_base,omitempty"`
 }
 
 // UnderlyingReport is one underlying's contribution and its stresses.
@@ -231,7 +399,12 @@ type Verdict struct {
 	AsOf         time.Time `json:"as_of"`
 	BaseCurrency string    `json:"base_currency,omitempty"`
 	Capital      Capital   `json:"capital"`
-	// Risk and Stresses are nil while the status is unknown.
+	// Loss is the headline: the loss measure against the loss room (spec
+	// TM-04.12). It is measured whenever the legs allow, so an unknown
+	// verdict still shows it.
+	Loss *LossMeasure `json:"loss,omitempty"`
+	// Risk and Stresses are nil while the status is unknown. The risk is
+	// the sizing input and the 1-day swing, no longer the headline.
 	Risk     *Risk     `json:"risk,omitempty"`
 	Stresses *Stresses `json:"stresses,omitempty"`
 	// Scenarios is the number of aligned daily returns the simulation ran,
@@ -259,6 +432,11 @@ func Evaluate(in Input) Verdict {
 		v.Reasons = append(v.Reasons, in.Capital.Reasons...)
 	}
 	legs := mergeLegs(in.Legs, in.LineISINs)
+	// The headline needs no history: the loss measure is read first, and a
+	// bought option whose premium is unmeasured is a reason like any other.
+	var lossReasons []string
+	v.Loss, lossReasons = measureLoss(in, legs)
+	v.Reasons = append(v.Reasons, lossReasons...)
 	// Which series the book needs: every underlying's returns (its own, or
 	// its proxy's: ReturnsSeries), the index and every non-base currency.
 	needed := map[string]bool{IndexSymbol: true}
@@ -320,7 +498,7 @@ func Evaluate(in Input) Verdict {
 	// Reports with contributions unknown still list the legs.
 	if len(v.Reasons) > 0 {
 		for _, l := range legs {
-			v.Legs = append(v.Legs, LegReport{ID: l.ID, Symbol: l.Symbol, Underlying: l.Underlying, Kind: l.Kind, Quantity: l.Quantity, Unknown: firstNonEmpty(legUnknown(l), "not simulated")})
+			v.Legs = append(v.Legs, LegReport{ID: l.ID, Symbol: l.Symbol, Underlying: l.Underlying, Kind: l.Kind, Quantity: l.Quantity, Unknown: firstNonEmpty(legUnknown(l), "not simulated"), LossBase: legLoss(l)})
 		}
 		ApplySleeveStop(&v, in.OwnerStop)
 		return v
@@ -328,17 +506,27 @@ func Evaluate(in Input) Verdict {
 	v.Scenarios, v.ScenariosFrom, v.ScenariosTo = Scenarios, from, to
 	sim := simulate(in, legs, returns)
 	v.Risk, v.Legs, v.Underlyings, v.Stresses, v.Allocations = sim.risk, sim.legs, sim.underlyings, sim.stresses, sim.allocations
+	// The simulation orders its reports by contribution, so each leg's loss
+	// is matched by ID, never by position.
+	lossByID := map[string]float64{}
+	for _, l := range legs {
+		lossByID[l.ID] += legLoss(l)
+	}
+	for i := range v.Legs {
+		v.Legs[i].LossBase = lossByID[v.Legs[i].ID]
+	}
 	budget := in.Capital.BudgetAnnualSD
 	if sim.risk.SDAnnualBase > 0 && budget <= 0 {
 		v.Risk.RatioToBudget = math.Inf(1)
 	} else if budget > 0 {
 		v.Risk.RatioToBudget = sim.risk.SDAnnualBase / budget
 	}
+	// The headline (spec TM-04.12, owner decision 2026-10-27 19:50 CET): the
+	// loss measure against the loss room, and the gap caps, which are shares
+	// of the same room. The volatility ratio is reported, not judged.
 	switch {
-	case len(sim.stresses.GapBreaches) > 0 || sim.risk.SDAnnualBase > ReduceFactor*budget:
+	case len(sim.stresses.GapBreaches) > 0 || lossOverRoom(v.Loss):
 		v.Status = StatusReduce
-	case sim.risk.SDAnnualBase > budget:
-		v.Status = StatusOver
 	default:
 		v.Status = StatusWithin
 	}
@@ -391,6 +579,16 @@ func mergeLegs(in []Leg, isins map[string]string) []Leg {
 		}
 		l.ISIN = strings.ToUpper(strings.TrimSpace(l.ISIN))
 		if i, ok := index[l.ID]; ok && l.ID != "" {
+			// Two lines of one contract: the loss per unit is the
+			// quantity-weighted figure, so the sum carries both premiums.
+			was, add := math.Abs(out[i].Quantity), math.Abs(l.Quantity)
+			if was+add > 0 {
+				out[i].LossPerUnitBase = (out[i].LossPerUnitBase*was + l.LossPerUnitBase*add) / (was + add)
+			}
+			out[i].StopArmed = out[i].StopArmed && l.StopArmed
+			if l.LossUnknown != "" && out[i].LossUnknown == "" {
+				out[i].LossUnknown = l.LossUnknown
+			}
 			out[i].Quantity += l.Quantity
 			continue
 		}

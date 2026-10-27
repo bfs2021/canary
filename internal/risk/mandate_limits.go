@@ -4,10 +4,12 @@ import "strconv"
 
 // MandateAdditionsOverrideControl is the one [mandate] key that takes a
 // one-shot override (canary policy override --control mandate.vol_target_pct
-// --reason TEXT --hours N): while it is active the mandate's volatility
-// budget no longer refuses the owner's additions (owner decision 2026-10-23
-// 18:22 CEST). What still bounds risk meanwhile: the drawdown brake at the
-// 30% maximum loss and the mandate's own no-room hold, the owner sleeve's
+// --reason TEXT --hours N): while it is active the mandate's additions gate
+// (since 2026-10-27 the loss measure against the loss room and the sleeve
+// allocations; before, the volatility budget) no longer refuses the owner's
+// additions (owner decision 2026-10-23 18:22 CEST). What still bounds risk
+// meanwhile: the drawdown brake at the 30% maximum loss and the mandate's
+// own no-room hold, the owner sleeve's
 // drawdown stop, every order cap, the premium limits on option additions
 // (option_name_act_pct per name, the premium budget's act level for the
 // book), the device confirmation of every order, and the override's own
@@ -36,9 +38,9 @@ func mandateLimits(c *Constitution, get func(key, value, source, meaning, enforc
 	}
 	return []ConstitutionLimit{
 		get("mandate.max_loss_pct", lossVal, lossSrc,
-			"The largest loss of the budget base the owner tolerates, in percent: room runs from 1 at a new high to 0 at this loss, where the book goes to its hedges. Changes only by a policy revision.", "hard"),
+			"The largest loss of the budget base the owner tolerates, in percent: room runs from 1 at a new high to 0 at this loss. The verdict's measure: the loss room (this percent of the budget base at room) bounds the loss measure, every bought option at its premium at risk plus the cash loss to the stop of every stopped share line (spec TM-04.12, owner decision 2026-10-27); over it the verdict reads reduce and additions are refused. Changes only by a policy revision.", "hard"),
 		get(MandateAdditionsOverrideControl, volVal, volSrc,
-			"The yearly volatility budget in percent of the budget base at full room. It gates stock and ETF additions; option additions are gated by the premium limits instead and read it as a warning. The one mandate key that takes a one-shot override: while one is active the volatility budget refuses no addition of yours; the maximum loss, the owner sleeve's stop, the order caps, the premium limits and the device confirmation still bind.", "hard"),
+			"The yearly volatility budget in percent of the budget base at full room. It sizes the sleeve allocations and the machine strategies, and is shown beside the loss measure as the 1-day swing; since 2026-10-27 it is no longer the verdict's headline. A sleeve over its allocation still refuses stock and ETF additions; option additions are gated by the premium limits instead. The one mandate key that takes a one-shot override: while one is active the volatility budget refuses no addition of yours; the maximum loss, the owner sleeve's stop, the order caps, the premium limits and the device confirmation still bind.", "hard"),
 		get("mandate.tax_reserve_base", reserveVal, reserveSrc,
 			"The part of equity that is not risk base, in the base currency. Changes only by a policy revision.", "advisory"),
 		get("mandate.started_at", startVal, startSrc,

@@ -7,12 +7,16 @@ import (
 
 // Premium at risk is the one measure of what a long option book can lose:
 // per leg the higher of the price paid and today's value (rule 2's line
-// figure), protection legs left out (rule 2's hedge tier and rule 12 govern
-// them), summed per underlying and over the book. Rule 3 measures the book's
-// total against the premium budget; since the owner's decision of 2026-10-23
+// figure), summed per underlying and over the book, protection legs counted
+// since the owner's decision of 2026-10-27 19:52 CET ("Count it", spec
+// TM-04.12) with their share named beside (rule 2's hedge tier and rule 12
+// still govern the hedge's own band). Rule 3 measures the book's total
+// against the premium budget; since the owner's decision of 2026-10-23
 // 18:22 CEST the same figures gate option additions (option_name_act_pct per
-// name, the premium budget's act level for the book) and are served per name
-// on the mandate's exposure view, so the gate and the page never disagree.
+// name, the premium budget's act level for the book), are served per name
+// on the mandate's exposure view and, since 2026-10-27, are the premium
+// part of the mandate's loss measure, so the gate, the page and the verdict
+// never disagree.
 
 // PremiumAtRiskLeg is one long leg's premium at risk in base currency and
 // the note rule 3 carries for it. ok is false, with why, when the figure
@@ -35,17 +39,18 @@ func PremiumAtRiskLeg(l LegInput) (atRisk float64, note string, ok bool, why str
 	return atRisk, note, true, ""
 }
 
-// PremiumAtRiskName is one underlying's premium at risk outside protection.
+// PremiumAtRiskName is one underlying's premium at risk, protection
+// included.
 type PremiumAtRiskName struct {
 	Symbol string
-	// Base is the sum over the name's long legs outside protection; Legs
+	// Base is the sum over the name's long legs, protection included; Legs
 	// counts them. Unmeasured names each leg whose figure is unknown, with
 	// why; while any is, Base understates and Known is false.
 	Base       float64
 	Legs       int
 	Known      bool
 	Unmeasured []string
-	// HedgeBase is the protection premium left out of Base.
+	// HedgeBase is the protection premium within Base.
 	HedgeBase float64
 }
 
@@ -53,8 +58,9 @@ type PremiumAtRiskName struct {
 type PremiumAtRiskReport struct {
 	// Names lists every underlying with a long option leg, largest first.
 	Names []PremiumAtRiskName
-	// TotalBase is the book's figure outside protection; Known is false
+	// TotalBase is the book's figure, protection included; Known is false
 	// while any leg is unmeasured, and Unmeasured names each such leg.
+	// HedgeBase is the protection premium within TotalBase.
 	TotalBase  float64
 	Known      bool
 	Unmeasured []string
@@ -82,21 +88,18 @@ func PremiumAtRisk(names []NameInput) PremiumAtRiskReport {
 				continue
 			}
 			atRisk, _, ok, why := PremiumAtRiskLeg(l)
-			if rule12HedgeLeg(l) {
-				if ok {
-					row.HedgeBase += atRisk
-				}
-				continue
-			}
 			row.Legs++
 			if !ok {
 				row.Known = false
 				row.Unmeasured = append(row.Unmeasured, l.Desc+": "+why)
 				continue
 			}
+			if rule12HedgeLeg(l) {
+				row.HedgeBase += atRisk
+			}
 			row.Base += atRisk
 		}
-		if row.Legs == 0 && row.HedgeBase == 0 {
+		if row.Legs == 0 {
 			continue
 		}
 		out.TotalBase += row.Base
@@ -113,8 +116,8 @@ func PremiumAtRisk(names []NameInput) PremiumAtRiskReport {
 
 // ClassifyNamePutRoles classifies every leg's index-put role as
 // EvaluateRulebook does (ClassifyIndexPutRoles on the names alone), so a
-// reader outside the rulebook (the premium gate, the exposure view) leaves
-// the same protection legs out of the premium.
+// reader outside the rulebook (the premium gate, the exposure view) names
+// the same protection share of the premium.
 func ClassifyNamePutRoles(names []NameInput, pol RulebookPolicy) []NameInput {
 	return ClassifyIndexPutRoles(RuleInputs{Names: names}, pol).Names
 }

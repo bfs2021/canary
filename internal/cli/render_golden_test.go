@@ -659,8 +659,9 @@ func goldenMandateRegister() rpc.MandateRiskResult {
 }
 
 // goldenMandate is a synthetic mandate verdict: a two-name book with a
-// short call, within budget or, with the quantities scaled up, a reduce with
-// one gap breach.
+// short call, SYNA stopped and SYNB not, within the maximum loss or, with
+// the quantities scaled up, a reduce on the loss measure with two gap
+// breaches (spec TM-04.12).
 func goldenMandate(status string) rpc.MandateRiskResult {
 	scale := 1.0
 	if status == mandate.StatusReduce {
@@ -683,11 +684,13 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 		since = goldenAt.Add(-62 * time.Minute)
 	}
 	verdict := &mandate.Verdict{Status: status, AsOf: goldenAt, BaseCurrency: "EUR", Capital: capital,
-		Risk:      &mandate.Risk{SD1DBase: 1510 * scale, SDAnnualBase: 23970 * scale, ES99Base: 4120 * scale, RatioToBudget: 0.748 * scale, FXContributionPct: 11.2},
+		Risk: &mandate.Risk{SD1DBase: 1510 * scale, SDAnnualBase: 23970 * scale, ES99Base: 4120 * scale, RatioToBudget: 0.748 * scale, FXContributionPct: 11.2},
+		Loss: &mandate.LossMeasure{TotalBase: 20750 * scale, StopLossBase: 20750 * scale, RoomBase: 64101, RatioToRoom: 20750 * scale / 64101,
+			Names: []mandate.LossName{{Underlying: "SYNA", TotalBase: 20750 * scale, StopLossBase: 20750 * scale}}, Unstopped: []string{"SYNB"}},
 		Stresses:  &mandate.Stresses{GapShockPct: 25, GapCapBase: 22940, IndexShockPct: 10, IndexLossBase: indexLoss},
 		Scenarios: 252, ScenariosFrom: "2025-09-05", ScenariosTo: "2026-09-04",
 		Legs: []mandate.LegReport{
-			{ID: "con:9001", Symbol: "SYNA", Underlying: "SYNA", Kind: mandate.KindStock, Quantity: 1000 * scale, ValueBase: 90000 * scale, ContributionPct: 71.4},
+			{ID: "con:9001", Symbol: "SYNA", Underlying: "SYNA", Kind: mandate.KindStock, Quantity: 1000 * scale, ValueBase: 90000 * scale, ContributionPct: 71.4, LossBase: 20750 * scale},
 			{ID: "con:9002", Symbol: "SYNB", Underlying: "SYNB", Kind: mandate.KindStock, Quantity: 500 * scale, ValueBase: 40000 * scale, ContributionPct: 33.1},
 			{ID: "con:9004", Symbol: "SYNA 20261218 110 C", Underlying: "SYNA", Kind: mandate.KindOption, Quantity: -2 * scale, ValueBase: -540 * scale, ContributionPct: -4.5},
 		},
@@ -716,10 +719,14 @@ func goldenMandate(status string) rpc.MandateRiskResult {
 			}},
 		Gate: &rpc.MandateGateView{}}
 	if status != mandate.StatusWithin {
-		res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "the mandate risk 95,880 EUR a year is over the budget 32,050 EUR (299%); a gap in SYNA, SYNB would lose more than the gap cap 22,940 EUR"}
+		res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: goldenMandateLossSentence + "; a gap in SYNA, SYNB would lose more than the gap cap 22,940 EUR"}
 	}
 	return res
 }
+
+// goldenMandateLossSentence is the reduce verdict's loss sentence, as the
+// daemon states it for every gate refusal.
+const goldenMandateLossSentence = "the loss measure 83,000 EUR (premium at risk 0 EUR, stop loss 83,000 EUR) is over the mandate's loss room 64,101 EUR (129%)"
 
 // goldenMandateExposure is the reduce verdict with the exposure view, the
 // options gate reading the premium limits and an active override of the
@@ -736,8 +743,13 @@ func goldenMandateExposure() rpc.MandateRiskResult {
 			{Underlying: "SYNB", Legs: 2, Options: 1, ContributionPct: num(33.1), Beta: num(0.64), DeltaBase: num(40000), DeltaBetaBase: num(25600), GammaBase: num(0), ThetaBase: num(0), PremiumAtRiskBase: num(0), PremiumPctNLV: num(0), PremiumCapBase: num(45000), PremiumRoomBase: num(45000),
 				Unknown: []string{"SYNB 20261218 C 90: no vega from the broker's model"}},
 		}}
-	res.Gate = &rpc.MandateGateView{Reason: "your override of mandate.vol_target_pct lifts the volatility budget until 2026-09-05 10:00 UTC (\"earnings week, adding by hand\"); the verdict reads: the mandate risk 95,880 EUR a year is over the budget 32,050 EUR (299%)",
-		Options:  &rpc.MandateOptionsGateView{Warning: "the mandate risk 95,880 EUR a year is over the budget 32,050 EUR (299%); a gap in SYNA, SYNB would lose more than the gap cap 22,940 EUR"},
+	// The verdict's premium at risk is the exposure view's: 48,000 EUR of
+	// premium beside the 83,000 EUR of stop loss.
+	res.Verdict.Loss = &mandate.LossMeasure{TotalBase: 131000, PremiumBase: 48000, StopLossBase: 83000, RoomBase: 64101, RatioToRoom: 131000.0 / 64101,
+		Names: []mandate.LossName{{Underlying: "SYNA", TotalBase: 131000, PremiumBase: 48000, StopLossBase: 83000}}, Unstopped: []string{"SYNB"}}
+	loss := "the loss measure 131,000 EUR (premium at risk 48,000 EUR, stop loss 83,000 EUR) is over the mandate's loss room 64,101 EUR (204%)"
+	res.Gate = &rpc.MandateGateView{Reason: "your override of mandate.vol_target_pct lifts the volatility budget until 2026-09-05 10:00 UTC (\"earnings week, adding by hand\"); the verdict reads: " + loss,
+		Options:  &rpc.MandateOptionsGateView{Warning: loss + "; a gap in SYNA, SYNB would lose more than the gap cap 22,940 EUR"},
 		Override: &rpc.MandateOverrideView{ID: "ov-20260905-080000-1", Control: "mandate.vol_target_pct", Reason: "earnings week, adding by hand", GrantedAt: goldenAt.Add(-2 * time.Hour), ExpiresAt: goldenAt.Add(22 * time.Hour)}}
 	return res
 }
@@ -747,19 +759,20 @@ func goldenMandateExposure() rpc.MandateRiskResult {
 func goldenMandateReducing() rpc.MandateRiskResult {
 	res := goldenMandate(mandate.StatusReduce)
 	res.Reduction = &rpc.MandateReductionView{State: rpc.MandateReductionReducing, Rows: 2, Pending: 2, VetoUntil: goldenAt.Add(30 * time.Minute), PreAuthorised: true,
-		Reason: "the verdict reads reduce (299% of the budget 32,050 EUR); 2 rows sized to take the risk to 30,100 EUR a year, inside the 30,448 EUR target",
+		Reason: "the verdict reads reduce (the loss measure 83,000 EUR is 129% of the loss room 64,101 EUR); 2 cuts sized to take the loss measure to 60,100 EUR, inside the 60,896 EUR target",
 		Orders: []rpc.MandateReductionOrder{
 			{Rank: 1, Key: "mandate_reduction:0001", Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "STK"}, Action: rpc.OrderActionSell, Quantity: 3200,
-				Phase: rpc.MandatePhaseGap, ContributionPct: 71.4, Automatic: rpc.TradeProposalAutomaticPending, SubmitAt: goldenAt.Add(30 * time.Minute)},
+				Phase: rpc.MandatePhaseGap, LossBase: 83000, ContributionPct: 71.4, Automatic: rpc.TradeProposalAutomaticPending, SubmitAt: goldenAt.Add(30 * time.Minute)},
 			{Rank: 2, Key: "mandate_reduction:0002", Contract: rpc.ContractParams{Symbol: "SYNB", SecType: "STK"}, Action: rpc.OrderActionSell, Quantity: 1200,
-				Phase: rpc.MandatePhaseRisk, ContributionPct: 33.1, Automatic: rpc.TradeProposalAutomaticPending, SubmitAt: goldenAt.Add(30 * time.Minute)},
+				Phase: rpc.MandatePhasePremium, ContributionPct: 33.1, Automatic: rpc.TradeProposalAutomaticPending, SubmitAt: goldenAt.Add(30 * time.Minute)},
 		}}
 	return res
 }
 
 // goldenMandateNoRoom is the reduce at room 0: the loss from the high has
-// passed the maximum, so the budget and the gap caps are zero and the ratio
-// is unbounded (null on the wire, read back as +Inf through goldenConn).
+// passed the maximum, so the loss room, the budget and the gap caps are zero
+// and the ratios are unbounded (null on the wire, read back as +Inf through
+// goldenConn).
 func goldenMandateNoRoom() rpc.MandateRiskResult {
 	res := goldenMandate(mandate.StatusWithin)
 	v := res.Verdict
@@ -767,11 +780,12 @@ func goldenMandateNoRoom() rpc.MandateRiskResult {
 	c := &v.Capital
 	c.EquityBase, c.RiskBase, c.DrawdownBase, c.DrawdownPct, c.Room, c.BudgetAnnualSD = 225000, 155000, 75000, 31.91, 0, 0
 	v.Risk.RatioToBudget = math.Inf(1)
+	v.Loss.RoomBase, v.Loss.RatioToRoom = 0, math.Inf(1)
 	v.Stresses.GapCapBase, v.Stresses.GapBreaches = 0, []string{"SYNA", "SYNB"}
 	for i := range v.Underlyings {
 		v.Underlyings[i].GapCapBase, v.Underlyings[i].GapBreach = 0, true
 	}
-	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "the mandate risk 23,970 EUR a year is over the budget 0 EUR (the loss has reached the mandate's maximum, so no risk is in budget); a gap in SYNA, SYNB would lose more than the gap cap 0 EUR"}
+	res.Gate = &rpc.MandateGateView{RefusesAdditions: true, Reason: "the loss measure 20,750 EUR (premium at risk 0 EUR, stop loss 20,750 EUR) is over the mandate's loss room 0 EUR (the loss has reached the mandate's maximum, so no loss room is left); a gap in SYNA, SYNB would lose more than the gap cap 0 EUR"}
 	return res
 }
 
@@ -780,24 +794,25 @@ func goldenMandateNoRoom() rpc.MandateRiskResult {
 func goldenMandateHeld() rpc.MandateRiskResult {
 	res := goldenMandateUnknown()
 	res.Reduction = &rpc.MandateReductionView{State: rpc.MandateReductionHeld, Rows: 1, Held: true,
-		HoldReason: "the mandate risk cannot be measured: daily history for SYNB is stale (last read 2026-09-02 06:10:00)",
+		HoldReason: "the mandate verdict cannot be measured: daily history for SYNB is stale (last read 2026-09-02 06:10:00)",
 		Orders: []rpc.MandateReductionOrder{{Rank: 1, Key: "mandate_reduction:0001", Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "STK"}, Action: rpc.OrderActionSell,
-			Quantity: 400, Phase: rpc.MandatePhaseRisk, ContributionPct: 71.4, Held: true}}}
+			Quantity: 400, Phase: rpc.MandatePhasePremium, LossBase: 20750, ContributionPct: 71.4, Held: true}}}
 	return res
 }
 
 // goldenMandateProposals is the forced reduction as canary proposals lists
-// it: an expiring call first, then the largest contributor held to the
+// it: an expiring call first, then the largest premium at risk held to the
 // order cap, pre-authorised and waiting out the veto window.
 func goldenMandateProposals() rpc.TradeProposalSnapshot {
 	verdictAt := goldenAt.Add(-time.Minute)
 	auto := &rpc.TradeProposalAutomatic{PreAuthorised: true, Bucket: rpc.TradeProposalBucketMandateReduction, State: rpc.TradeProposalAutomaticPending,
 		CreatedAt: goldenAt, SubmitAt: goldenAt.Add(30 * time.Minute), VetoWindow: "30m0s"}
 	sessions := 2
-	mandateRow := func(rank int, phase string, contribution, cut float64) *rpc.TradeProposalMandate {
+	mandateRow := func(rank int, phase string, contribution, cut, legLoss, lossCut float64) *rpc.TradeProposalMandate {
 		m := &rpc.TradeProposalMandate{Rank: rank, BatchRows: 2, Phase: phase, ContributionPct: contribution, Units: 600,
-			RiskAnnualBase: 41200, BudgetAnnualSD: 36000, TargetAnnualSD: 34200, RiskCutAnnualBase: cut, RiskAfterAnnualBase: 34050,
-			VerdictStatus: mandate.StatusOver, VerdictAt: verdictAt, VerdictFingerprint: "a1b2c3d4e5f6", BaseCurrency: "EUR"}
+			LossBase: 72000, LossRoomBase: 64000, LossTargetBase: 60800, LegLossBase: legLoss, LossCutBase: lossCut, LossAfterBase: 60500,
+			RiskAnnualBase: 41200, BudgetAnnualSD: 36000, RiskCutAnnualBase: cut, RiskAfterAnnualBase: 34050,
+			VerdictStatus: mandate.StatusReduce, VerdictAt: verdictAt, VerdictFingerprint: "a1b2c3d4e5f6", BaseCurrency: "EUR"}
 		if phase == rpc.MandatePhaseExpiry {
 			m.Units, m.SessionsToExpiry = 5, &sessions
 		}
@@ -806,23 +821,24 @@ func goldenMandateProposals() rpc.TradeProposalSnapshot {
 	return rpc.TradeProposalSnapshot{
 		Revision: "rev-0002", PolicyID: "protection", PolicyVersion: 3,
 		Counts: rpc.TradeProposalCounts{Total: 2, Actionable: 2, MandateReduction: 2},
-		MandateReduction: &rpc.TradeProposalMandateStatus{State: rpc.MandateReductionReducing, VerdictStatus: mandate.StatusOver, VerdictAt: verdictAt,
-			VerdictFingerprint: "a1b2c3d4e5f6", ConsecutiveOver: 2, RiskAnnualBase: 41200, BudgetAnnualSD: 36000, TargetAnnualSD: 34200, ProjectedRiskAnnualBase: new(34050.0),
+		MandateReduction: &rpc.TradeProposalMandateStatus{State: rpc.MandateReductionReducing, VerdictStatus: mandate.StatusReduce, VerdictAt: verdictAt,
+			VerdictFingerprint: "a1b2c3d4e5f6", ConsecutiveOver: 2, LossBase: 72000, LossRoomBase: 64000, LossTargetBase: 60800, ProjectedLossBase: new(60500.0),
+			RiskAnnualBase: 41200, BudgetAnnualSD: 36000, ProjectedRiskAnnualBase: new(34050.0),
 			TargetReached: true, Rows: 2, BaseCurrency: "EUR",
-			Reason: "the verdict reads over (114% of the budget 36,000 EUR); 2 rows sized to take the risk to 34,050 EUR a year, inside the 34,200 EUR target"},
+			Reason: "the verdict reads reduce (the loss measure 72,000 EUR is 112% of the loss room 64,000 EUR); 2 cuts sized to take the loss measure to 60,500 EUR, inside the 60,800 EUR target"},
 		Proposals: []rpc.TradeProposal{
 			{Key: "mandate_reduction:0001", Bucket: rpc.TradeProposalBucketMandateReduction, Action: rpc.OrderActionSell, Quantity: 5, Symbol: "SYNB", SecType: "OPT",
 				OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, PositionEffect: rpc.OrderPositionEffectClose, PositionQuantity: 5, NeverSkipVeto: true,
 				Contract: rpc.ContractParams{Symbol: "SYNB", SecType: "OPT", Currency: "EUR", Expiry: "20260909", Strike: 75, Right: "C"},
-				Reason:   "mandate risk 41,200 EUR a year is 114% of the budget 36,000 EUR (over); in the money 2 sessions before expiry; exercised, the delivered shares would put the book over budget, so it goes first: sell 5 of 5 contracts; the batch takes the risk to 34,050 EUR, inside the 34,200 EUR target",
-				Mandate:  mandateRow(1, rpc.MandatePhaseExpiry, 4.2, 700), Automatic: auto,
-				Details: []string{"order 1 of 2 in the batch, sent in this order; this cut takes 700 EUR a year off the risk", "waits the full veto window even under a latched brake: a reduction to budget is a discretionary-scale action, not a stop"}},
+				Reason:   "the loss measure 72,000 EUR is 112% of the mandate's loss room 64,000 EUR (reduce); in the money 2 sessions before expiry; exercised, the delivered shares would push the reduced book's volatility over its budget, so it goes first: sell 5 of 5 contracts; the batch takes the loss measure to 60,500 EUR, inside the 60,800 EUR target",
+				Mandate:  mandateRow(1, rpc.MandatePhaseExpiry, 4.2, 700, 2500, 2500), Automatic: auto,
+				Details: []string{"order 1 of 2 in the batch, sent in this order; this cut takes 2,500 EUR off the loss measure and 700 EUR a year off the volatility", "waits the full veto window even under a latched brake: a reduction to budget is a discretionary-scale action, not a stop"}},
 			{Key: "mandate_reduction:0002", Bucket: rpc.TradeProposalBucketMandateReduction, Action: rpc.OrderActionSell, Quantity: 200, Symbol: "SYNA", SecType: "STK",
 				OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, PositionEffect: rpc.OrderPositionEffectReduce, PositionQuantity: 3000, NeverSkipVeto: true,
 				Contract: rpc.ContractParams{Symbol: "SYNA", SecType: "STK", Currency: "EUR"},
-				Reason:   "mandate risk 41,200 EUR a year is 114% of the budget 36,000 EUR (over); the largest risk contributor left (88% of the risk): sell 200 of 3000 shares now (the batch asks for 600; the order caps hold one order to 200, and the next cycle measures the rest); the batch takes the risk to 34,050 EUR, inside the 34,200 EUR target",
-				Mandate:  mandateRow(2, rpc.MandatePhaseRisk, 88.1, 6450), Automatic: auto,
-				Details: []string{"order 2 of 2 in the batch, sent in this order; this cut takes 6,450 EUR a year off the risk", "waits the full veto window even under a latched brake: a reduction to budget is a discretionary-scale action, not a stop"}},
+				Reason:   "the loss measure 72,000 EUR is 112% of the mandate's loss room 64,000 EUR (reduce); the largest premium at risk left, SYNA in your sleeve (60,000 EUR of the loss measure): sell 200 of 3000 shares now (the batch asks for 600; the order caps hold one order to 200, and the next cycle measures the rest); the batch takes the loss measure to 60,500 EUR, inside the 60,800 EUR target",
+				Mandate:  mandateRow(2, rpc.MandatePhasePremium, 88.1, 6450, 60000, 9000), Automatic: auto,
+				Details: []string{"order 2 of 2 in the batch, sent in this order; this cut takes 9,000 EUR off the loss measure and 6,450 EUR a year off the volatility", "waits the full veto window even under a latched brake: a reduction to budget is a discretionary-scale action, not a stop"}},
 		},
 	}
 }

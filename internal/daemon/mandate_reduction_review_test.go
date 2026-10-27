@@ -149,7 +149,7 @@ func TestMandateReductionWorkingOrdersAndThePlan(t *testing.T) {
 	}) {
 		t.Fatalf("the held line is not named: %v", st.LeftOut)
 	}
-	if st.TargetReached != (mandateRiskAfter(t, in, map[int]float64{9002: float64(rows[0].Mandate.Units)}) <= 0.95*in.Result.Verdict.Capital.BudgetAnnualSD+1e-6) {
+	if st.TargetReached != (mandateLossAfter(t, in, map[int]float64{9002: float64(rows[0].Mandate.Units)}) <= 0.95*mandateLossRoom(in)+1e-6) {
 		t.Fatalf("target reached %v disagrees with the plan without SYNA", st.TargetReached)
 	}
 
@@ -170,9 +170,10 @@ func TestMandateReductionWorkingOrdersAndThePlan(t *testing.T) {
 	}
 }
 
-// At the maximum loss the room is nil, so are the budget and every gap cap:
-// the batch reduces the book to what it may not cut (a hedge-listed put
-// stays), and a verdict back within withdraws it. The verdict encodes.
+// At the maximum loss the room is nil, so are the loss room, the budget
+// and every gap cap: the batch reduces the book to what it may not cut (a
+// hedge-listed put stays), and a verdict back within withdraws it. The
+// verdict encodes.
 func TestMandateReductionAtTheMaximumLoss(t *testing.T) {
 	t.Parallel()
 	hedge := mandateReductionCall("SPY", 9020, 10, 400, 420, 5, "20261120")
@@ -183,15 +184,15 @@ func TestMandateReductionAtTheMaximumLoss(t *testing.T) {
 	book.Capital.Room, book.Capital.BudgetAnnualSD = 0, 0
 	in := mandateReductionVerdict(book, 2)
 	v := in.Result.Verdict
-	if v.Status != mandate.StatusReduce || !math.IsInf(v.Risk.RatioToBudget, 1) || v.Stresses == nil || len(v.Stresses.GapBreaches) == 0 {
-		t.Fatalf("verdict at room 0: %s ratio %v breaches %+v", v.Status, v.Risk.RatioToBudget, v.Stresses)
+	if v.Status != mandate.StatusReduce || !math.IsInf(v.Risk.RatioToBudget, 1) || v.Loss == nil || v.Loss.RoomBase != 0 || !math.IsInf(v.Loss.RatioToRoom, 1) || v.Stresses == nil || len(v.Stresses.GapBreaches) == 0 {
+		t.Fatalf("verdict at room 0: %s ratio %v loss %+v breaches %+v", v.Status, v.Risk.RatioToBudget, v.Loss, v.Stresses)
 	}
 	raw, err := json.Marshal(in.Result)
-	if err != nil || !strings.Contains(string(raw), `"ratio_to_budget":null`) {
+	if err != nil || !strings.Contains(string(raw), `"ratio_to_budget":null`) || !strings.Contains(string(raw), `"ratio_to_room":null`) {
 		t.Fatalf("encode at room 0: %v", err)
 	}
 	var back rpc.MandateRiskResult
-	if err := json.Unmarshal(raw, &back); err != nil || back.Verdict.Status != mandate.StatusReduce || !math.IsInf(back.Verdict.Risk.RatioToBudget, 1) {
+	if err := json.Unmarshal(raw, &back); err != nil || back.Verdict.Status != mandate.StatusReduce || !math.IsInf(back.Verdict.Risk.RatioToBudget, 1) || !math.IsInf(back.Verdict.Loss.RatioToRoom, 1) {
 		t.Fatalf("round trip at room 0: %+v %v", back.Verdict, err)
 	}
 	if !strings.Contains(mandateStatusSentence(v, "EUR"), "maximum") {

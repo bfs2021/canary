@@ -7,9 +7,13 @@ import (
 	"github.com/osauer/canary/v2/internal/mandate"
 )
 
-// MethodMandateRisk serves the daemon-owned mandate risk verdict: the
-// ex-ante volatility of the book by historical simulation against the
-// owner's budget (internal-docs/design/mandate-risk-budget.md).
+// MethodMandateRisk serves the daemon-owned mandate risk verdict
+// (internal-docs/design/mandate-risk-budget.md): the loss measure, premium
+// at risk on every bought option plus the cash loss to every armed share
+// stop, against the loss the mandate still allows (the headline, spec
+// TM-04.12, owner decision 2026-10-27 19:50 CET), and the ex-ante
+// volatility of the book by historical simulation, which sizes the sleeve
+// allocations and reports the daily swing.
 const MethodMandateRisk = "mandate.risk"
 
 // MandateRiskParams is the input for MethodMandateRisk. Refresh asks the
@@ -21,7 +25,8 @@ type MandateRiskParams struct {
 
 // MandateBudgetBlockerCode is the blocker of a risk-adding order the mandate
 // gate refuses: the verdict is not within, or the addition would take the
-// risk over the budget.
+// loss measure over the loss room, a gap over its cap or its sleeve over its
+// allocation.
 const MandateBudgetBlockerCode = "mandate_budget"
 
 // MandatePremiumBlockerCode is the blocker of an option addition the premium
@@ -116,11 +121,12 @@ type MandateExposureRow struct {
 	GammaBase     *float64 `json:"gamma_base,omitempty"`
 	ThetaBase     *float64 `json:"theta_base,omitempty"`
 	VegaBase      *float64 `json:"vega_base,omitempty"`
-	// PremiumAtRiskBase is the premium at risk outside protection (the
-	// higher of price paid and value per long leg), PremiumPctNLV its share
-	// of NLV, PremiumCapBase the cap in money (the name's or the book's) and
+	// PremiumAtRiskBase is the premium at risk on every long leg, protection
+	// included (the higher of price paid and value per leg; owner decision
+	// 2026-10-27 19:52 CET, "Count it"), PremiumPctNLV its share of NLV,
+	// PremiumCapBase the cap in money (the name's or the book's) and
 	// PremiumRoomBase what the cap still leaves; PremiumOver says the cap is
-	// reached. HedgePremiumBase is the protection premium left out.
+	// reached. HedgePremiumBase is the protection premium within it.
 	PremiumAtRiskBase *float64 `json:"premium_at_risk_base,omitempty"`
 	PremiumPctNLV     *float64 `json:"premium_pct_nlv,omitempty"`
 	PremiumCapBase    *float64 `json:"premium_cap_base,omitempty"`
@@ -192,9 +198,11 @@ type MandateReductionOrder struct {
 	Contract ContractParams `json:"contract"`
 	Action   string         `json:"action"`
 	Quantity int            `json:"quantity"`
-	// Phase is expiry, gap or risk (MandatePhase*); ContributionPct the
-	// leg's share of the variance on the verdict it was sized on.
+	// Phase is expiry, gap, premium or stop (MandatePhase*); LossBase the
+	// leg's part of the loss measure and ContributionPct its share of the
+	// variance on the verdict it was sized on.
 	Phase           string  `json:"phase"`
+	LossBase        float64 `json:"loss_base,omitempty"`
 	ContributionPct float64 `json:"contribution_pct"`
 	// Automatic is the row's automatic-submission state (pending, deferred,
 	// submitting, submitted, vetoed, superseded or failed), empty when no
@@ -262,9 +270,11 @@ type MandateSeriesEvidence struct {
 
 // MandateGateView is the additions gate as it reads the verdict now.
 type MandateGateView struct {
-	// RefusesAdditions is true whenever the verdict is not within, is older
-	// than the gate accepts, or the owner's allocation is over (allocations, 2026-10-18):
-	// it reads the gate for the owner's stock and ETF additions.
+	// RefusesAdditions is true whenever the verdict is not within (the loss
+	// measure over the loss room, a gap over its cap, or unmeasured), is
+	// older than the gate accepts, or the owner's allocation is over
+	// (allocations, 2026-10-18): it reads the gate for the owner's stock and
+	// ETF additions.
 	RefusesAdditions bool   `json:"refuses_additions"`
 	Reason           string `json:"reason,omitempty"`
 	// Options reads the gate for the owner's option additions, which the
