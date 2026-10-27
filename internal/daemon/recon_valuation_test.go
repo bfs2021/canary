@@ -298,3 +298,34 @@ func TestReconPublishedPrecisionIsEvidenceNotTolerance(t *testing.T) {
 		}
 	}
 }
+
+// The broker delivers each day in three queries: year to date, the single
+// day, and a 35-day window generated last. Only the single-day statement
+// carries the day's closing FX basis; the windows read
+// daily_statement_required. The newest generation still owns the equity
+// row, but the closing basis comes from the newest statement that has one,
+// so the window generated last cannot leave every report incomparable (from
+// 39ee0097 on 2026-10-22 it did, and the reconcile clock lapsed 2026-10-27).
+func TestReconClosingBasisComesFromTheSingleDayStatement(t *testing.T) {
+	s := newReconV3TestServer(t)
+	row, daily, sample := reconValuationFixture()
+	s.riskCapital.now = func() time.Time { return sample.AsOf.Add(time.Hour) }
+	scope := brokerStateScope{Account: "U1234567", Mode: rpc.AccountModeLive}
+	s.riskCapital.observeWithValuation(sample.EquityBase, mandatePnLReading{}, sample.AsOf, s.riskPolicies.snapshot().policy, scope, true, &sample)
+	window := func(days int, generated time.Duration) flexstmt.Statement {
+		st := daily
+		st.FromDate, st.WhenGenerated = row.ReportDate.AddDate(0, 0, -days), daily.WhenGenerated.Add(generated)
+		st.FX = &flexstmt.FXSnapshot{Day: daily.FX.Day, Reason: "daily_statement_required"}
+		return st
+	}
+	merged := mergeRetainedStatements([]flexstmt.Statement{window(265, -time.Minute), daily, window(34, 90*time.Minute)})
+	got := s.reconEquityCheck(merged, scope)
+	if got.Comparability != "comparable" || got.DivergencePct == nil {
+		t.Fatalf("the window generated last hid the single day's closing basis: %+v", got)
+	}
+	// Without a single-day statement the day stays unproven.
+	merged = mergeRetainedStatements([]flexstmt.Statement{window(265, -time.Minute), window(34, 90*time.Minute)})
+	if got := s.reconEquityCheck(merged, scope); got.Comparability != "statement_basis_missing" || got.DivergencePct != nil {
+		t.Fatalf("a window without a closing basis passed: %+v", got)
+	}
+}

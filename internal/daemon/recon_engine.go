@@ -37,7 +37,7 @@ type retainedStatementMerge struct {
 	flows            []reconFlow
 	exceptions       []rpc.ReconException
 	equityByDay      map[string]flexstmt.EquityRow
-	statementByDay   map[string]flexstmt.Statement
+	statementByDay   map[string]flexstmt.Statement // the day's closing basis: newest statement with a single-day FX snapshot
 	classifiedCounts map[string]int
 	statementAsOf    time.Time
 	coverageFrom     time.Time
@@ -371,6 +371,12 @@ func mergeRetainedStatements(statements []flexstmt.Statement) retainedStatementM
 			key := strings.ToUpper(strings.TrimSpace(st.AccountID)) + "\x00" + e.ReportDate.Format("2006-01-02")
 			if _, ok := merged.equityByDay[key]; !ok {
 				merged.equityByDay[key] = e
+			}
+			// The closing basis is the newest statement that carries one for
+			// the day: the broker's single-day query. Its 35-day and
+			// year-to-date windows share the day's equity row but not its
+			// closing FX, and the window is generated last.
+			if _, ok := merged.statementByDay[key]; !ok && st.FX != nil && st.FX.SingleDay && st.FX.Reason == "" && st.FX.Day == e.ReportDate.Format("2006-01-02") {
 				merged.statementByDay[key] = st
 			}
 		}
