@@ -271,6 +271,20 @@ sweep. `--plan` sizes the legs without broker previews and reports what the
 book would lose if the index fell 10% now and after, from the mandate's
 index stress; a plan cannot be submitted.
 
+Canary's own proposals carry the same figure. `canary proposals list`, and
+the proposal snapshot it reads, give each row an `index_loss` object with
+the fields the plan carries at its top level: `index_shock_pct`,
+`index_loss_before_base`, `index_loss_after_base`, and `index_loss_unknown`
+when there is no figure. The before figure is the book now; the after figure
+is the book with that row filled. The snapshot's own `index_loss` fills every
+actionable row together, and its `base_currency` names the currency. A
+blocked or shadow row is priced on its own but left out of the total. A stop
+or trail reads unknown, because it fills only when the market reaches it. A
+cash sweep or currency row carries no figure. The figures read the mandate's
+last evaluation under the current policy and are never stored; without one,
+every row says the figure is unknown and why. Reading the list never runs an
+evaluation.
+
 A reduction reserves the quantities already committed by Canary's working
 orders, including individual legs of combo orders. A known fill does not
 make those units available for another sale while positions are catching up:
@@ -281,11 +295,25 @@ These checks, and the reviewed worst price, apply when a reduction token is
 submitted through `order place` as well as through `proposals reduce`.
 
 No portfolio sweep, in any mode, selects a locked holding. `canary locks
-lock SYMBOL --con-id ID --role hedge|core` puts a line on the keep list:
-a hedge is a hedge because you say so, not because of its delta sign that
-day. Net mode reads the direction of the unlocked book. The mandate's
-automatic reduction leaves locked lines out too. If the keep list cannot be
-read, automatic reductions wait; an unreadable list never means no locks. A
+lock SYMBOL --role hedge|core` puts a name on the keep list: a hedge is a
+hedge because you say so, not because of its delta sign that day. A lock
+names the underlying and covers every contract of it the book holds when a
+sweep runs: the shares, the calls written on them, the puts, and the
+contract a roll moves into. `--con-id` is optional and records the contract
+the lock was placed from, which the lock also covers. Net mode reads the
+direction of the unlocked book. The mandate's automatic reduction and the
+premium budget sweep leave locked names out too, and `positions.risk`
+carries the keep list resolved against its book under `holding_locks`.
+
+A lock on a name the book no longer holds keeps nothing. It is not pruned,
+since removing a lock is yours: `canary locks` and `holding_locks.list`
+report it as not held (`held: false`, no `contracts`), and it holds the name
+again once a line of it is held. A list saved by an earlier version named one
+contract per lock. It still reads: the entries of one name fold into one
+lock on that name, and one name saved under both roles reads as a hedge. The
+next save that changes the list writes it in the folded form. If the keep
+list cannot be read, automatic reductions wait; an unreadable list never
+means no locks. A
 lock save waits for any in-flight broker transaction before acknowledging the
 new list. It does not cancel orders already sent. A reviewed basket refuses,
 and sends nothing for, a leg locked after the review. A single-holding

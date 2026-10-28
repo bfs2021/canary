@@ -532,10 +532,8 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 	default:
 		statusRow(env, out, "Percent", fmt.Sprintf("%d%% of net delta", res.Percent))
 	}
-	if res.IndexLossBeforeBase != nil && res.IndexLossAfterBase != nil {
-		statusRow(env, out, fmt.Sprintf("Index -%.0f%%", res.IndexShockPct), "loses "+formatProposalMoney(*res.IndexLossBeforeBase, res.BaseCurrency)+" now, "+formatProposalMoney(*res.IndexLossAfterBase, res.BaseCurrency)+" after")
-	} else if res.IndexLossUnknown != "" {
-		statusRow(env, out, "Index loss", "unknown: "+res.IndexLossUnknown)
+	if label, value := formatIndexLoss(&res.IndexLoss, res.BaseCurrency); value != "" {
+		statusRow(env, out, label, value)
 	}
 	if len(res.Kept) > 0 {
 		kept := make([]string, 0, len(res.Kept))
@@ -733,6 +731,9 @@ func renderProposalsText(env *Env, snap *rpc.TradeProposalSnapshot) {
 	if m := formatProposalMandateStatus(snap.MandateReduction); m != "" {
 		statusRow(env, out, "Mandate", m)
 	}
+	if label, value := formatIndexLoss(snap.IndexLoss, snap.BaseCurrency); value != "" {
+		statusRow(env, out, label, value)
+	}
 	printTradingBlockers(out, "  ", snap.Blockers)
 	var shadow, sweep, leveling []rpc.TradeProposal
 	for _, p := range snap.Proposals {
@@ -748,7 +749,7 @@ func renderProposalsText(env *Env, snap *rpc.TradeProposalSnapshot) {
 			shadow = append(shadow, p)
 			continue
 		}
-		renderProposalRow(env, out, &p)
+		renderProposalRow(env, out, &p, snap.BaseCurrency)
 	}
 	// Shadow rows are observation, not an offer: they sit under their own
 	// heading so nobody reads them as work, and the heading says what happens
@@ -757,7 +758,7 @@ func renderProposalsText(env *Env, snap *rpc.TradeProposalSnapshot) {
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "  Shadow (budget reduction)  %d %s listed for observation; preview and submit refuse them\n", len(shadow), pluralWord(len(shadow), "row", "rows"))
 		for _, p := range shadow {
-			renderProposalRow(env, out, &p)
+			renderProposalRow(env, out, &p, snap.BaseCurrency)
 		}
 	}
 	renderCashSweepSection(env, out, snap.CashSweep, sweep)
@@ -765,7 +766,22 @@ func renderProposalsText(env *Env, snap *rpc.TradeProposalSnapshot) {
 	fmt.Fprintln(out)
 }
 
-func renderProposalRow(env *Env, out io.Writer, p *rpc.TradeProposal) {
+// formatIndexLoss is the one-line index-fall figure shared by the reduce
+// plan, the proposal list and each row: what the book loses in the fall now
+// and after the orders fill, or why that is unknown. Empty when absent.
+func formatIndexLoss(il *rpc.IndexLoss, ccy string) (label, value string) {
+	switch {
+	case il == nil:
+		return "", ""
+	case il.IndexLossBeforeBase != nil && il.IndexLossAfterBase != nil:
+		return fmt.Sprintf("Index -%.0f%%", il.IndexShockPct), "loses " + formatProposalMoney(*il.IndexLossBeforeBase, ccy) + " now, " + formatProposalMoney(*il.IndexLossAfterBase, ccy) + " after"
+	case il.IndexLossUnknown != "":
+		return "Index loss", "unknown: " + il.IndexLossUnknown
+	}
+	return "", ""
+}
+
+func renderProposalRow(env *Env, out io.Writer, p *rpc.TradeProposal, snapBaseCurrency string) {
 	state := "ready"
 	if len(p.Blockers) > 0 {
 		state = "blocked"
@@ -795,6 +811,9 @@ func renderProposalRow(env *Env, out io.Writer, p *rpc.TradeProposal) {
 	}
 	if m := formatProposalMandate(p.Mandate); m != "" {
 		fmt.Fprintf(out, "      Mandate:     %s\n", m)
+	}
+	if label, value := formatIndexLoss(p.IndexLoss, snapBaseCurrency); value != "" {
+		fmt.Fprintf(out, "      %-12s %s\n", label+":", value)
 	}
 	if sizing := formatProposalTrailSizing(p.TrailSizing); sizing != "" {
 		fmt.Fprintf(out, "      Trail sizing: %s\n", sizing)

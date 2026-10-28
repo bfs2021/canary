@@ -41,6 +41,14 @@ func (s *Server) handlePositionsRisk(ctx context.Context, req *rpc.Request) (*rp
 		return nil, err
 	}
 	out := rpc.CompactPositionsRisk(res, 5)
+	// The keep list resolved against this very book, so a reader marks the
+	// locked lines the way every sweep sees them.
+	if locks, err := s.holdingLocks(ctx); err != nil {
+		out.HoldingLocksUnavailable = "the locked holdings could not be read: " + err.Error()
+	} else {
+		locks.Decorate(res)
+		out.HoldingLocks = &locks
+	}
 	return &out, nil
 }
 

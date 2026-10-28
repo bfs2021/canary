@@ -141,12 +141,18 @@ func TestHoldingLocksPersistReplayAndFence(t *testing.T) {
 		t.Fatal(empty, err)
 	}
 	spy := rpc.HoldingLock{ConID: 9, Symbol: " spy ", Role: "Hedge"}
-	saved, err := replaceHoldingLocks(t, s, []rpc.HoldingLock{{ConID: 12, Symbol: "GLD", Role: "core"}, spy}, 0, "lock-1")
-	if err != nil || saved.Revision != 1 || len(saved.Locks) != 2 || saved.Locks[0].ConID != 9 || saved.Locks[0].Symbol != "SPY" || saved.Locks[0].Role != "hedge" {
-		t.Fatalf("saved = %+v err %v, want normalized and ordered by contract", saved, err)
+	saved, err := replaceHoldingLocks(t, s, []rpc.HoldingLock{spy, {ConID: 12, Symbol: "GLD", Role: "core"}}, 0, "lock-1")
+	if err != nil || saved.Revision != 1 || len(saved.Locks) != 2 || saved.Locks[0].Symbol != "GLD" || saved.Locks[1].ConID != 9 || saved.Locks[1].Symbol != "SPY" || saved.Locks[1].Role != "hedge" {
+		t.Fatalf("saved = %+v err %v, want normalized and ordered by name", saved, err)
 	}
-	if !saved.Locked(9) || saved.Locked(1) || saved.Locked(0) {
-		t.Fatal("Locked answers by exact contract only")
+	if _, ok := saved.Match("SPY", 0); !ok {
+		t.Fatal("a lock covers its name")
+	}
+	if _, ok := saved.Match("OTHER", 9); !ok {
+		t.Fatal("a lock still covers the contract it was placed from")
+	}
+	if _, ok := saved.Match("OTHER", 1); ok {
+		t.Fatal("an unlocked name and contract must not match")
 	}
 	replay, err := replaceHoldingLocks(t, s, []rpc.HoldingLock{{ConID: 12, Symbol: "GLD", Role: "core"}, spy}, 0, "lock-1")
 	if err != nil || !replay.Replay || replay.Revision != 1 {
@@ -162,11 +168,12 @@ func TestHoldingLocksPersistReplayAndFence(t *testing.T) {
 	if _, err = replaceHoldingLocks(t, s, []rpc.HoldingLock{{ConID: 9, Symbol: "SPY", Role: "keep"}}, 1, "lock-4"); err == nil {
 		t.Fatal("an unknown role must be refused")
 	}
-	if _, err = replaceHoldingLocks(t, s, []rpc.HoldingLock{spy, spy}, 1, "lock-5"); err == nil {
-		t.Fatal("a contract locked twice must be refused")
+	folded, err := replaceHoldingLocks(t, s, []rpc.HoldingLock{{ConID: 10, Symbol: "SPY", Role: "core"}, spy}, 1, "lock-5")
+	if err != nil || folded.Revision != 2 || len(folded.Locks) != 1 || folded.Locks[0].Role != rpc.HoldingLockRoleHedge || folded.Locks[0].ConID != 0 {
+		t.Fatalf("folded = %+v err %v, want one SPY lock as hedge spanning contracts", folded, err)
 	}
-	cleared, err := replaceHoldingLocks(t, s, []rpc.HoldingLock{}, 1, "lock-6")
-	if err != nil || cleared.Revision != 2 || len(cleared.Locks) != 0 {
+	cleared, err := replaceHoldingLocks(t, s, []rpc.HoldingLock{}, 2, "lock-6")
+	if err != nil || cleared.Revision != 3 || len(cleared.Locks) != 0 {
 		t.Fatalf("cleared = %+v err %v", cleared, err)
 	}
 }

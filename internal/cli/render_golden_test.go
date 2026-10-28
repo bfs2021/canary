@@ -345,7 +345,11 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "exercise_reconciliation_replay", argv: []string{"opportunities", "reconcile-exercise", "synthetic-request", "revision-one", "--evidence", "synthetic-evidence", "--confirm-complete"}, render: func(env *Env) { renderExerciseReconciliation(env, goldenExerciseResolution(true)) }},
 		{name: "help_opportunities_exercises", argv: []string{"opportunities", "exercises", "--help"}},
 		{name: "help_opportunities_reconcile_exercise", argv: []string{"opportunities", "reconcile-exercise", "--help"}},
-		{name: "locks_list", argv: []string{"locks"}, conn: goldenConn{rpc.MethodHoldingLocksList: rpc.HoldingLocks{Version: 1, Revision: 3, AsOf: goldenAt, Locks: []rpc.HoldingLock{{ConID: goldenReduceOptionCon, Symbol: "SYNB", Role: rpc.HoldingLockRoleHedge}, {ConID: 4242, Symbol: "SYNG", Role: rpc.HoldingLockRoleCore}}}}},
+		{name: "locks_list", argv: []string{"locks"}, conn: goldenConn{rpc.MethodHoldingLocksList: rpc.HoldingLocks{Version: 1, Revision: 3, AsOf: goldenAt, Locks: []rpc.HoldingLock{
+			{Symbol: "SYNA", Role: rpc.HoldingLockRoleCore, Contracts: []int{goldenReduceStockCon, goldenReduceOptionCon}, Held: new(true)},
+			{ConID: goldenReduceOptionCon, Symbol: "SYNB", Role: rpc.HoldingLockRoleHedge},
+			{ConID: 4242, Symbol: "SYNG", Role: rpc.HoldingLockRoleCore, Held: new(false)}}}}},
+		{name: "proposals_list_index_loss", argv: []string{"proposals", "list"}, conn: goldenConn{rpc.MethodTradeProposalsSnapshot: goldenProposalsIndexLoss()}},
 		{name: "locks_list_empty", argv: []string{"locks"}, conn: goldenConn{rpc.MethodHoldingLocksList: rpc.HoldingLocks{Version: 1, AsOf: goldenAt, Locks: []rpc.HoldingLock{}}}},
 		{name: "proposals_reduce_portfolio_submit_tokens", argv: []string{"proposals", "reduce", "--portfolio", "--submit", "--preview-token", goldenReduceToken, "--preview-token", goldenReduceTokenB, "--request-ref", "desk-basket-7f3a"},
 			conn: goldenConn{rpc.MethodTradeProposalsReducePortfolioSubmit: goldenReducePortfolioSubmit()}},
@@ -1003,6 +1007,24 @@ func goldenProposals() rpc.TradeProposalSnapshot {
 			Details:            []string{"protects 100 sh of SYNA"},
 		}},
 	}
+}
+
+// goldenProposalsIndexLoss is a list priced for the index fall: the book's
+// loss now and with every actionable row filled, each row's own figure, and
+// a trailing stop that has none because it fills only when reached.
+func goldenProposalsIndexLoss() rpc.TradeProposalSnapshot {
+	snap := goldenProposals()
+	snap.BaseCurrency = "USD"
+	snap.Counts = rpc.TradeProposalCounts{Total: 2, Actionable: 2, TrailingStop: 1, RiskReduction: 1}
+	snap.IndexLoss = &rpc.IndexLoss{IndexShockPct: 10, IndexLossBeforeBase: new(8300.0), IndexLossAfterBase: new(7050.0)}
+	snap.Proposals[0].IndexLoss = &rpc.IndexLoss{IndexShockPct: 10, IndexLossUnknown: "a stop or trail fills only when the market reaches it; the loss is measured for orders that fill now"}
+	snap.Proposals = append(snap.Proposals, rpc.TradeProposal{
+		Key: "rr-SYNC", Bucket: rpc.TradeProposalBucketRiskReduction, Action: rpc.OrderActionSell, Quantity: 10, Symbol: "SYNC", SecType: "STK",
+		OrderType: rpc.OrderTypeLMT, TIF: rpc.OrderTIFDay, Contract: rpc.ContractParams{Symbol: "SYNC", SecType: "STK", Currency: "USD", ConID: 5151},
+		Reason: "issuer over its worst-case loss limit", PositionQuantity: 40,
+		IndexLoss: &rpc.IndexLoss{IndexShockPct: 10, IndexLossBeforeBase: new(8300.0), IndexLossAfterBase: new(7050.0)},
+	})
+	return snap
 }
 
 // goldenSweepBorrowed is a sweep whose EUR buy holds because USD is

@@ -73,6 +73,9 @@ type proposalEngine struct {
 	// statements for an hour; levelingRatesForTest replaces the read in tests.
 	levelingRates        currencyLevelingRatesCache
 	levelingRatesForTest func(now time.Time) (map[string]currencyLevelingRate, string, string)
+	// indexLoss keeps the served rows' index-fall figures for one snapshot
+	// and evaluation (proposal_index_loss.go).
+	indexLoss proposalIndexLossCache
 	// kick wakes Run for an immediate refresh (gateway reconnect). Lazily
 	// need no extra setup. Buffered: senders never block.
 	kick chan struct{}
@@ -372,6 +375,7 @@ func (e *proposalEngine) snapshotForRead(show, refresh bool) rpc.TradeProposalSn
 	e.decorateAutomatic(&snap)
 	e.decorateQueued(&snap)
 	e.decorateReadiness(&snap)
+	e.decorateIndexLoss(&snap)
 	if refresh {
 		e.kickIfCoverageStale(snap.Proposals)
 	}
@@ -389,6 +393,7 @@ func (e *proposalEngine) Refresh(ctx context.Context, show bool) (rpc.TradePropo
 	e.decorateAutomatic(&snap)
 	e.decorateQueued(&snap)
 	e.decorateReadiness(&snap)
+	e.decorateIndexLoss(&snap)
 	return snap, err
 }
 

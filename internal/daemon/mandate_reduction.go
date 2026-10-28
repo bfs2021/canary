@@ -150,7 +150,7 @@ func (e *proposalEngine) mandateReductionInput(ctx context.Context, policy prote
 	if ctx != nil {
 		if locks, err := s.holdingLocks(ctx); err == nil {
 			in.LocksUnknown = ""
-			in.Locked = locks.Locked
+			in.Locked = locks.Resolve(pos).Locked
 		} else {
 			in.LocksUnknown = "the locked holdings cannot be read; automatic reductions wait until the keep list is available"
 			if s.logger != nil {

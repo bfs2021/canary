@@ -41,7 +41,7 @@ func TestHoldingLocksAcknowledgementWaitsForBrokerTransaction(t *testing.T) {
 		t.Fatal("lock did not complete after the broker transaction ended")
 	}
 	locks, err := s.holdingLocks(t.Context())
-	if err != nil || !locks.Locked(9001) {
+	if _, locked := locks.Match("SYNA", 9001); err != nil || !locked {
 		t.Fatalf("accepted lock missing: %v", err)
 	}
 }

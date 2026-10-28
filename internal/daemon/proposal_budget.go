@@ -675,7 +675,8 @@ func (e *proposalEngine) budgetReductionProposals(policy protectionPolicy, statu
 	if e != nil && e.server != nil {
 		var locks rpc.HoldingLocks
 		locks, locksErr = e.server.holdingLocks(context.Background())
-		input.Locked = func(conID int) bool { return locksErr != nil || locks.Locked(conID) }
+		resolved := locks.Resolve(pos)
+		input.Locked = func(conID int) bool { return locksErr != nil || resolved.Locked(conID) }
 	}
 	plan := budgetReductionPlan(policy, input, pos, now)
 	st := plan.status
@@ -1150,7 +1151,7 @@ func (e *proposalEngine) budgetHoldingLockBlockers(ctx context.Context, p rpc.Tr
 	if err != nil {
 		return []rpc.TradingBlocker{{Code: "holding_locks_unavailable", Message: "The locked holdings list cannot be confirmed; budget reductions are held."}}
 	}
-	if locks.Locked(p.Contract.ConID) {
+	if _, locked := locks.Match(p.Contract.Symbol, p.Contract.ConID); locked {
 		return []rpc.TradingBlocker{{Code: "holding_locked", Message: "This holding is locked; the budget sweep cannot sell it.", Action: "Unlock it first, or reduce it on its own."}}
 	}
 	return nil

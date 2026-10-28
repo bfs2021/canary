@@ -11,11 +11,12 @@ import (
 	"github.com/osauer/canary/v2/internal/rpc"
 )
 
-// runLocks reads and edits the owner's keep list. A locked line is never
-// selected by a bulk reduction or an automatic one; it places no order.
+// runLocks reads and edits the owner's keep list. A locked name is never
+// selected by a bulk reduction or an automatic one, on any of its held
+// contracts; it places no order.
 func runLocks(ctx context.Context, env *Env, args []string) int {
 	fs := flagSet(env, "locks")
-	conID := fs.Int("con-id", 0, "exact contract ID of the line")
+	conID := fs.Int("con-id", 0, "contract ID the lock is placed from (optional; the lock covers every contract of the name)")
 	role := fs.String("role", rpc.HoldingLockRoleCore, "hedge or core")
 	revision := fs.Int64("expected-revision", -1, "revision fence; otherwise read once")
 	id := fs.String("request-id", "", "immutable request ID; otherwise generated")
@@ -35,8 +36,8 @@ func runLocks(ctx context.Context, env *Env, args []string) int {
 			return fail(env, "usage: canary locks list [--json]")
 		}
 	case "lock", "unlock":
-		if fs.NArg() != 2 || *conID <= 0 {
-			return fail(env, "usage: canary locks lock|unlock SYMBOL --con-id ID [--role hedge|core] [--expected-revision N] [--request-id ID] [--json]")
+		if fs.NArg() != 2 || *conID < 0 || strings.TrimSpace(fs.Arg(1)) == "" {
+			return fail(env, "usage: canary locks lock|unlock SYMBOL [--con-id ID] [--role hedge|core] [--expected-revision N] [--request-id ID] [--json]")
 		}
 		var current rpc.HoldingLocks
 		if err := env.Conn.Call(ctx, rpc.MethodHoldingLocksList, nil, &current); err != nil {
@@ -45,7 +46,10 @@ func runLocks(ctx context.Context, env *Env, args []string) int {
 		if *revision == -1 {
 			*revision = current.Revision
 		}
-		next := slices.DeleteFunc(slices.Clone(current.Locks), func(l rpc.HoldingLock) bool { return l.ConID == *conID })
+		symbol := strings.ToUpper(strings.TrimSpace(fs.Arg(1)))
+		next := slices.DeleteFunc(slices.Clone(current.Locks), func(l rpc.HoldingLock) bool {
+			return l.Symbol == symbol || *conID > 0 && l.ConID == *conID
+		})
 		if op == "lock" {
 			next = append(next, rpc.HoldingLock{ConID: *conID, Symbol: fs.Arg(1), Role: *role})
 		}
@@ -87,8 +91,28 @@ func renderHoldingLocks(env *Env, out rpc.HoldingLocks) {
 		fmt.Fprintln(env.Stdout, "Locked holdings · none · every line can be reduced in bulk")
 		return
 	}
-	fmt.Fprintf(env.Stdout, "Locked holdings · %d · never selected by a bulk or automatic reduction\n", len(out.Locks))
+	fmt.Fprintf(env.Stdout, "Locked holdings · %d · every held contract of the name, never selected by a bulk or automatic reduction\n", len(out.Locks))
 	for _, l := range out.Locks {
-		fmt.Fprintf(env.Stdout, "%s\t%s\tcontract %d\n", l.Symbol, strings.ToLower(l.Role), l.ConID)
+		fmt.Fprintf(env.Stdout, "%s\t%s\t%s\n", l.Symbol, strings.ToLower(l.Role), formatHoldingLockCoverage(l))
 	}
+}
+
+// formatHoldingLockCoverage says what the lock holds in the book now: the
+// contracts it covers, or that none of the name is held, so a lock left
+// behind by a roll or a sale is seen for what it is. Without a book read
+// it names the contract the lock was placed from, if any.
+func formatHoldingLockCoverage(l rpc.HoldingLock) string {
+	switch {
+	case l.Held == nil && l.ConID > 0:
+		return fmt.Sprintf("placed from contract %d", l.ConID)
+	case l.Held == nil:
+		return "every contract of the name"
+	case !*l.Held:
+		return "not held · keeps nothing until a line of it is held again"
+	}
+	ids := make([]string, 0, len(l.Contracts))
+	for _, id := range l.Contracts {
+		ids = append(ids, fmt.Sprint(id))
+	}
+	return fmt.Sprintf("%d %s held (%s)", len(l.Contracts), pluralWord(len(l.Contracts), "contract", "contracts"), strings.Join(ids, ", "))
 }

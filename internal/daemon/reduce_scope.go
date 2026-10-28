@@ -19,23 +19,23 @@ const (
 )
 
 // reduceUnlockedBook is the book a sweep may act on: every locked line is
-// taken out and disclosed as kept. In net mode the direction is then the
-// unlocked book's, so a hedge the owner locked never sets it (owner,
-// 2026-10-22 19:50 CEST: a hedge is a hedge because the owner says so).
+// taken out and disclosed as kept. A lock names an underlying, so the keep
+// list is resolved against this book first: the shares and every option on
+// them go together (owner, 2026-10-28 06:41 CET). In net mode the direction
+// is then the unlocked book's, so a hedge the owner locked never sets it
+// (owner, 2026-10-22 19:50 CEST: a hedge is a hedge because the owner says
+// so).
 func reduceUnlockedBook(pos *rpc.PositionsResult, locks rpc.HoldingLocks) (*rpc.PositionsResult, []rpc.TradeProposalReduceKept) {
 	if pos == nil || len(locks.Locks) == 0 {
 		return pos, nil
 	}
 	var kept []rpc.TradeProposalReduceKept
-	role := func(conID int) string {
-		i := slices.IndexFunc(locks.Locks, func(l rpc.HoldingLock) bool { return l.ConID == conID })
-		return locks.Locks[i].Role
-	}
+	resolved := locks.Resolve(pos)
 	keep := func(rows []rpc.PositionView) []rpc.PositionView {
 		out := make([]rpc.PositionView, 0, len(rows))
 		for _, row := range rows {
-			if locks.Locked(row.ConID) {
-				kept = append(kept, rpc.TradeProposalReduceKept{ConID: row.ConID, Symbol: normSym(row.Symbol), Reason: reduceKeptLocked, Role: role(row.ConID)})
+			if resolved.Locked(row.ConID) {
+				kept = append(kept, rpc.TradeProposalReduceKept{ConID: row.ConID, Symbol: normSym(row.Symbol), Reason: reduceKeptLocked, Role: resolved.Role(row.ConID)})
 				continue
 			}
 			out = append(out, row)
@@ -160,34 +160,19 @@ func reduceScopedCandidates(pos *rpc.PositionsResult, p rpc.TradeProposalReduceP
 // a contract to its signed quantity change.
 func (s *Server) reduceIndexLoss(ctx context.Context, res *rpc.TradeProposalReducePortfolioResult, trades map[int]float64) {
 	res.IndexShockPct = mandate.IndexShockPct
-	_, input, _, fp := s.mandateVerdicts.current()
-	current := func() bool {
-		return input != nil && s.riskPolicies != nil && fp == s.riskPolicies.snapshot().policy.FingerprintKey()
-	}
-	if !current() && s.riskPolicies != nil {
+	input, _, why := s.mandateCurrentInput()
+	if input == nil && s.riskPolicies != nil {
 		// No evaluation since the daemon started, or one under another
 		// policy: a read's evaluation (it never counts toward the forced
 		// reduction's streak) measures the book now.
 		s.evaluateMandate(ctx, true)
-		_, input, _, fp = s.mandateVerdicts.current()
+		input, _, why = s.mandateCurrentInput()
 	}
-	if !current() {
-		res.IndexLossUnknown = "the mandate has not measured the book under the current policy yet"
-		return
-	}
-	before := mandate.Evaluate(*input)
-	after := mandateInputWithTrades(*input, trades)
-	afterVerdict := mandate.Evaluate(after)
-	if before.Stresses == nil || afterVerdict.Stresses == nil {
-		why := "the mandate cannot measure the book"
-		if len(before.Reasons) > 0 {
-			why = before.Reasons[0]
-		}
+	if input == nil {
 		res.IndexLossUnknown = why
 		return
 	}
-	b, a := before.Stresses.IndexLossBase, afterVerdict.Stresses.IndexLossBase
-	res.IndexLossBeforeBase, res.IndexLossAfterBase = &b, &a
+	res.IndexLoss = indexLossBetween(*input, mandateInputWithTrades(*input, trades))
 }
 
 // mandateInputWithTrades is the input with each traded contract's quantity

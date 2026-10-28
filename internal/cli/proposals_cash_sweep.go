@@ -92,7 +92,7 @@ func renderCashSweepSection(env *Env, out io.Writer, st *rpc.TradeProposalCashSw
 		}
 	}
 	for _, p := range rows {
-		renderProposalRow(env, out, &p)
+		renderProposalRow(env, out, &p, "")
 	}
 }
 

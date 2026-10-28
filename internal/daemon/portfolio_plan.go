@@ -90,6 +90,7 @@ func portfolioPlanProposalFingerprint(snap rpc.TradeProposalSnapshot) string {
 	snap.Proposals = slices.Clone(snap.Proposals)
 	for i := range snap.Proposals {
 		snap.Proposals[i].Readiness = nil
+		snap.Proposals[i].IndexLoss = nil
 	}
 	raw, err := json.Marshal(struct {
 		Rows     []rpc.TradeProposal

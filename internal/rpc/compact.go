@@ -138,6 +138,12 @@ type PositionsRiskResult struct {
 	SPYHedgeOffsetPct  *float64                   `json:"spy_hedge_offset_pct,omitempty"`
 	FlaggedOptionLegs  []OptionRiskLegSummary     `json:"flagged_option_legs,omitempty"`
 	Authority          *AccountDataAuthority      `json:"authority,omitempty"`
+	// HoldingLocks is the owner's keep list resolved against this book: each
+	// lock with the held contracts it covers now. Absent, with
+	// HoldingLocksUnavailable saying why, when the list could not be read;
+	// an unreadable list never means no locks.
+	HoldingLocks            *HoldingLocks `json:"holding_locks,omitempty"`
+	HoldingLocksUnavailable string        `json:"holding_locks_unavailable,omitempty"`
 }
 
 // OptionHealthSummary summarizes availability and concentration of option risk.

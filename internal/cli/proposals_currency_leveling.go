@@ -35,7 +35,7 @@ func renderCurrencyLevelingSection(env *Env, out io.Writer, st *rpc.TradeProposa
 			fmt.Fprintf(out, "    %s\n", formatCurrencyLevelingBundle(b, st.BaseCurrency))
 			for _, key := range b.Keys {
 				if p, ok := byKey[key]; ok {
-					renderProposalRow(env, out, &p)
+					renderProposalRow(env, out, &p, "")
 					delete(byKey, key)
 				}
 			}
@@ -43,7 +43,7 @@ func renderCurrencyLevelingSection(env *Env, out io.Writer, st *rpc.TradeProposa
 	}
 	for _, p := range rows {
 		if _, ok := byKey[p.Key]; ok {
-			renderProposalRow(env, out, &p)
+			renderProposalRow(env, out, &p, "")
 		}
 	}
 }

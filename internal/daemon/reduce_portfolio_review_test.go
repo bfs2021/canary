@@ -97,12 +97,13 @@ func TestReducePortfolioReviewIncompleteHasNoAfterEstimate(t *testing.T) {
 }
 
 // A locked line is named once, in the untouched list, as locked (owner,
-// 2026-10-22: one list of what the reduction keeps).
+// 2026-10-22: one list of what the reduction keeps). The put is on another
+// name than the stock: a lock covers every contract of its name.
 func TestReducePortfolioReviewNamesALockedLineOnce(t *testing.T) {
 	put := reduceTestOptionRow(1)
-	put.Right, put.Delta = "P", new(-0.5)
+	put.Symbol, put.Right, put.Delta = "SYNP", "P", new(-0.5)
 	srv, _ := newReducePreviewTestServer(t, reduceTestStockRow(100), put)
-	if _, err := replaceHoldingLocks(t, srv, []rpc.HoldingLock{{ConID: put.ConID, Symbol: "SYN", Role: rpc.HoldingLockRoleHedge}}, 0, "lock-put"); err != nil {
+	if _, err := replaceHoldingLocks(t, srv, []rpc.HoldingLock{{ConID: put.ConID, Symbol: "SYNP", Role: rpc.HoldingLockRoleHedge}}, 0, "lock-put"); err != nil {
 		t.Fatal(err)
 	}
 	res, err := srv.reducePortfolioPreview(t.Context(), rpc.TradeProposalReducePortfolioParams{Percent: 50})

@@ -536,6 +536,12 @@ type TradeProposalSnapshot struct {
 	SourceFingerprints         TradeProposalSourceFingerprints `json:"source_fingerprints,omitzero"`
 	MarketEvents               *MarketEventsResult             `json:"market_events,omitempty"`
 	Proposals                  []TradeProposal                 `json:"proposals"`
+	// IndexLoss is served, never persisted: the mandate's index stress on
+	// the book now and with every actionable row (no blockers, not shadow,
+	// not a stop or trail, not a cash or currency row) filled together;
+	// BaseCurrency names its currency.
+	IndexLoss    *IndexLoss `json:"index_loss,omitempty"`
+	BaseCurrency string     `json:"base_currency,omitempty"`
 	// OptionHedges lists the held long options the exit engine holds as
 	// portfolio protection. They are standing facts, not work: no exit rule
 	// applies to them and no order follows from them. A hedge the whole-book
@@ -1144,6 +1150,12 @@ type TradeProposal struct {
 	// Readiness is served, never persisted: the daemon classifies each row
 	// against its market's session at read time.
 	Readiness *TradeProposalReadiness `json:"readiness,omitempty"`
+	// IndexLoss is served, never persisted: the mandate's index stress on
+	// the book now and with this row filled, read against the kept
+	// evaluation. Absent on cash sweep and currency leveling rows, which
+	// carry no equity risk. A stop or trail reads unknown: it fills only
+	// when the market reaches it.
+	IndexLoss *IndexLoss `json:"index_loss,omitempty"`
 	// Queued is served, never persisted: the live queued authorisation for
 	// this row's contract and side, read at serve time. Surfaces keep such a
 	// row out of approvals; only the queued executor may send it.
@@ -1790,6 +1802,22 @@ type TradeProposalReduceUntouchedPosition struct {
 	Reason           string         `json:"reason"`
 }
 
+// IndexLoss is the mandate's index stress (the index falls IndexShockPct
+// and every name follows with its beta, options repriced) on the book now
+// and with a set of orders filled, in the account base currency. A negative
+// loss is a gain. The before and after figures are nil, with
+// IndexLossUnknown saying why, when the mandate cannot measure the book or
+// price the orders. The same shape serves the portfolio reduce plan (its
+// top-level fields), each proposal (`index_loss`) and the proposal
+// snapshot (`index_loss`, every actionable proposal filled together), so
+// a reader prices Canary's own proposals exactly as a planned sweep.
+type IndexLoss struct {
+	IndexShockPct       float64  `json:"index_shock_pct,omitempty"`
+	IndexLossBeforeBase *float64 `json:"index_loss_before_base,omitempty"`
+	IndexLossAfterBase  *float64 `json:"index_loss_after_base,omitempty"`
+	IndexLossUnknown    string   `json:"index_loss_unknown,omitempty"`
+}
+
 // TradeProposalReducePortfolioResult is the basket preview/submit envelope.
 type TradeProposalReducePortfolioResult struct {
 	Accepted             bool                     `json:"accepted"`
@@ -1814,16 +1842,11 @@ type TradeProposalReducePortfolioResult struct {
 	AsOf                 time.Time                `json:"as_of"`
 	// Kept lists the held lines the sweep left alone.
 	Kept []TradeProposalReduceKept `json:"kept,omitempty"`
-	// IndexLossBeforeBase and IndexLossAfterBase are the mandate's index
-	// stress (the index falls IndexShockPct and every name follows with its
-	// beta, options repriced) on the book now and with every planned leg
-	// filled. A negative loss is a gain. Nil with IndexLossUnknown when the
-	// mandate cannot measure the book.
-	IndexShockPct       float64  `json:"index_shock_pct,omitempty"`
-	IndexLossBeforeBase *float64 `json:"index_loss_before_base,omitempty"`
-	IndexLossAfterBase  *float64 `json:"index_loss_after_base,omitempty"`
-	IndexLossUnknown    string   `json:"index_loss_unknown,omitempty"`
-	PlanOnly            bool     `json:"plan_only,omitempty"`
+	// IndexLoss is the mandate's index stress on the book now and with every
+	// planned leg filled; its fields are the result's own (index_shock_pct,
+	// index_loss_before_base, index_loss_after_base, index_loss_unknown).
+	IndexLoss
+	PlanOnly bool `json:"plan_only,omitempty"`
 	// NetDollarDeltaAfter estimates signed exposure after all eligible preview
 	// legs fill at current Greeks/prices. Nil means unavailable, not zero.
 	NetDollarDeltaAfter *float64 `json:"net_dollar_delta_after,omitempty"`

@@ -24,7 +24,7 @@ func TestBudgetHoldingLocksRetainExposureAndSelectUnlockedLines(t *testing.T) {
 			if _, ok := budgetRowsByConID(before)[locked]; !ok {
 				t.Fatal("precondition: unlocked line is selected")
 			}
-			if _, err := replaceHoldingLocks(t, s, []rpc.HoldingLock{{ConID: locked, Symbol: "SYN", Role: rpc.HoldingLockRoleCore}}, 0, "budget-lock"); err != nil {
+			if _, err := replaceHoldingLocks(t, s, []rpc.HoldingLock{{ConID: locked, Symbol: "LOCKED", Role: rpc.HoldingLockRoleCore}}, 0, "budget-lock"); err != nil {
 				t.Fatal(err)
 			}
 			rows, status := run()

@@ -1,0 +1,36 @@
+# canary proposals list · COLUMNS=80 · colour off
+Protection proposals
+2 actionable / 2 total · 0 queued for the open
+Index -10%     loses $ 8,300.00 now, $ 7,050.00 after
+
+SYNA · SELL 100 shares · review
+  ts-SYNA · trailing_stop · TRAIL
+  Trail: trail 8% stop 92.0000
+  long stock without a protective stop
+  Index loss: unknown: a stop or trail fills only when the market reaches it;
+  the loss is measured for orders that fill now
+
+SYNC · SELL 10 shares · review
+  rr-SYNC · risk_reduction · LMT
+  issuer over its worst-case loss limit
+  Index -10%: loses $ 8,300.00 now, $ 7,050.00 after
+Full risk evidence, sizing and funding: canary proposals list --details
+Review list only; exact preview and submit eligibility remain separate.
+# canary proposals list · COLUMNS=80 · colour on, ESC written as \x1b
+\x1b[1mProtection proposals\x1b[0m
+2 actionable / 2 total · 0 queued for the open
+\x1b[2mIndex -10%    \x1b[0m loses $ 8,300.00 now, $ 7,050.00 after
+
+\x1b[1mSYNA · SELL 100 shares · review\x1b[0m
+  ts-SYNA · trailing_stop · TRAIL
+  Trail: trail 8% stop 92.0000
+  long stock without a protective stop
+  Index loss: unknown: a stop or trail fills only when the market reaches it;
+  the loss is measured for orders that fill now
+
+\x1b[1mSYNC · SELL 10 shares · review\x1b[0m
+  rr-SYNC · risk_reduction · LMT
+  issuer over its worst-case loss limit
+  Index -10%: loses $ 8,300.00 now, $ 7,050.00 after
+\x1b[2mFull risk evidence, sizing and funding: canary proposals list --details\x1b[0m
+\x1b[2mReview list only; exact preview and submit eligibility remain separate.\x1b[0m

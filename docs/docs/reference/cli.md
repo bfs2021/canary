@@ -24,7 +24,7 @@ The group column is the heading a command appears under in `canary --help`: Desk
 | [`canary portfolio`](#canary-portfolio) | Desk | Signed allocation by asset class and GICS sector, with coverage; plan reads the next portfolio action | `read-only` | yes |
 | [`canary market`](#canary-market) | Markets | Observed quotes, price history and a daily price/breadth/volume tape | `read-only` | yes |
 | [`canary technical`](#canary-technical) | Markets | Trend, relative strength, ATR, and liquidity from daily bars | `read-only` | yes |
-| [`canary locks`](#canary-locks) | Desk | Keep hedges and core holdings out of every bulk or automatic reduction; places no orders | `local` | CLI only |
+| [`canary locks`](#canary-locks) | Desk | Keep hedges and core holdings, every contract of the name, out of every bulk or automatic reduction; places no orders | `local` | CLI only |
 | [`canary watchlist`](#canary-watchlist) | Markets | View and edit your saved watchlist; no orders or risk-limit changes | `local` | CLI only |
 | [`canary add`](#canary-add) | Desk | Plan a stock addition or opening and review it through existing order confirmation | `read-only` | yes |
 | [`canary setups`](#canary-setups) | Markets | Review volume signals, find standard call options and check prices after entry; no orders or risk-limit changes | `read-only` | CLI only |
@@ -245,13 +245,13 @@ canary technical SYM[,SYM...] [--benchmark SPY] [--market us|de|uk] [--json]
 
 ## `canary locks`
 
-Keep hedges and core holdings out of every bulk or automatic reduction; places no orders.
+Keep hedges and core holdings, every contract of the name, out of every bulk or automatic reduction; places no orders.
 
 Guard `local`. CLI only, with no MCP tool: owner keep list for bulk and automatic reductions; owner CLI and console only, no model tool.
 
 ```text
 canary locks list [--json]
-canary locks lock|unlock SYMBOL --con-id ID [--role hedge|core] [--expected-revision N] [--request-id ID] [--json]
+canary locks lock|unlock SYMBOL [--con-id ID] [--role hedge|core] [--expected-revision N] [--request-id ID] [--json]
 ```
 
 **Subcommands**

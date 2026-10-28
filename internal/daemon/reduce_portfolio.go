@@ -551,7 +551,7 @@ func (s *Server) reducePortfolioSubmitTokens(ctx context.Context, p rpc.TradePro
 			continue
 		}
 		seen[token] = struct{}{}
-		res.Legs = append(res.Legs, reduceLegFromTokenOutcome(s.reduceTokenLeg(ctx, token, pos, p.TimeoutMs, p.Origin, locks.Locked)))
+		res.Legs = append(res.Legs, reduceLegFromTokenOutcome(s.reduceTokenLeg(ctx, token, pos, p.TimeoutMs, p.Origin, locks.Resolve(pos).Locked)))
 	}
 	aggregateBasket(res, true)
 	s.reduceRemember(p.RequestRef, reduceDedupeEntry{basket: res})
