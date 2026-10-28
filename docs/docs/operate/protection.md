@@ -285,6 +285,17 @@ last evaluation under the current policy and are never stored; without one,
 every row says the figure is unknown and why. Reading the list never runs an
 evaluation.
 
+To price a chosen set of proposals, name them: `canary proposals reduce
+--portfolio --plan --proposal KEY` (repeatable) returns a plan in mode
+`proposals`, one leg per named row at its own size, with the same index-loss
+fields as a sweep plan. The after figure is the book with every named row
+filled. A row that is not current, or that cannot be priced (a stop, a trail,
+a cash or currency row, an option without the terms to price it), is a
+blocked leg, and then the figure is unknown with the count of rows not
+priced: a partial figure would read as the whole set's. `--percent`,
+`--mode`, `--sector` and `--min-beta` do not apply, and a plan cannot be
+submitted.
+
 A reduction reserves the quantities already committed by Canary's working
 orders, including individual legs of combo orders. A known fill does not
 make those units available for another sale while positions are catching up:

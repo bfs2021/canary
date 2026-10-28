@@ -338,6 +338,7 @@ func renderGoldenCases() []renderGoldenCase {
 		{name: "proposals_reduce_submit_refused", argv: []string{"proposals", "reduce", "--submit", "--preview-token", goldenReduceToken, "--request-ref", "desk-7f3a"},
 			conn: goldenConn{rpc.MethodTradeProposalsReduceSubmit: goldenReduceSubmitRefused()}},
 		{name: "proposals_reduce_portfolio_preview", argv: []string{"proposals", "reduce", "--portfolio", "--percent", "50"}, conn: goldenConn{rpc.MethodTradeProposalsReducePortfolioPreview: goldenReducePortfolioPreview()}},
+		{name: "proposals_reduce_portfolio_plan_proposals", argv: []string{"proposals", "reduce", "--portfolio", "--plan", "--proposal", "rr-SYNA", "--proposal", "rr-SYNC"}, conn: goldenConn{rpc.MethodTradeProposalsReducePortfolioPreview: goldenReducePortfolioPlanProposals()}},
 		{name: "proposals_reduce_portfolio_plan_longs", argv: []string{"proposals", "reduce", "--portfolio", "--mode", "longs", "--percent", "25", "--plan"}, conn: goldenConn{rpc.MethodTradeProposalsReducePortfolioPreview: goldenReducePortfolioPlanLongs()}},
 		{name: "exercises_pending", argv: []string{"opportunities", "exercises"}, conn: goldenConn{rpc.MethodOpportunitiesExercises: goldenPendingExercises()}},
 		{name: "exercises_empty", argv: []string{"opportunities", "exercises"}, conn: goldenConn{rpc.MethodOpportunitiesExercises: rpc.ExercisePendingResult{Requests: []rpc.ExercisePendingRequest{}}}},

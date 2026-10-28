@@ -241,6 +241,13 @@ func runProposalsReduce(ctx context.Context, env *Env, args []string) int {
 	})
 	minBeta := fs.Float64("min-beta", 0, "with --mode longs|all: only lines whose beta to the index is at least this")
 	plan := fs.Bool("plan", false, "with --portfolio: size the legs and the index loss without broker previews; nothing can be submitted from a plan")
+	var proposalKeys []string
+	fs.Func("proposal", "with --portfolio --plan: price this proposal (its key) instead of a sweep (repeatable); the plan is the book with every named proposal filled", func(v string) error {
+		if v = strings.TrimSpace(v); v != "" {
+			proposalKeys = append(proposalKeys, v)
+		}
+		return nil
+	})
 	timeout := fs.Duration("timeout", 5*time.Second, "quote/WhatIf timeout")
 	if err := fs.Parse(args); err != nil {
 		return parseExit(err)
@@ -260,6 +267,10 @@ func runProposalsReduce(ctx context.Context, env *Env, args []string) int {
 		if !*portfolio && len(tokens) > 1 {
 			return fail(env, "proposals reduce: one holding takes one --preview-token; --portfolio takes one per leg")
 		}
+	} else if len(proposalKeys) > 0 {
+		if !*portfolio || !*plan || *submit || set["percent"] || set["mode"] || set["sector"] || set["min-beta"] || fs.NArg() > 0 || *conID > 0 {
+			return fail(env, "proposals reduce: --proposal goes with --portfolio --plan alone; the proposals carry their own size")
+		}
 	} else if *percent <= 0 || *percent > 100 {
 		return fail(env, "proposals reduce: --percent must be between 1 and 100 (the app offers 25/50/75/100)")
 	}
@@ -277,7 +288,7 @@ func runProposalsReduce(ctx context.Context, env *Env, args []string) int {
 			return fail(env, "proposals reduce: --plan only sizes the sweep; drop --submit")
 		}
 		pparams := rpc.TradeProposalReducePortfolioParams{Percent: *percent, AdaptivePriority: *adaptive, TimeoutMs: int(timeout.Milliseconds()),
-			Mode: strings.ToLower(strings.TrimSpace(*mode)), Sectors: sectors, MinBeta: *minBeta, PlanOnly: *plan}
+			Mode: strings.ToLower(strings.TrimSpace(*mode)), Sectors: sectors, MinBeta: *minBeta, PlanOnly: *plan, ProposalKeys: proposalKeys}
 		method := rpc.MethodTradeProposalsReducePortfolioPreview
 		if *submit {
 			method = rpc.MethodTradeProposalsReducePortfolioSubmit
@@ -525,6 +536,8 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 	}
 	fmt.Fprintf(out, "%s  accepted=%v\n", title, res.Accepted)
 	switch res.Mode {
+	case rpc.ReduceModeProposals:
+		statusRow(env, out, "Proposals", fmt.Sprintf("%d named, each at its own size", res.LegCount))
 	case rpc.ReduceModeLongs:
 		statusRow(env, out, "Percent", fmt.Sprintf("%d%% of every long", res.Percent))
 	case rpc.ReduceModeAll:

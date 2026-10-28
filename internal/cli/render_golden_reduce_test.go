@@ -90,6 +90,18 @@ func goldenReducePortfolioPreview() rpc.TradeProposalReducePortfolioResult {
 
 // goldenReducePortfolioPlanLongs is a 25% longs plan: sized from the marks,
 // no tokens, a locked hedge and a short kept, and the index stress measured.
+// goldenReducePortfolioPlanProposals prices two of Canary's own proposals
+// by key, each at its own size.
+func goldenReducePortfolioPlanProposals() rpc.TradeProposalReducePortfolioResult {
+	before, after := 8300.0, 6900.0
+	return rpc.TradeProposalReducePortfolioResult{Mode: rpc.ReduceModeProposals, PlanOnly: true, BaseCurrency: "USD", AsOf: goldenAt, LegCount: 2,
+		IndexShockPct: 10, IndexLossBeforeBase: &before, IndexLossAfterBase: &after,
+		Legs: []rpc.TradeProposalReduceLeg{
+			{ConID: goldenReduceStockCon, Symbol: "SYNA", SecType: "STK", Action: rpc.OrderActionSell, PositionQuantity: 100, ReduceQuantity: 40},
+			{ConID: 5151, Symbol: "SYNC", SecType: "STK", Action: rpc.OrderActionSell, PositionQuantity: 40, ReduceQuantity: 10},
+		}}
+}
+
 func goldenReducePortfolioPlanLongs() rpc.TradeProposalReducePortfolioResult {
 	before, after := 8300.0, 5100.0
 	return rpc.TradeProposalReducePortfolioResult{Percent: 25, Mode: rpc.ReduceModeLongs, PlanOnly: true, BaseCurrency: "USD", AsOf: goldenAt,

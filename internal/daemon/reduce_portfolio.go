@@ -369,6 +369,9 @@ func aggregateBasket(res *rpc.TradeProposalReducePortfolioResult, submit bool) {
 }
 
 func (s *Server) reducePortfolioPreview(ctx context.Context, p rpc.TradeProposalReducePortfolioParams) (*rpc.TradeProposalReducePortfolioResult, error) {
+	if len(p.ProposalKeys) > 0 || p.Mode == rpc.ReduceModeProposals {
+		return s.reduceProposalsPlan(ctx, p), nil
+	}
 	now := s.reduceClock()
 	res := &rpc.TradeProposalReducePortfolioResult{Percent: p.Percent, AsOf: now}
 	if p.Percent <= 0 || p.Percent > 100 {
@@ -477,7 +480,7 @@ func (s *Server) reducePortfolioSubmit(ctx context.Context, p rpc.TradeProposalR
 		clone.Replayed = true
 		return &clone, nil
 	}
-	if p.PlanOnly {
+	if p.PlanOnly || len(p.ProposalKeys) > 0 {
 		res.Blockers = []rpc.TradingBlocker{{Code: "bad_request", Message: "a plan is preview-only", Action: "Preview the basket, then submit its tokens; nothing was sent."}}
 		return res, nil
 	}

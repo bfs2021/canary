@@ -114,3 +114,52 @@ func TestProposalIndexLossUnknownWithoutAnEvaluation(t *testing.T) {
 		t.Fatalf("snapshot = %+v row = %+v, want unknown with a reason", snap.IndexLoss, snap.Proposals[0].IndexLoss)
 	}
 }
+
+// A plan of named proposals prices exactly the named rows (owner,
+// 2026-10-28 06:41 CET): the figure equals the snapshot's for the same
+// rows, a row it cannot price leaves the whole figure unknown, an unknown
+// key is a blocked leg, and nothing from it can be submitted.
+func TestReducePlanPricesNamedProposals(t *testing.T) {
+	pos := mandateReductionBook(mandateReductionStock("SPY", 9101, 100, 50), mandateReductionStock("SYNB", 9102, 200, 30))
+	s := indexLossServer(t, pos)
+	sell := func(key, symbol string, conID, qty int) rpc.TradeProposal {
+		return rpc.TradeProposal{Key: key, Revision: "r1", State: "generated", Bucket: rpc.TradeProposalBucketRiskReduction, Action: rpc.OrderActionSell, Quantity: qty,
+			Symbol: symbol, SecType: "STK", OrderType: rpc.OrderTypeLMT, Contract: rpc.ContractParams{ConID: conID, Symbol: symbol, SecType: "STK", Currency: "EUR"}}
+	}
+	trail := sell("ts-SYNB", "SYNB", 9102, 200)
+	trail.Bucket, trail.OrderType = rpc.TradeProposalBucketTrailingStop, rpc.OrderTypeTRAIL
+	scope := brokerStateScope{Account: "DU1234567", Mode: rpc.AccountModePaper}
+	s.tradeProposals = &proposalEngine{server: s, scope: func() brokerStateScope { return scope },
+		snapshot: rpc.TradeProposalSnapshot{Kind: rpc.TradeProposalSnapshotKind, Revision: "snap-1", AccountID: scope.Account, AccountMode: scope.Mode,
+			Proposals: []rpc.TradeProposal{sell("rr-SPY", "SPY", 9101, 40), sell("rr-SYNB", "SYNB", 9102, 50), trail}}}
+
+	plan, err := s.reducePortfolioPreview(t.Context(), rpc.TradeProposalReducePortfolioParams{PlanOnly: true, ProposalKeys: []string{"rr-SPY", "rr-SYNB", "rr-SPY"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := s.tradeProposals.snapshotForRead(false, false)
+	if plan.Mode != rpc.ReduceModeProposals || !plan.PlanOnly || plan.LegCount != 2 || plan.BlockedCount != 0 || plan.BaseCurrency != "EUR" {
+		t.Fatalf("plan = %+v, want two priced legs in EUR", plan)
+	}
+	cuts := &rpc.TradeProposalReducePortfolioResult{}
+	s.reduceIndexLoss(t.Context(), cuts, map[int]float64{9101: -40, 9102: -50})
+	near := func(a, b *float64) bool { return a != nil && b != nil && math.Abs(*a-*b) < 1e-6 }
+	if !near(plan.IndexLossAfterBase, cuts.IndexLossAfterBase) || !near(plan.IndexLossBeforeBase, cuts.IndexLossBeforeBase) || !near(plan.IndexLossAfterBase, served.IndexLoss.IndexLossAfterBase) {
+		t.Fatalf("named plan %+v, sweep plan %+v, snapshot %+v; want one figure", plan.IndexLoss, cuts.IndexLoss, served.IndexLoss)
+	}
+	if plan.Legs[0].ConID != 9101 || plan.Legs[0].Action != rpc.OrderActionSell || plan.Legs[0].ReduceQuantity != 40 {
+		t.Fatalf("leg = %+v, want the row's own size", plan.Legs[0])
+	}
+
+	withStop, _ := s.reducePortfolioPreview(t.Context(), rpc.TradeProposalReducePortfolioParams{PlanOnly: true, ProposalKeys: []string{"rr-SPY", "ts-SYNB", "gone"}})
+	if withStop.IndexLossAfterBase != nil || !strings.Contains(withStop.IndexLossUnknown, "2 of 3") || withStop.BlockedCount != 2 {
+		t.Fatalf("plan with a stop and an unknown key = %+v, want the figure unknown and two blocked legs", withStop)
+	}
+	if code := withStop.Legs[2].Blockers[0].Code; code != "proposal_unknown" {
+		t.Fatalf("unknown key blocker = %s", code)
+	}
+	refused, _ := s.reducePortfolioPreview(t.Context(), rpc.TradeProposalReducePortfolioParams{ProposalKeys: []string{"rr-SPY"}})
+	if len(refused.Blockers) == 0 || refused.IndexLossAfterBase != nil {
+		t.Fatalf("named proposals without plan_only = %+v, want refused", refused)
+	}
+}

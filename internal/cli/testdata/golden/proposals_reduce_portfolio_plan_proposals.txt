@@ -1,0 +1,18 @@
+# canary proposals reduce --portfolio --plan --proposal rr-SYNA --proposal rr-SYNC · COLUMNS=80 · colour off
+
+Portfolio Reduce Plan  accepted=false
+Proposals      2 named, each at its own size
+Index -10%     loses $ 8,300.00 now, $ 6,900.00 after
+Legs           2 planned · 0 blocked of 2
+  SELL 40 SYNA  [planned]
+  SELL 10 SYNC  [planned]
+
+# canary proposals reduce --portfolio --plan --proposal rr-SYNA --proposal rr-SYNC · COLUMNS=80 · colour on, ESC written as \x1b
+
+Portfolio Reduce Plan  accepted=false
+\x1b[2mProposals     \x1b[0m 2 named, each at its own size
+\x1b[2mIndex -10%    \x1b[0m loses $ 8,300.00 now, $ 6,900.00 after
+\x1b[2mLegs          \x1b[0m 2 planned · 0 blocked of 2
+  SELL 40 SYNA  [planned]
+  SELL 10 SYNC  [planned]
+

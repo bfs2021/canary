@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -166,4 +169,89 @@ func tradingBlockerCodes(blockers []rpc.TradingBlocker) []string {
 		out = append(out, b.Code)
 	}
 	return out
+}
+
+// maxProposalPlanRows bounds one plan of named proposals. Nothing is sent
+// from a plan, so the bound is the work of one read, not the basket cap.
+const maxProposalPlanRows = 100
+
+// reduceProposalsPlan prices Canary's own proposals by key, the way a sweep
+// plan prices its legs: each named row is a leg at its own size, priced
+// through the order gate's pricing, and the index loss is the kept book
+// with every named row filled. A row that cannot be found or priced is a
+// blocked leg, and then the whole figure is unknown: a partial figure would
+// read as the named set's.
+func (s *Server) reduceProposalsPlan(ctx context.Context, p rpc.TradeProposalReducePortfolioParams) *rpc.TradeProposalReducePortfolioResult {
+	res := &rpc.TradeProposalReducePortfolioResult{Mode: rpc.ReduceModeProposals, PlanOnly: true, AsOf: s.reduceClock(), Legs: []rpc.TradeProposalReduceLeg{}}
+	res.IndexShockPct = mandate.IndexShockPct
+	switch {
+	case !p.PlanOnly:
+		res.Blockers = []rpc.TradingBlocker{{Code: "bad_request", Message: "named proposals are priced by a plan only", Action: "Pass plan_only; send proposals through their own review."}}
+		return res
+	case p.Mode != "" && p.Mode != rpc.ReduceModeProposals || len(p.Sectors) > 0 || p.MinBeta != 0:
+		res.Blockers = []rpc.TradingBlocker{{Code: "bad_request", Message: "named proposals take no mode, sector or beta scope", Action: "Name the proposals alone."}}
+		return res
+	case len(p.ProposalKeys) > maxProposalPlanRows:
+		res.Blockers = []rpc.TradingBlocker{{Code: "too_many_legs", Message: fmt.Sprintf("the plan names %d proposals, above %d", len(p.ProposalKeys), maxProposalPlanRows), Action: "Name fewer proposals."}}
+		return res
+	}
+	snap := s.tradeProposals.snapshotForRead(false, false)
+	input, _, why := s.mandateCurrentInput()
+	if input == nil && s.riskPolicies != nil {
+		s.evaluateMandate(ctx, true) // as the sweep plan does: a read's evaluation
+		input, _, why = s.mandateCurrentInput()
+	}
+	if input != nil {
+		res.BaseCurrency = strings.ToUpper(input.BaseCurrency)
+	}
+	var legs []mandate.Leg
+	unpriced := 0
+	seen := map[string]bool{}
+	for _, key := range p.ProposalKeys {
+		key = strings.TrimSpace(key)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		i := slices.IndexFunc(snap.Proposals, func(row rpc.TradeProposal) bool { return row.Key == key })
+		if i < 0 {
+			unpriced++
+			res.Legs = append(res.Legs, rpc.TradeProposalReduceLeg{Symbol: key, Blockers: []rpc.TradingBlocker{{Code: "proposal_unknown", Message: "no current proposal has this key", Action: "Read the proposals again and name current rows."}}})
+			continue
+		}
+		row := snap.Proposals[i]
+		leg := rpc.TradeProposalReduceLeg{ConID: row.Contract.ConID, Symbol: normSym(nonEmptyString(row.Contract.Symbol, row.Symbol)), SecType: nonEmptyString(row.SecType, row.Contract.SecType),
+			Action: row.Action, ReduceQuantity: row.Quantity, PositionQuantity: row.PositionQuantity}
+		if !proposalCarriesEquityRisk(row) {
+			unpriced++
+			leg.Blockers = []rpc.TradingBlocker{{Code: "index_loss_unpriced", Message: "a cash or currency row carries no equity risk to price"}}
+		} else if input != nil {
+			m, reason := proposalIndexLossLeg(row, input)
+			if reason != "" {
+				unpriced++
+				leg.Blockers = []rpc.TradingBlocker{{Code: "index_loss_unpriced", Message: reason}}
+			} else {
+				legs = append(legs, m)
+			}
+		}
+		res.Legs = append(res.Legs, leg)
+	}
+	switch {
+	case input == nil:
+		res.IndexLossUnknown = why
+	case unpriced > 0:
+		res.IndexLossUnknown = fmt.Sprintf("%d of %d named proposals cannot be priced for the fall", unpriced, len(res.Legs))
+	case len(res.Legs) == 0:
+		res.IndexLossUnknown = "no proposal was named"
+	default:
+		res.IndexLoss = indexLossWithLegs(*input, legs)
+	}
+	res.LegCount = len(res.Legs)
+	for _, leg := range res.Legs {
+		if len(leg.Blockers) > 0 {
+			res.BlockedCount++
+		}
+	}
+	res.Message = fmt.Sprintf("%d priced · %d not priced of %d named proposals", res.LegCount-res.BlockedCount, res.BlockedCount, res.LegCount)
+	return res
 }

@@ -910,6 +910,7 @@ canary proposals status|refresh|list|preview|prepare|prepared-status|prepare-bun
 | `--sector` | yes | - |
 | `--min-beta` | yes | - |
 | `--plan` | no | - |
+| `--proposal` | yes | - |
 | `--adaptive-priority` | yes | `Normal`, `Patient`, `Urgent`, `none` |
 | `--preview-token` | yes | - |
 | `--request-ref` | yes | - |

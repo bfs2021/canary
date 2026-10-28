@@ -1740,6 +1740,13 @@ type TradeProposalReducePortfolioParams struct {
 	// previews: no tokens, nothing submit-eligible. It lets a console show
 	// what each choice would do before one is reviewed.
 	PlanOnly bool `json:"plan_only,omitempty"`
+	// ProposalKeys, on a plan, names Canary's own proposals to price instead
+	// of a sweep: each named row becomes a leg at its own size, and the
+	// index loss is the book with every named row filled (mode "proposals").
+	// A console prices exactly the rows it would send, which no sweep scope
+	// and no snapshot total can name (owner, 2026-10-28 06:41 CET). Mode,
+	// Sectors, MinBeta and Percent do not apply.
+	ProposalKeys []string `json:"proposal_keys,omitempty"`
 }
 
 // Reduce modes for TradeProposalReducePortfolioParams.Mode.
@@ -1747,6 +1754,8 @@ const (
 	ReduceModeNet   = "net"
 	ReduceModeLongs = "longs"
 	ReduceModeAll   = "all"
+	// ReduceModeProposals is a plan of named proposals (ProposalKeys).
+	ReduceModeProposals = "proposals"
 )
 
 // TradeProposalReduceKept is a held line the sweep left alone, and why.
