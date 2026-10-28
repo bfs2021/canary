@@ -912,6 +912,9 @@ func sanitizeOrdersHistoryForMCP(res *rpc.OrdersHistoryResult) {
 }
 
 func sanitizeOrderStatusForMCP(res *rpc.OrderStatusResult) {
+	if res.AttachedStop != nil {
+		sanitizeOrderViewForMCP(res.AttachedStop)
+	}
 	sanitizeOrderViewForMCP(&res.Order)
 	sanitizeOrderEventsForMCP(res.Events)
 }

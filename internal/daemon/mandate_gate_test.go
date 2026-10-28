@@ -17,6 +17,7 @@ import (
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkr "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 // mandateTestNow is a Wednesday during the US session, so the last completed
@@ -40,6 +41,10 @@ func mandateTestServer(t *testing.T, c *risk.Constitution) (*Server, *riskCapita
 	t.Helper()
 	srv, st, _, _ := brakeTestServer(t)
 	srv.now = func() time.Time { return mandateTestNow }
+	// Option admission requires a complete current all-client inventory.
+	srv.openOrderInventoryForTest = func(context.Context, bool) (ibkr.OpenOrderSnapshot, brokerStateScope, error) {
+		return ibkr.OpenOrderSnapshot{Complete: true, AsOf: srv.orderNow()}, srv.currentBrokerStateScope(), nil
+	}
 	st.now = srv.now
 	srv.riskPolicies.active = c
 	st.Observe(300000, mandateTestNow.Add(-2*time.Minute), c, testLiveObserveScope, true)
@@ -195,7 +200,10 @@ var mandateOpen = rpc.OrderPositionImpact{Before: 0, After: 100, Effect: rpc.Ord
 // stops the measure reads come from the open orders, which this server
 // cannot read, so the verdict says every share line counts as unstopped.
 func TestMandateGateRefusesAdditionsOverBudget(t *testing.T) {
-	srv, res := mandateTestOverLossServer(t)
+	srv, _ := mandateTestOverLossServer(t)
+	// This case specifically exercises unavailable broker stop inventory.
+	srv.openOrderInventoryForTest = nil
+	res := srv.evaluateMandate(t.Context(), false)
 	if math.Abs(res.Verdict.Loss.TotalBase-71640) > 1e-6 || math.Abs(res.Verdict.Loss.RoomBase-69000) > 1e-6 || res.Verdict.Loss.PremiumBase != res.Verdict.Loss.TotalBase {
 		t.Fatalf("loss %+v, want 71,640 EUR of premium against the 69,000 EUR room", res.Verdict.Loss)
 	}
@@ -1143,7 +1151,7 @@ func TestMandateGatePreviewPassesABillAndRefusesABond(t *testing.T) {
 	st.Observe(300000, rig.now.Add(-2*time.Minute), c, testLiveObserveScope, true)
 	rig.srv.riskCapital = st
 	verdict := &mandate.Verdict{Status: mandate.StatusReduce, BaseCurrency: "USD"}
-	rig.srv.mandateVerdicts.set(&rpc.MandateRiskResult{AsOf: rig.now, Active: true, Verdict: verdict}, &mandate.Input{}, rig.now, c.FingerprintKey(), false)
+	rig.srv.mandateVerdicts.set(&rpc.MandateRiskResult{AsOf: rig.now, Active: true, Verdict: verdict}, &mandate.Input{}, rig.now, c.FingerprintKey(), false, rig.srv.captureMandateBookBinding())
 
 	billLine := synthBondLine(8201, synthCUSIP35, "USD", cashSweepDay(rig.now).AddDate(0, 0, 120))
 	rig.setLine(synthCUSIP35, billLine)

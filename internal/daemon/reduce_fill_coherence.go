@@ -40,6 +40,12 @@ func (s *Server) reduceFillBindingCurrent(binding protectionOrderSnapshotBinding
 // the stream; do not release filled capacity against an older quantity. The
 // lifecycle frontier also binds the read and the eventual first broker byte.
 func (s *Server) ensureReduceFillCoherence(ctx context.Context, held []reduceHeldPosition, timeoutMs int) (protectionOrderSnapshotBinding, error) {
+	return s.ensureOrderFillCoherence(ctx, held, timeoutMs, "")
+}
+
+// ensureOrderFillCoherence also checks purchase fills for premium admission.
+// Empty action retains the reducing side selected from each held quantity.
+func (s *Server) ensureOrderFillCoherence(ctx context.Context, held []reduceHeldPosition, timeoutMs int, requestedAction string) (protectionOrderSnapshotBinding, error) {
 	binding := s.reduceFillBinding()
 	var inventory journalInventory
 	load := func() bool {
@@ -63,6 +69,13 @@ func (s *Server) ensureReduceFillCoherence(ctx context.Context, held []reduceHel
 		return binding, fmt.Errorf("%w: reduction fill evidence changed or cannot be read; preview again", ErrTradingDisabled)
 	}
 	check := make(map[int]float64)
+	// Purchase callers supply exactly the contracts with observed fills,
+	// including all-client snapshot rows that have no local order token.
+	if requestedAction != "" {
+		for _, row := range held {
+			check[row.contract.ConID] = row.quantity
+		}
+	}
 	for i := range inventory.views {
 		view := &inventory.views[i]
 		if view.Filled == 0 || view.ReservedOrderID <= 0 || view.OrderRef == "" || view.PreviewTokenID == "" ||
@@ -72,9 +85,12 @@ func (s *Server) ensureReduceFillCoherence(ctx context.Context, held []reduceHel
 		order := journalOrderIdentity(*view)
 		order.Remaining, order.Legs = view.Filled, inventory.legsOf(view)
 		for _, row := range held {
-			action := rpc.OrderActionSell
-			if row.quantity < 0 {
-				action = rpc.OrderActionBuy
+			action := requestedAction
+			if action == "" {
+				action = rpc.OrderActionSell
+				if row.quantity < 0 {
+					action = rpc.OrderActionBuy
+				}
 			}
 			quantity := order.competesWith(row.contract, action)
 			if math.IsNaN(quantity) || math.IsInf(quantity, 0) {

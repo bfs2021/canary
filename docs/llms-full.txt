@@ -1,6 +1,12 @@
 # Canary full context
 
-Updated: 2026-10-23 08:14 WEST
+Updated: 2026-10-28 08:05 CET
+
+Version 3.28 adds historical option-exit replay, option-list pagination and
+intraday account-value history. Holding locks cover a name across its held
+contracts. Mandate reporting separates the loss measure from volatility;
+proposal reviews include an index-fall comparison when it can be measured.
+Historical replays are not forecasts or instructions to trade.
 
 Version 3.27 adds stock-entry reviews with optional protection for the added
 shares, call discovery and budget-based call sizing, and holding locks for

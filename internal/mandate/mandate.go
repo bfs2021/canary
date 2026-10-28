@@ -95,8 +95,9 @@ type Leg struct {
 	// LossUnknown says why a bought option's premium cannot be measured; set,
 	// the verdict is unknown.
 	LossUnknown string `json:"loss_unknown,omitempty"`
-	// StopArmed marks a share line a working stop or trail bounds; one
-	// without is listed as unstopped on the verdict.
+	// StopArmed marks a share line fully covered by working stops or trails.
+	// Partial coverage still contributes LossPerUnitBase; the uncovered
+	// residual is also listed as unstopped on the verdict.
 	StopArmed bool `json:"stop_armed,omitempty"`
 }
 
@@ -201,11 +202,12 @@ func measureLoss(in Input, legs []Leg) (*LossMeasure, []string) {
 		case l.Kind == KindOption && l.Quantity > 0:
 			n.PremiumBase += loss
 			out.PremiumBase += loss
-		case l.Kind == KindStock && l.StopArmed:
+		case l.Kind == KindStock:
 			n.StopLossBase += loss
 			out.StopLossBase += loss
-		case l.Kind == KindStock:
-			out.Unstopped = append(out.Unstopped, l.Symbol)
+			if !l.StopArmed {
+				out.Unstopped = append(out.Unstopped, l.Symbol)
+			}
 		}
 		n.TotalBase = n.PremiumBase + n.StopLossBase
 	}
@@ -231,7 +233,7 @@ func legLoss(l Leg) float64 {
 	switch {
 	case l.Kind == KindOption && l.Quantity > 0 && l.LossUnknown == "":
 		return l.Quantity * l.LossPerUnitBase
-	case l.Kind == KindStock && l.StopArmed:
+	case l.Kind == KindStock:
 		return math.Abs(l.Quantity) * l.LossPerUnitBase
 	}
 	return 0

@@ -296,7 +296,7 @@ func (s *Server) mandateReservedIDs(ctx context.Context) []int {
 		return nil
 	}
 	out := s.coreContractIDs(ctx)
-	_, input, _, _ := s.mandateVerdicts.current()
+	_, input, _, _ := s.currentMandateVerdict()
 	if input == nil || input.Allocations == nil {
 		return out
 	}

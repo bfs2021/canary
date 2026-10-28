@@ -368,6 +368,12 @@ func (r *replay) prepare() string {
 		windowTrades[trade.ConID] = append(windowTrades[trade.ConID], trade)
 	}
 	r.days = slices.Sorted(maps.Keys(daySet))
+	// A requested window needs a baseline after all earlier activity. A
+	// missing intervening snapshot cannot be replaced by replaying days
+	// the caller excluded.
+	if !r.in.From.IsZero() && len(r.days) > 0 && r.days[0] < from {
+		return "start_snapshot_unavailable"
+	}
 	if len(r.days) == 0 {
 		return "window_empty"
 	}
@@ -680,12 +686,7 @@ func (r *replay) buildLots(c *replayContract, start flexstmt.OpenPosition, prehe
 		if !ok {
 			return "fx_unavailable"
 		}
-		first := r.start
-		for _, trade := range trades {
-			if trade.ConID == c.conid && strings.EqualFold(trade.Side, "BUY") && dayKey(tradeStatementDay(trade)) <= r.start {
-				first = min(first, dayKey(tradeStatementDay(trade)))
-			}
-		}
+		first := replayHeldCycleStart(c.conid, qty, r.start, trades)
 		newLot(first, int(math.Round(qty)), cost, *start.MarkPrice*c.mult*fx, true)
 		c.preheld = true
 	}
@@ -747,6 +748,45 @@ func (r *replay) buildLots(c *replayContract, start flexstmt.OpenPosition, prehe
 	}
 	c.lots = lots
 	return ""
+}
+
+// replayHeldCycleStart walks the owner's executions backwards from the
+// baseline quantity to its most recent flat state. An older completed cycle
+// cannot seed this holding's price high. Without a balanced execution path,
+// the known start snapshot is the earliest usable state.
+func replayHeldCycleStart(conid int64, quantity float64, start string, trades []flexstmt.Trade) string {
+	rows := make([]flexstmt.Trade, 0)
+	for _, trade := range trades {
+		if trade.ConID == conid && dayKey(tradeStatementDay(trade)) <= start {
+			rows = append(rows, trade)
+		}
+	}
+	slices.SortStableFunc(rows, func(a, b flexstmt.Trade) int {
+		if order := a.ExecutedAt.Compare(b.ExecutedAt); order != 0 {
+			return order
+		}
+		return strings.Compare(a.RecordID, b.RecordID)
+	})
+	for _, trade := range slices.Backward(rows) {
+		if trade.Quantity == nil || !wholeContracts(*trade.Quantity) {
+			return start
+		}
+		switch strings.ToUpper(trade.Side) {
+		case "BUY":
+			quantity -= math.Abs(*trade.Quantity)
+		case "SELL":
+			quantity += math.Abs(*trade.Quantity)
+		default:
+			return start
+		}
+		if almostEqual(quantity, 0) {
+			return dayKey(tradeStatementDay(trade))
+		}
+		if quantity < 0 {
+			return start
+		}
+	}
+	return start
 }
 
 func wholeContracts(q float64) bool {
@@ -1295,14 +1335,30 @@ func replayExitPolicy(pol risk.OptionExitPolicy, rules map[string]bool) risk.Opt
 func (r *replay) initialHighWater(lot *replayLot) (risk.OptionExitHighWater, bool) {
 	c := lot.c
 	high := 0.0
-	for day, rows := range r.snapshots {
+	for _, day := range slices.Sorted(maps.Keys(r.snapshots)) {
 		if day < lot.day || day > r.start {
 			continue
 		}
-		for _, row := range rows {
-			if row.ConID == c.conid && row.MarkPrice != nil {
-				high = math.Max(high, *row.MarkPrice)
+		matched := false
+		for _, row := range r.snapshots[day] {
+			if row.ConID != c.conid || row.Quantity == nil || !almostEqual(*row.Quantity, float64(lot.qty)) || row.MarkPrice == nil {
+				continue
 			}
+			costPer := 0.0
+			switch {
+			case row.CostBasisMoney != nil && *row.Quantity > 0:
+				costPer = *row.CostBasisMoney / *row.Quantity
+			case row.CostBasisPrice != nil:
+				costPer = *row.CostBasisPrice * c.mult
+			}
+			if !almostEqual(costPer, lot.costPerContract) {
+				continue
+			}
+			matched = true
+			high = math.Max(high, *row.MarkPrice)
+		}
+		if !matched {
+			high = 0
 		}
 	}
 	cost := lot.costPerContract / c.mult

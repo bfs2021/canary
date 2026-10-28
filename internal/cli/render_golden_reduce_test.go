@@ -78,7 +78,11 @@ func goldenReducePortfolioPreview() rpc.TradeProposalReducePortfolioResult {
 	stock, option := goldenReduceTerms(), goldenReduceOptionTerms()
 	pct := 100.0
 	return rpc.TradeProposalReducePortfolioResult{Accepted: true, Percent: 50, NetDollarDeltaBefore: 3750, TargetDollarDelta: 1875, AchievedDollarDelta: 1875, AchievedPctOfTarget: &pct,
-		LegCount: 2, EligibleCount: 2, TotalNotional: 1750, BaseCurrency: "USD", AsOf: goldenAt,
+		LegCount: 2, EligibleCount: 2, TotalNotional: 1750, BaseCurrency: "USD", AsOf: goldenAt, NetDollarDeltaAfter: new(1875.0),
+		UntouchedPositions: []rpc.TradeProposalReduceUntouchedPosition{{
+			Contract:         rpc.ContractParams{ConID: 700003, Symbol: "SYNC", SecType: "OPT", Expiry: "20261218", Strike: 35, Right: "P", Currency: "USD"},
+			PositionQuantity: 2, Code: "locked", Reason: "Locked by you; never in a bulk reduction.",
+		}},
 		Legs: []rpc.TradeProposalReduceLeg{
 			{ConID: goldenReduceStockCon, Symbol: "SYNA", SecType: "STK", Action: rpc.OrderActionSell, PositionQuantity: 100, ReduceQuantity: 50, DollarDelta: 2500, RiskContributionCut: 1250,
 				Notional: 1250, NotionalCurrency: "USD", NotionalBase: new(1250.0), PreviewToken: goldenReduceToken, PreviewTokenID: goldenReduceTokenID, Terms: stock, SubmitEligible: true},
@@ -117,6 +121,7 @@ func goldenReducePortfolioSubmit() rpc.TradeProposalReducePortfolioResult {
 	res := goldenReducePortfolioPreview()
 	res.Accepted, res.EligibleCount, res.BlockedCount, res.TotalNotional, res.RequestRef = false, 1, 1, 1250, "desk-basket-7f3a"
 	res.NetDollarDeltaBefore, res.TargetDollarDelta, res.AchievedDollarDelta, res.AchievedPctOfTarget = 0, 0, 0, nil
+	res.NetDollarDeltaAfter, res.UntouchedPositions = nil, nil
 	res.Message = "1 placed · 1 blocked of 2 legs"
 	for i := range res.Legs {
 		res.Legs[i].PreviewToken, res.Legs[i].DollarDelta, res.Legs[i].RiskContributionCut = "", 0, 0

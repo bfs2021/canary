@@ -140,7 +140,7 @@ func (e *proposalEngine) mandateReductionInput(ctx context.Context, policy prote
 		return in
 	}
 	in.Active = true
-	if kept := s.mandateVerdicts.kept(); kept.result != nil && kept.fingerprint == c.FingerprintKey() {
+	if kept := s.keptMandateVerdict(); kept.result != nil && kept.fingerprint == c.FingerprintKey() {
 		in.Result, in.Input, in.EvaluatedAt, in.OverStreak = kept.result, kept.input, kept.evaluatedAt, kept.overStreak
 	}
 	if limits := s.orderLimitsInForce(protectionCoverageBaseCurrency(pos)); limits.Complete {

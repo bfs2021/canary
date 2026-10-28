@@ -138,11 +138,17 @@ that artifact.
   place no order. See the [Add command guide](docs/docs/reference/cli.md#add)
   for request examples and the separate confirmation boundary.
 - **How can I reduce exposure while keeping chosen holdings?**
-  `canary locks` keeps specified lines out of bulk and automatic reductions.
+  `canary locks` keeps every held contract of a chosen name out of bulk and
+  automatic reductions, including contracts acquired after a roll.
   Portfolio reductions can target net exposure, long positions, sectors or
   higher-beta holdings. `--plan` shows a proposed reduction without creating
   anything that can be submitted. A direct single-holding reduction can still
   target a locked line. See [reductions and holding locks](docs/docs/operate/protection.md).
+- **How would option exit rules have changed past trades?** `canary edge replay`
+  compares historical exit rules using statement trades and dated market evidence.
+  Missing history and reconciliation limits remain explicit; this is a historical
+  simulation, not a forecast or a live trading instruction. See the
+  [Edge guide](docs/docs/understand/edge.md).
 - **What work already exists?** Proposals, opportunities, and the local order
   journal show what is blocked or ready for human review and how it changed.
   They are evidence, not broker authority. A multi-leg option position is

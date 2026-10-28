@@ -2,30 +2,57 @@
 
 All notable changes to this project are documented here. The project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and release entries follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) categories (Added / Changed / Deprecated / Removed / Fixed / Security).
 
-## v3.27.2 — Unreleased
+## v3.28.0 — 2026-10-28 08:22 CET
 
-### Changed
+### What's new
 
-- The mandate's verdict is the loss measure against the maximum loss (owner decision 2026-10-27 19:50–19:52 CET on the trading machine spec's callout TM-04.12). The loss measure is every bought option at its premium at risk (the higher of the price paid and today's value, as rule 2 measures a line, protection included) plus the cash loss to the stop of every share line a working stop or trail covers; a share line without one counts nothing and is named as unstopped. The loss room is `max_loss_pct` of the budget base less the drawdown taken. The verdict reads `within` inside the room, `reduce` over it or on a gap breach, `unknown` when a premium or a series is missing; the status `over` is no longer produced. The book's volatility is still measured and shown, as the 1-day swing and the sizing input of the sleeve allocations and the machine strategies (`vol_target_pct`), no longer as the headline. `canary mandate` prints the loss measure, the room and the unstopped names on its first lines and relabels the volatility lines (Risk is now Volatility, the budget the sizing budget); `canary_mandate` carries `verdict.loss` (`total_base`, `premium_base`, `stop_loss_base`, `room_base`, `ratio_to_room`, `names`, `unstopped`) and each leg's `loss_base`. A stock or ETF order that would take the loss measure over the room is refused as `mandate_budget`; an option buy inside the premium limits passes with the loss-room judgement as its warning.
-- The forced reduction cuts the largest premium at risk per name first, whatever its sleeve, until the book fits 95% of the loss room (phase `premium`; the allocations' order of 2026-10-18 is superseded, and a sleeve over its allocation still refuses additions). The gap phase, the expiry gate (still judged on volatility, since delivered shares carry no premium), the owner sleeve's stop phase, the veto clock and the device-confirmed path are unchanged; `mandate_reduction` stays unauthorised unless the owner lists it. The status carries `loss_base`, `loss_room_base`, `loss_target_base` and `projected_loss_base`, each row `loss_base` and `loss_cut_base`, and the proposal rows say what each cut takes off the loss measure.
-- The premium budget (rule 3) counts protection's premium (owner decision 2026-10-27 19:52 CET: "Count it"). Every bought option counts at its premium at risk, portfolio protection included; the evidence names the protection's share. The per-name cap `option_name_act_pct` reads the same figure. Rule 4 and rule 12's hedge band are unchanged. A book whose protection alone was over the cap now reads so.
+Compare historical option-exit rules against statement trades, inspect option
+results beyond the first page, and read the current and previous session's
+account-value history. Missing history and reconciliation limits remain visible;
+a replay is a historical simulation, not a forecast or an order instruction.
+
+Holding locks now cover a whole name across its contracts. Proposal reviews
+show an index-fall comparison when the required evidence is available.
+
+This release includes the owner's previously approved risk-policy changes
+below. Installing it does not arm automatic trading. Standard binaries and
+every MCP tool remain read-only; broker writes retain their separate gates.
 
 ### Added
 
-- Canary's own proposals are priced for a 10% index fall, the way `canary proposals reduce --portfolio --plan` prices its legs (owner instruction 2026-10-28 06:41 CET). Each row of the proposal snapshot carries `index_loss` (`index_shock_pct`, `index_loss_before_base`, `index_loss_after_base`, or `index_loss_unknown` with the reason), the same fields the plan carries at its top level; the snapshot's own `index_loss` fills every actionable row together, and its new `base_currency` names the currency. A stop or trail reads unknown because it fills only when reached; cash sweep and currency rows carry none. The figures read the mandate's last evaluation and are never stored. `canary proposals list` prints the line on the list and on each row. `canary proposals reduce --portfolio --plan --proposal KEY` (repeatable; RPC `proposal_keys`) prices exactly the named proposals as a plan in mode `proposals`, so a console prices the rows it would send; a row it cannot price leaves the figure unknown.
-- Option buys are gated by premium at risk, not by the mandate's volatility budget (owner decision 2026-10-23 18:22 CEST). A buy that would take one name's premium at risk past `option_name_act_pct` of NLV (new Rulebook key, written into the policy file at 15 by the migration) or the book's past the premium budget's act level is refused as `mandate_premium`, naming the figure, the limit and the name; a buy within them passes, with the volatility verdict as the preview's warning. Stock and ETF additions keep the volatility gate. A short option opened to sell stays on the volatility gate.
-- `canary policy override --control mandate.vol_target_pct` lifts the volatility budget's additions gate for the owner's own orders until it expires; the maximum loss, the owner sleeve's stop, the order caps, the premium limits and the device confirmation still bind. `canary mandate` and Desk show the override, its reason and its expiry. The `[mandate]` keys are listed by `canary policy show --explain`; the others take no override.
-- `canary mandate` (and `canary_mandate`) carries the book's exposure through the greeks, per underlying and in total: net delta in money, the same through each name's beta, gamma per 1% move, theta a day, vega a point, each name's share of the risk and beta, and the premium at risk against its cap. A figure a leg cannot supply is absent with its reason, never zero.
+- Historical option-exit replay through `canary edge replay`, with dated market evidence, retained inputs and explicit missing-history and reconciliation results. Live option rolling and cooling-off remain design work, not execution features in this release.
+- Option-list pagination in CLI and MCP. `canary edge --all-options --json` retrieves all rows while counts and known totals cover the entire result.
+- Intraday account-value history for the current and previous US equity sessions. It is display evidence, not an input to trading decisions.
+- Proposal index-loss estimates and `canary proposals reduce --portfolio --plan --proposal KEY` to price a selected group. Stops and trails remain unknown because their execution depends on a trigger; plans cannot be submitted.
+- Mandate exposure by underlying and in total, including delta, beta-adjusted delta, gamma, theta, vega and premium at risk. Unavailable figures retain their reasons.
+
+### Changed
+
+- Holding locks apply to every held contract of a name, including a later rolled contract (owner decision 2026-10-28 06:41 CET). A lock on a name no longer held remains recorded and is labeled accordingly; direct single-holding reductions retain their existing behavior.
+- The mandate headline now compares option premium at risk plus losses to working stock stops against remaining maximum-loss room (owner decision 2026-10-27 19:50–19:52 CET). Unstopped shares are named rather than assigned an invented stop loss; volatility remains visible for sizing.
+- Forced loss-budget reductions target the largest premium at risk per name until the book fits 95% of loss room, superseding the former allocation order under that same owner decision. Gap, expiry, sleeve-stop, veto and device-confirmation gates remain binding.
+- Risk-adding option purchases use the premium limits; a loss-room or volatility judgment remains a warning when those limits permit the buy (owner decision 2026-10-23 18:22 CEST). The migration writes the new per-name `option_name_act_pct` policy key at 15. Held protection premium counts in the name and portfolio measurements (owner decision 2026-10-27 19:52 CET); the existing protective-put entry exemption remains.
+- An owner override of `mandate.vol_target_pct` can lift the additions gate until expiry. Other applicable loss, premium and order limits, sleeve stops and device confirmation still bind, with existing hedge and reduction exceptions retained; installation creates no override.
 
 ### Fixed
 
-- A holding lock covers every contract of its name, now and after a roll (owner instruction 2026-10-28 06:41 CET). A lock named one contract, so a locked stock's held calls could still be sold by the reduce plan, and after a roll the lock stayed on a contract no longer held. The reduce plan, a reviewed basket, the mandate's forced reduction and the premium budget sweep now resolve the keep list against the book they act on. `canary locks lock SYMBOL` no longer needs `--con-id`; given, it records the contract the lock was placed from, which the lock also covers. `canary locks` and `holding_locks.list` serve each lock's held `contracts` and `held`; a lock on a name not held keeps nothing, reads as not held and is never pruned. `positions.risk` carries the resolved list as `holding_locks`, or `holding_locks_unavailable` with the reason. A list saved earlier reads folded to one lock per name; one name saved under both roles reads as a hedge.
-- Statement reconciliation keeps the day's last complete account reading. A reading taken just before midnight that caught a later price can no longer leave the day's statement uncomparable.
-- Edge no longer restarts its monthly statement download every night. A section without rows that day is no longer read as a change to the Flex query.
-- Edge accepts IBKR's stored copy of a statement period it already built, instead of retrying every 30 minutes because a newer daily report exists.
-- Edge includes the executions of its last statement day. The review stopped at midnight UTC at the start of that day, so the newest day's fills were missing from option episodes, completed option positions and decision changes.
-- Edge counts option positions closed by expiry, exercise or assignment as completed positions, with the broker's realized P/L and a `closed_by` of `expiry`, `exercise` or `assignment` (`trade` otherwise). They were excluded as lifecycle activity, and the event's duplicate row moved the replayed quantity twice, which marked some contracts unbalanced. After an exercise or assignment the P/L is the option leg's; the stock leg is not included.
-- Edge's option lists page. `canary edge --option-offset N --option-limit N` and `canary_edge`'s `option_offset` and `option_limit` read rows past the first 20 of completed positions, realized episodes and open positions; each list carries `offset` and, while rows remain, `next_offset`. `canary edge --all-options --json` returns every row. Counts and known totals still cover every row. Rows without a numeric P/L follow the ranked rows instead of being left out of the list.
+- Mandate evaluations are bound to the broker account, session and position evidence that produced them. Reconnects and book changes invalidate old readings before admission or reduction uses them.
+- Risk-adding option purchases count pending buy commitments against the existing premium caps, including uncertain sends. Unresolved fills and unpriceable pending combo exposure hold further additions until the evidence is sufficient.
+- Held, deactivated or not-yet-activated stop children no longer count as effective stock protection.
+- Proposal index-loss comparisons become unavailable when their retained mandate evaluation exceeds the existing freshness limit, including previously cached figures.
+- CLI reduction reviews show the projected after-delta and untouched holdings, with explicit unlocked-book scope for net reductions.
+- Partially stop-covered shares now contribute the covered loss to the mandate while the uncovered portion remains identified.
+- Reductions capped by working orders report relief for the quantity actually reviewed rather than the original larger allocation.
+- Option-exit replay refuses an explicit date window when its required baseline is missing. A reopened position no longer inherits a previous closed cycle's profit-trail high; historical adds reset that high when the position changes.
+- Reconciliation uses the single-day statement's closing basis and tolerates sub-cent closing dust without requiring an unrelated live currency reading.
+- Edge retains statement evidence through nightly reports, includes the final statement day's executions, and counts option closures by expiry, exercise or assignment without moving the same quantity twice. Option-leg results do not include the resulting stock position.
+- Cash-sweep selection compares earnings after fees with leaving the money in cash, and remembers fee evidence across daemon restarts.
+- Broker transport sends waiting behind a pause end with their session; the next account-summary read retries a failed cancellation. Closed-session US cash-index quotes preserve the regular close and its predecessor.
+- MCP order-status sanitization now covers attached protective stops while preserving typed state and error codes.
+
+### Security
+
+- Updated `golang.org/x/net` to v0.62.0 for GO-2026-6860.
 
 ## v3.27.1 — 2026-10-23 12:16 WEST
 

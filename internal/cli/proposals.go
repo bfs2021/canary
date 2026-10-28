@@ -564,6 +564,9 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 	} else {
 		statusRow(env, out, "Legs", fmt.Sprintf("%d %s · %d blocked of %d", res.EligibleCount, verb, res.BlockedCount, res.LegCount))
 	}
+	if res.TargetDollarDelta != 0 || res.NetDollarDeltaAfter != nil {
+		statusRow(env, out, "Delta scope", "unlocked holdings; locked holdings excluded")
+	}
 	if res.TargetDollarDelta != 0 {
 		statusRow(env, out, "Net delta (before)", formatProposalMoney(res.NetDollarDeltaBefore, res.BaseCurrency))
 		statusRow(env, out, "Target removed", formatProposalMoney(res.TargetDollarDelta, res.BaseCurrency))
@@ -572,6 +575,13 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 			achieved += fmt.Sprintf(" (%.0f%% of target)", *res.AchievedPctOfTarget)
 		}
 		statusRow(env, out, "Achieved", achieved)
+	}
+	if res.NetDollarDeltaAfter != nil {
+		after := fmt.Sprintf("%.2f", *res.NetDollarDeltaAfter)
+		if strings.TrimSpace(res.BaseCurrency) != "" {
+			after = formatMoneyCcyForPnL(*res.NetDollarDeltaAfter, res.BaseCurrency)
+		}
+		statusRow(env, out, "Net delta (after)", after+" (estimated after eligible preview legs fill)")
 	}
 	if res.NetDeltaIncomplete {
 		statusRow(env, out, "Note", "net delta is a partial-book estimate; some positions had no computable delta")
@@ -588,6 +598,21 @@ func renderProposalReducePortfolioText(env *Env, res *rpc.TradeProposalReducePor
 	}
 	if res.Replayed {
 		statusRow(env, out, "Replayed", "true (idempotent retry; nothing placed)")
+	}
+	if res.UntouchedPositions != nil {
+		untouched := fmt.Sprintf("%d %s", len(res.UntouchedPositions), plural(len(res.UntouchedPositions), "position", "positions"))
+		if len(res.UntouchedPositions) == 0 {
+			untouched = "none"
+		}
+		statusRow(env, out, "Untouched", untouched)
+		for _, position := range res.UntouchedPositions {
+			identity := queuedContractLabel(position.Contract)
+			if position.Contract.ConID > 0 {
+				identity += fmt.Sprintf(" (conid %d)", position.Contract.ConID)
+			}
+			statusRow(env, out, "  Position", fmt.Sprintf("%g %s", position.PositionQuantity, identity))
+			statusRow(env, out, "  Reason", strings.TrimSpace(position.Code+": "+position.Reason))
+		}
 	}
 	printTradingBlockers(out, "  ", res.Blockers)
 	for _, leg := range res.Legs {

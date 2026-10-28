@@ -3,11 +3,17 @@
 Portfolio Reduce Preview  accepted=true
 Percent        50% of net delta
 Legs           2 eligible · 0 blocked of 2
+Delta scope    unlocked holdings; locked holdings excluded
 Net delta (before)
                $ 3,750.00
 Target removed $ 1,875.00
 Achieved       $ 1,875.00 (100% of target)
+Net delta (after)
+               $ 1,875.00 (estimated after eligible preview legs fill)
 Total notional $ 1,750.00
+Untouched      1 position
+  Position     2 SYNC 20261218 35 P (conid 700003)
+  Reason       locked: Locked by you; never in a bulk reduction.
   SELL 50 SYNA  [eligible]
   notional     $ 1,250.00
   token        ibkrp4.synthetic-reduce-leg-1.sig
@@ -27,11 +33,17 @@ Total notional $ 1,750.00
 Portfolio Reduce Preview  accepted=true
 \x1b[2mPercent       \x1b[0m 50% of net delta
 \x1b[2mLegs          \x1b[0m 2 eligible · 0 blocked of 2
+\x1b[2mDelta scope   \x1b[0m unlocked holdings; locked holdings excluded
 \x1b[2mNet delta (before)\x1b[0m
 \x1b[2m              \x1b[0m $ 3,750.00
 \x1b[2mTarget removed\x1b[0m $ 1,875.00
 \x1b[2mAchieved      \x1b[0m $ 1,875.00 (100% of target)
+\x1b[2mNet delta (after)\x1b[0m
+\x1b[2m              \x1b[0m $ 1,875.00 (estimated after eligible preview legs fill)
 \x1b[2mTotal notional\x1b[0m $ 1,750.00
+\x1b[2mUntouched     \x1b[0m 1 position
+\x1b[2m  Position    \x1b[0m 2 SYNC 20261218 35 P (conid 700003)
+\x1b[2m  Reason      \x1b[0m locked: Locked by you; never in a bulk reduction.
   SELL 50 SYNA  [eligible]
 \x1b[2m  notional    \x1b[0m $ 1,250.00
 \x1b[2m  token       \x1b[0m ibkrp4.synthetic-reduce-leg-1.sig

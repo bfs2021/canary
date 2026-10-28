@@ -261,6 +261,11 @@ func (s *Server) reduceLegPrepare(ctx context.Context, c reduceSweepCandidate, t
 	}
 	leg.Action = prep.action
 	leg.ReduceQuantity = prep.qty
+	// Working orders can leave less capacity than the selected allocation.
+	// Report only the relief of the quantity this preview will actually trade.
+	if c.qty > 0 {
+		leg.RiskContributionCut *= float64(prep.qty) / float64(c.qty)
+	}
 	legCtx, cancel := legContext(ctx, timeoutMs)
 	defer cancel()
 	preview, err := s.previewOrder(legCtx, prep.params)

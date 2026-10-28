@@ -237,7 +237,7 @@ func (s *Server) shadowDecide(res *rpc.StrategyTargetResult, r register.Resolved
 	if !isCore {
 		in.Symbol, in.Name = k.Symbol, strategyName(e)
 	}
-	result, kept, _, _ := s.mandateVerdicts.current()
+	result, kept, _, _ := s.currentMandateVerdict()
 	var verdict *mandate.Verdict
 	if result != nil {
 		verdict = result.Verdict

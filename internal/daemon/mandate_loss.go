@@ -85,14 +85,20 @@ func (s *Server) mandateArmedStops(ctx context.Context, pos *rpc.PositionsResult
 	case !sameBrokerScope(inventoryScope, scope):
 		return nil, "the open orders belong to another account than the selected one"
 	}
+	// Attached children require the durable parent-fill/child-activation
+	// proof used by protection coverage. An unavailable journal proves no
+	// child active; standalone broker stops can still be measured.
+	views, _, _ := s.loadOrderViews()
+	working := brokerWorkingOrders(snapshot, views, scope)
 	out := map[string][]mandateArmedStop{}
 	for _, row := range pos.Stocks {
 		if row.Quantity == 0 || row.ConID <= 0 {
 			continue
 		}
 		action := mandateAction(row)
-		for _, order := range snapshot.Orders {
-			if order.ConID != row.ConID || !brokerOrderWorking(order) || !strings.EqualFold(order.Action, action) || !mandateConditionalOrder(order.OrderType) {
+		for _, candidate := range working {
+			order := candidate.Order
+			if order.ConID != row.ConID || !mandateStopEffective(candidate) || !strings.EqualFold(order.Action, action) || !mandateConditionalOrder(order.OrderType) {
 				continue
 			}
 			if account := strings.TrimSpace(order.Account); account != "" && strings.TrimSpace(scope.Account) != "" && !strings.EqualFold(account, strings.TrimSpace(scope.Account)) {
@@ -110,6 +116,25 @@ func (s *Server) mandateArmedStops(ctx context.Context, pos *rpc.PositionsResult
 		}
 	}
 	return out, ""
+}
+
+// mandateStopEffective distinguishes executable protection from an order
+// retained to block competing orders. A held child is not protection for an
+// existing holding, even when its broker status reads PreSubmitted.
+func mandateStopEffective(candidate brokerWorkingOrder) bool {
+	order := candidate.Order
+	if order.Deactivated != nil && *order.Deactivated || strings.TrimSpace(order.WhyHeld) != "" {
+		return false
+	}
+	if order.Status != "Submitted" && order.Status != "PreSubmitted" {
+		return false
+	}
+	view := candidate.Journal
+	if order.ParentID != nil && *order.ParentID > 0 || view != nil && view.EntryLink != nil {
+		return view != nil && view.EntryLink != nil && view.EntryState == "active" &&
+			order.ParentID != nil && *order.ParentID == view.EntryLink.ParentID
+	}
+	return true
 }
 
 // mandateStopPrice is the price a working stop or trail triggers at: the

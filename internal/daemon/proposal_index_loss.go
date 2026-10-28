@@ -19,15 +19,18 @@ import (
 // persisted, and read the kept evaluation only; a read never evaluates.
 
 // mandateCurrentInput is the kept evaluation's input when it was made under
-// the current policy, with the time it was made; otherwise why it cannot
-// serve.
+// the current policy and within the existing verdict age limit, with the
+// time it was made; otherwise why it cannot serve. A read never refreshes it.
 func (s *Server) mandateCurrentInput() (*mandate.Input, time.Time, string) {
 	if s == nil {
 		return nil, time.Time{}, "the mandate has not measured the book under the current policy yet"
 	}
-	_, input, at, fp := s.mandateVerdicts.current()
+	_, input, at, fp := s.currentMandateVerdict()
 	if input == nil || s.riskPolicies == nil || fp != s.riskPolicies.snapshot().policy.FingerprintKey() {
 		return nil, time.Time{}, "the mandate has not measured the book under the current policy yet"
+	}
+	if at.IsZero() || s.nowUTC().Sub(at) > mandateVerdictMaxAge {
+		return nil, time.Time{}, "the mandate needs a recent measurement of the book before the index loss can be shown"
 	}
 	return input, at, ""
 }

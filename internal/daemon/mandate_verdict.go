@@ -52,6 +52,7 @@ type mandateVerdictCache struct {
 	input       *mandate.Input
 	evaluatedAt time.Time
 	fingerprint string
+	binding     daemonBrokerEvidenceBinding
 	// overStreak counts consecutive scheduled evaluations reading over or
 	// reduce, each at least mandateStreakSpacing and at most
 	// mandateStreakMaxGap after the last one counted (streakAt), under one
@@ -72,6 +73,7 @@ type mandateVerdictKept struct {
 	input       *mandate.Input
 	evaluatedAt time.Time
 	fingerprint string
+	binding     daemonBrokerEvidenceBinding
 	overStreak  int
 }
 
@@ -83,19 +85,19 @@ func (c *mandateVerdictCache) current() (*rpc.MandateRiskResult, *mandate.Input,
 func (c *mandateVerdictCache) kept() mandateVerdictKept {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return mandateVerdictKept{result: c.result, input: c.input, evaluatedAt: c.evaluatedAt, fingerprint: c.fingerprint, overStreak: c.overStreak}
+	return mandateVerdictKept{result: c.result, input: c.input, evaluatedAt: c.evaluatedAt, fingerprint: c.fingerprint, binding: c.binding, overStreak: c.overStreak}
 }
 
 // set keeps one evaluation; scheduled says it came from the background
 // cadence rather than a read, and only those count toward the streak.
-func (c *mandateVerdictCache) set(result *rpc.MandateRiskResult, input *mandate.Input, at time.Time, fingerprint string, scheduled bool) {
+func (c *mandateVerdictCache) set(result *rpc.MandateRiskResult, input *mandate.Input, at time.Time, fingerprint string, scheduled bool, binding daemonBrokerEvidenceBinding) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// A breach reading: the book over or reduce, or the owner sleeve's stop
 	// engaged with risk still to cut (mandate_sleeve_stop.go).
 	breach := result != nil && result.Verdict != nil && (result.Verdict.Status == mandate.StatusOver || result.Verdict.Status == mandate.StatusReduce || mandateStopOver(*result.Verdict))
 	switch {
-	case !breach || (c.overStreak > 0 && fingerprint != c.streakFP):
+	case !breach || !sameMandateBookSession(c.binding, binding) || (c.overStreak > 0 && fingerprint != c.streakFP):
 		c.overStreak, c.streakAt, c.streakFP = 0, time.Time{}, ""
 	}
 	if breach && scheduled {
@@ -114,6 +116,88 @@ func (c *mandateVerdictCache) set(result *rpc.MandateRiskResult, input *mandate.
 		c.scheduledAt = at
 	}
 	c.result, c.input, c.evaluatedAt, c.fingerprint = result, input, at, fingerprint
+	c.binding = binding
+}
+
+// captureMandateBookBinding pins the book's account, connector publication,
+// socket and structural portfolio generation before evaluation. Order inventory
+// refreshes are reads and can advance the order callback frontier themselves;
+// the mandate binds the position generation, not that refresh frontier.
+func (s *Server) captureMandateBookBinding() daemonBrokerEvidenceBinding {
+	b := s.currentProtectionOrderSnapshotBinding()
+	out := daemonBrokerEvidenceBinding{scope: b.scope, connector: b.connector, connectorEpoch: b.connectorEpoch}
+	if b.connector != nil {
+		// Consumers also run inside the first-byte guard, which already
+		// owns the broker evidence barrier. These accessors do not reenter it.
+		out.broker.Session = b.session
+		out.broker.PortfolioProjectionGeneration = b.connector.PortfolioProjectionGeneration()
+	}
+	return out
+}
+
+func sameMandateBookSession(a, b daemonBrokerEvidenceBinding) bool {
+	return sameBrokerScope(a.scope, b.scope) && a.connector == b.connector &&
+		a.connectorEpoch == b.connectorEpoch && a.broker.Session == b.broker.Session
+}
+
+func (s *Server) mandateBookBindingCurrent(binding daemonBrokerEvidenceBinding) bool {
+	current := s.captureMandateBookBinding()
+	return sameMandateBookSession(binding, current) && binding.broker == current.broker &&
+		(binding.connector == nil || binding.connector.SessionCurrent(binding.broker.Session))
+}
+
+// keepMandateVerdict publishes only while the captured book still owns the
+// broker frontier. A slow old evaluation cannot displace a successor's cache.
+func (s *Server) keepMandateVerdict(binding daemonBrokerEvidenceBinding, result *rpc.MandateRiskResult, input *mandate.Input, at time.Time, fingerprint string, scheduled bool) bool {
+	keep := func() error {
+		s.mandateVerdicts.set(result, input, at, fingerprint, scheduled, binding)
+		return nil
+	}
+	if binding.connector != nil {
+		latest, ok := binding.connector.CaptureBrokerEvidence()
+		if !ok || latest.Session != binding.broker.Session || latest.PortfolioProjectionGeneration != binding.broker.PortfolioProjectionGeneration {
+			return false
+		}
+		// The existing publication barrier also pins the current order frontier
+		// during the commit; only the position frontier belongs to the cache.
+		commitBinding := binding
+		commitBinding.broker = latest
+		kept, _ := s.withStableBrokerEvidence(commitBinding, keep)
+		return kept
+	}
+	// An unconnected evaluation (including pure fixtures) has no broker
+	// frontier. Keep its exact daemon identity under the publication lock.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	configuredAccount, port := "", s.endpoint.Port
+	if s.cfg != nil {
+		configuredAccount = s.cfg.Gateway.Account
+		if port == 0 && s.cfg.Gateway.Port != nil {
+			port = *s.cfg.Gateway.Port
+		}
+	}
+	scope := brokerStateScopeFromSnapshot(configuredAccount, s.endpoint.Account, port, "")
+	if s.connector != nil || s.connectorEpoch != binding.connectorEpoch || !sameBrokerScope(scope, binding.scope) {
+		return false
+	}
+	_ = keep()
+	return true
+}
+
+// keptMandateVerdict validates the authority on every consumer read. The zero
+// identity used by pure fixtures matches only that exact unconnected identity;
+// it never exempts a changed account, connector epoch or socket from validation.
+func (s *Server) keptMandateVerdict() mandateVerdictKept {
+	kept := s.mandateVerdicts.kept()
+	if !s.mandateBookBindingCurrent(kept.binding) {
+		return mandateVerdictKept{}
+	}
+	return kept
+}
+
+func (s *Server) currentMandateVerdict() (*rpc.MandateRiskResult, *mandate.Input, time.Time, string) {
+	k := s.keptMandateVerdict()
+	return k.result, k.input, k.evaluatedAt, k.fingerprint
 }
 
 // lastScheduled is the time of the last scheduled evaluation.
@@ -166,13 +250,13 @@ func (s *Server) refreshMandateVerdict(ctx context.Context) {
 	}
 	c := s.riskPolicies.snapshot().policy
 	if !c.MandateActive() {
-		s.mandateVerdicts.set(nil, nil, time.Time{}, "", true)
+		s.mandateVerdicts.set(nil, nil, time.Time{}, "", true, daemonBrokerEvidenceBinding{})
 		return
 	}
 	// A revised policy is judged at once; otherwise the cadence decides. A
 	// read's evaluation does not move it: the forced reduction counts only
 	// scheduled verdicts.
-	if _, _, _, fp := s.mandateVerdicts.current(); fp == c.FingerprintKey() {
+	if _, _, _, fp := s.currentMandateVerdict(); fp == c.FingerprintKey() {
 		if last := s.mandateVerdicts.lastScheduled(); !last.IsZero() && s.nowUTC().Sub(last) < mandateVerdictRefreshEvery {
 			return
 		}
@@ -195,7 +279,7 @@ func (s *Server) handleMandateRisk(ctx context.Context, req *rpc.Request) (*rpc.
 	if !mgr.policy.MandateActive() {
 		return mandateInactiveResult(now, mgr), nil
 	}
-	if result, _, at, fp := s.mandateVerdicts.current(); !p.Refresh && result != nil && fp == mgr.policy.FingerprintKey() && now.Sub(at) < mandateVerdictServeWithin {
+	if result, _, at, fp := s.currentMandateVerdict(); !p.Refresh && result != nil && fp == mgr.policy.FingerprintKey() && now.Sub(at) < mandateVerdictServeWithin {
 		out := *result
 		out.Gate = s.mandateGateView(&out, now)
 		out.Reduction = s.mandateReductionView()
@@ -215,7 +299,7 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	c := mgr.policy
 	if !c.MandateActive() {
 		res := mandateInactiveResult(s.nowUTC(), mgr)
-		s.mandateVerdicts.set(nil, nil, time.Time{}, "", !refreshAccount)
+		s.mandateVerdicts.set(nil, nil, time.Time{}, "", !refreshAccount, daemonBrokerEvidenceBinding{})
 		return res
 	}
 	if refreshAccount {
@@ -223,7 +307,8 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 		_, _ = s.handleAccountSummary(acctCtx)
 		cancel()
 	}
-	scope := s.currentBrokerStateScope()
+	binding := s.captureMandateBookBinding()
+	scope := binding.scope
 	base := normCcy(c.Capital.BaseCurrency)
 	// The verdict's clock is read once the capital state is in hand, so it is
 	// never older than the equity observation it is judged on.
@@ -291,6 +376,9 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	placement := s.mandateStrategyPlacement(ctx, c, resolved, in.Legs)
 	in.Legs = placement.Legs
 	in.Allocations = mandateAllocationPlanPlaced(c, resolved, placement.Placed, in.Legs)
+	if !s.mandateBookBindingCurrent(binding) {
+		in.Reasons = append(in.Reasons, "the broker account, session or positions changed during the mandate measurement")
+	}
 	verdict := mandate.Evaluate(in)
 	// The owner sleeve's drawdown stop reads this verdict's legs and use, and
 	// the kept input carries it, so every evaluation sized or judged on this
@@ -307,10 +395,27 @@ func (s *Server) evaluateMandate(ctx context.Context, refreshAccount bool) *rpc.
 	if pos != nil && currentPortfolioAuthority(pos.Authority) {
 		res.Exposure = s.mandateExposure(pos, &verdict, base, now)
 	}
+	// Recheck after all derived reads: never publish an old book as a
+	// measurable result under the successor session. The stored binding
+	// remains the one captured before the read, so later consumers reject it.
+	if !s.mandateBookBindingCurrent(binding) {
+		if verdict.Status != mandate.StatusUnknown {
+			in.Reasons = append(in.Reasons, "the broker account, session or positions changed during the mandate measurement")
+			verdict = mandate.Evaluate(in)
+		}
+		res.Exposure = nil
+	}
 	res.Gate = s.mandateGateView(res, now)
 	res.Register = mandateRegisterView(resolved)
 	res.StatusSince = s.mandateStatusSince(ctx, verdict.Status, now)
-	s.mandateVerdicts.set(res, &in, now, fp, !refreshAccount)
+	if !s.keepMandateVerdict(binding, res, &in, now, fp, !refreshAccount) {
+		if verdict.Status != mandate.StatusUnknown {
+			in.Reasons = append(in.Reasons, "the broker account, session or positions changed during the mandate measurement")
+			verdict = mandate.Evaluate(in)
+		}
+		res.Exposure = nil
+		res.Gate = s.mandateGateView(res, now)
+	}
 	return res
 }
 
@@ -589,7 +694,7 @@ func (s *Server) mandateBudgetJudgement(draft rpc.OrderDraft, position rpc.Order
 		return nil, nil
 	}
 	now := s.nowUTC()
-	result, input, at, fp := s.mandateVerdicts.current()
+	result, input, at, fp := s.currentMandateVerdict()
 	if result == nil || result.Verdict == nil || input == nil || fp != c.FingerprintKey() {
 		return &rpc.TradingBlocker{Code: mandateBudgetCode, Message: "Mandate budget: no verdict has been measured for the policy in force yet; this order adds risk." + open, Action: action}, nil
 	}

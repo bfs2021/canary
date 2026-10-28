@@ -445,7 +445,7 @@ func TestMandateReductionStartsOnConfirmedVerdicts(t *testing.T) {
 		{mandate.StatusOver, 5 * time.Minute, "b", true, 2},
 	} {
 		at = at.Add(step.gap)
-		c.set(verdict(step.status), &mandate.Input{}, at, step.fp, step.scheduled)
+		c.set(verdict(step.status), &mandate.Input{}, at, step.fp, step.scheduled, daemonBrokerEvidenceBinding{})
 		if got := c.kept().overStreak; got != step.want {
 			t.Fatalf("step %d (%s after %s, policy %s, scheduled %v): streak %d, want %d", i, step.status, step.gap, step.fp, step.scheduled, got, step.want)
 		}

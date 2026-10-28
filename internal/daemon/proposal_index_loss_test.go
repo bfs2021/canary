@@ -14,11 +14,11 @@ import (
 // under the current policy, so served proposals and plans read it.
 func indexLossServer(t *testing.T, pos *rpc.PositionsResult) *Server {
 	t.Helper()
-	s := &Server{}
+	s := &Server{now: func() time.Time { return mandateTestNow }}
 	s.riskPolicies = newRiskPolicyManager("", time.Minute, nil)
 	s.riskPolicies.active = testMandateConstitution()
 	fixture := mandateReductionFixture(t, pos, 0.5, 1000000, 0)
-	s.mandateVerdicts.set(fixture.Result, fixture.Input, mandateTestNow, s.riskPolicies.snapshot().policy.FingerprintKey(), false)
+	s.mandateVerdicts.set(fixture.Result, fixture.Input, mandateTestNow, s.riskPolicies.snapshot().policy.FingerprintKey(), false, s.captureMandateBookBinding())
 	return s
 }
 

@@ -58,7 +58,7 @@ type reduceScopeFacts struct {
 func (s *Server) reduceScopeFacts(ctx context.Context, pos *rpc.PositionsResult, p rpc.TradeProposalReducePortfolioParams) reduceScopeFacts {
 	facts := reduceScopeFacts{betas: map[string]float64{}, sectors: map[string]string{}}
 	if p.MinBeta > 0 {
-		if result, _, _, _ := s.mandateVerdicts.current(); result != nil && result.Verdict != nil {
+		if result, _, _, _ := s.currentMandateVerdict(); result != nil && result.Verdict != nil {
 			for _, u := range result.Verdict.Underlyings {
 				facts.betas[normSym(u.Underlying)] = u.Beta
 			}

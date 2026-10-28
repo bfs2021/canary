@@ -590,7 +590,15 @@ func (s *Server) previewOrder(ctx context.Context, p rpc.OrderPreviewParams) (*r
 	if brake != nil {
 		return nil, refusePreview(errBadRequest(brake.Message), *brake)
 	}
-	mandateBlocker, mandateWarning := s.mandateBudgetJudgement(draft, position)
+	mandateDraft := draft
+	if scope == rpc.OrderTokenScopeModify {
+		mandateDraft.OrderRef = replaceView.OrderRef
+	}
+	// Read broker inventory and correlated fill quantities outside the wire lock.
+	if _, err := s.prepareMandatePremium(ctx, mandateDraft, position); err != nil {
+		return nil, refusePreview(errBadRequest("Mandate premium: "+err.Error()), rpc.TradingBlocker{Code: rpc.MandatePremiumBlockerCode, Message: "Mandate premium: " + err.Error(), Action: "Refresh orders and positions before adding option premium."})
+	}
+	mandateBlocker, mandateWarning := s.mandateBudgetJudgement(mandateDraft, position)
 	if mandateBlocker != nil {
 		return nil, refusePreview(errBadRequest(mandateBlocker.Message), *mandateBlocker)
 	}

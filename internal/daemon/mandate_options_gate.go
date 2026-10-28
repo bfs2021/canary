@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/osauer/canary/v2/internal/mandate"
 	"github.com/osauer/canary/v2/internal/risk"
 	"github.com/osauer/canary/v2/internal/rpc"
+	ibkr "github.com/osauer/canary/v2/pkg/ibkr"
 )
 
 // Options at the additions gate (owner decision 2026-10-23 18:22 CEST):
@@ -116,6 +118,10 @@ func (s *Server) mandatePremiumGate(draft rpc.OrderDraft, result *rpc.MandateRis
 		mult = 100
 	}
 	premium := float64(draft.Quantity) * mult * draft.LimitPrice * fx
+	pending, err := s.mandatePendingPremium(draft, input, exposure, ccy)
+	if err != nil {
+		return refuse("this option buy cannot be measured: "+err.Error()+".", "Refresh the orders and positions reading; "+measure)
+	}
 	nlv := *exposure.NLVBase
 	nameNow := 0.0
 	for _, row := range exposure.Names {
@@ -127,6 +133,7 @@ func (s *Server) mandatePremiumGate(draft rpc.OrderDraft, result *rpc.MandateRis
 		}
 		nameNow = *row.PremiumAtRiskBase
 	}
+	nameNow += pending[sym]
 	nameCap := exposure.NamePremiumCapPct / 100 * nlv
 	if after := nameNow + premium; after > nameCap+mandateReductionEpsilon {
 		return refuse(fmt.Sprintf("with this order the premium at risk in %s would be %s, %s of net liquidation %s, over the %s limit for one name (now %s).",
@@ -137,6 +144,9 @@ func (s *Server) mandatePremiumGate(draft rpc.OrderDraft, result *rpc.MandateRis
 		return refuse("this option buy cannot be measured: the book's premium at risk is unknown ("+strings.Join(exposure.Book.Unknown, "; ")+").", "Retry once every long option carries a value or a price paid; "+measure)
 	}
 	bookNow := *exposure.Book.PremiumAtRiskBase
+	for _, amount := range pending {
+		bookNow += amount
+	}
 	bookCap := exposure.BookPremiumCapPct / 100 * nlv
 	if after := bookNow + premium; after > bookCap+mandateReductionEpsilon {
 		set := ""
@@ -148,6 +158,199 @@ func (s *Server) mandatePremiumGate(draft rpc.OrderDraft, result *rpc.MandateRis
 			fmt.Sprintf("Size it smaller: the book has room for %s more premium under the budget, or sell premium first. %s", mandateMoney(max(0, bookCap-bookNow), ccy), measure))
 	}
 	return nil
+}
+
+// prepareMandatePremium warms the shared broker inventory before admission.
+// The final physical-wire guard reads only that receipt and durable journal;
+// it must never initiate broker I/O while holding the transport lock.
+func (s *Server) prepareMandatePremium(ctx context.Context, draft rpc.OrderDraft, position rpc.OrderPositionImpact) (*protectionOrderSnapshotBinding, error) {
+	if s == nil || s.riskPolicies == nil || s.riskCapital == nil || !mandateOptionAddition(draft) || !s.riskAddingOrder(draft, position) || !s.riskPolicies.snapshot().policy.MandateActive() {
+		return nil, nil
+	}
+	snapshot, snapshotScope, err := s.brokerOpenOrderInventory(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	_, input, _, _ := s.currentMandateVerdict()
+	if input == nil {
+		return nil, fmt.Errorf("premium positions are unavailable")
+	}
+	before := s.reduceFillBinding()
+	inventory, ok := s.journalOrderViewsForInventory()
+	if !ok {
+		return nil, fmt.Errorf("premium fill evidence is unavailable")
+	}
+	// Include filled contracts absent from the cached positions as zero: their
+	// absence must agree with the request-correlated broker receipt too.
+	contracts := map[int]rpc.ContractParams{}
+	for i := range inventory.views {
+		view := &inventory.views[i]
+		if view.Filled <= 0 || !orderViewMatchesBrokerScope(*view, before.scope) {
+			continue
+		}
+		if strings.EqualFold(view.SecType, "BAG") {
+			legs := inventory.legsOf(view)
+			if len(legs) == 0 {
+				return nil, fmt.Errorf("filled combination premium legs are unknown")
+			}
+			for _, leg := range legs {
+				if strings.EqualFold(leg.Contract.SecType, "OPT") && strings.EqualFold(leg.Action, rpc.OrderActionBuy) {
+					if leg.Contract.ConID <= 0 {
+						return nil, fmt.Errorf("filled option identity is unknown")
+					}
+					contracts[leg.Contract.ConID] = leg.Contract
+				}
+			}
+		} else if strings.EqualFold(view.SecType, "OPT") && strings.EqualFold(view.Action, rpc.OrderActionBuy) {
+			if view.ConID <= 0 {
+				return nil, fmt.Errorf("filled option identity is unknown")
+			}
+			contracts[view.ConID] = rpc.ContractParams{ConID: view.ConID, Symbol: view.Symbol, SecType: "OPT", Currency: view.Currency}
+		}
+	}
+	for _, row := range brokerWorkingOrders(snapshot, inventory.views, snapshotScope) {
+		order := row.Order
+		if order.Filled <= 0 {
+			continue
+		}
+		if strings.EqualFold(order.SecType, "BAG") && row.Journal == nil {
+			return nil, fmt.Errorf("filled combination premium legs are unknown")
+		}
+		if strings.EqualFold(order.SecType, "OPT") && strings.EqualFold(order.Action, rpc.OrderActionBuy) {
+			if order.ConID <= 0 {
+				return nil, fmt.Errorf("filled option identity is unknown")
+			}
+			contracts[order.ConID] = rpc.ContractParams{ConID: order.ConID, Symbol: order.Symbol, SecType: "OPT", Currency: order.Currency}
+		}
+	}
+	held := make([]reduceHeldPosition, 0, len(contracts))
+	for conID, contract := range contracts {
+		quantity := 0.0
+		for _, leg := range input.Legs {
+			if leg.ID == mandateLegID(rpc.PositionView{ConID: conID}) {
+				quantity += leg.Quantity
+			}
+		}
+		held = append(held, reduceHeldPosition{contract: contract, quantity: quantity})
+	}
+	binding, err := s.ensureOrderFillCoherence(ctx, held, 0, rpc.OrderActionBuy)
+	if err != nil {
+		return nil, err
+	}
+	if binding != before {
+		return nil, fmt.Errorf("option fill evidence changed during premium admission")
+	}
+	return &binding, nil
+}
+
+// mandatePendingPremium joins all-client working orders to local durable
+// intents. An absent broker echo cannot erase an uncertain send. Matched rows
+// count once, only unfilled units count, and the authenticated draft reference
+// excludes the order being replaced (or the current staged send itself).
+func (s *Server) mandatePendingPremium(draft rpc.OrderDraft, input *mandate.Input, exposure *rpc.MandateExposureView, base string) (map[string]float64, error) {
+	scope := s.currentBrokerStateScope()
+	var snapshot ibkr.OpenOrderSnapshot
+	if s.openOrderInventoryForTest != nil {
+		var got brokerStateScope
+		var err error
+		snapshot, got, err = s.openOrderInventoryForTest(context.Background(), false)
+		if err != nil || !sameBrokerScope(got, scope) {
+			return nil, fmt.Errorf("current broker purchase commitments are unavailable")
+		}
+	} else {
+		binding := s.currentProtectionOrderSnapshotBinding()
+		var ok bool
+		snapshot, ok = s.cachedProtectionOrderSnapshot(binding, s.orderNow())
+		if !ok || !sameBrokerScope(binding.scope, scope) || !s.protectionOrderSnapshotBindingCurrent(binding) {
+			return nil, fmt.Errorf("current broker purchase commitments are unavailable")
+		}
+	}
+	if !protectionOrderSnapshotUsable(snapshot, s.orderNow()) {
+		return nil, fmt.Errorf("current broker purchase commitments are unavailable")
+	}
+	journal, ok := s.journalOrderViewsForInventory()
+	if !ok {
+		return nil, fmt.Errorf("durable purchase commitments are unavailable")
+	}
+	out := map[string]float64{}
+	add := func(view rpc.OrderView, remaining float64, legs map[int]rpc.StrategyOrderLeg) error {
+		if strings.EqualFold(view.SecType, "BAG") {
+			if len(legs) == 0 {
+				return fmt.Errorf("a working combination has unknown option premium commitments")
+			}
+			for _, leg := range legs {
+				if strings.EqualFold(leg.Contract.SecType, "OPT") && strings.EqualFold(leg.Action, rpc.OrderActionBuy) {
+					return fmt.Errorf("a working combination's net limit cannot bound its bought option premiums")
+				}
+			}
+			return nil
+		}
+		if !strings.EqualFold(view.SecType, "OPT") || !strings.EqualFold(view.Action, rpc.OrderActionBuy) {
+			return nil
+		}
+		// A fill after the exposure reading may not yet be in held premium. Do
+		// not guess whether it is included or count those units twice.
+		if view.Filled > 0 && view.UpdatedAt.After(exposure.AsOf) {
+			return fmt.Errorf("an option purchase filled after the premium reading")
+		}
+		if view.OrderRef != "" && view.OrderRef == draft.OrderRef {
+			return nil
+		}
+		orderType := strings.ToUpper(strings.TrimSpace(view.OrderType))
+		if (orderType != "LMT" && orderType != "STP LMT") || !positiveFinite(remaining) || !positiveFinite(view.LimitPrice) || view.Multiplier <= 0 || normSym(view.Symbol) == "" || normCcy(view.Currency) == "" {
+			return fmt.Errorf("a working option purchase has no bounded premium")
+		}
+		fx := 1.0
+		if normCcy(view.Currency) != normCcy(base) {
+			fx = input.FXNow[normCcy(view.Currency)]
+		}
+		amount := remaining * float64(view.Multiplier) * view.LimitPrice * fx
+		if !positiveFinite(fx) || !positiveFinite(amount) || !positiveFinite(out[normSym(view.Symbol)]+amount) {
+			return fmt.Errorf("a working option purchase has no finite premium in %s", base)
+		}
+		out[normSym(view.Symbol)] += amount
+		return nil
+	}
+	seen := map[int]bool{}
+	for _, row := range brokerWorkingOrders(snapshot, journal.views, scope) {
+		view := untrackedOrderView(row.Order, scope, snapshot.AsOf)
+		if row.Journal != nil {
+			view.OrderRef = row.Journal.OrderRef
+			view.UpdatedAt = row.Journal.UpdatedAt
+			if strings.EqualFold(view.SecType, "OPT") && strings.EqualFold(view.Action, rpc.OrderActionBuy) && view.OrderRef != draft.OrderRef && (view.Quantity != row.Journal.Quantity || view.LimitPrice != row.Journal.LimitPrice || view.OrderType != row.Journal.OrderType) {
+				return nil, fmt.Errorf("a modified option purchase has not been reconciled with broker terms")
+			}
+		}
+		if err := add(view, brokerOrderRemaining(row.Order), journal.legsOf(row.Journal)); err != nil {
+			return nil, err
+		}
+		for i := range journal.views {
+			if row.Journal == &journal.views[i] {
+				seen[i] = true
+			}
+		}
+	}
+	for i, view := range journal.views {
+		if !orderViewMatchesBrokerScope(view, scope) || seen[i] {
+			continue
+		}
+		// Even a terminal fill must wait for the positions measurement to catch
+		// up; otherwise a fast fill releases its reservation before becoming held.
+		if strings.EqualFold(view.SecType, "OPT") && strings.EqualFold(view.Action, rpc.OrderActionBuy) && view.Filled > 0 && view.UpdatedAt.After(exposure.AsOf) {
+			return nil, fmt.Errorf("an option purchase filled after the premium reading")
+		}
+		if !view.Open {
+			continue
+		}
+		remaining := view.Remaining
+		if remaining <= 0 {
+			remaining = view.Quantity - view.Filled
+		}
+		if err := add(view, remaining, journal.legsOf(&view)); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // mandateOptionsGateView reads the premium limits for an option buy now:

@@ -424,10 +424,13 @@ func TestOrderJournalSanitizerWithholdsBrokerProse(t *testing.T) {
 	events := []rpc.OrderEvent{{Type: "broker-error", ErrorCode: 201, Message: attack, WhyHeld: attack}}
 	open := rpc.OrdersOpenResult{Orders: []rpc.OrderView{view}, Untracked: []rpc.OrderView{view}}
 	history := rpc.OrdersHistoryResult{Orders: []rpc.OrdersHistoryRow{{Order: view, Events: slices.Clone(events)}}}
-	status := rpc.OrderStatusResult{Found: true, Order: view, Events: slices.Clone(events)}
+	status := rpc.OrderStatusResult{Found: true, Order: view, AttachedStop: new(view), Events: slices.Clone(events)}
 	sanitizeOrdersOpenForMCP(&open)
 	sanitizeOrdersHistoryForMCP(&history)
 	sanitizeOrderStatusForMCP(&status)
+	if status.AttachedStop.Status != view.Status || status.AttachedStop.LastErrorCode != view.LastErrorCode {
+		t.Fatal("attached-stop typed state changed during sanitization")
+	}
 	for name, result := range map[string]any{"open": open, "history": history, "status": status} {
 		raw, err := json.Marshal(result)
 		if err != nil {

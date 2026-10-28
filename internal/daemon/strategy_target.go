@@ -359,7 +359,7 @@ func unknownStrategyMessage(id string, resolved []register.Resolved) string {
 // asks for it, when none is kept for the policy in force, or when the kept
 // one is older than mandateVerdictServeWithin.
 func (s *Server) refreshMandateForTarget(ctx context.Context, c *risk.Constitution, refresh bool, now time.Time) {
-	if result, _, at, fp := s.mandateVerdicts.current(); refresh || result == nil || fp != c.FingerprintKey() || now.Sub(at) >= mandateVerdictServeWithin {
+	if result, _, at, fp := s.currentMandateVerdict(); refresh || result == nil || fp != c.FingerprintKey() || now.Sub(at) >= mandateVerdictServeWithin {
 		s.evaluateMandate(ctx, true)
 	}
 }
@@ -732,7 +732,7 @@ func (s *Server) evaluateStrategyTarget(ctx context.Context, now time.Time, r re
 
 	// The mandate: capital for the size, the book for the holding and the
 	// headroom.
-	result, input, at, fp := s.mandateVerdicts.current()
+	result, input, at, fp := s.currentMandateVerdict()
 	var verdict *mandate.Verdict
 	switch {
 	case result == nil || result.Verdict == nil || input == nil || fp != c.FingerprintKey():
